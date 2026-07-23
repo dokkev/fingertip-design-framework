@@ -106,6 +106,133 @@ initialization, runtime flag inspection, and `Finalize()`. It does not include
 an external rounded indenter, prescribed indentation, or a nonlinear loading
 solve.
 
+## Phase 4I central indentation
+
+Phase 4I adds the external indenter as an FEM fixture; it does not add it to
+`FingertipModel`. This preserves the Shapely fingertip model as the sole owner
+of pad/link geometry while allowing the solver layer to change loading tools.
+The fixture is a radius-`4 mm`, thickness-`1 mm` circular T3 carrier positioned
+from the actual `pad_outer_arc` crown and translated rigidly toward the pad.
+
+The indexed Kratos contact groups are:
+
+```text
+ContactSub0: PadOuterArc      (SLAVE) / IndenterContactArc (MASTER)
+ContactSub1: PadCutoutLeft    (SLAVE) / StemLeft            (MASTER)
+ContactSub2: PadCutoutRight   (SLAVE) / StemRight           (MASTER)
+ContactSub3: PadCutoutBottom  (SLAVE) / StemBottom          (MASTER)
+```
+
+Lengths and prescribed displacement are in `mm`, material values in `MPa =
+N/mm^2`, thickness in `mm`, and the resulting 2D plane-strain reaction in `N`.
+The current `E = 1.0 MPa` is a numerical placeholder, not calibrated silicone.
+This phase is only the symmetric, central, solid-pad baseline.
+
+The outer profile CSV uses the complete reference `PadOuterArc`, ordered by a
+normalized arc coordinate from 0 to 1. It reports global and local normal/
+tangential displacement. Contact chord width is the span of active pad nodes
+projected onto the crown tangent; contact arc length is the sum of source edges
+whose two endpoints are active.
+
+Run the isolated Trial before attempting the baseline:
+
+```bash
+OMP_NUM_THREADS=1 /home/dk/miniconda3/envs/lit/bin/python -B \
+  -m analysis.phase4_indentation_baseline \
+  --mesh-level medium --indentation-mm 0.25 --steps 48 --trial
+
+OMP_NUM_THREADS=1 /home/dk/miniconda3/envs/lit/bin/python -B \
+  -m analysis.phase4_indentation_baseline \
+  --mesh-levels medium fine --indentation-mm 1.5 --steps 48 --compare
+```
+
+The first command currently returns nonzero. Initialization verifies all four
+runtime contact groups, but the default zero-clearance internal contacts make
+the first nonlinear system rank deficient. Skyline LU reports a zero pivot,
+Newton reaches its 35-iteration limit, and the failed iterate contains
+non-finite solid fields. The requested 1.5 mm baseline is therefore gated off.
+Reproduction logs and JSON diagnostics are retained under
+`output/phase4_indentation/trial_medium_0p25/`.
+
+### Phase 4I-D internal-contact isolation
+
+The solver layer now accepts an explicit internal-contact configuration:
+`none`, `bottom_only`, `sides_separate`, `three_pairs`, or
+`continuous_u`. External pad/indenter contact remains present in every
+configuration. The continuous option creates solver-facing
+`PadInternalU`/`StemInternalU` aggregate SubModelParts by reusing the
+existing left/bottom/right nodes and Line2 conditions; the original semantic
+SubModelParts remain available for regional post-processing.
+
+Run the fixed medium-mesh first-step isolation suite with:
+
+```bash
+OMP_NUM_THREADS=1 /home/dk/miniconda3/envs/lit/bin/python -B \
+  -m analysis.phase4_internal_contact_diagnostic \
+  --mesh-level medium --cases A B C D E --first-step-only
+```
+
+The executed Phase 4I-D suite found:
+
+```text
+A external only:          PASS, 1 iteration
+B bottom only:            PASS, 1 iteration
+C left + right separate:  FAIL during the first Skyline factorization
+C-left only:              PASS, 12 iterations
+C-right only:             FAIL, 35 iterations
+D three separate pairs:   FAIL, 35 iterations
+E one continuous U-pair:  FAIL, 35 iterations
+```
+
+Cases C/D/E share near-zero ALM-pressure tangent rows at the upper side
+endpoints `(3.5, 0)` and `(-3.5, 0)`; the right-only control also fails,
+while the left-only control converges. The four lower U-corners reuse the
+same physical node and source-condition IDs in D and E. Continuous U reduces
+each lower pad corner from two process registrations to one, creates no
+duplicate condition connectivity or EquationId, and preserves pair purity,
+but does not remove the upper-endpoint rows or recover the solve.
+
+Therefore Phase 4I-D is `FAIL` and continuous U is `REJECT` as a recovery for
+the current Kratos 2D ALM setup. Its gated 0.25 mm/48-step Trial was not run.
+Phase 4M initialization remains `PASS`, Phase 4I remains incomplete, and the
+1.5 mm medium/fine baseline and contact-location sweep remain blocked.
+Artifacts are separate under
+`output/phase4_internal_contact_diagnostic/`.
+
+### Phase 4I-E right-side mirror audit
+
+Run the fixed first-step left/right and orientation matrix with:
+
+```bash
+OMP_NUM_THREADS=1 /home/dk/miniconda3/envs/lit/bin/python -B \
+  -m analysis.phase4_right_side_audit \
+  --mesh-level medium --run-orientation-matrix
+```
+
+The executed audit found that the source mesh, Shapely-derived physical
+normals, runtime nodal normals, semantic membership, slave/master roles, and
+zero initial weighted gap all satisfy the left/right reflection contract.
+R00 is already physically oriented. Reversing the right slave, master, or both
+produces a non-physical ordering and a zero nodal normal at a shared endpoint
+during `ExecuteInitialize`, so no orientation source edit was adopted.
+
+The first left/right asymmetry appears after contact search. Left node 5 has
+one valid generated master pairing; right node 2 has that valid pairing plus
+an adjacent lower master segment whose endpoint projection is out of range
+and whose local LM row contribution is exactly zero. The first assembled
+upper-endpoint LM rows remain near zero on both sides, but the left nonlinear
+solve deactivates the endpoint and converges while R00 reproduces the
+right-only failure.
+
+Phase 4I-E is therefore `FAIL` and the orientation hypothesis is `REJECT`.
+The evidence narrows the unresolved issue to right upper-endpoint contact
+search/pair generation and subsequent LM assembly/active-set handling; it
+does not establish a library-level root cause. No source-level production
+fix, regression suite, or D/E full Trial was run. Three-pair and continuous-U
+remain rejected for the current contact setup, Phase 4I cannot resume, and
+the 1.5 mm medium/fine baseline remains blocked. Artifacts are under
+`output/phase4_right_side_audit/`.
+
 ## Example
 
 ```python
@@ -130,4 +257,5 @@ left_contact = model.contact_pairs[0]
 print(left_contact.initial_normal_gap)
 ```
 
-External indentation loading and nonlinear solution remain intentionally deferred.
+Contact-location sweeps remain deferred until the default internal-contact
+nonlinear blocker is resolved.
