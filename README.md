@@ -1,5 +1,9 @@
 # Parameterized Fingertip geometry
 
+The reusable, declarative visualization pipeline is documented in
+[Scientific-Figure-Framework.md](Scientific-Figure-Framework.md). Reference
+specs live under `examples/` and render through `python -B -m visualization`.
+
 This project constructs, validates, and visualizes the two-dimensional geometry of a rigid LIT
 Hand link inserted into a compliant silicone fingertip pad. Shapely geometry is kept independent
 of meshing or finite-element software.

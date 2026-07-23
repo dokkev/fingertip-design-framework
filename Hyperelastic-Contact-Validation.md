@@ -1072,3 +1072,96 @@ J4 parameter sweep:        SKIPPED (defined candidates 없음)
 상세 checkpoint와 result는
 `output/phase4_crosspoint_multiplier_treatment/` 및
 `output/phase4_no_void_baseline/`에 저장했다.
+
+---
+
+## 20. Phase 4K — contact-to-observation deformation transfer map
+
+Phase 4J solver 설정을 바꾸지 않고 수렴 step 직후 observer만 추가했다.
+`PadOuterArc` reference connectivity를 node-ID 독립적으로 정렬하고, 우측
+`xi=0→0.25`, 좌측 `xi=1→0.75` 구간에 각각 41개 고정 `eta` sample을
+Line2 shape function으로 보간했다. 두 side 모두 reference outward-normal
+bulging을 positive primary channel로 사용한다.
+
+Kratos 10.3 source/runtime audit에서 실제 external slave에 저장된
+`AUGMENTED_NORMAL_CONTACT_PRESSURE`(non-historical), `NODAL_AREA`
+(non-historical), `NORMAL`(historical)을 선택했다. Contact resultant는
+global loading direction으로 투영하고 canonical indenter reaction과 2%
+closure를 검사한다. Closure 실패 시 centroid/2D length는 공개하지 않고 raw
+candidate만 보존한다.
+
+K2 medium/fine은 각각 Phase 4J J1/J2 final reaction과 minimum det(F)를
+정확히 재현했다. 모든 location/mesh solve는 48 step에 도달했고 finite
+field와 positive det(F)를 유지했다.
+
+| Mesh/location | Solve | Final reaction | Verified centroid/length | Final closure |
+|---|---:|---:|---|---:|
+| medium `.20` | PASS | `0.132235 N` | `0.173066 / 2.34749 mm` | `0.133%` |
+| medium `.35` | PASS | `0.432058 N` | `0.328307 / 2.93384 mm` | `0.0129%` |
+| medium `.50` | PASS | `0.861926 N` | `0.500159 / 3.32329 mm` | `0.508%` |
+| medium `.65` | PASS | `0.422103 N` | UNVERIFIED | `4.327%` |
+| medium `.80` | PASS | `0.130621 N` | UNVERIFIED | `2.286%` |
+| fine `.20` | PASS | `0.133677 N` | `0.172961 / 2.13546 mm` | `0.0317%` |
+| fine `.50` | PASS | `0.864680 N` | `0.500039 / 3.42512 mm` | `0.0675%` |
+| fine `.80` | PASS | `0.129790 N` | UNVERIFIED | `4.702%` |
+
+Spot-check final normal-profile relative L2 difference는 `.20/.50/.80`에서
+각각 `0.635% / 0.255% / 0.659%`다. 수치는 양호하지만 사전 정의된
+CODTM profile threshold가 없으므로 mesh convergence는 `PROVISIONAL`이다.
+Optical/noise model도 없으므로 location separability와 SVD는 descriptive
+metric일 뿐 PASS criterion이 아니다.
+
+```text
+CODTM extraction pipeline:       PASS
+Center reconstruction:           PASS
+Medium location map:             PARTIAL
+Fine spot checks:                PARTIAL
+CODTM mesh convergence:          PROVISIONAL
+Contact-distribution closure:    PARTIAL (256/384 records verified)
+Mechanical separability:         DESCRIPTIVE ONLY
+Geometry optimization:           NOT STARTED
+```
+
+상세 정의와 결과는 `Mechanical-Deformation-Transfer-Map.md`, artifact는
+`output/phase4_mechanical_transfer_map/`에 저장했다.
+
+---
+
+## 21. Phase 4K-Viz — CODTM spatial visualization
+
+Phase 4K canonical artifacts만 read-only로 사용해 10개 static figure를 300
+DPI PNG와 vector PDF로 생성했다. NPZ axes, case/side ordering, 31,488 CSV
+rows, 384 valid displacement records를 metadata-driven loader로 교차검사했고,
+입력 7개 파일의 실행 전/후 SHA-256이 모두 동일했다. Kratos solve와 contact
+parameter 변경은 없었다.
+
+Scientific coordinate는 `(side, eta)`로 유지했다. Combined display에서만
+`zeta_right=eta-1`, `zeta_left=1-eta`를 사용하며, 서로 다른 `eta=1`
+material points 사이에 명시적 unsampled gap을 렌더링했다. Location
+interpolation/smoothing, crown endpoint 병합, deformed contact surface 추정은
+하지 않았다.
+
+Phase 4K metric은 정확히 재현됐다. `delta=1.5 mm` medium raw distance
+off-diagonal range는 `0.265411–0.982068 mm`, normalized shape distance는
+`0.552584–1.968494`다. Mirror residual은 `.20/.80`, `.35/.65`, `.50/.50`
+pair에서 각각 `0.0670%`, `0.1498%`, `0.0942%`여서 `CONSISTENT`다.
+Stored tangent gain과 독립 finite difference의 최대 차이는 `0.0`이다.
+Medium/fine profile 결과도 기존 `0.635%/0.255%/0.659%`를 재현했지만
+scientific status는 그대로 `PROVISIONAL`이다.
+
+```text
+Data ingestion:                 PASS
+Coordinate semantics:           PASS
+Static visualization pipeline:  PASS
+Metric reproduction:            PASS
+Mirror symmetry:                CONSISTENT
+Medium/fine visualization:      PROVISIONAL
+Publication readiness:          READY
+Optical observability:          NOT EVALUATED
+```
+
+Contact centroid/length는 기존 force-closure mask를 유지해 256/384 record만
+verified로 취급했다. Visualization 작업만으로 Phase 4K ledger, descriptor
+closure, CODTM mesh-convergence, optical observability를 승격하지 않았다.
+상세 설명은 `CODTM-Visualization.md`, 산출물은
+`output/phase4_codtm_visualization/`에 있다.

@@ -82,6 +82,7 @@ class IndenterFixture:
     settings: IndenterSettings
     frame: CrownFrame
     center_mm: Vector2
+    contact_direction: Vector2
     carrier_geometry: Polygon
     contact_arc: LineString
     outer_remainder: MultiLineString
@@ -106,6 +107,7 @@ class IndenterFixture:
             "crown_tangent": list(self.frame.tangent),
             "pad_outward_normal": list(self.frame.pad_outward_normal),
             "loading_direction": list(self.frame.loading_direction),
+            "contact_direction": list(self.contact_direction),
             "center_mm": list(self.center_mm),
             "pad_contact_arc_minimum_distance_mm": self.contact_arc.distance(
                 Point(self.frame.point_mm)
@@ -215,6 +217,70 @@ def crown_frame_from_model(model: FingertipModel) -> CrownFrame:
     )
 
 
+def surface_frame_from_normalized_location(
+    model: FingertipModel,
+    normalized_location: float,
+) -> CrownFrame:
+    """Return the local surface frame while retaining the global load direction.
+
+    ``normalized_location`` follows the native ``pad_outer_arc`` orientation:
+    zero is the right bonded endpoint, one half is the crown, and one is the
+    left bonded endpoint.  Only the placement frame rotates with location.
+    The loading direction is always copied from the central Phase 4J frame.
+    """
+    if (
+        not math.isfinite(normalized_location)
+        or normalized_location < 0.0
+        or normalized_location > 1.0
+    ):
+        raise InvalidIndenterSettings(
+            "normalized contact location must be finite and lie in [0, 1]"
+        )
+    arc = model.boundaries.segments["pad_outer_arc"].geometry
+    distance = normalized_location * float(arc.length)
+    point = arc.interpolate(distance)
+    sample_distance = max(
+        1.0e-6 * arc.length,
+        100.0 * model.parameters.geometry_tolerance,
+    )
+    before = arc.interpolate(max(0.0, distance - sample_distance))
+    after = arc.interpolate(min(arc.length, distance + sample_distance))
+    tangent = _normalized((after.x - before.x, after.y - before.y))
+    candidates = ((-tangent[1], tangent[0]), (tangent[1], -tangent[0]))
+    probe_distance = max(
+        1.0e-4, 1000.0 * model.parameters.geometry_tolerance
+    )
+    outside = [
+        candidate
+        for candidate in candidates
+        if not model.pad_material_geometry.covers(
+            Point(
+                point.x + probe_distance * candidate[0],
+                point.y + probe_distance * candidate[1],
+            )
+        )
+    ]
+    if len(outside) != 1:
+        interior = model.pad_material_geometry.representative_point()
+        radial = (point.x - interior.x, point.y - interior.y)
+        outward = max(
+            candidates,
+            key=lambda candidate: (
+                candidate[0] * radial[0] + candidate[1] * radial[1]
+            ),
+        )
+    else:
+        outward = outside[0]
+    central = crown_frame_from_model(model)
+    return CrownFrame(
+        point_mm=(float(point.x), float(point.y)),
+        tangent=tangent,
+        pad_outward_normal=_normalized(outward),
+        loading_direction=central.loading_direction,
+        arc_distance_mm=distance,
+    )
+
+
 def _sample_circle_arc(
     center: Vector2,
     radius: float,
@@ -278,6 +344,7 @@ def build_indenter_fixture(
         settings=resolved,
         frame=frame,
         center_mm=center,
+        contact_direction=frame.loading_direction,
         carrier_geometry=carrier,
         contact_arc=contact_arc,
         outer_remainder=MultiLineString([remainder_arc.coords]),
@@ -298,6 +365,78 @@ def build_indenter_fixture(
             f"indenter geometric gap {geometric_gap:g} does not reproduce "
             f"{resolved.initial_gap_mm:g} mm"
         )
+    return fixture
+
+
+def build_indenter_fixture_at_location(
+    model: FingertipModel,
+    normalized_location: float,
+    settings: IndenterSettings | None = None,
+) -> IndenterFixture:
+    """Place the fixture at one reference-arc location with global loading.
+
+    The circle is tangent to the local undeformed pad surface, but prescribed
+    travel remains parallel to the central Phase 4J loading direction.
+    """
+    resolved = settings or IndenterSettings()
+    frame = surface_frame_from_normalized_location(model, normalized_location)
+    center = (
+        frame.point_mm[0]
+        + (resolved.radius_mm + resolved.initial_gap_mm)
+        * frame.pad_outward_normal[0],
+        frame.point_mm[1]
+        + (resolved.radius_mm + resolved.initial_gap_mm)
+        * frame.pad_outward_normal[1],
+    )
+    contact_direction = (
+        -frame.pad_outward_normal[0],
+        -frame.pad_outward_normal[1],
+    )
+    contact_direction_angle = math.atan2(
+        contact_direction[1], contact_direction[0]
+    )
+    half_angle = math.radians(resolved.contact_half_angle_degrees)
+    contact_arc = _sample_circle_arc(
+        center,
+        resolved.radius_mm,
+        contact_direction_angle - half_angle,
+        contact_direction_angle + half_angle,
+        resolved.geometry_resolution,
+    )
+    remainder_arc = _sample_circle_arc(
+        center,
+        resolved.radius_mm,
+        contact_direction_angle + half_angle,
+        contact_direction_angle + 2.0 * math.pi - half_angle,
+        resolved.geometry_resolution,
+    )
+    carrier = Point(center).buffer(
+        resolved.radius_mm, quad_segs=resolved.geometry_resolution
+    )
+    if not isinstance(carrier, Polygon) or not carrier.is_valid:
+        raise InvalidIndenterSettings("failed to construct the circular carrier")
+    fixture = IndenterFixture(
+        settings=resolved,
+        frame=frame,
+        center_mm=center,
+        contact_direction=contact_direction,
+        carrier_geometry=carrier,
+        contact_arc=contact_arc,
+        outer_remainder=MultiLineString([remainder_arc.coords]),
+    )
+    target = Point(frame.point_mm)
+    target_gap = fixture.contact_arc.distance(target)
+    if abs(target_gap - resolved.initial_gap_mm) > max(
+        1.0e-8, 10.0 * model.parameters.geometry_tolerance
+    ):
+        raise InvalidIndenterSettings(
+            f"target-point gap {target_gap:g} does not reproduce "
+            f"{resolved.initial_gap_mm:g} mm"
+        )
+    if resolved.initial_gap_mm == 0.0 and not fixture.contact_arc.distance(target) <= max(
+        1.0e-8, 10.0 * model.parameters.geometry_tolerance
+    ):
+        raise InvalidIndenterSettings("contact arc does not contain its target point")
     return fixture
 
 
@@ -351,7 +490,7 @@ def generate_indenter_mesh(
 
         center = fixture.center_mm
         contact_angle = math.atan2(
-            fixture.frame.loading_direction[1], fixture.frame.loading_direction[0]
+            fixture.contact_direction[1], fixture.contact_direction[0]
         )
         half_angle = math.radians(fixture.settings.contact_half_angle_degrees)
         angles = (
@@ -458,7 +597,7 @@ def generate_indenter_mesh(
             outward_average[1] -= second[0] - first[0]
         outward_average_vector = _normalized((outward_average[0], outward_average[1]))
         normal_dot = sum(
-            outward_average_vector[index] * fixture.frame.loading_direction[index]
+            outward_average_vector[index] * fixture.contact_direction[index]
             for index in range(2)
         )
         if normal_dot <= 0.7:

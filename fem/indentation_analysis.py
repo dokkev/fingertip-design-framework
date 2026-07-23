@@ -6,7 +6,7 @@ from dataclasses import asdict, dataclass
 import math
 import time
 import traceback
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 from fem.indenter_fixture import (
     IndenterBoundaryEdge,
@@ -136,6 +136,29 @@ class IndentationArtifacts:
     indenter_mesh: IndenterMesh
     indenter_topology: IndenterKratosTopology
     snapshots: dict[str, dict[str, Any]]
+
+
+@dataclass(frozen=True)
+class ConvergedIndentationStep:
+    """Read-only view exposed immediately after one converged solution step."""
+
+    model: Any
+    model_part: Any
+    fingertip_model: FingertipModel
+    mesh: FingertipMesh
+    fixture: IndenterFixture
+    base_topology: KratosTopology
+    indenter_topology: IndenterKratosTopology
+    settings: IndentationSettings
+    displacements: Mapping[int, Sequence[float]]
+    reactions: Mapping[int, Sequence[float]]
+    result_point: Mapping[str, Any]
+    elapsed_case_seconds: float
+
+
+ConvergedStepObserver = Callable[
+    [ConvergedIndentationStep], Mapping[str, Any] | None
+]
 
 
 def _next_id(entities: Any) -> int:
@@ -980,6 +1003,8 @@ def run_indentation_case(
     indenter_settings: IndenterSettings | None = None,
     internal_contact_configuration: str = "three_pairs",
     mesh_override: FingertipMesh | None = None,
+    fixture_override: IndenterFixture | None = None,
+    converged_step_observer: ConvergedStepObserver | None = None,
 ) -> tuple[dict[str, Any], IndentationArtifacts | None]:
     """Run one fresh-model Phase 4I case and retain failure diagnostics."""
     KM, CSMA, _, _ = _import_kratos()
@@ -1015,7 +1040,15 @@ def run_indentation_case(
             raise InvalidIndentationSettings(
                 "mesh_override level must match mesh_level"
             )
-        fixture = build_indenter_fixture(fingertip_model, indenter_settings)
+        if fixture_override is not None and indenter_settings is not None:
+            raise InvalidIndentationSettings(
+                "fixture_override and indenter_settings are mutually exclusive"
+            )
+        fixture = (
+            fixture_override
+            if fixture_override is not None
+            else build_indenter_fixture(fingertip_model, indenter_settings)
+        )
         indenter_mesh = generate_indenter_mesh(
             fixture, mesh.settings.contact_boundary_target_size_mm
         )
@@ -1314,6 +1347,25 @@ def run_indentation_case(
             }
             if field_failures:
                 point["non_finite_fields"] = field_failures[:50]
+            if converged_step_observer is not None:
+                observer_value = converged_step_observer(
+                    ConvergedIndentationStep(
+                        model=model,
+                        model_part=model_part,
+                        fingertip_model=fingertip_model,
+                        mesh=mesh,
+                        fixture=fixture,
+                        base_topology=base_topology,
+                        indenter_topology=indenter_topology,
+                        settings=settings,
+                        displacements=displacements,
+                        reactions=reactions,
+                        result_point=point,
+                        elapsed_case_seconds=time.perf_counter() - start,
+                    )
+                )
+                if observer_value is not None:
+                    point["converged_step_observation"] = dict(observer_value)
             result["history"].append(point)
 
             if step in capture_steps:

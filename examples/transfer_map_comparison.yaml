@@ -1,0 +1,61 @@
+{
+  "schema_version": "1.0",
+  "datasets": [
+    {
+      "adapter": "phase4k",
+      "design_id": "baseline",
+      "input_dir": "output/phase4_mechanical_transfer_map"
+    }
+  ],
+  "figure": {
+    "kind": "transfer_map_comparison",
+    "title": "Mechanical location encoding — single-design reference",
+    "basename": "transfer_map_comparison",
+    "designs": [
+      "baseline"
+    ],
+    "mesh": "medium",
+    "quantity": "secant_gain",
+    "contact_locations": [
+      0.2,
+      0.35,
+      0.5,
+      0.65,
+      0.8
+    ],
+    "indentation_mm": 1.5,
+    "interpolation": {
+      "enabled": false
+    },
+    "color_scale": {
+      "mode": "shared_symmetric",
+      "center": 0.0
+    },
+    "panels": {
+      "geometry_context": true,
+      "transfer_maps": true,
+      "distance_matrices": true,
+      "metric_summary": true,
+      "optimization_history": false
+    },
+    "theme": "journal",
+    "scale": {
+      "deformation": 1.0,
+      "arrows": 1.0
+    },
+    "arrows": {
+      "maximum_per_panel": 18,
+      "minimum_magnitude_mm": 0.0
+    },
+    "export": {
+      "formats": [
+        "png",
+        "pdf"
+      ],
+      "dpi": 300,
+      "source_data": true,
+      "manifest": true,
+      "output_directory": "output/geometry_aware_figures/transfer_map_comparison"
+    }
+  }
+}
