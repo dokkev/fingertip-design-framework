@@ -556,8 +556,10 @@ def endpoint_snapshot(
             ),
             "CONTACT_CONVERGED": _process_flag(
                 context.model_part.ProcessInfo,
-                CSMA.CONTACT_CONVERGED,
-            ),
+                getattr(CSMA, "CONTACT_CONVERGED", None),
+            )
+            if hasattr(CSMA, "CONTACT_CONVERGED")
+            else None,
         },
         "dofs": {
             "DISPLACEMENT_X": _dof_state(node, KM.DISPLACEMENT_X),
@@ -612,7 +614,7 @@ def _final_fields(context: Any, converged: bool) -> dict[str, Any]:
             "available": False,
             "reason": f"{type(exception).__name__}: {exception}",
         }
-    loading_direction = context.fixture.loading_direction
+    loading_direction = context.fixture.frame.loading_direction
     reaction = compressive_indenter_reaction(
         reactions,
         context.indenter_topology.node_ids,
@@ -969,6 +971,25 @@ def source_trace() -> dict[str, Any]:
             {
                 "file": (
                     "applications/ContactStructuralMechanicsApplication/"
+                    "custom_processes/normal_gap_process.cpp"
+                ),
+                "class": "NormalGapProcess",
+                "methods": ["Execute", "ComputeNormalGap"],
+                "behavior": (
+                    "ComputeMappedGap constructs a SimpleMortarMapperProcess "
+                    "for AUXILIAR_COORDINATES, then computes the nodal normal "
+                    "gap from current minus mapped coordinates. This nodal "
+                    "mapping is separate from exact mortar overlap acceptance."
+                ),
+                "url": root
+                + (
+                    "applications/ContactStructuralMechanicsApplication/"
+                    "custom_processes/normal_gap_process.cpp"
+                ),
+            },
+            {
+                "file": (
+                    "applications/ContactStructuralMechanicsApplication/"
                     "custom_processes/base_contact_search_process.cpp"
                 ),
                 "class": "BaseContactSearchProcess",
@@ -1080,6 +1101,10 @@ def source_trace() -> dict[str, Any]:
             "exact_overlap_api": (
                 "ExactMortarIntegrationUtility2D2N."
                 "TestGetExactAreaIntegration"
+            ),
+            "normal_gap_projection_api": (
+                "NormalGapProcess -> SimpleMortarMapperProcess "
+                "(not exposed as a read-only per-pair projection record)"
             ),
         },
         "crosspoint_support_search": {

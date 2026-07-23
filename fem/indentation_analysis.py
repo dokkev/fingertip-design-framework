@@ -524,7 +524,7 @@ def inspect_indentation_runtime_contract(
     internal_contact_configuration: str = "three_pairs",
 ) -> dict[str, Any]:
     """Initialize and inspect Phase 4I without entering a nonlinear step."""
-    KM, _, _, _ = _import_kratos()
+    KM, CSMA, _, _ = _import_kratos()
     from KratosMultiphysics.StructuralMechanicsApplication.structural_mechanics_analysis import (
         StructuralMechanicsAnalysis,
     )
@@ -571,6 +571,33 @@ def inspect_indentation_runtime_contract(
         runtime = _runtime_contact_contract(
             model, model_part, contact_groups
         )
+        model_part_names = sorted(str(name) for name in model.GetModelPartNames())
+        indexed_contact_paths = [
+            name
+            for name in model_part_names
+            if ".Contact.ContactSub" in name
+            or ".ComputingContact.ComputingContactSub" in name
+        ]
+        internal_surface_names = (
+            "PadCutoutLeft",
+            "PadCutoutRight",
+            "PadCutoutBottom",
+            "StemLeft",
+            "StemRight",
+            "StemBottom",
+        )
+        internal_surface_node_ids = {
+            node.Id
+            for name in internal_surface_names
+            for node in model_part.GetSubModelPart(name).Nodes
+        }
+        global_lm_node_ids = {
+            node.Id
+            for node in model_part.Nodes
+            if node.HasDofFor(
+                CSMA.LAGRANGE_MULTIPLIER_CONTACT_PRESSURE
+            )
+        }
         return {
             "status": "PASS" if runtime["all_group_contracts_pass"] else "FAIL",
             "mesh_level": mesh_level,
@@ -592,6 +619,31 @@ def inspect_indentation_runtime_contract(
             "contact_groups": [list(group) for group in contact_groups],
             "continuous_u_aggregate_contract": aggregate_contract,
             "runtime_contact_contract": runtime,
+            "contact_process_count": len(contact_groups),
+            "indexed_contact_model_part_paths": indexed_contact_paths,
+            "internal_contact_registration": {
+                "registered_group_names": [
+                    group_name
+                    for group_name, _, _ in contact_groups
+                    if group_name.startswith("internal_")
+                ],
+                "internal_contact_submodel_parts_present": [
+                    name
+                    for name in indexed_contact_paths
+                    if not name.endswith("Sub0")
+                ],
+                "internal_source_semantic_parts_retained": list(
+                    internal_surface_names
+                ),
+                "internal_source_nodes_with_root_level_lm_dof": len(
+                    internal_surface_node_ids.intersection(global_lm_node_ids)
+                ),
+                "root_level_lm_dof_explanation": (
+                    "AuxiliaryAddDofs adds the ALM pressure DOF to every root "
+                    "node even for one external pair. These dormant DOFs are "
+                    "not evidence of an internal contact process or assembly."
+                ),
+            },
             "internal_contact_lm_boundary_treatment": "Kratos process default; no manual LM pressure constraints",
             "strategy_check": int(
                 analysis._GetSolver()._GetSolutionStrategy().Check()
@@ -699,11 +751,25 @@ def _contact_group_step_metrics(
             )
             for node in slave.Nodes
         }
-        slave_positions = {node.Id: (float(node.X), float(node.Y)) for node in slave.Nodes}
+        geometric_gap_node_ids = (
+            set(active_slave_ids)
+            if group_name == "external_pad_indenter"
+            else {node.Id for node in slave.Nodes}
+        )
+        slave_positions = {
+            node.Id: (float(node.X), float(node.Y))
+            for node in slave.Nodes
+            if node.Id in geometric_gap_node_ids
+        }
+        gap_normals = {
+            node_id: normal
+            for node_id, normal in normals.items()
+            if node_id in geometric_gap_node_ids
+        }
         master_edges = _master_edges_for_group(group_name, mesh, indenter_topology)
         geometric_gap = signed_geometric_gap_statistics(
             slave_positions,
-            normals,
+            gap_normals,
             master_edges,
             _edge_positions(model_part, master_edges),
         )
@@ -720,6 +786,11 @@ def _contact_group_step_metrics(
             "weighted_gap": _statistics(weighted_gaps),
             "lagrange_multiplier_contact_pressure": _statistics(pressures),
             "signed_geometric_gap": geometric_gap,
+            "geometric_gap_node_scope": (
+                "active slave nodes"
+                if group_name == "external_pad_indenter"
+                else "all source slave nodes"
+            ),
             "local_contact_mesh_size_mm": local_size,
             "penetration_tolerance_mm": penetration_tolerance,
             "penetration_pass": bool(geometric_gap.get("available"))
@@ -1099,6 +1170,66 @@ def run_indentation_case(
                     },
                 }
                 break
+
+            if "assembled_contact_lm_contract" not in result:
+                assembled_lm_node_ids = sorted(
+                    {
+                        int(dof.Id())
+                        for index, _ in enumerate(
+                            contact_group_definitions
+                        )
+                        for condition in model[
+                            "Structure.ComputingContact."
+                            f"ComputingContactSub{index}"
+                        ].Conditions
+                        for dof in condition.GetDofList(
+                            model_part.ProcessInfo
+                        )
+                        if dof.GetVariable().Name()
+                        == (
+                            CSMA.LAGRANGE_MULTIPLIER_CONTACT_PRESSURE.Name()
+                        )
+                    }
+                )
+                internal_source_ids = {
+                    node.Id
+                    for name in (
+                        "PadCutoutLeft",
+                        "PadCutoutRight",
+                        "PadCutoutBottom",
+                        "StemLeft",
+                        "StemRight",
+                        "StemBottom",
+                    )
+                    for node in model_part.GetSubModelPart(name).Nodes
+                }
+                external_slave_ids = {
+                    node.Id
+                    for node in model_part.GetSubModelPart("PadOuterArc").Nodes
+                }
+                result["assembled_contact_lm_contract"] = {
+                    "assembled_lm_node_ids": assembled_lm_node_ids,
+                    "assembled_lm_node_count": len(assembled_lm_node_ids),
+                    "identification_method": (
+                        "LM DOFs returned by generated ComputingContact "
+                        "condition GetDofList"
+                    ),
+                    "external_slave_lm_node_count": len(
+                        set(assembled_lm_node_ids).intersection(
+                            external_slave_ids
+                        )
+                    ),
+                    "internal_exclusive_lm_node_ids": sorted(
+                        set(assembled_lm_node_ids)
+                        .intersection(internal_source_ids)
+                        .difference(external_slave_ids)
+                    ),
+                    "no_internal_contact_lm_assembly": not (
+                        set(assembled_lm_node_ids)
+                        .intersection(internal_source_ids)
+                        .difference(external_slave_ids)
+                    ),
+                }
 
             displacements, reactions = _nodal_fields(model_part, all_node_ids)
             field_failures = _finite_field_failures(

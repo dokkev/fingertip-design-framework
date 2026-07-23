@@ -8,6 +8,8 @@ import pytest
 from fem.fingertip_mesher import generate_fingertip_mesh
 from fem.indenter_fixture import build_indenter_fixture
 from fem.indentation_postprocess import (
+    _save_history_plots,
+    _write_history_csv,
     compressive_indenter_reaction,
     contact_width_metrics,
     extract_outer_arc_profile,
@@ -104,3 +106,49 @@ def test_pad_strain_statistics_exclude_both_rigid_domains(meshed_model) -> None:
     assert result["det_f"]["min"] == pytest.approx(1.0)
     assert result["det_f"]["max"] == pytest.approx(1.0)
     assert result["maximum_absolute_green_lagrange_component"]["value"] == pytest.approx(0.0)
+
+
+def test_external_only_history_outputs_do_not_require_internal_groups(
+    tmp_path,
+) -> None:
+    def point(step: int) -> dict[str, object]:
+        return {
+            "step": step,
+            "pseudo_time": float(step),
+            "prescribed_indenter_travel_mm": 0.01 * step,
+            "achieved_indentation_mm": 0.01 * step,
+            "indenter_normal_reaction_n": 0.1 * step,
+            "support_signed_reaction_along_loading_n": -0.1 * step,
+            "force_equilibrium_error": 0.0,
+            "nonlinear_iterations": 2,
+            "solver_converged": True,
+            "active_set_converged": True,
+            "contact_groups": {
+                "external_pad_indenter": {
+                    "active_condition_count": 1,
+                    "weighted_gap": {"min": -1.0e-6, "mean": -1.0e-7},
+                    "signed_geometric_gap": {
+                        "maximum_penetration_mm": 1.0e-6
+                    },
+                }
+            },
+            "external_contact_width": {
+                "chord_width_mm": 0.1,
+                "arc_length_mm": 0.1,
+            },
+            "pad_strain_det_f": {
+                "maximum_principal_green_lagrange_strain": {
+                    "value": 0.01
+                },
+                "det_f": {"min": 0.99},
+            },
+            "maximum_pad_displacement_mm": 0.01 * step,
+            "volumetric_strain": {"min": -0.01, "max": 0.01},
+            "solve_wall_clock_seconds": 0.1,
+        }
+
+    history = [point(1), point(2)]
+    _write_history_csv(tmp_path / "history.csv", history)
+    _save_history_plots({"history": history}, tmp_path / "plots")
+    assert (tmp_path / "history.csv").is_file()
+    assert (tmp_path / "plots" / "contact_groups.png").is_file()

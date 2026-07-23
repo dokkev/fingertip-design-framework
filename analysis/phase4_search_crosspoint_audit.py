@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 import os
 from pathlib import Path
 import resource
@@ -47,12 +48,29 @@ def _arguments() -> argparse.Namespace:
 def _write_json(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
-        json.dumps(value, indent=2, sort_keys=True, allow_nan=False) + "\n",
+        json.dumps(
+            _json_safe(value),
+            indent=2,
+            sort_keys=True,
+            allow_nan=False,
+        )
+        + "\n",
         encoding="utf-8",
     )
 
 
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, Mapping):
+        return {key: _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    return value
+
+
 def _csv_value(value: Any) -> Any:
+    value = _json_safe(value)
     if value is None or isinstance(value, (str, int, float, bool)):
         return value
     return json.dumps(value, sort_keys=True, allow_nan=False)
@@ -407,6 +425,41 @@ def _summarize(
         for record in left_history
         if not record["active"]
     ]
+    left_activation_iterations = [
+        record["iteration"]
+        for record in left_history
+        if record["active"]
+    ]
+    left_final_assembly = _stage(
+        lifecycles["L00"],
+        "after_tangent_assembly",
+        results["L00"].get("newton_iterations"),
+    )
+    left_final_local_rows = (
+        left_final_assembly.get("local_lm_assembly", {}).get(
+            "condition_rows", []
+        )
+    )
+    right_first_local_rows = (
+        f00_assembly.get("local_lm_assembly", {}).get(
+            "condition_rows", []
+        )
+    )
+    right_inactive_assembly = _stage(
+        lifecycles["F00"], "after_tangent_assembly", 2
+    )
+    right_inactive_rows = (
+        right_inactive_assembly.get("local_lm_assembly", {}).get(
+            "condition_rows", []
+        )
+    )
+    f00_active_sequence = [
+        record["active"] for record in right_history
+    ]
+    f02_history = _active_history(lifecycles["F02"])
+    f02_active_sequence = [
+        record["active"] for record in f02_history
+    ]
     f02_still_fails = (
         f02_invalid_inactive and not results["F02"]["solve_converged"]
     )
@@ -463,6 +516,15 @@ def _summarize(
             "invalid_pair_active_state_is_necessary_for_failure": False
             if f02_still_fails
             else None,
+            "F00_F02_node_active_sequences_identical": (
+                f00_active_sequence == f02_active_sequence
+            ),
+            "persistent_endpoint_active_hypothesis": (
+                "REJECTED: the right endpoint is inactive after check 1, "
+                "active after checks 2-4, and inactive after non-finite "
+                "state develops. Failure is associated with active episodes, "
+                "not a permanently ACTIVE node."
+            ),
             "invalid_pair_presence_effect_isolated": False,
             "reason": (
                 "F02 separates condition ACTIVE state from presence and still "
@@ -485,13 +547,31 @@ def _summarize(
             "left_post_dirichlet_global_row": left_assembly.get(
                 "global_lm_assembly"
             ),
+            "active_lm_diagonal": next(
+                (
+                    record.get("lm_diagonal")
+                    for record in right_first_local_rows
+                    if record.get("valid_endpoint_pair")
+                ),
+                None,
+            ),
+            "inactive_lm_diagonal_iteration_2": next(
+                (
+                    record.get("lm_diagonal")
+                    for record in right_inactive_rows
+                    if record.get("valid_endpoint_pair")
+                ),
+                None,
+            ),
             "mechanism": (
                 "The active endpoint LM couples locally to displacement "
                 "columns, but its endpoint X/Y primal DOFs are fixed. The "
                 "remaining valid-pair coupling to free columns is near zero; "
                 "Dirichlet elimination therefore leaves a near-zero global LM "
-                "row. The zero-overlap extra condition contributes a zero "
-                "local row but is not required for the deficiency."
+                "row and active LM diagonal is zero. When the slave node is "
+                "inactive, the contact condition supplies an LM diagonal. The "
+                "zero-overlap extra condition contributes a zero local row but "
+                "is not required for the deficiency."
             ),
         },
         "left_success_dependency": {
@@ -502,13 +582,38 @@ def _summarize(
             "first_inactive_iteration": min(
                 left_deactivation_iterations, default=None
             ),
+            "active_iterations": left_activation_iterations,
+            "final_endpoint_active": (
+                left_history[-1]["active"] if left_history else None
+            ),
+            "final_augmented_pressure": (
+                left_history[-1]["augmented_pressure"]
+                if left_history
+                else None
+            ),
+            "final_tangent_lm_diagonal": next(
+                (
+                    record.get("lm_diagonal")
+                    for record in left_final_local_rows
+                    if record.get("lm_diagonal") is not None
+                ),
+                None,
+            ),
             "depends_on_endpoint_deactivation": bool(
                 results["L00"]["solve_converged"]
                 and left_deactivation_iterations
             ),
+            "explanation": (
+                "Left is first deactivated by the positive augmented-pressure "
+                "test after iteration 1, reactivates intermittently, and "
+                "converges at iteration 12 with the endpoint inactive. Its "
+                "final tangent contains the inactive-node LM diagonal, unlike "
+                "the near-zero active-row tangent."
+            ),
             "active_history": left_history,
         },
         "right_active_history": right_history,
+        "F02_active_history": f02_history,
         "library_level_behavior": (
             "Kratos' broad-phase search can create an ACTIVE paired condition "
             "whose endpoint projection is outside the Line2 segment and whose "

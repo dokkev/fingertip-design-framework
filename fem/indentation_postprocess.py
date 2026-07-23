@@ -490,13 +490,19 @@ def _write_history_csv(path: Path, history: Sequence[Mapping[str, Any]]) -> None
                     ],
                     "internal_left_active_condition_count": groups[
                         "internal_left"
-                    ]["active_condition_count"],
+                    ]["active_condition_count"]
+                    if "internal_left" in groups
+                    else 0,
                     "internal_right_active_condition_count": groups[
                         "internal_right"
-                    ]["active_condition_count"],
+                    ]["active_condition_count"]
+                    if "internal_right" in groups
+                    else 0,
                     "internal_bottom_active_condition_count": groups[
                         "internal_bottom"
-                    ]["active_condition_count"],
+                    ]["active_condition_count"]
+                    if "internal_bottom" in groups
+                    else 0,
                     "external_weighted_gap_min": external["weighted_gap"]["min"],
                     "external_weighted_gap_mean": external["weighted_gap"]["mean"],
                     "external_contact_chord_width_mm": point[
@@ -594,6 +600,8 @@ def _save_history_plots(
         "internal_right",
         "internal_bottom",
     ):
+        if group_name not in history[0]["contact_groups"]:
+            continue
         axis.plot(
             indentation,
             [point["contact_groups"][group_name]["active_condition_count"] for point in history],

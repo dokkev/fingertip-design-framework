@@ -195,7 +195,8 @@ but does not remove the upper-endpoint rows or recover the solve.
 Therefore Phase 4I-D is `FAIL` and continuous U is `REJECT` as a recovery for
 the current Kratos 2D ALM setup. Its gated 0.25 mm/48-step Trial was not run.
 Phase 4M initialization remains `PASS`, Phase 4I remains incomplete, and the
-1.5 mm medium/fine baseline and contact-location sweep remain blocked.
+internal-contact 1.5 mm medium/fine baseline remains blocked. Phase 4J later
+establishes an independent external-only baseline.
 Artifacts are separate under
 `output/phase4_internal_contact_diagnostic/`.
 
@@ -230,8 +231,78 @@ search/pair generation and subsequent LM assembly/active-set handling; it
 does not establish a library-level root cause. No source-level production
 fix, regression suite, or D/E full Trial was run. Three-pair and continuous-U
 remain rejected for the current contact setup, Phase 4I cannot resume, and
-the 1.5 mm medium/fine baseline remains blocked. Artifacts are under
+the internal-contact 1.5 mm medium/fine baseline remains blocked. Artifacts are under
 `output/phase4_right_side_audit/`.
+
+### Phase 4I-F search/crosspoint audit
+
+Run the fixed first-step causal and multiplier-space audit with:
+
+```bash
+OMP_NUM_THREADS=1 PYTHONFAULTHANDLER=1 \
+  /home/dk/miniconda3/envs/lit/bin/python -B \
+  -m analysis.phase4_search_crosspoint_audit \
+  --output-directory output/phase4_search_crosspoint_audit
+```
+
+The right extra pair projects to Kratos Line2 local coordinate `xi=3.0`,
+outside `[-1, 1]`, and has only `5.3013e-14 mm` exact overlap. F00 reproduces
+the 35-iteration failure. F02 retains the generated condition/search
+lifecycle but sets only that invalid condition inactive; it still follows the
+same endpoint active-set history and fails. The invalid condition's ACTIVE
+state is therefore not necessary for failure, while safe generated-pair
+removal/insertion experiments are unavailable through the Kratos 10.3 Python
+API.
+
+Both upper pad endpoints are also fully constrained pad-bond crosspoints.
+Their active LM diagonal is zero, and the valid contact condition alone leaves
+free-column norms of `1.7164e-15` (left) and `6.3117e-17` (right) after the
+fixed endpoint displacement columns are eliminated. Inactive contact supplies
+an LM diagonal; the left control converges at iteration 12 with that endpoint
+inactive. This distinguishes the broad-phase extra-pair behavior from the
+direct active-crosspoint LM row deficiency.
+
+Phase 4I-F is `FAIL`: no physical, mesh-independent production correction was
+validated, so A–E regressions and the gated 0.25 mm/48-step D/E trial were not
+run. The mixed T3 solid remains adopted, the current internal ALM contact
+configuration remains blocked, and internal-contact 1.5 mm trials remain
+deferred. Artifacts
+are under `output/phase4_search_crosspoint_audit/`.
+
+### Phase 4I-G and Phase 4J
+
+Run the bounded crosspoint treatment audit and the resumable no-void fallback:
+
+```bash
+OMP_NUM_THREADS=1 /home/dk/miniconda3/envs/lit/bin/python -B \
+  -m analysis.phase4_crosspoint_multiplier_treatment
+
+OMP_NUM_THREADS=1 PYTHONFAULTHANDLER=1 \
+  /home/dk/miniconda3/envs/lit/bin/python -B \
+  -m analysis.phase4_no_void_baseline
+```
+
+Phase 4I-G is `FAIL/BLOCKED`. Kratos 10.3 provides no official
+contact–Dirichlet crosspoint LM omission/condensation setting. In six
+mirrored/refined minimal patches, a fully fixed ACTIVE endpoint retained
+healthy coupling to its adjacent free slave trace and did not produce a zero
+LM row. A topology-only rule that excludes every such endpoint is therefore
+not a safe production correction. The gated A–E regressions and full internal
+contact trial were not run.
+
+Phase 4J is an independent `PASS` using the existing zero-void default
+geometry, mixed T3 solid, `nu = 0.49`, and external pad–indenter ALM pair only.
+The 1.5 mm/48-step medium and fine cases both pass with final reactions
+`0.861926 N` and `0.864680 N`; their relative difference is `0.319%`.
+All fields remain finite, det(F) stays positive, the force curves are smooth
+and monotonic, and no internal contact-coupled LM enters the generated
+condition DOF lists. The symbolic roadmap contains no executable location list
+or documented no-void candidate list, so J3/J4 are recorded as `SKIPPED`
+instead of inventing a new sweep.
+
+Artifacts are under `output/phase4_crosspoint_multiplier_treatment/` and
+`output/phase4_no_void_baseline/`. The mixed solid and external baseline remain
+adopted; the current internal zero-clearance ALM configuration remains blocked.
 
 ## Example
 
@@ -257,5 +328,6 @@ left_contact = model.contact_pairs[0]
 print(left_contact.initial_normal_gap)
 ```
 
-Contact-location sweeps remain deferred until the default internal-contact
-nonlinear blocker is resolved.
+Contact-location sweeps remain deferred until a reviewed discrete location
+list is added. The Phase 4J external-only baseline is available for those
+future cases; the default internal-contact nonlinear blocker remains separate.

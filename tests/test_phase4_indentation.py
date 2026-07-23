@@ -50,6 +50,26 @@ def test_internal_three_pair_runtime_contract_is_preserved(
         assert groups[name]["contact_submodelpart_condition_ids"]
 
 
+def test_no_void_external_only_runtime_has_no_internal_contact_registration() -> None:
+    preflight = inspect_indentation_runtime_contract(
+        FingertipModel(FingertipParameters()),
+        "medium",
+        IndentationSettings(0.25 / 48.0, 1),
+        internal_contact_configuration="none",
+    )
+    assert preflight["status"] == "PASS"
+    assert preflight["contact_process_count"] == 1
+    assert set(preflight["runtime_contact_contract"]["groups"]) == {
+        "external_pad_indenter"
+    }
+    registration = preflight["internal_contact_registration"]
+    assert not registration["registered_group_names"]
+    assert not registration["internal_contact_submodel_parts_present"]
+    # Kratos adds the external ALM DOF root-wide; it remains dormant on the
+    # retained internal semantic surface nodes and is not a contact process.
+    assert registration["internal_source_nodes_with_root_level_lm_dof"] > 0
+
+
 @pytest.fixture(scope="module")
 def separated_internal_gap_small_solve():
     # This diagnostic isolates external ALM solve wiring from the default

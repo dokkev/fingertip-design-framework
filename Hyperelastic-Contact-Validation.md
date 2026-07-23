@@ -80,7 +80,11 @@ Recommended contact roles:
 | Phase 4M | 실제 Shapely geometry의 Gmsh T3/Kratos initialization | PASS | 3개 내부 contact runtime contract 확인 |
 | Phase 4I | 중앙 rigid-indenter nonlinear solve | FAIL | Trial step 1에서 내부 zero-clearance contact rank deficiency |
 | Phase 4I-D | 내부 contact A–E 격리 및 continuous-U recovery | FAIL | Right-only도 실패; continuous U도 35회에서 실패 |
-| Project decision | LIT Hand application 적합성 평가 | — | **Mixed solid 유지 / contact-location sweep 보류** |
+| Phase 4I-E | 우측 mirror/orientation 및 endpoint assembly audit | FAIL | ordering 가설 기각; search 이후 extra pair 확인 |
+| Phase 4I-F | Search-pair 인과성 및 contact–bond crosspoint audit | FAIL | invalid-pair ACTIVE는 필요조건 아님; active crosspoint LM row 결손 확인 |
+| Phase 4I-G | 제한된 multiplier-space treatment 검증 | FAIL/BLOCKED | 공식 경로 없음; topology-only endpoint LM 제외는 과도함 |
+| Phase 4J | No-void external-contact-only baseline | PASS | medium/fine 1.5 mm 완료; 반력 차이 0.319% |
+| Project decision | LIT Hand application 적합성 평가 | — | **Mixed solid 및 external baseline 유지 / internal contact 차단** |
 
 `Phase 3R Formal FAIL` 기록은 지우지 않는다. 다만 이는 coarse mesh의 pressure roughness까지 모든 mesh에서 `< 0.5`를 요구한 원래 gate에 따른 판정이다. Solver failure 또는 application blocker를 의미하지 않는다.
 
@@ -822,3 +826,249 @@ Phase 4I baseline resume:          NO
 
 Artifact는 기존 Phase 결과를 덮어쓰지 않고
 `output/phase4_right_side_audit/`에 저장했다.
+
+---
+
+## 17. Phase 4I-F — search pair와 upper crosspoint multiplier audit
+
+### 실행 범위
+
+Phase 4I-E와 동일한 medium mesh, `0.25 / 48 mm` 첫 travel, geometry, material,
+mixed T3, ALM/search, penalty, tolerance, Newton 35회 및 Skyline solver를
+유지했다. Kratos contact strategy의 공개 scheme/builder/criterion API로 첫
+nonlinear step 순서를 재현해 각 iteration 전후의 endpoint flag, gap, LM,
+local condition row 및 Dirichlet 적용 후 global row를 저장했다.
+
+```bash
+OMP_NUM_THREADS=1 PYTHONFAULTHANDLER=1 \
+  /home/dk/miniconda3/envs/lit/bin/python -B \
+  -m analysis.phase4_search_crosspoint_audit \
+  --output-directory output/phase4_search_crosspoint_audit
+```
+
+### Search 및 causal matrix 결과
+
+Kratos `Line2D2`의 local domain은 `[-1, 1]`이다. Right extra pair의 기존
+segment fraction `t=2.0`은 Kratos local coordinate `xi=2t-1=3.0`에
+해당하므로 domain 밖이다. 공개
+`ExactMortarIntegrationUtility2D2N.TestGetExactAreaIntegration`으로 계산한
+overlap도 `5.3013e-14 mm`로 numerical zero였다. Valid right pair의 overlap은
+약 `0.35 mm`였다.
+
+| Case | Invalid condition | 결과 | Newton | 관찰 |
+|---|---:|---:|---:|---|
+| L00 | 없음 | PASS | 12 | 최종 endpoint inactive |
+| F00 | 원래 ACTIVE | FAIL | 35 | Skyline zero-sum, 이후 non-finite |
+| F02 | condition만 inactive | FAIL | 35 | F00과 동일한 node ACTIVE sequence와 LM response |
+| F01 | 생성 전 제거 | UNAVAILABLE | — | Python에 search `INDEX_MAP` filter hook 없음 |
+| F03 | valid generated pair만 유지 | UNAVAILABLE | — | condition만 제거하면 C++ pairing map lifecycle 불일치 |
+| symmetric control | extra pair 주입 | NOT RUN | — | pair/map을 원자적으로 추가하는 공개 API 없음 |
+
+F00과 F02에서 right node 2는 active-set check 후
+`inactive -> active -> active -> active -> inactive ...`의 동일한 초기
+sequence를 보였다. 따라서 extra condition의 `ACTIVE` 상태가 failure의
+필요조건이라는 가설은 기각한다. F02는 invalid condition을 container와
+search map에 그대로 두고 flag만 비활성화했으므로 “pair의 존재 자체”까지
+분리한 실험은 아니다.
+
+### Contact–bond crosspoint assembly
+
+Node 2와 node 5는 각각 `PadCutoutRight/Left`와 `PadBondRight/Left`에 동시에
+속하며 X/Y displacement가 모두 고정되어 있다. LM 자체는 free scalar DOF다.
+첫 active tangent의 수치는 다음과 같다.
+
+| 항목 | Left node 5 | Right node 2 |
+|---|---:|---:|
+| Endpoint free X/Y DOF | 0 | 0 |
+| Valid condition local all-column norm | `0.764997` | `0.750396` |
+| Valid-only free-column norm | `1.7164e-15` | `6.3117e-17` |
+| Active LM diagonal | `0.0` | `0.0` |
+| Dirichlet 후 global LM row norm | `1.7164e-15` | `6.3117e-17` |
+| Invalid condition local norm | — | `0.0` |
+
+즉 직접적인 zero-row mechanism은 extra pair가 아니라 active endpoint LM이
+고정된 endpoint primal displacement에 결합하고, 나머지 free primal
+column과는 numerical zero 수준으로만 결합한다는 점이다. Active 상태에서는
+LM diagonal이 없지만 inactive 상태에서는 condition이 diagonal
+stabilization을 제공한다. Right iteration 2의 inactive diagonal은
+`3.032058`이었다.
+
+Left도 처음부터 구조적으로 안전한 것은 아니다. Iteration 1의 positive
+augmented pressure로 비활성화된 뒤 iteration 4–6, 8, 10에는 다시
+활성화됐다. 최종 iteration 12에서는 inactive이고 LM diagonal
+`3.091055`가 있는 tangent로 수렴했다. 따라서 left PASS는 crosspoint row가
+본질적으로 유효해서가 아니라 final active-set이 endpoint를 inactive
+formulation으로 놓은 데 의존한다.
+
+### Library behavior와 application susceptibility
+
+설치 kernel의 exact commit은
+`14ee273e97af403622699e797ea5fa356b1a7e60`이다. Source trace에서 확인한
+동작은 다음과 같다.
+
+- `BaseContactSearchProcess::SearchUsingKDTree`는 KD-tree/OBB broad-phase
+  candidate를 만들고, `CheckCondition`은 identity, normal 및 duplicate
+  조건을 확인하지만 endpoint `Line2D2::IsInside` 검사를 하지 않는다.
+- `CreateAuxiliaryConditions`/`AddPairing`은 candidate를 coupled condition으로
+  만들고 condition을 `ACTIVE`로 설정한다.
+- `WEIGHTED_GAP`은 ComputingContact condition의 explicit contribution을
+  slave node에 누적한다.
+- `ComputeALMFrictionlessActiveSet`은 pair별 exact overlap이 아니라
+  `SCALE_FACTOR*LM + INITIAL_PENALTY*WEIGHTED_GAP`의 node-level 부호로
+  `ACTIVE`를 판정한다.
+- 조사한 공식 search/active-set/mortar-condition 경로에서는 fully
+  Dirichlet contact–bond crosspoint LM을 자동 제거하거나 별도로
+  stabilization하는 공식 규칙을 찾지 못했다.
+
+따라서 library-level behavior는 out-of-domain numerical-zero-overlap
+condition 생성을 허용하는 broad-phase/condition creation 흐름이다.
+Application-level susceptibility는 바로 그 slave endpoint를 fully constrained
+pad-bond crosspoint로 contact multiplier space에 포함한 것이다. F02 결과상
+전자가 직접적인 singular row의 필요조건은 아니다.
+
+### 판정
+
+물리적이고 mesh-independent한 production correction은 검증하지 못했다.
+Endpoint 삭제, LM 고정, contact 절단, endpoint 강제 inactive는 채택하지
+않았다. Safe F01/F03 경로가 없으므로 pair acceptance correction도 완전한
+fix로 주장하지 않는다. 공식 crosspoint treatment가 확인되지 않은 상태에서
+application-level LM rule도 임의 도입하지 않았다.
+
+```text
+Phase 4I-F:                         FAIL
+Invalid-pair ACTIVE causal hypothesis: REJECT
+Active contact–bond crosspoint deficiency: CONFIRMED
+Production correction:             NONE
+A/B/C-left/C-right/C/D/E regression: NOT RUN (correction gate)
+D/E 0.25 mm x 48-step Trial:       NOT RUN (first-step gate)
+1.5 mm baseline:                   NOT RUN
+Mixed T3 hyperelastic solid:       ADOPT 유지
+```
+
+상세 lifecycle, pair 비교, crosspoint DOF map, source/API trace 및 격리 로그는
+`output/phase4_search_crosspoint_audit/`에 보존한다.
+
+---
+
+## 18. Phase 4I-G — bounded multiplier-space treatment
+
+### Source audit
+
+설치된 Kratos `10.3.0-14ee273e`의 exact commit
+`14ee273e97af403622699e797ea5fa356b1a7e60`을 기준으로 다음 경로를
+확인했다.
+
+- `AuxiliaryAddDofs`: frictionless ALM이면 scalar pressure LM DOF를 root
+  model part 전체 node에 추가한다.
+- `ALM_frictionless_mortar_contact_condition.cpp`의 `EquationIdVector`와
+  `GetDofList`: slave geometry의 모든 node에서 LM을 요구하며 displacement
+  fixity를 검사하지 않는다.
+- active LM은 mortar coupling을 사용하고 별도 diagonal이 없으며, inactive
+  LM에는 `scale_factor² / penalty` diagonal이 생긴다.
+- block builder는 entity assembly 이후 fixed displacement row/column을
+  제거한다.
+- contact builder의 isolated-node 처리는 incident contact condition을
+  기준으로 하며 contact–Dirichlet trace를 검사하지 않는다.
+
+공식 LM omission, static condensation, boundary-trace restriction 또는
+crosspoint setting은 확인되지 않았다. 따라서 G1은 `UNAVAILABLE`이다.
+
+### Mirrored/refined minimal algebra
+
+Adopt된 mixed T3 solid, flat rigid master, ACTIVE frictionless ALM contact,
+fully fixed endpoint와 인접 free slave node를 가진 fresh patch를 좌우
+mirror 및 2/4/8 divisions에서 조립했다.
+
+| Divisions | Left endpoint ID | Right endpoint ID | Left/right post-Dirichlet LM row norm | LM diagonal |
+|---:|---:|---:|---:|---:|
+| 2 | 3 | 9 | `1.0000e-4` / `1.0000e-4` | 0 / 0 |
+| 4 | 5 | 25 | `2.0000e-4` / `2.0000e-4` | 0 / 0 |
+| 8 | 9 | 81 | `4.0000e-4` / `4.0000e-4` | 0 / 0 |
+
+모든 case에서 endpoint X/Y는 고정되고 endpoint contact는 ACTIVE였지만,
+LM basis가 인접 free slave trace와 결합하여 zero row가 생기지 않았다.
+좌우 norm 차이는 최대 `4.44e-16`이며 refinement에 따라 node ID가 바뀌어도
+동일했다.
+
+이 결과는 “fully fixed contact endpoint”라는 topology/fixity 조건만으로
+독립 LM basis를 제거하면 정상 mortar support도 함께 제거할 수 있음을
+보인다. 실제 fingertip의 `6.3117e-17` row는 해당 local geometry/support에서
+생긴 cancellation과 결합된 더 좁은 현상이다. Kratos Python lifecycle에서
+안전하게 그 basis만 제외/condense할 hook도 없으므로 G2는 production
+correction으로 `REJECTED`했다.
+
+```text
+G1 official treatment:        UNAVAILABLE
+G2 application restriction:  REJECTED AS PRODUCTION FIX
+A/B/C-left/C-right/C/D/E:     NOT RUN (candidate gate)
+0.25 mm x 48-step Trial:      NOT RUN (candidate gate)
+Phase 4I-G:                   FAIL/BLOCKED
+```
+
+---
+
+## 19. Phase 4J — no-void external-contact-only baseline
+
+### Preflight
+
+기존 `FingertipParameters()` default를 그대로 사용했다.
+
+- `void_width = void_height = 0`
+- `void_geometry is None`, void area `0`
+- internal ALM group/process/`ContactSubN`/generated condition 없음
+- 유일한 runtime pair:
+  `PadOuterArc` slave — `IndenterContactArc` master
+- `TotalLagrangianMixedVolumetricStrainElement2D3N`
+- `HyperElasticPlaneStrain2DLaw`, `ν = 0.49`
+
+Kratos의 `AuxiliaryAddDofs` 때문에 외부 ALM process 하나만 있어도 scalar LM
+DOF object는 root node 전체에 생긴다. 따라서 internal semantic surface의
+“LM DOF object가 문자 그대로 0개”는 아니다. 그러나 generated condition
+`GetDofList`로 확인한 assembled LM node는 외부 pair에만 속했고 internal
+exclusive LM assembly는 모든 J0/J1/J2 case에서 0개였다.
+
+외부 penetration 후처리도 수정했다. 기존 코드는 접촉하지 않는
+`PadOuterArc` 전체 node를 작은 indenter에 투영해 최대 `12.5 mm`의 가짜
+penetration을 만들었다. 외부 pair는 실제 ACTIVE slave node만 평가하도록
+범위를 제한했다. internal pair의 기존 범위는 변경하지 않았다.
+
+### Baseline 결과
+
+| Case | Mesh | Steps | 결과 | Final reaction | min det(F) | Max strain | Max Newton | Solve time |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| J0 | medium | 1 | PASS | `0.0013569 N` | `0.98984` | `0.002493` | 1 | `1.22 s` |
+| J1 | medium | 48 | PASS | `0.861926 N` | `0.76282` | `0.17165` | 3 | `114.73 s` |
+| J2 | fine | 48 | PASS | `0.864680 N` | `0.69839` | `0.17278` | 3 | `331.65 s` |
+
+Medium/fine final reaction 차이는 `0.003185 = 0.319%`로 10% gate를
+통과했다. 두 48-step curve는 monotonic/smooth하고 normalized maximum
+second difference는 medium `0.001741`, fine `0.002304`였다. 모든 step에서
+finite field, positive det(F), force equilibrium, active-set convergence,
+penetration 및 volumetric checkerboard check가 통과했다.
+
+`STRAIN_ENERGY`는 앞 phase에서 accepted runtime output이 아니므로 새
+acceptance metric으로 만들지 않았다. 대신 reaction curve trapezoid 적분을
+명시적으로 external-work proxy로 저장했다: medium `0.59817 N·mm`, fine
+`0.60065 N·mm`.
+
+J1 solve/result/history/profile checkpoint는 정상 완료됐지만 당시 실행 중이던
+pre-fix plot writer가 존재하지 않는 `internal_left` key를 요구해 child exit
+code 1을 냈다. 수치 solve는 재실행하지 않았고 수정된 writer로 누락 plot을
+재생성했다. J0 재실행과 J2는 같은 수정본에서 exit code 0으로 전체
+post-processing을 통과했다.
+
+J3는 roadmap에 symbolic `x_c`만 있고 실행 가능한 discrete location list가
+없어서 `SKIPPED`했다. J4도 문서화된 no-void mechanics candidate list가
+없어 새 design space를 만들지 않고 `SKIPPED`했다.
+
+```text
+Phase 4I internal contact: BLOCKED 유지
+Phase 4I-G:                FAIL/BLOCKED
+Phase 4J:                  PASS
+J3 location sweep:         SKIPPED (defined cases 없음)
+J4 parameter sweep:        SKIPPED (defined candidates 없음)
+```
+
+상세 checkpoint와 result는
+`output/phase4_crosspoint_multiplier_treatment/` 및
+`output/phase4_no_void_baseline/`에 저장했다.
