@@ -15,30 +15,36 @@ from visualization.data import (
     FRAMEWORK_VERSION,
     ScientificFigureError,
     VisualizationDataset,
-    load_phase4k_visualization_dataset,
     merge_visualization_datasets,
 )
-from visualization.rendering import (
+from visualization.adapters.normal_indentation import (
+    load_normal_indentation_visualization_dataset,
+)
+from visualization.adapters.phase4k_dataset import (
+    load_phase4k_visualization_dataset,
+)
+from visualization.export import FigureExporter, RenderedFigure, SourceTable
+from visualization.panels.geometry import (
     ContactInputAnnotation,
     DisplacementVectorPanel,
-    FigureComposer,
-    FigureExporter,
-    FigureTheme,
-    LocationDistanceMatrixPanel,
     MeshPanel,
-    MetricSummaryPanel,
+    NodalDisplacementMagnitudePanel,
     ObservationBoundaryOverlay,
+)
+from visualization.panels.transfer import (
+    FigureComposer,
+    LocationDistanceMatrixPanel,
+    MetricSummaryPanel,
     PanelLabelManager,
-    RenderedFigure,
-    ScalePolicy,
     SharedColorbar,
-    SourceTable,
     TransferMapPanel,
 )
+from visualization.theme import FigureTheme, ScalePolicy
 from visualization.transforms import (
     SelectedTransferState,
     raw_distance_metrics,
     select_transfer_state,
+    symmetric_limits,
     transfer_summary_metrics,
 )
 
@@ -57,6 +63,7 @@ class FigureSpec:
     mesh_id: str
     quantity: str
     contact_locations: tuple[float, ...]
+    contact_coordinate: str
     indentation_mm: float
     interpolation_enabled: bool
     color_scale_mode: str
@@ -83,10 +90,28 @@ class FigureSpec:
             raise ScientificFigureError("figure designs/contact locations are empty")
         if self.indentation_mm <= 0.0:
             raise ScientificFigureError("indentation must be positive")
-        if self.color_scale_mode != "shared_symmetric" or self.color_center != 0.0:
+        if self.kind == "transfer_map_comparison":
+            if (
+                self.color_scale_mode != "shared_symmetric"
+                or self.color_center != 0.0
+            ):
+                raise ScientificFigureError(
+                    "signed reference figures require a shared zero-centered scale"
+                )
+            if self.contact_coordinate != "normalized_arc":
+                raise ScientificFigureError(
+                    "transfer-map contact coordinate must be normalized_arc"
+                )
+        elif self.color_scale_mode not in {
+            "shared_symmetric",
+            "shared_sequential",
+        }:
             raise ScientificFigureError(
-                "signed reference figures require a shared zero-centered scale"
+                "displacement atlas color scale must be shared_symmetric "
+                "or shared_sequential"
             )
+        if self.contact_coordinate not in {"normalized_arc", "surface_x_mm"}:
+            raise ScientificFigureError("unsupported contact coordinate")
         if set(self.export_formats) - {"png", "pdf"}:
             raise ScientificFigureError("export formats must be png/pdf")
         if self.maximum_arrows_per_panel < 1 or self.raster_dpi < 72:
@@ -131,6 +156,9 @@ def _parse_figure_spec(
         mesh_id=str(figure.get("mesh", "medium")),
         quantity=str(figure.get("quantity", "raw_displacement")),
         contact_locations=tuple(float(item) for item in figure["contact_locations"]),
+        contact_coordinate=str(
+            figure.get("contact_coordinate", "normalized_arc")
+        ),
         indentation_mm=float(figure["indentation_mm"]),
         interpolation_enabled=bool(interpolation.get("enabled", False)),
         color_scale_mode=str(color_scale.get("mode", "shared_symmetric")),
@@ -183,16 +211,25 @@ def load_visualization_dataset(spec: FigureSpec) -> VisualizationDataset:
         if design_id in declared_designs:
             raise ScientificFigureError(f"duplicate design ID {design_id}")
         declared_designs.add(design_id)
-        if adapter != "phase4k":
-            raise ScientificFigureError(f"unsupported dataset adapter {adapter!r}")
         input_dir = _resolve_repository_path(str(item["input_dir"]), spec)
-        loaded.append(
-            load_phase4k_visualization_dataset(
-                input_dir,
-                design_id=design_id,
-                mesh_ids=(spec.mesh_id,),
+        if adapter == "phase4k":
+            loaded.append(
+                load_phase4k_visualization_dataset(
+                    input_dir,
+                    design_id=design_id,
+                    mesh_ids=(spec.mesh_id,),
+                )
             )
-        )
+        elif adapter == "normal_indentation_full_field":
+            loaded.append(
+                load_normal_indentation_visualization_dataset(
+                    input_dir,
+                    design_id=design_id,
+                    mesh_id=spec.mesh_id,
+                )
+            )
+        else:
+            raise ScientificFigureError(f"unsupported dataset adapter {adapter!r}")
     missing = set(spec.designs) - declared_designs
     if missing:
         raise ScientificFigureError(
@@ -220,21 +257,6 @@ def _selected_states(
     ]
 
 
-def _symmetric_limits(
-    states_by_design: Mapping[str, Sequence[SelectedTransferState]],
-) -> tuple[float, float]:
-    maximum = max(
-        abs(float(value))
-        for states in states_by_design.values()
-        for state in states
-        for side in ("left", "right")
-        for value in state.values_by_side[side]
-    )
-    if maximum <= 0.0:
-        raise ScientificFigureError("cannot create a signed color scale from zero data")
-    return -maximum, maximum
-
-
 def _quantity_label(quantity: str, units: str) -> str:
     labels = {
         "raw_displacement": r"$u_\mathrm{normal}$",
@@ -258,7 +280,7 @@ class TransferMapComparisonFigure:
             design_id: _selected_states(dataset, spec, design_id)
             for design_id in spec.designs
         }
-        color_limits = _symmetric_limits(states_by_design)
+        color_limits = symmetric_limits(states_by_design)
         signed_norm = colors.TwoSlopeNorm(
             vmin=color_limits[0], vcenter=0.0, vmax=color_limits[1]
         )
@@ -492,9 +514,317 @@ class TransferMapComparisonFigure:
 
 
 class DisplacementVectorAtlasFigure:
-    """Build a friendly geometry view using only actual stored u vectors."""
+    """Build an actual FEM field view or the legacy sidewall-only view."""
 
     def build(
+        self,
+        dataset: VisualizationDataset,
+        spec: FigureSpec,
+        theme: FigureTheme,
+    ) -> RenderedFigure:
+        if spec.contact_coordinate == "surface_x_mm":
+            return self._build_full_field(dataset, spec, theme)
+        return self._build_observation_chain(dataset, spec, theme)
+
+    def _build_full_field(
+        self,
+        dataset: VisualizationDataset,
+        spec: FigureSpec,
+        theme: FigureTheme,
+    ) -> RenderedFigure:
+        if len(spec.designs) != 1:
+            raise ScientificFigureError(
+                "full-field displacement atlas requires exactly one design"
+            )
+        if spec.color_scale_mode != "shared_sequential":
+            raise ScientificFigureError(
+                "displacement-magnitude heatmap requires shared_sequential color"
+            )
+        design_id = spec.designs[0]
+        mesh = dataset.mesh(design_id, spec.mesh_id)
+        selected: list[tuple[Any, Any]] = []
+        for surface_x_mm in spec.contact_locations:
+            matches = [
+                case
+                for case in dataset.contact_cases
+                if case.design_id == design_id
+                and case.mesh_id == spec.mesh_id
+                and case.surface_x_mm is not None
+                and np.isclose(
+                    case.surface_x_mm, surface_x_mm, rtol=0.0, atol=1.0e-12
+                )
+                and np.isclose(
+                    case.delta_mm,
+                    spec.indentation_mm,
+                    rtol=0.0,
+                    atol=1.0e-9,
+                )
+                and case.convergence_state == "converged"
+            ]
+            if len(matches) != 1:
+                raise ScientificFigureError(
+                    f"expected one converged full-field state at "
+                    f"x={surface_x_mm:g} mm"
+                )
+            case = matches[0]
+            field = dataset.displacement_state(
+                design_id, case.case_id, case.step
+            )
+            if field.location_kind != "mesh_node" or not field.validity_mask.all():
+                raise ScientificFigureError(
+                    f"{case.case_id} is not a valid full mesh-node field"
+                )
+            if set(field.point_ids) != {str(node_id) for node_id in mesh.node_ids}:
+                raise ScientificFigureError(
+                    f"{case.case_id} displacement nodes do not match the mesh"
+                )
+            selected.append((case, field))
+
+        maximum_magnitude = max(
+            float(np.linalg.norm(field.nodal_displacement, axis=1).max())
+            for _, field in selected
+        )
+        if not np.isfinite(maximum_magnitude) or maximum_magnitude <= 0.0:
+            raise ScientificFigureError(
+                "full-field displacement magnitude has no positive finite value"
+            )
+        color_limits = (0.0, maximum_magnitude)
+        magnitude_norm = colors.Normalize(*color_limits)
+        scale_policy = ScalePolicy(
+            deformation_scale=spec.deformation_scale,
+            arrow_scale=spec.arrow_scale,
+            arrow_minimum_mm=spec.arrow_minimum_mm,
+            color_limits=color_limits,
+        )
+        composer = FigureComposer()
+        figure, axes = composer.create(
+            1,
+            len(selected),
+            figsize=(4.5 * len(selected), 5.0),
+            title=spec.title,
+        )
+        flat_axes = list(axes.ravel())
+        panel_metadata: list[Mapping[str, Any]] = []
+        vector_rows = []
+        image = None
+        for axis, (case, field) in zip(flat_axes, selected):
+            vector_by_node_id = {
+                int(point_id): field.nodal_displacement[index]
+                for index, point_id in enumerate(field.point_ids)
+            }
+            displacement = np.asarray(
+                [vector_by_node_id[node_id] for node_id in mesh.node_ids]
+            )
+            deformed_coordinates = (
+                mesh.node_coordinates
+                + scale_policy.deformation_scale * displacement
+            )
+            if spec.panels.get("fem_heatmap", True):
+                heatmap_meta = NodalDisplacementMagnitudePanel().render(
+                    axis,
+                    mesh,
+                    vector_by_node_id,
+                    theme,
+                    scale_policy,
+                    magnitude_norm,
+                )
+                image = heatmap_meta.pop("image")
+                panel_metadata.append(heatmap_meta)
+            if spec.panels.get("displacement_vectors", True):
+                vector_meta, arrow_indices = DisplacementVectorPanel().render(
+                    axis,
+                    deformed_coordinates,
+                    displacement,
+                    theme,
+                    scale_policy,
+                    maximum_arrows=spec.maximum_arrows_per_panel,
+                    color="#111111",
+                    anchor_configuration="deformed",
+                )
+                panel_metadata.append(vector_meta)
+            else:
+                arrow_indices = np.asarray([], dtype=int)
+            if spec.panels.get("contact_annotation", True):
+                reference_point = np.asarray(case.contact_point_mm, dtype=float)
+                direction = np.asarray(case.indentation_direction, dtype=float)
+                final_tangent_point = (
+                    reference_point + case.delta_mm * direction
+                )
+                annotation = ContactInputAnnotation().render_at(
+                    axis,
+                    final_tangent_point,
+                    direction,
+                )
+                annotation["reference_contact_point_mm"] = reference_point.tolist()
+                annotation["display_point"] = (
+                    "final prescribed indenter tangency point"
+                )
+                panel_metadata.append(annotation)
+            reaction_text = (
+                "reaction unavailable"
+                if case.reaction_force_n is None
+                else f"F={case.reaction_force_n:.4f} N"
+            )
+            axis.set_title(
+                f"x={case.surface_x_mm:g} mm, "
+                f"n_in=({case.indentation_direction[0]:+.3f}, "
+                f"{case.indentation_direction[1]:+.3f})\n"
+                f"δ={case.delta_mm:.2f} mm, {reaction_text}"
+            )
+            axis.text(
+                0.02,
+                0.02,
+                f"heatmap geometry {scale_policy.deformation_scale:g}×; "
+                f"vectors {scale_policy.arrow_scale:g}×",
+                transform=axis.transAxes,
+                fontsize=7,
+                bbox={"facecolor": "white", "edgecolor": "0.75", "alpha": 0.9},
+                zorder=20,
+            )
+            arrow_set = set(int(index) for index in arrow_indices)
+            magnitude = np.linalg.norm(displacement, axis=1)
+            for index, node_id in enumerate(mesh.node_ids):
+                vector_rows.append(
+                    (
+                        design_id,
+                        spec.mesh_id,
+                        case.case_id,
+                        case.surface_x_mm,
+                        case.xi,
+                        case.delta_mm,
+                        node_id,
+                        mesh.node_coordinates[index, 0],
+                        mesh.node_coordinates[index, 1],
+                        deformed_coordinates[index, 0],
+                        deformed_coordinates[index, 1],
+                        displacement[index, 0],
+                        displacement[index, 1],
+                        magnitude[index],
+                        int(index in arrow_set),
+                    )
+                )
+        if image is None:
+            raise ScientificFigureError("full-field heatmap panel is disabled")
+        panel_metadata.append(
+            SharedColorbar().add(
+                figure,
+                image,
+                flat_axes,
+                label=r"displacement magnitude $|u|$ [mm]",
+            )
+        )
+        panel_metadata.append(PanelLabelManager().apply(flat_axes, theme))
+        figure.text(
+            0.5,
+            -0.01,
+            "Heatmap: full-pad FEM |u| on the 1× deformed T3 mesh. "
+            "Arrows: actual u=[u_x,u_y], anchored on that deformed mesh. "
+            "Each indenter moves along the local inward curvature normal.",
+            ha="center",
+        )
+        node_rows = tuple(
+            (design_id, spec.mesh_id, node_id, point[0], point[1])
+            for node_id, point in zip(mesh.node_ids, mesh.node_coordinates)
+        )
+        element_rows = tuple(
+            (
+                design_id,
+                spec.mesh_id,
+                element_id,
+                int(connectivity[0]),
+                int(connectivity[1]),
+                int(connectivity[2]),
+            )
+            for element_id, connectivity in zip(
+                mesh.element_ids, mesh.element_connectivity
+            )
+        )
+        return RenderedFigure(
+            figure=figure,
+            basename=spec.basename,
+            figure_kind=spec.kind,
+            represented_variable=(
+                "full-pad nodal displacement magnitude |u| and vector "
+                "u=[u_x,u_y]"
+            ),
+            units="mm",
+            normalization="none",
+            design_ids=spec.designs,
+            mesh_ids=(spec.mesh_id,),
+            cases=tuple(case.case_id for case, _ in selected),
+            xi_values=tuple(case.xi for case, _ in selected),
+            surface_x_values_mm=tuple(
+                float(case.surface_x_mm) for case, _ in selected
+            ),
+            indentation_values_mm=(spec.indentation_mm,),
+            coordinate_convention=dataset.metadata["adapters"][0][
+                "coordinate_convention"
+            ],
+            interpolation={
+                "state_selection": "exact surface x and indentation",
+                "state_interpolation": False,
+                "heatmap": "linear T3 nodal interpolation",
+                "vector_subsampling": "deterministic spatial binning",
+            },
+            validity={
+                "displacement": "converged, finite, full pad mesh-node field",
+                "field_nodes": "exact match to persisted pad mesh",
+                "contact_direction": "local inward normal at each surface x",
+            },
+            scale_policy=scale_policy,
+            color_limits=color_limits,
+            panel_metadata=tuple(panel_metadata),
+            source_tables=(
+                SourceTable(
+                    "mesh_nodes.csv",
+                    ("design_id", "mesh_id", "node_id", "x_mm", "y_mm"),
+                    node_rows,
+                    label_columns=("design_id", "mesh_id"),
+                ),
+                SourceTable(
+                    "mesh_elements.csv",
+                    (
+                        "design_id",
+                        "mesh_id",
+                        "element_id",
+                        "node_1",
+                        "node_2",
+                        "node_3",
+                    ),
+                    element_rows,
+                    label_columns=("design_id", "mesh_id"),
+                ),
+                SourceTable(
+                    "displacement_vectors.csv",
+                    (
+                        "design_id",
+                        "mesh_id",
+                        "case_id",
+                        "surface_x_mm",
+                        "xi",
+                        "delta_mm",
+                        "node_id",
+                        "X0_x_mm",
+                        "X0_y_mm",
+                        "x_deformed_mm",
+                        "y_deformed_mm",
+                        "u_x_mm",
+                        "u_y_mm",
+                        "u_magnitude_mm",
+                        "arrow_selected",
+                    ),
+                    tuple(vector_rows),
+                    label_columns=("design_id", "mesh_id", "case_id"),
+                ),
+            ),
+            notes=(
+                "All three panels are independent nonlinear FEM solves.",
+                "Only the deformable pad field is shown; rigid carrier and indenter are excluded.",
+                "The heatmap is displacement magnitude and uses one shared sequential scale.",
+            ),
+        )
+
+    def _build_observation_chain(
         self,
         dataset: VisualizationDataset,
         spec: FigureSpec,
@@ -512,7 +842,7 @@ class DisplacementVectorAtlasFigure:
             }
         )
         states = _selected_states(dataset, raw_spec, design_id)
-        color_limits = _symmetric_limits({design_id: states})
+        color_limits = symmetric_limits({design_id: states})
         signed_norm = colors.TwoSlopeNorm(
             vmin=color_limits[0], vcenter=0.0, vmax=color_limits[1]
         )

@@ -2,35 +2,32 @@
 
 from __future__ import annotations
 
-import csv
-import json
 from pathlib import Path
 
-import matplotlib.image as mpimg
 import numpy as np
 import pytest
 
-from analysis.phase4_codtm_visualization import _write_csv, run_visualization
-from fem.codtm_visualization import (
-    CODTMVisualizationError,
+from visualization.adapters.phase4k import (
     canonicalize_array,
     common_eta_profiles,
     descriptor_verified_mask,
     display_zeta_for_side,
-    finite_csv_audit,
     load_codtm_dataset,
-    location_distance_matrix,
     mirror_metrics,
     profile_comparison_metrics,
     profile_segments,
+    zeta_for_side,
+)
+from visualization.transforms import (
+    CODTMVisualizationError,
+    location_distance_matrix,
     select_indentation,
     shape_distance_matrix,
     signature_norm,
-    zeta_for_side,
 )
 
 
-REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 CANONICAL_INPUT = REPOSITORY_ROOT / "output" / "phase4_mechanical_transfer_map"
 
 
@@ -192,51 +189,6 @@ def test_descriptor_mask_is_distinct_from_displacement_validity(dataset) -> None
     assert descriptor.shape == displacement.shape
 
 
-def test_deterministic_figure_csv_serialization(tmp_path: Path) -> None:
-    rows = [(0.2, "left", 1.0 / 3.0), (0.8, "right", -0.0)]
-    first = tmp_path / "first.csv"
-    second = tmp_path / "second.csv"
-    _write_csv(first, ("xi", "side", "value"), rows)
-    _write_csv(second, ("xi", "side", "value"), rows)
-    assert first.read_bytes() == second.read_bytes()
-    assert finite_csv_audit(first, nonnumeric={"side"})["finite"]
-
-
-@pytest.fixture(scope="module")
-def rendered_output(tmp_path_factory):
-    output = tmp_path_factory.mktemp("phase4k_viz") / "rendered"
-    result = run_visualization(
-        CANONICAL_INPUT,
-        output,
-        mesh="medium",
-        formats=("png", "pdf"),
-        dpi=72,
-        diagnostics=False,
-    )
-    assert result["status"] == "PASS"
-    return output
-
-
-def test_headless_render_produces_nonempty_image(rendered_output: Path) -> None:
-    path = rendered_output / "figures" / "codtm_overview.png"
-    image = mpimg.imread(path)
-    assert path.stat().st_size > 10_000
-    assert image.shape[0] > 400 and image.shape[1] > 500
-
-
-def test_png_pdf_manifest_is_consistent(rendered_output: Path) -> None:
-    manifest = json.loads(
-        (rendered_output / "plot_manifest.json").read_text(encoding="utf-8")
-    )
-    assert manifest["figures"]
-    for figure in manifest["figures"]:
-        formats = {output["format"] for output in figure["outputs"]}
-        assert formats == {"png", "pdf"}
-        for output in figure["outputs"]:
-            path = Path(output["path"])
-            assert path.is_file()
-            assert path.stat().st_size == output["bytes"] > 0
-
 
 def test_medium_fine_profile_metrics_match_reported_scale(dataset) -> None:
     medium = dataset.select_case_field("medium_xi_0p20", "u_normal", 1.5).values
@@ -244,10 +196,3 @@ def test_medium_fine_profile_metrics_match_reported_scale(dataset) -> None:
     metrics = profile_comparison_metrics(medium, fine)
     assert metrics["relative_l2"] == pytest.approx(0.00635, rel=0.02)
     assert metrics["shape_correlation"] > 0.99996
-
-
-def test_source_csv_schema_and_values_are_finite(rendered_output: Path) -> None:
-    for path in (rendered_output / "figure_data").glob("*.csv"):
-        with path.open(newline="", encoding="utf-8") as stream:
-            assert csv.DictReader(stream).fieldnames
-        assert finite_csv_audit(path, nonnumeric={"mesh", "side"})["finite"]

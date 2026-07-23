@@ -1,15 +1,13 @@
-"""Unit tests for Phase 4I solver-independent measurements."""
+"""Gmsh-backed smoke tests for Phase 4I result extraction."""
 
 from __future__ import annotations
 
 import numpy as np
 import pytest
 
-from fem.fingertip_mesher import generate_fingertip_mesh
-from fem.indenter_fixture import build_indenter_fixture
-from fem.indentation_postprocess import (
-    _save_history_plots,
-    _write_history_csv,
+from mesh.fingertip import generate_fingertip_mesh
+from mesh.indenter import build_indenter_fixture
+from fem.results import (
     compressive_indenter_reaction,
     contact_width_metrics,
     extract_outer_arc_profile,
@@ -19,7 +17,9 @@ from fem.indentation_postprocess import (
     profile_error_metrics,
     unique_projected_reaction,
 )
-from fem.mesh_types import mesh_settings_for_level
+from validation.common.io import write_indentation_history
+from visualization.indentation import save_history_plots
+from mesh.types import mesh_settings_for_level
 from model.fingertip_model import FingertipModel
 from model.fingertip_parameters import FingertipParameters
 
@@ -148,7 +148,7 @@ def test_external_only_history_outputs_do_not_require_internal_groups(
         }
 
     history = [point(1), point(2)]
-    _write_history_csv(tmp_path / "history.csv", history)
-    _save_history_plots({"history": history}, tmp_path / "plots")
+    write_indentation_history(tmp_path / "history.csv", history)
+    save_history_plots({"history": history}, tmp_path / "plots")
     assert (tmp_path / "history.csv").is_file()
     assert (tmp_path / "plots" / "contact_groups.png").is_file()

@@ -2,7 +2,7 @@
 
 > 이 문서는 LIT Hand의 2D hyperelastic-contact validation을 여러 작업 세션에 걸쳐
 > 이어가기 위한 **working memory**다. 확정된 수치와 정식 판정은
-> [`Hyperelastic-Contact-Validation.md`](Hyperelastic-Contact-Validation.md)를 기준으로
+> [`hyperelastic-contact.md`](hyperelastic-contact.md)를 기준으로
 > 하고, 이 문서는 각 단계의 가설, 통제 실험, 증거, 판정, 다음 질문을 연결한다.
 
 - 시작일: 2026-07-23
@@ -1351,4 +1351,4 @@ Optical observability:         NOT EVALUATED
 ```
 
 Artifacts: `output/phase4_codtm_visualization/`.
-Documentation: `CODTM-Visualization.md`.
+Documentation: `codtm-visualization.md`.

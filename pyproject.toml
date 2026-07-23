@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fingertip-design-framework"
+version = "0.1.0"
+description = "Parametric fingertip geometry, meshing, Kratos FEM, and scientific validation"
+requires-python = ">=3.11"
+dependencies = [
+  "numpy>=1.26",
+  "shapely>=2.0",
+]
+
+[project.optional-dependencies]
+mesh = ["gmsh>=4.12"]
+visualization = ["matplotlib>=3.8"]
+validation = ["scipy>=1.11"]
+test = ["pytest>=8"]
+
+[tool.setuptools.packages.find]
+include = ["model*", "mesh*", "fem*", "visualization*", "validation*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests/unit", "tests/smoke"]
+markers = [
+  "smoke: dependency wiring smoke test",
+  "gmsh: requires the Gmsh Python API",
+  "kratos: requires the external Kratos 10.3 environment",
+  "slow: takes materially longer than a unit test",
+]

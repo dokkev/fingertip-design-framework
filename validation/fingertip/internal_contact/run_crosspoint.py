@@ -9,15 +9,15 @@ from pathlib import Path
 import sys
 from typing import Any, Mapping
 
-from fem.crosspoint_multiplier_treatment import (
+from validation.fingertip.internal_contact.crosspoint_core import (
     candidate_assessment,
     run_crosspoint_patch,
     source_audit,
 )
 
 
-DEFAULT_OUTPUT = Path("output/phase4_crosspoint_multiplier_treatment")
-PHASE4IF_OUTPUT = Path("output/phase4_search_crosspoint_audit")
+DEFAULT_OUTPUT = Path("output/validation/fingertip/internal_contact/crosspoint")
+PHASE4IF_OUTPUT = Path("output/validation/fingertip/internal_contact/search_crosspoint")
 
 
 def _arguments() -> argparse.Namespace:
@@ -264,7 +264,7 @@ def main() -> int:
             sys.executable,
             "-B",
             "-m",
-            "analysis.phase4_crosspoint_multiplier_treatment",
+            "validation.fingertip.internal_contact.run_crosspoint",
             "--output-directory",
             str(output),
         ],

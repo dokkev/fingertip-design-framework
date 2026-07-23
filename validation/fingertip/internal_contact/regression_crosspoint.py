@@ -6,14 +6,14 @@ import json
 
 import pytest
 
-from fem.crosspoint_multiplier_treatment import (
+from validation.fingertip.internal_contact.crosspoint_core import (
     CrosspointRuleInput,
     contact_coupled_free_primal_dof_count,
     fully_prescribed_contact_crosspoint,
 )
-from fem.no_void_baseline import (
+from validation.common.io import atomic_write_json
+from validation.fingertip.indentation.metrics import (
     append_or_replace_case,
-    atomic_write_json,
     completed_case_result,
     no_void_geometry_contract,
     reaction_work_proxy,

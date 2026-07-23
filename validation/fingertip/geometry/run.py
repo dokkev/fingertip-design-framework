@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 from dataclasses import replace
 from math import isclose
 from pathlib import Path
@@ -14,7 +15,7 @@ import matplotlib.pyplot as plt
 
 from model.fingertip_model import FingertipModel
 from model.fingertip_parameters import FingertipParameters
-from model.visualize import plot_fingertip
+from visualization.geometry import plot_fingertip
 
 
 def _four_cases() -> list[tuple[str, FingertipParameters]]:
@@ -138,10 +139,21 @@ def make_parameter_grid(output_directory: Path) -> Path:
     return path
 
 
+def parse_arguments() -> argparse.Namespace:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--output-directory",
+        type=Path,
+        default=Path("output/validation/fingertip/geometry"),
+    )
+    return parser.parse_args()
+
+
 def main() -> None:
     """Run analytic checks and generate both reference figures under output/."""
+    arguments = parse_arguments()
     run_sanity_checks()
-    output_directory = Path(__file__).resolve().parents[1] / "output"
+    output_directory = arguments.output_directory.expanduser().resolve()
     output_directory.mkdir(parents=True, exist_ok=True)
     for path in (
         make_four_case_figure(output_directory),

@@ -11,7 +11,7 @@ from fem.kratos_settings import (
     indentation_contact_groups,
     validate_internal_contact_configuration,
 )
-from fem.sparse_diagnostics import analyze_sparse_system
+from validation.fingertip.internal_contact.sparse import analyze_sparse_system
 
 
 @pytest.mark.parametrize(

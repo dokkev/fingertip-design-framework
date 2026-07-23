@@ -17,25 +17,22 @@ from typing import Any, Literal, Mapping, Sequence
 
 import numpy as np
 
-from fem.indentation_analysis import (
-    _nodal_fields,
-    set_indenter_travel,
-)
-from fem.indentation_postprocess import (
+from fem.kratos_adapter import import_kratos, set_indenter_travel
+from fem.results import (
     compressive_indenter_reaction,
+    extract_nodal_fields,
     pad_strain_det_f_statistics,
 )
-from fem.internal_contact_diagnostic import (
+from validation.fingertip.internal_contact.diagnostics import (
     FIRST_STEP_TRAVEL_MM,
-    _build_context,
-    _contact_condition_records,
-    _dof_records,
-    _runtime_contract,
-    _source_condition_maps,
+    build_diagnostic_context,
+    contact_condition_records,
+    dof_records,
+    runtime_contract,
+    source_condition_maps,
 )
-from fem.kratos_adapter import _import_kratos
 from fem.kratos_settings import MAXIMUM_NEWTON_ITERATIONS
-from fem.right_side_audit import _endpoint_id
+from validation.fingertip.internal_contact.right_side_core import endpoint_id
 
 
 Side = Literal["left", "right"]
@@ -140,7 +137,7 @@ def _source_condition(
     source_name: str,
     connectivity: Sequence[int],
 ) -> Any | None:
-    by_surface, _ = _source_condition_maps(context)
+    by_surface, _ = source_condition_maps(context)
     identifier = by_surface[source_name].get(tuple(sorted(connectivity)))
     return (
         context.model_part.Conditions[identifier]
@@ -156,7 +153,7 @@ def _exact_overlap(
     slave_connectivity: Sequence[int],
     master_connectivity: Sequence[int],
 ) -> dict[str, Any]:
-    KM, _, _, _ = _import_kratos()
+    KM, _, _, _ = import_kratos()
     slave = _source_condition(context, slave_name, slave_connectivity)
     master = _source_condition(context, master_name, master_connectivity)
     if slave is None or master is None:
@@ -196,7 +193,7 @@ def endpoint_pair_records(
     endpoint_node_id: int,
 ) -> list[dict[str, Any]]:
     """Resolve every generated condition incident to an endpoint."""
-    KM, _, _, _ = _import_kratos()
+    KM, _, _, _ = import_kratos()
     group_name, slave_name, master_name = context.groups[pair_index]
     computing = context.model[
         f"Structure.ComputingContact.ComputingContactSub{pair_index}"
@@ -264,7 +261,7 @@ def _local_lm_rows(
     pair_index: int,
     endpoint_node_id: int,
 ) -> dict[str, Any]:
-    KM, CSMA, _, _ = _import_kratos()
+    KM, CSMA, _, _ = import_kratos()
     computing = context.model[
         f"Structure.ComputingContact.ComputingContactSub{pair_index}"
     ]
@@ -466,7 +463,7 @@ def _memberships(context: Any, node_id: int) -> dict[str, Any]:
         for name in names
     }
     node = context.model_part.Nodes[node_id]
-    KM, _, _, _ = _import_kratos()
+    KM, _, _, _ = import_kratos()
     return {
         "submodelparts": membership,
         "pad_internal_contact_boundary": (
@@ -504,8 +501,8 @@ def endpoint_snapshot(
     pair_index: int = 1,
 ) -> dict[str, Any]:
     """Serialize the endpoint state at one exact lifecycle point."""
-    KM, CSMA, _, _ = _import_kratos()
-    endpoint_id = _endpoint_id(context.model_part, side, slave=True)
+    KM, CSMA, _, _ = import_kratos()
+    endpoint_id = endpoint_id(context.model_part, side, slave=True)
     node = context.model_part.Nodes[endpoint_id]
     lm_dof = _dof_state(
         node, CSMA.LAGRANGE_MULTIPLIER_CONTACT_PRESSURE
@@ -594,9 +591,9 @@ def endpoint_snapshot(
 
 
 def _final_fields(context: Any, converged: bool) -> dict[str, Any]:
-    KM, _, _, _ = _import_kratos()
+    KM, _, _, _ = import_kratos()
     all_node_ids = [node.Id for node in context.model_part.Nodes]
-    displacements, reactions = _nodal_fields(
+    displacements, reactions = extract_nodal_fields(
         context.model_part, all_node_ids
     )
     displacement_values = [
@@ -638,7 +635,7 @@ def run_lifecycle_case(
     mesh_level: str = "medium",
 ) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
     """Execute one fresh first-step diagnostic with manual lifecycle capture."""
-    KM, _, _, _ = _import_kratos()
+    KM, _, _, _ = import_kratos()
     configuration = f"{variant.side}_only"
     snapshots: list[dict[str, Any]] = []
     context: Any | None = None
@@ -652,7 +649,7 @@ def run_lifecycle_case(
         _mesh: Any,
         _fixture: Any,
     ) -> None:
-        endpoint_id = _endpoint_id(
+        endpoint_id = endpoint_id(
             model_part, variant.side, slave=True
         )
         node = model_part.Nodes[endpoint_id]
@@ -701,13 +698,13 @@ def run_lifecycle_case(
     iterations = 0
     invalid_ids: list[int] = []
     try:
-        context = _build_context(
+        context = build_diagnostic_context(
             mesh_level,
             configuration,
             before_initialize=capture_before,
         )
         capture("after_execute_initialize")
-        runtime = _runtime_contract(context)
+        runtime = runtime_contract(context)
         solver = context.analysis._GetSolver()
         context.analysis.time = solver.AdvanceInTime(context.analysis.time)
         set_indenter_travel(
@@ -719,7 +716,7 @@ def run_lifecycle_case(
 
         context.analysis.ApplyBoundaryConditions()
         capture("after_contact_search")
-        endpoint_id = _endpoint_id(
+        endpoint_id = endpoint_id(
             context.model_part, variant.side, slave=True
         )
         pairs_after_search = endpoint_pair_records(
@@ -756,7 +753,7 @@ def run_lifecycle_case(
             _equation_map,
             _assembled_dofs,
             dof_summary,
-        ) = _dof_records(context, dof_set)
+        ) = dof_records(context, dof_set)
         matrix = strategy.GetSystemMatrix()
         increment = strategy.GetSolutionVector()
         rhs = strategy.GetSystemVector()
@@ -852,7 +849,7 @@ def run_lifecycle_case(
             scheme, computing_model_part, matrix, increment, rhs
         )
         capture("after_solve", iterations, matrix, rhs)
-        pair_records, pair_purity = _contact_condition_records(context)
+        pair_records, pair_purity = contact_condition_records(context)
         final_fields = _final_fields(context, converged)
         result = {
             "phase": "4I-F",

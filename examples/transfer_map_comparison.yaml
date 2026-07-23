@@ -4,7 +4,7 @@
     {
       "adapter": "phase4k",
       "design_id": "baseline",
-      "input_dir": "output/phase4_mechanical_transfer_map"
+      "input_dir": "output/validation/fingertip/transfer_map"
     }
   ],
   "figure": {
@@ -55,7 +55,7 @@
       "dpi": 300,
       "source_data": true,
       "manifest": true,
-      "output_directory": "output/geometry_aware_figures/transfer_map_comparison"
+      "output_directory": "output/figures/transfer_map_comparison"
     }
   }
 }

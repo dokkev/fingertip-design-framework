@@ -12,7 +12,7 @@ import subprocess
 import sys
 from typing import Any, Mapping, Sequence
 
-from fem.right_side_audit import (
+from validation.fingertip.internal_contact.right_side_core import (
     ORIENTATION_VARIANTS,
     audit_side_orientation,
     common_audit_mesh,
@@ -20,7 +20,7 @@ from fem.right_side_audit import (
 )
 
 
-DEFAULT_OUTPUT = Path("output/phase4_right_side_audit")
+DEFAULT_OUTPUT = Path("output/validation/fingertip/internal_contact/right_side")
 CASE_DIRECTORIES = {
     "L00": "left_oracle",
     "R00": "right_r00",
@@ -151,7 +151,7 @@ def _child_command(
         sys.executable,
         "-B",
         "-m",
-        "analysis.phase4_right_side_audit",
+        "validation.fingertip.internal_contact.run_right_side",
         "--mesh-level",
         arguments.mesh_level,
         "--output-directory",

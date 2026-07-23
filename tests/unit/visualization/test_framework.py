@@ -1,55 +1,38 @@
-"""Synthetic contracts and Phase 4K integration for the figure framework."""
+"""Synthetic contracts for dependency-light visualization transforms."""
 
 from __future__ import annotations
 
 from dataclasses import replace
-import hashlib
 import json
 from pathlib import Path
 
-import matplotlib.image as mpimg
-import matplotlib.pyplot as plt
 import numpy as np
 import pytest
 
-from fem.codtm_visualization import (
-    CODTMVisualizationError,
-    location_distance_matrix,
-    select_indentation,
-    shape_distance_matrix,
-    signature_norm,
-)
 from visualization.data import (
     DisplacementField,
     MeshData,
     ObservationChain,
     ScientificFigureError,
-    descriptor_verified_mask,
-    input_checksums,
 )
 from visualization.framework import (
-    _symmetric_limits,
     load_figure_spec,
-    load_visualization_dataset,
-    render_figure,
-)
-from visualization.rendering import (
-    FigureTheme,
-    ObservationBoundaryOverlay,
-    ScalePolicy,
 )
 from visualization.transforms import (
+    CODTMVisualizationError,
     SelectedTransferState,
     deterministic_spatial_subsample,
+    location_distance_matrix,
     mirror_side_swap,
     project_outward_displacement,
+    select_indentation,
+    shape_distance_matrix,
+    signature_norm,
+    symmetric_limits,
 )
 
 
-REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
-PHASE4K_INPUT = REPOSITORY_ROOT / "output" / "phase4_mechanical_transfer_map"
-
-
+REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 def _chain(side: str, normal: tuple[float, float]) -> ObservationChain:
     return ObservationChain(
         side=side,
@@ -223,17 +206,6 @@ def test_mirror_side_swap_preserves_eta_sample_order() -> None:
     assert result["right"].tolist() == [1.0, 2.0]
 
 
-def test_observation_overlay_keeps_eta_one_points_separate() -> None:
-    figure, axis = plt.subplots()
-    metadata = ObservationBoundaryOverlay().render(
-        axis,
-        {"left": _chain("left", (-1.0, 0.0)), "right": _chain("right", (1.0, 0.0))},
-        FigureTheme.preset("journal"),
-    )
-    assert metadata["center_connected"] is False
-    assert len(axis.lines) == 4
-    plt.close(figure)
-
 
 def test_exact_indentation_selection() -> None:
     result = select_indentation(
@@ -286,7 +258,7 @@ def test_shape_normalization_rejects_zero_norm() -> None:
 def test_common_color_scale_uses_all_compared_states() -> None:
     first = _selected_state(0.2)
     second = _selected_state(0.8)
-    assert _symmetric_limits({"a": [first], "b": [second]}) == (-0.8, 0.8)
+    assert symmetric_limits({"a": [first], "b": [second]}) == (-0.8, 0.8)
 
 
 def test_vector_subsampling_is_deterministic() -> None:
@@ -302,117 +274,3 @@ def test_displacement_vectors_are_not_normalized() -> None:
     magnitudes = np.linalg.norm(state.displacement_by_side["right"], axis=1)
     assert magnitudes[-1] == pytest.approx(0.8)
     assert not np.allclose(magnitudes[1:], 1.0)
-
-
-def test_deformation_and_arrow_scales_are_independent() -> None:
-    policy = ScalePolicy(deformation_scale=1.0, arrow_scale=3.0)
-    assert policy.deformation_scale == 1.0
-    assert policy.arrow_scale == 3.0
-
-
-@pytest.fixture(scope="module")
-def framework_outputs(tmp_path_factory):
-    before = input_checksums(PHASE4K_INPUT)
-    root = tmp_path_factory.mktemp("scientific_figures")
-    transfer_spec = load_figure_spec(
-        REPOSITORY_ROOT / "examples/transfer_map_comparison.yaml"
-    )
-    vector_spec = load_figure_spec(
-        REPOSITORY_ROOT / "examples/displacement_vector_atlas.yaml"
-    )
-    dataset = load_visualization_dataset(transfer_spec)
-    transfer_output = root / "transfer"
-    vector_output = root / "vectors"
-    render_figure(dataset, transfer_spec, output_directory=transfer_output)
-    render_figure(dataset, vector_spec, output_directory=vector_output)
-
-    def tree_hash(directory: Path) -> dict[str, str]:
-        return {
-            str(path.relative_to(directory)): hashlib.sha256(path.read_bytes()).hexdigest()
-            for path in sorted(directory.rglob("*"))
-            if path.is_file()
-        }
-
-    first = {"transfer": tree_hash(transfer_output), "vectors": tree_hash(vector_output)}
-    render_figure(dataset, transfer_spec, output_directory=transfer_output)
-    render_figure(dataset, vector_spec, output_directory=vector_output)
-    second = {"transfer": tree_hash(transfer_output), "vectors": tree_hash(vector_output)}
-    assert first == second
-    assert before == input_checksums(PHASE4K_INPUT)
-    return transfer_output, vector_output, dataset
-
-
-def test_phase4k_adapter_preserves_descriptor_mask(framework_outputs) -> None:
-    _, _, dataset = framework_outputs
-    source = dataset.metadata["adapters"][0]["phase4k_audit"]
-    assert source["valid_step_count"] == 384
-    assert any(not case.descriptor_valid for case in dataset.contact_cases)
-    assert all(case.codtm_valid for case in dataset.contact_cases)
-
-
-def test_reference_mesh_matches_phase4k_counts(framework_outputs) -> None:
-    _, _, dataset = framework_outputs
-    mesh = dataset.mesh("baseline", "medium")
-    assert len(mesh.node_ids) == 6774
-    assert len(mesh.element_ids) == 13164
-    assert mesh.provenance["phase4k_counts_matched"] is True
-    assert mesh.provenance["fem_solve_performed"] is False
-
-
-def test_headless_reference_figures_render(framework_outputs) -> None:
-    transfer, vectors, _ = framework_outputs
-    for path in (
-        transfer / "transfer_map_comparison.png",
-        vectors / "displacement_vector_atlas.png",
-    ):
-        image = mpimg.imread(path)
-        assert path.stat().st_size > 10_000
-        assert image.shape[0] > 700 and image.shape[1] > 900
-
-
-def test_png_pdf_and_manifest_are_consistent(framework_outputs) -> None:
-    transfer, vectors, _ = framework_outputs
-    for directory in (transfer, vectors):
-        manifest = json.loads((directory / "plot_manifest.json").read_text())
-        assert {item["format"] for item in manifest["output_paths"]} == {"png", "pdf"}
-        assert manifest["source_data_files"]
-        for output in manifest["output_paths"]:
-            path = Path(output["path"])
-            assert path.stat().st_size == output["bytes"] > 0
-        for source in manifest["source_data_files"]:
-            assert Path(source).is_file()
-
-
-def test_vector_manifest_records_actual_arrow_and_geometry_scales(
-    framework_outputs,
-) -> None:
-    _, vectors, _ = framework_outputs
-    manifest = json.loads((vectors / "plot_manifest.json").read_text())
-    assert manifest["deformation_scale"] == 1.0
-    assert manifest["arrow_scale"] == 3.0
-    vector_panels = [
-        item
-        for item in manifest["panel_metadata"]
-        if item["component"] == "DisplacementVectorPanel"
-    ]
-    assert len(vector_panels) == 3
-    assert all(
-        item["represented_vector"] == "physical displacement u=[u_x,u_y]"
-        and item["normalized_arrows"] is False
-        for item in vector_panels
-    )
-
-
-def test_phase4k_known_distance_regression(framework_outputs) -> None:
-    transfer, _, _ = framework_outputs
-    data = np.genfromtxt(
-        transfer / "source_data" / "location_distance.csv",
-        delimiter=",",
-        names=True,
-        dtype=None,
-        encoding="utf-8",
-    )
-    off_diagonal = data["distance"][data["xi_i"] != data["xi_j"]]
-    # This spec uses secant gain, so Phase 4K raw distances are divided by 1.5 mm.
-    assert off_diagonal.min() == pytest.approx(0.26541113032547 / 1.5)
-    assert off_diagonal.max() == pytest.approx(0.9820683126730818 / 1.5)

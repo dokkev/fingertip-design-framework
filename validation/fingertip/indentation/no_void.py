@@ -5,30 +5,31 @@ from __future__ import annotations
 import argparse
 import csv
 from datetime import datetime, timezone
-import json
 import os
 from pathlib import Path
-import resource
-import subprocess
 import sys
 import time
 from typing import Any, Mapping
 
-from fem.indentation_analysis import (
+from fem.indentation import (
     IndentationSettings,
     inspect_indentation_runtime_contract,
     run_indentation_case,
 )
-from fem.indentation_postprocess import write_indentation_case_outputs
 from fem.kratos_settings import (
     CONSTITUTIVE_LAW,
     MIXED_PAD_ELEMENT,
     POISSON_RATIO,
 )
-from fem.no_void_baseline import (
+from validation.common.io import (
+    atomic_write_json,
+    strict_read_json,
+    write_indentation_case_outputs,
+)
+from validation.common.runner import run_isolated
+from validation.fingertip.indentation.metrics import (
     achieved_contact_centroid,
     append_or_replace_case,
-    atomic_write_json,
     completed_case_result,
     no_void_geometry_contract,
     reaction_work_proxy,
@@ -37,7 +38,7 @@ from model.fingertip_model import FingertipModel
 from model.fingertip_parameters import FingertipParameters
 
 
-DEFAULT_OUTPUT = Path("output/phase4_no_void_baseline")
+DEFAULT_OUTPUT = Path("output/validation/fingertip/indentation/no_void")
 J0_INDENTATION_MM = 0.25 / 48.0
 CANONICAL_INDENTATION_MM = 1.5
 CANONICAL_STEPS = 48
@@ -57,10 +58,6 @@ def _arguments() -> argparse.Namespace:
     parser.add_argument("--_indentation-mm", type=float)
     parser.add_argument("--_steps", type=int)
     return parser.parse_args()
-
-
-def _strict_json(path: Path) -> dict[str, Any]:
-    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def _smoke_acceptance(result: Mapping[str, Any]) -> dict[str, bool]:
@@ -179,7 +176,7 @@ def _case_command(
         sys.executable,
         "-B",
         "-m",
-        "analysis.phase4_no_void_baseline",
+        "validation.fingertip.indentation.no_void",
         "--output-directory",
         str(output),
         "--_child",
@@ -262,42 +259,26 @@ def _run_case(
     timed_out = False
     for attempt in range(2):
         attempt_log = case_directory / f"solver_attempt_{attempt}.log"
-        try:
-            completed = subprocess.run(
-                command,
-                check=False,
-                capture_output=True,
-                text=True,
-                env=environment,
-                timeout=timeout_seconds,
-                preexec_fn=lambda: resource.setrlimit(
-                    resource.RLIMIT_CORE, (0, 0)
-                ),
-            )
-            final_exit_code = completed.returncode
-            attempt_log.write_text(
-                completed.stdout + completed.stderr,
-                encoding="utf-8",
-            )
-            if result_path.is_file():
-                break
-            if attempt == 0:
-                retry_count = 1
-                continue
+        completed = run_isolated(
+            command,
+            cwd=Path(__file__).resolve().parents[3],
+            environment=environment,
+            output_path=attempt_log,
+            timeout_seconds=timeout_seconds,
+            disable_core_dumps=True,
+        )
+        final_exit_code = completed.return_code
+        timed_out = timed_out or completed.timed_out
+        if result_path.is_file():
             break
-        except subprocess.TimeoutExpired as exception:
-            timed_out = True
-            output_text = (exception.stdout or "") + (exception.stderr or "")
-            if isinstance(output_text, bytes):
-                output_text = output_text.decode(errors="replace")
-            attempt_log.write_text(output_text, encoding="utf-8")
-            if attempt == 0:
-                retry_count = 1
-                continue
+        if attempt == 0:
+            retry_count = 1
+            continue
+        break
 
     duration = time.perf_counter() - start
     if result_path.is_file():
-        result = _strict_json(result_path)
+        result = strict_read_json(result_path)
         recovered_postprocess = (
             result.get("postprocess_recovery", {}).get("status") == "PASS"
         )
@@ -457,7 +438,7 @@ def _run_parent(arguments: argparse.Namespace) -> int:
     output.mkdir(parents=True, exist_ok=True)
     state_path = output / "run_state.json"
     if state_path.is_file():
-        run_state = _strict_json(state_path)
+        run_state = strict_read_json(state_path)
     else:
         run_state = {
             "phase": "4J",
@@ -471,7 +452,7 @@ def _run_parent(arguments: argparse.Namespace) -> int:
     geometry_contract = no_void_geometry_contract(model)
     preflight_path = output / "preflight.json"
     if preflight_path.is_file():
-        preflight = _strict_json(preflight_path)
+        preflight = strict_read_json(preflight_path)
     else:
         runtime = inspect_indentation_runtime_contract(
             model,

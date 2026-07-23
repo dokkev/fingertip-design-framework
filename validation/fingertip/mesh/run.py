@@ -8,9 +8,9 @@ import json
 from pathlib import Path
 from typing import Any
 
-from fem.fingertip_mesher import generate_fingertip_mesh
-from fem.mesh_types import mesh_settings_for_level
-from fem.mesh_visualize import save_mesh_figure
+from mesh.fingertip import generate_fingertip_mesh
+from mesh.types import mesh_settings_for_level
+from visualization.mesh import save_mesh_figure
 from model.fingertip_model import FingertipModel
 from model.fingertip_parameters import FingertipParameters
 
@@ -26,7 +26,7 @@ def _parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         "--output-directory",
         type=Path,
-        default=Path("output/phase4_mesh"),
+        default=Path("output/validation/fingertip/mesh"),
     )
     return parser.parse_args()
 

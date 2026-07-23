@@ -14,7 +14,7 @@ from typing import Any, Literal, Mapping, Sequence
 
 import numpy as np
 
-from fem.kratos_adapter import _import_kratos
+from fem.kratos_adapter import import_kratos
 from fem.kratos_settings import (
     ABSOLUTE_TOLERANCE,
     CONSTITUTIVE_LAW,
@@ -26,7 +26,7 @@ from fem.kratos_settings import (
     THICKNESS_MM,
     YOUNG_MODULUS_MPA,
 )
-from fem.sparse_diagnostics import analyze_sparse_system
+from validation.fingertip.internal_contact.sparse import analyze_sparse_system
 
 
 CrosspointSide = Literal["left", "right"]
@@ -71,7 +71,7 @@ def fully_prescribed_contact_crosspoint(
 
 
 def _project_parameters(number_of_steps: int = 1) -> Any:
-    KM, _, _, _ = _import_kratos()
+    KM, _, _, _ = import_kratos()
     return KM.Parameters(
         f"""{{
             "problem_data": {{
@@ -142,7 +142,7 @@ def _project_parameters(number_of_steps: int = 1) -> Any:
 
 
 def _create_patch_mesh(model_part: Any, divisions: int) -> dict[str, Any]:
-    KM, _, CLA, _ = _import_kratos()
+    KM, _, CLA, _ = import_kratos()
     if divisions < 2:
         raise ValueError("crosspoint patch needs at least two divisions")
     geometry = KM.Quadrilateral2D4(
@@ -264,7 +264,7 @@ def _fix_patch(
     mesh: Mapping[str, Sequence[int]],
     side: CrosspointSide,
 ) -> int:
-    KM, _, _, _ = _import_kratos()
+    KM, _, _, _ = import_kratos()
     for node in model_part.Nodes:
         node.SetSolutionStepValue(KM.VOLUMETRIC_STRAIN, 0.0)
     for node_id in mesh["bottom_node_ids"]:
@@ -301,7 +301,7 @@ def _move_master(
     model_part: Any,
     node_ids: Sequence[int],
 ) -> None:
-    KM, _, _, _ = _import_kratos()
+    KM, _, _, _ = import_kratos()
     for node_id in node_ids:
         node = model_part.Nodes[node_id]
         node.SetSolutionStepValue(
@@ -315,7 +315,7 @@ def _condition_rows(
     endpoint_id: int,
     process_info: Any,
 ) -> list[dict[str, Any]]:
-    KM, CSMA, _, _ = _import_kratos()
+    KM, CSMA, _, _ = import_kratos()
     rows: list[dict[str, Any]] = []
     for condition in computing_contact.Conditions:
         geometry = condition.GetGeometry()
@@ -395,7 +395,7 @@ def run_crosspoint_patch(
     divisions: int,
 ) -> dict[str, Any]:
     """Build and assemble one fresh mirrored crosspoint patch."""
-    KM, CSMA, _, _ = _import_kratos()
+    KM, CSMA, _, _ = import_kratos()
     from KratosMultiphysics.StructuralMechanicsApplication.structural_mechanics_analysis import (
         StructuralMechanicsAnalysis,
     )

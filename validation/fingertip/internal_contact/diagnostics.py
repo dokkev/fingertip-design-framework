@@ -16,20 +16,16 @@ from typing import Any, Mapping, Sequence
 
 import numpy as np
 
-from fem.fingertip_mesher import generate_fingertip_mesh
-from fem.indentation_analysis import (
+from mesh.fingertip import generate_fingertip_mesh
+from fem.indentation import (
     IndentationSettings,
-    _nodal_fields,
-    apply_indentation_constraints,
-    populate_indenter_model_part,
     run_indentation_case,
-    set_indenter_travel,
 )
-from fem.indenter_fixture import (
+from mesh.indenter import (
     build_indenter_fixture,
     generate_indenter_mesh,
 )
-from fem.internal_contact_configuration import (
+from fem.contact import (
     PAD_U_AGGREGATE,
     PAD_U_SEGMENTS,
     STEM_U_AGGREGATE,
@@ -37,7 +33,14 @@ from fem.internal_contact_configuration import (
     create_continuous_u_submodel_parts,
     u_corner_node_ids,
 )
-from fem.kratos_adapter import _import_kratos, populate_kratos_model_part
+from fem.kratos_adapter import (
+    apply_indentation_constraints,
+    import_kratos,
+    populate_indenter_model_part,
+    populate_kratos_model_part,
+    set_indenter_travel,
+)
+from fem.results import extract_nodal_fields
 from fem.kratos_settings import (
     ABSOLUTE_TOLERANCE,
     CONSTITUTIVE_LAW,
@@ -52,8 +55,8 @@ from fem.kratos_settings import (
     indentation_contact_groups,
     validate_internal_contact_configuration,
 )
-from fem.mesh_types import MeshLevel, mesh_settings_for_level
-from fem.sparse_diagnostics import analyze_sparse_system
+from mesh.types import MeshLevel, mesh_settings_for_level
+from validation.fingertip.internal_contact.sparse import analyze_sparse_system
 from model.fingertip_model import FingertipModel
 from model.fingertip_parameters import FingertipParameters
 
@@ -139,14 +142,14 @@ def _statistics(values: Sequence[float]) -> dict[str, Any]:
     }
 
 
-def _build_context(
+def build_diagnostic_context(
     mesh_level: MeshLevel,
     configuration: str,
     number_of_steps: int = 1,
     mesh_override: Any | None = None,
     before_initialize: Any | None = None,
 ) -> DiagnosticContext:
-    KM, _, _, _ = _import_kratos()
+    KM, _, _, _ = import_kratos()
     from KratosMultiphysics.StructuralMechanicsApplication.structural_mechanics_analysis import (
         StructuralMechanicsAnalysis,
     )
@@ -242,8 +245,8 @@ def _coordinates(nodes: Any) -> dict[str, Any]:
     }
 
 
-def _runtime_contract(context: DiagnosticContext) -> dict[str, Any]:
-    KM, CSMA, _, _ = _import_kratos()
+def runtime_contract(context: DiagnosticContext) -> dict[str, Any]:
+    KM, CSMA, _, _ = import_kratos()
     groups: dict[str, Any] = {}
     selected_source_conditions: set[int] = set()
     for index, (name, slave_name, master_name) in enumerate(context.groups):
@@ -418,7 +421,7 @@ def _connectivity(geometry: Any) -> tuple[int, ...]:
     return tuple(node.Id for node in geometry)
 
 
-def _source_condition_maps(
+def source_condition_maps(
     context: DiagnosticContext,
 ) -> tuple[
     dict[str, dict[tuple[int, ...], int]],
@@ -471,12 +474,12 @@ def _semantic_key(names: Sequence[str]) -> str | None:
     return None
 
 
-def _contact_condition_records(
+def contact_condition_records(
     context: DiagnosticContext,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Read CouplingGeometry parts 0/1; never infer parents from coordinates."""
-    KM, CSMA, _, _ = _import_kratos()
-    by_surface, condition_semantics = _source_condition_maps(context)
+    KM, CSMA, _, _ = import_kratos()
+    by_surface, condition_semantics = source_condition_maps(context)
     records: list[dict[str, Any]] = []
     group_summary: dict[str, Any] = {}
     generated_ids_seen: list[int] = []
@@ -605,7 +608,7 @@ def _corner_contract(
     context: DiagnosticContext,
     assembled_dofs: Mapping[tuple[int, str], Mapping[str, Any]],
 ) -> dict[str, Any]:
-    KM, CSMA, _, _ = _import_kratos()
+    KM, CSMA, _, _ = import_kratos()
     corner_ids = u_corner_node_ids(context.model_part)
     slave_names = [slave for _, slave, _ in context.groups]
     output: dict[str, Any] = {}
@@ -711,7 +714,7 @@ def _corner_contract(
     }
 
 
-def _dof_records(
+def dof_records(
     context: DiagnosticContext,
     dof_set: Any,
 ) -> tuple[
@@ -720,7 +723,7 @@ def _dof_records(
     dict[tuple[int, str], dict[str, Any]],
     dict[str, Any],
 ]:
-    KM, CSMA, _, _ = _import_kratos()
+    KM, CSMA, _, _ = import_kratos()
     assembled: dict[tuple[int, str], dict[str, Any]] = {}
     equation_map: dict[int, dict[str, Any]] = {}
     equation_ids: list[int] = []
@@ -839,7 +842,7 @@ def _add_unused_surface_assembly_contract(
     assembled_dofs: Mapping[tuple[int, str], Mapping[str, Any]],
 ) -> bool:
     """Distinguish Kratos' global nodal DOF addition from DofSet assembly."""
-    _, CSMA, _, _ = _import_kratos()
+    _, CSMA, _, _ = import_kratos()
     lm_name = CSMA.LAGRANGE_MULTIPLIER_CONTACT_PRESSURE.Name()
     selected_slave_nodes = {
         node.Id
@@ -888,11 +891,11 @@ def assemble_first_step_diagnostics(
     initialized_step = False
     start = time.perf_counter()
     try:
-        context = _build_context(
+        context = build_diagnostic_context(
             mesh_level, configuration, mesh_override=mesh_override
         )
-        KM, _, _, _ = _import_kratos()
-        runtime = _runtime_contract(context)
+        KM, _, _, _ = import_kratos()
+        runtime = runtime_contract(context)
         solver = context.analysis._GetSolver()
         strategy_check_before_search = int(
             solver._GetSolutionStrategy().Check()
@@ -916,7 +919,7 @@ def assemble_first_step_diagnostics(
             equation_map,
             assembled_dofs,
             dof_summary,
-        ) = _dof_records(context, dof_set)
+        ) = dof_records(context, dof_set)
         unused_assembly_pass = _add_unused_surface_assembly_contract(
             context, runtime, assembled_dofs
         )
@@ -957,7 +960,7 @@ def assemble_first_step_diagnostics(
             free_without_contribution
         )
 
-        contact_records, pair_purity = _contact_condition_records(context)
+        contact_records, pair_purity = contact_condition_records(context)
         corner = _corner_contract(context, assembled_dofs)
         counts_after_search = _entity_counts(context.model_part)
         result = {

@@ -1,0 +1,1 @@
+"""Headless visualization smoke tests."""

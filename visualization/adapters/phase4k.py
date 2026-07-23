@@ -18,6 +18,15 @@ from typing import Any, Iterable, Mapping, Sequence
 
 import numpy as np
 
+from visualization.transforms import (
+    CODTMVisualizationError,
+    IndentationSelection,
+    location_distance_matrix,
+    select_indentation,
+    shape_distance_matrix,
+    signature_norm,
+)
+
 
 CANONICAL_INPUT_FILES = (
     "codtm_arrays.npz",
@@ -30,33 +39,6 @@ CANONICAL_INPUT_FILES = (
 )
 
 
-class CODTMVisualizationError(RuntimeError):
-    """Raised when an artifact or requested visualization is not valid."""
-
-
-@dataclass(frozen=True)
-class IndentationSelection:
-    """An exact or linearly interpolated value at one indentation."""
-
-    target_mm: float
-    values: np.ndarray
-    exact: bool
-    lower_step_index: int
-    upper_step_index: int
-    lower_delta_mm: float
-    upper_delta_mm: float
-    interpolation_weight: float
-
-    def metadata(self) -> dict[str, Any]:
-        return {
-            "target_mm": self.target_mm,
-            "selection": "exact" if self.exact else "linear_interpolation",
-            "lower_step": self.lower_step_index + 1,
-            "upper_step": self.upper_step_index + 1,
-            "lower_delta_mm": self.lower_delta_mm,
-            "upper_delta_mm": self.upper_delta_mm,
-            "interpolation_weight": self.interpolation_weight,
-        }
 
 
 @dataclass(frozen=True)
@@ -355,64 +337,6 @@ def load_codtm_dataset(input_dir: Path | str) -> tuple[CODTMDataset, dict[str, A
     return dataset, audit
 
 
-def select_indentation(
-    delta_mm: Sequence[float] | np.ndarray,
-    values: np.ndarray,
-    valid_mask: Sequence[bool] | np.ndarray,
-    target_mm: float,
-    *,
-    tolerance: float = 1.0e-10,
-) -> IndentationSelection:
-    """Select an exact step or interpolate between two valid finite steps."""
-    delta = np.asarray(delta_mm, dtype=float)
-    data = np.asarray(values, dtype=float)
-    valid = np.asarray(valid_mask, dtype=bool)
-    if (
-        delta.ndim != 1
-        or data.shape[0] != delta.size
-        or valid.shape != delta.shape
-        or not math.isfinite(target_mm)
-    ):
-        raise CODTMVisualizationError("invalid indentation selection inputs")
-    exact = np.flatnonzero(np.isclose(delta, target_mm, rtol=0.0, atol=tolerance))
-    if exact.size:
-        index = int(exact[0])
-        if not valid[index] or not np.isfinite(data[index]).all():
-            raise CODTMVisualizationError("exact indentation step is invalid")
-        return IndentationSelection(
-            target_mm=float(target_mm),
-            values=np.array(data[index], copy=True),
-            exact=True,
-            lower_step_index=index,
-            upper_step_index=index,
-            lower_delta_mm=float(delta[index]),
-            upper_delta_mm=float(delta[index]),
-            interpolation_weight=0.0,
-        )
-    if target_mm < float(np.min(delta)) or target_mm > float(np.max(delta)):
-        raise CODTMVisualizationError("indentation extrapolation is forbidden")
-    upper = int(np.searchsorted(delta, target_mm, side="right"))
-    lower = upper - 1
-    if lower < 0 or upper >= delta.size or not delta[lower] < target_mm < delta[upper]:
-        raise CODTMVisualizationError("indentation coordinates are not strictly ordered")
-    if not valid[lower] or not valid[upper]:
-        raise CODTMVisualizationError("cannot interpolate across an invalid step")
-    if not np.isfinite(data[[lower, upper]]).all():
-        raise CODTMVisualizationError("cannot interpolate across a non-finite step")
-    weight = float((target_mm - delta[lower]) / (delta[upper] - delta[lower]))
-    interpolated = (1.0 - weight) * data[lower] + weight * data[upper]
-    return IndentationSelection(
-        target_mm=float(target_mm),
-        values=np.asarray(interpolated, dtype=float),
-        exact=False,
-        lower_step_index=lower,
-        upper_step_index=upper,
-        lower_delta_mm=float(delta[lower]),
-        upper_delta_mm=float(delta[upper]),
-        interpolation_weight=weight,
-    )
-
-
 def zeta_for_side(side: str, eta: Sequence[float] | np.ndarray) -> np.ndarray:
     """Return the exact visualization-only signed coordinate."""
     values = np.asarray(eta, dtype=float)
@@ -451,71 +375,6 @@ def profile_segments(
         )
         for side in ("right", "left")
     )
-
-
-def _sorted_side(
-    values: np.ndarray,
-    eta: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray]:
-    order = np.argsort(eta)
-    return np.asarray(values)[..., order], np.asarray(eta)[order]
-
-
-def signature_inner_product(
-    first: np.ndarray,
-    second: np.ndarray,
-    eta_by_side: np.ndarray,
-) -> float:
-    """Integrate each side separately, then sum; the center gap has no length."""
-    a = np.asarray(first, dtype=float)
-    b = np.asarray(second, dtype=float)
-    eta = np.asarray(eta_by_side, dtype=float)
-    if a.shape != b.shape or a.ndim != 2 or eta.shape != a.shape:
-        raise CODTMVisualizationError("signature/eta shapes must be [side, sample]")
-    total = 0.0
-    for side_index in range(a.shape[0]):
-        difference_a, coordinate = _sorted_side(a[side_index], eta[side_index])
-        difference_b, _ = _sorted_side(b[side_index], eta[side_index])
-        total += float(np.trapezoid(difference_a * difference_b, coordinate))
-    return total
-
-
-def signature_norm(values: np.ndarray, eta_by_side: np.ndarray) -> float:
-    norm_squared = signature_inner_product(values, values, eta_by_side)
-    return math.sqrt(max(norm_squared, 0.0))
-
-
-def location_distance_matrix(
-    signatures: np.ndarray,
-    eta_by_side: np.ndarray,
-) -> np.ndarray:
-    fields = np.asarray(signatures, dtype=float)
-    if fields.ndim != 3:
-        raise CODTMVisualizationError("signatures must have [location, side, sample]")
-    count = fields.shape[0]
-    result = np.zeros((count, count), dtype=float)
-    for first in range(count):
-        for second in range(first + 1, count):
-            distance = signature_norm(fields[first] - fields[second], eta_by_side)
-            result[first, second] = distance
-            result[second, first] = distance
-    return result
-
-
-def shape_distance_matrix(
-    signatures: np.ndarray,
-    eta_by_side: np.ndarray,
-    *,
-    norm_floor: float = 1.0e-12,
-) -> np.ndarray:
-    fields = np.asarray(signatures, dtype=float)
-    normalized: list[np.ndarray] = []
-    for field in fields:
-        norm = signature_norm(field, eta_by_side)
-        if not math.isfinite(norm) or norm <= norm_floor:
-            raise CODTMVisualizationError("shape normalization encountered zero norm")
-        normalized.append(field / norm)
-    return location_distance_matrix(np.asarray(normalized), eta_by_side)
 
 
 def mirror_signature(
@@ -649,4 +508,3 @@ def finite_csv_audit(path: Path, nonnumeric: Iterable[str] = ()) -> dict[str, An
                         f"{path.name}:{rows + 1} non-finite {key}"
                     )
     return {"path": str(path), "row_count": rows, "columns": list(columns), "finite": True}
-

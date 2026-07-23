@@ -10,27 +10,26 @@ from typing import Any, Literal, Mapping, Sequence
 
 import numpy as np
 
-from fem.fingertip_mesher import generate_fingertip_mesh
-from fem.indentation_analysis import (
+from mesh.fingertip import generate_fingertip_mesh
+from fem.indentation import (
     IndentationSettings,
     run_indentation_case,
-    set_indenter_travel,
 )
-from fem.internal_contact_diagnostic import (
+from validation.fingertip.internal_contact.diagnostics import (
     FIRST_STEP_TRAVEL_MM,
-    _build_context,
-    _contact_condition_records,
-    _dof_records,
-    _runtime_contract,
+    build_diagnostic_context,
+    contact_condition_records,
+    dof_records,
+    runtime_contract,
 )
-from fem.kratos_adapter import _import_kratos
-from fem.mesh_types import (
+from fem.kratos_adapter import import_kratos, set_indenter_travel
+from mesh.types import (
     BoundaryEdge,
     FingertipMesh,
     MeshLevel,
     mesh_settings_for_level,
 )
-from fem.sparse_diagnostics import analyze_sparse_system
+from validation.fingertip.internal_contact.sparse import analyze_sparse_system
 from model.fingertip_model import FingertipModel
 from model.fingertip_parameters import FingertipParameters
 
@@ -453,7 +452,7 @@ def _condition_record(
     fingertip_model: FingertipModel,
     domain: str,
 ) -> dict[str, Any]:
-    KM, _, _, _ = _import_kratos()
+    KM, _, _, _ = import_kratos()
     geometry = condition.GetGeometry()
     first = geometry[0]
     second = geometry[1]
@@ -497,7 +496,7 @@ def _surface_stage_snapshot(
     fingertip_model: FingertipModel,
     stage: str,
 ) -> dict[str, Any]:
-    KM, CSMA, _, _ = _import_kratos()
+    KM, CSMA, _, _ = import_kratos()
     surfaces: dict[str, Any] = {}
     for tag in (
         "pad_cutout_left",
@@ -647,7 +646,7 @@ def _pairing_projection_records(
                 "master_node_coordinates_mm": [
                     list(point) for point in master_points
                 ],
-                "active": bool(condition.Is(_import_kratos()[0].ACTIVE)),
+                "active": bool(condition.Is(import_kratos()[0].ACTIVE)),
                 "endpoint_projection": projection,
             }
         )
@@ -660,7 +659,7 @@ def _local_lm_contributors(
     endpoint_node_id: int,
     lm_equation_id: int,
 ) -> list[dict[str, Any]]:
-    KM, CSMA, _, _ = _import_kratos()
+    KM, CSMA, _, _ = import_kratos()
     records: list[dict[str, Any]] = []
     computing = context.model[
         f"Structure.ComputingContact.ComputingContactSub{pair_index}"
@@ -731,7 +730,7 @@ def _local_lm_contributors(
     return records
 
 
-def _endpoint_id(model_part: Any, side: Side, slave: bool) -> int:
+def endpoint_id(model_part: Any, side: Side, slave: bool) -> int:
     tag = (
         f"pad_cutout_{side}" if slave else f"stem_{side}"
     )
@@ -838,19 +837,19 @@ def audit_side_orientation(
     initialized_step = False
     start = time.perf_counter()
     try:
-        context = _build_context(
+        context = build_diagnostic_context(
             mesh_level,
             configuration,
             mesh_override=mesh,
             before_initialize=capture_before,
         )
-        KM, CSMA, _, _ = _import_kratos()
+        KM, CSMA, _, _ = import_kratos()
         stages["after_execute_initialize"] = _surface_stage_snapshot(
             context.model_part,
             fingertip_model,
             "after_execute_initialize",
         )
-        runtime = _runtime_contract(context)
+        runtime = runtime_contract(context)
         solver = context.analysis._GetSolver()
         context.analysis.time = solver.AdvanceInTime(context.analysis.time)
         set_indenter_travel(
@@ -867,7 +866,7 @@ def audit_side_orientation(
             fingertip_model,
             "after_contact_search",
         )
-        endpoint_node_id = _endpoint_id(
+        endpoint_node_id = endpoint_id(
             context.model_part, side, slave=True
         )
         pairing = _pairing_projection_records(
@@ -883,7 +882,7 @@ def audit_side_orientation(
             equation_map,
             assembled_dofs,
             dof_summary,
-        ) = _dof_records(context, dof_set)
+        ) = dof_records(context, dof_set)
         matrix = strategy.GetSystemMatrix()
         rhs = strategy.GetSystemVector()
         increment = KM.Vector(matrix.Size1())
@@ -916,7 +915,7 @@ def audit_side_orientation(
             fingertip_model,
             "after_first_newton_assembly",
         )
-        contact_records, pair_purity = _contact_condition_records(
+        contact_records, pair_purity = contact_condition_records(
             context
         )
         diagnostic = {

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 import math
-from typing import Any
+from typing import Any, Sequence
 
 from fem.kratos_settings import (
     CARRIER_ELEMENT,
@@ -16,7 +16,8 @@ from fem.kratos_settings import (
     YOUNG_MODULUS_MPA,
     build_project_parameters_json,
 )
-from fem.mesh_types import BoundaryEdge, FingertipMesh
+from mesh.indenter import IndenterFixture, IndenterMesh
+from mesh.types import BoundaryEdge, FingertipMesh
 
 
 class KratosDependencyError(RuntimeError):
@@ -54,7 +55,21 @@ class KratosTopology:
     carrier_node_ids: tuple[int, ...]
 
 
-def _import_kratos() -> tuple[Any, Any, Any, Any]:
+@dataclass(frozen=True)
+class IndenterKratosTopology:
+    """Global Kratos IDs assigned to an independently generated fixture mesh."""
+
+    node_ids: tuple[int, ...]
+    element_ids: tuple[int, ...]
+    contact_condition_ids: tuple[int, ...]
+    remainder_condition_ids: tuple[int, ...]
+    contact_node_ids: tuple[int, ...]
+    local_to_global_node_id: dict[int, int]
+    contact_edges: tuple[BoundaryEdge, ...]
+    remainder_edges: tuple[BoundaryEdge, ...]
+
+
+def import_kratos() -> tuple[Any, Any, Any, Any]:
     try:
         import KratosMultiphysics as KM
         import KratosMultiphysics.ContactStructuralMechanicsApplication as CSMA
@@ -67,6 +82,191 @@ def _import_kratos() -> tuple[Any, Any, Any, Any]:
             "ContactStructuralMechanics applications."
         ) from exception
     return KM, CSMA, CLA, SMA
+
+
+def _next_id(entities: Any) -> int:
+    return max((entity.Id for entity in entities), default=0) + 1
+
+
+def _add_named_submodel_part(
+    model_part: Any,
+    name: str,
+    node_ids: Sequence[int],
+    element_ids: Sequence[int] = (),
+    condition_ids: Sequence[int] = (),
+) -> Any:
+    submodel_part = model_part.CreateSubModelPart(name)
+    if node_ids:
+        submodel_part.AddNodes(list(node_ids))
+    if element_ids:
+        submodel_part.AddElements(list(element_ids))
+    if condition_ids:
+        submodel_part.AddConditions(list(condition_ids))
+    return submodel_part
+
+
+def populate_indenter_model_part(
+    model_part: Any,
+    indenter_mesh: IndenterMesh,
+    base_topology: KratosTopology,
+) -> IndenterKratosTopology:
+    """Append the independent carrier with globally disjoint entity IDs."""
+    KM, _, CLA, _ = import_kratos()
+    properties_id = 3
+    properties = (
+        model_part.Properties[properties_id]
+        if model_part.HasProperties(properties_id)
+        else model_part.CreateNewProperties(properties_id)
+    )
+    properties[KM.YOUNG_MODULUS] = YOUNG_MODULUS_MPA
+    properties[KM.POISSON_RATIO] = POISSON_RATIO
+    properties[KM.THICKNESS] = THICKNESS_MM
+    properties[KM.DENSITY] = 1.0
+    properties[KM.VOLUME_ACCELERATION] = [0.0, 0.0, 0.0]
+    properties[KM.CONSTITUTIVE_LAW] = CLA.HyperElasticPlaneStrain2DLaw()
+
+    first_node_id = _next_id(model_part.Nodes)
+    node_map = {
+        local_id: first_node_id + index
+        for index, local_id in enumerate(sorted(indenter_mesh.nodes))
+    }
+    for local_id in sorted(indenter_mesh.nodes):
+        node = indenter_mesh.nodes[local_id]
+        model_part.CreateNewNode(node_map[local_id], node.x_mm, node.y_mm, 0.0)
+
+    first_element_id = _next_id(model_part.Elements)
+    element_ids: list[int] = []
+    for index, element in enumerate(indenter_mesh.elements):
+        element_id = first_element_id + index
+        model_part.CreateNewElement(
+            CARRIER_ELEMENT,
+            element_id,
+            [node_map[node_id] for node_id in element.node_ids],
+            properties,
+        )
+        element_ids.append(element_id)
+
+    first_condition_id = _next_id(model_part.Conditions)
+    contact_condition_ids: list[int] = []
+    remainder_condition_ids: list[int] = []
+    for edge_group, identifiers in (
+        (indenter_mesh.contact_edges, contact_condition_ids),
+        (indenter_mesh.remainder_edges, remainder_condition_ids),
+    ):
+        for edge in edge_group:
+            condition_id = (
+                first_condition_id
+                + len(contact_condition_ids)
+                + len(remainder_condition_ids)
+            )
+            model_part.CreateNewCondition(
+                "LineCondition2D2N",
+                condition_id,
+                [node_map[node_id] for node_id in edge.node_ids],
+                properties,
+            )
+            identifiers.append(condition_id)
+
+    node_ids = tuple(sorted(node_map.values()))
+    contact_node_ids = tuple(
+        sorted(node_map[node_id] for node_id in indenter_mesh.contact_node_ids)
+    )
+    contact_edges = tuple(
+        BoundaryEdge(
+            tuple(node_map[node_id] for node_id in edge.node_ids),
+            "rigid_carrier",
+        )
+        for edge in indenter_mesh.contact_edges
+    )
+    remainder_edges = tuple(
+        BoundaryEdge(
+            tuple(node_map[node_id] for node_id in edge.node_ids),
+            "rigid_carrier",
+        )
+        for edge in indenter_mesh.remainder_edges
+    )
+    _add_named_submodel_part(model_part, "RigidIndenter", node_ids, element_ids)
+    _add_named_submodel_part(
+        model_part,
+        "IndenterContactArc",
+        contact_node_ids,
+        condition_ids=contact_condition_ids,
+    )
+    remainder_node_ids = tuple(
+        sorted({node_id for edge in remainder_edges for node_id in edge.node_ids})
+    )
+    _add_named_submodel_part(
+        model_part,
+        "IndenterOuterRemainder",
+        remainder_node_ids,
+        condition_ids=remainder_condition_ids,
+    )
+    _add_named_submodel_part(model_part, "IndenterRigidMotion", node_ids)
+    pad_outer = model_part.GetSubModelPart("PadOuterArc")
+    external_nodes = tuple(
+        sorted({node.Id for node in pad_outer.Nodes}.union(contact_node_ids))
+    )
+    external_conditions = tuple(
+        sorted(
+            {condition.Id for condition in pad_outer.Conditions}.union(
+                contact_condition_ids
+            )
+        )
+    )
+    _add_named_submodel_part(
+        model_part,
+        "ExternalContact",
+        external_nodes,
+        condition_ids=external_conditions,
+    )
+    if not set(node_ids).isdisjoint(
+        set(base_topology.pad_node_ids).union(base_topology.carrier_node_ids)
+    ):
+        raise KratosAdapterError("pad/link and indenter node IDs are not disjoint")
+    return IndenterKratosTopology(
+        node_ids=node_ids,
+        element_ids=tuple(element_ids),
+        contact_condition_ids=tuple(contact_condition_ids),
+        remainder_condition_ids=tuple(remainder_condition_ids),
+        contact_node_ids=contact_node_ids,
+        local_to_global_node_id=node_map,
+        contact_edges=contact_edges,
+        remainder_edges=remainder_edges,
+    )
+
+
+def apply_indentation_constraints(
+    model_part: Any,
+    base_topology: KratosTopology,
+    indenter_topology: IndenterKratosTopology,
+) -> None:
+    """Fix the model supports and constrain the indenter to translation."""
+    KM, _, _, _ = import_kratos()
+    apply_initialization_constraints(model_part, base_topology)
+    for node_id in indenter_topology.node_ids:
+        node = model_part.Nodes[node_id]
+        for variable in (KM.DISPLACEMENT_X, KM.DISPLACEMENT_Y, KM.DISPLACEMENT_Z):
+            node.Fix(variable)
+            node.SetSolutionStepValue(variable, 0.0)
+
+
+def set_indenter_travel(
+    model_part: Any,
+    node_ids: Sequence[int],
+    fixture: IndenterFixture,
+    travel_mm: float,
+) -> None:
+    """Apply one common translation before contact search and prediction."""
+    KM, _, _, _ = import_kratos()
+    displacement = fixture.displacement_for_travel(travel_mm)
+    for node_id in node_ids:
+        node = model_part.Nodes[node_id]
+        node.SetSolutionStepValue(KM.DISPLACEMENT_X, displacement[0])
+        node.SetSolutionStepValue(KM.DISPLACEMENT_Y, displacement[1])
+        node.SetSolutionStepValue(KM.DISPLACEMENT_Z, 0.0)
+        node.X = node.X0 + displacement[0]
+        node.Y = node.Y0 + displacement[1]
+        node.Z = node.Z0
 
 
 def _properties(model_part: Any, identifier: int) -> Any:
@@ -113,7 +313,7 @@ def populate_kratos_model_part(
         raise KratosAdapterError(
             "refusing to adapt an invalid mesh: " + ", ".join(mesh.validation.errors)
         )
-    KM, _, CLA, _ = _import_kratos()
+    KM, _, CLA, _ = import_kratos()
     model_part.ProcessInfo[KM.DOMAIN_SIZE] = 2
     pad_properties, carrier_properties = _configure_properties(
         model_part, KM, CLA
@@ -193,7 +393,7 @@ def apply_initialization_constraints(
     model_part: Any, topology: KratosTopology
 ) -> None:
     """Fix the pad bond and the entire kinematic carrier for the smoke model."""
-    KM, _, _, _ = _import_kratos()
+    KM, _, _, _ = import_kratos()
     for node in model_part.Nodes:
         node.SetSolutionStepValue(KM.VOLUMETRIC_STRAIN, 0.0)
     constrained_ids = set(topology.carrier_node_ids)
@@ -270,7 +470,7 @@ def inspect_runtime_contact_contract(
     mesh: FingertipMesh,
 ) -> dict[str, Any]:
     """Inspect flags and fields after ``ALMContactProcess`` initialization."""
-    KM, CSMA, _, _ = _import_kratos()
+    KM, CSMA, _, _ = import_kratos()
     if not model.HasModelPart("Structure.Contact"):
         raise KratosAdapterError("ALMContactProcess did not create Structure.Contact")
     contact_part = model["Structure.Contact"]
@@ -402,7 +602,7 @@ def inspect_runtime_contact_contract(
 
 def run_initialization_smoke(mesh: FingertipMesh) -> dict[str, Any]:
     """Initialize the mixed-solid/internal-ALM model without a nonlinear solve."""
-    KM, _, _, _ = _import_kratos()
+    KM, _, _, _ = import_kratos()
     from KratosMultiphysics.StructuralMechanicsApplication.structural_mechanics_analysis import (
         StructuralMechanicsAnalysis,
     )

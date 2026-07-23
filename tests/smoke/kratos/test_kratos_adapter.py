@@ -6,10 +6,10 @@ import pytest
 
 pytest.importorskip("KratosMultiphysics")
 
-from fem.fingertip_mesher import generate_fingertip_mesh
+from mesh.fingertip import generate_fingertip_mesh
 from fem.kratos_adapter import run_initialization_smoke
 from fem.kratos_settings import CARRIER_ELEMENT, MIXED_PAD_ELEMENT
-from fem.mesh_types import mesh_settings_for_level
+from mesh.types import mesh_settings_for_level
 from model.fingertip_model import FingertipModel
 from model.fingertip_parameters import FingertipParameters
 

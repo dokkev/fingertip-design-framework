@@ -15,15 +15,13 @@ from typing import Any, Mapping, Sequence
 
 import numpy as np
 
-from fem.indentation_analysis import (
+from fem.indentation import (
     IndentationSettings,
     inspect_indentation_runtime_contract,
     run_indentation_case,
 )
-from fem.indentation_postprocess import (
-    profile_error_metrics,
-    write_indentation_case_outputs,
-)
+from fem.results import profile_error_metrics
+from validation.common.io import write_indentation_case_outputs
 from model.fingertip_model import FingertipModel
 from model.fingertip_parameters import FingertipParameters
 
@@ -44,7 +42,7 @@ def _parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         "--output-directory",
         type=Path,
-        default=Path("output/phase4_indentation"),
+        default=Path("output/validation/fingertip/indentation/baseline"),
     )
     parser.add_argument("--_child", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--_case-directory", type=Path, help=argparse.SUPPRESS)
@@ -120,7 +118,7 @@ def _run_case_subprocess(
         sys.executable,
         "-B",
         "-m",
-        "analysis.phase4_indentation_baseline",
+        "validation.fingertip.indentation.baseline",
         "--mesh-level",
         mesh_level,
         "--indentation-mm",

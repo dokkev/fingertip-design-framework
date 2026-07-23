@@ -13,7 +13,7 @@ import subprocess
 import sys
 from typing import Any, Mapping, Sequence
 
-from fem.search_crosspoint_audit import (
+from validation.fingertip.internal_contact.search_crosspoint_core import (
     CAUSAL_VARIANTS,
     run_lifecycle_case,
     source_trace,
@@ -21,7 +21,7 @@ from fem.search_crosspoint_audit import (
 )
 
 
-DEFAULT_OUTPUT = Path("output/phase4_search_crosspoint_audit")
+DEFAULT_OUTPUT = Path("output/validation/fingertip/internal_contact/search_crosspoint")
 CASE_DIRECTORIES = {
     "L00": "left_control",
     "F00": "f00_original",
@@ -682,7 +682,7 @@ def main() -> int:
             sys.executable,
             "-B",
             "-m",
-            "analysis.phase4_search_crosspoint_audit",
+            "validation.fingertip.internal_contact.run_search_crosspoint",
             "--mesh-level",
             arguments.mesh_level,
             "--output-directory",

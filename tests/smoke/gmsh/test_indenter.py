@@ -6,13 +6,13 @@ import math
 
 import pytest
 
-from fem.indenter_fixture import (
+from mesh.indenter import (
     IndenterSettings,
     InvalidIndenterSettings,
     build_indenter_fixture,
     generate_indenter_mesh,
 )
-from fem.indentation_analysis import (
+from fem.indentation import (
     IndentationSettings,
     InvalidIndentationSettings,
 )

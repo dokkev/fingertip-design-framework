@@ -7,9 +7,9 @@ import math
 import pytest
 from shapely.geometry import Point
 
-from fem.fingertip_mesher import generate_fingertip_mesh
-from fem.indenter_fixture import build_indenter_fixture_at_location
-from fem.mechanical_transfer_map import (
+from mesh.fingertip import generate_fingertip_mesh
+from mesh.indenter import build_indenter_fixture_at_location
+from fem.observables import (
     ReferenceBoundaryChain,
     TransferMapSettings,
     integrate_nodal_contact_distribution,
@@ -19,7 +19,7 @@ from fem.mechanical_transfer_map import (
     sample_observation_sidewalls,
     strict_json_round_trip,
 )
-from fem.mesh_types import mesh_settings_for_level
+from mesh.types import mesh_settings_for_level
 from model.fingertip_model import FingertipModel
 from model.fingertip_parameters import FingertipParameters
 

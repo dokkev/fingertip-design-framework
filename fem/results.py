@@ -2,22 +2,52 @@
 
 from __future__ import annotations
 
-import csv
-import json
 import math
-from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
 import numpy as np
 from shapely.geometry import LineString, Point
 
-from fem.indenter_fixture import CrownFrame, Vector2
-from fem.mesh_types import BoundaryEdge, FingertipMesh
+from fem.kratos_adapter import import_kratos
+from mesh.indenter import CrownFrame, Vector2
+from mesh.types import BoundaryEdge, FingertipMesh
 from model.fingertip_model import FingertipModel
 
 
 class IndentationPostprocessError(RuntimeError):
     """Raised when a requested measurement has no valid geometric support."""
+
+
+def scalar_statistics(values: Sequence[float]) -> dict[str, Any]:
+    """Summarize one finite scalar field without solver-specific objects."""
+    return {
+        "count": len(values),
+        "min": min(values) if values else None,
+        "max": max(values) if values else None,
+        "mean": sum(values) / len(values) if values else None,
+        "finite": bool(values)
+        and all(math.isfinite(float(value)) for value in values),
+    }
+
+
+def failure_statistics(values: Sequence[float]) -> dict[str, Any]:
+    """Summarize a failed iterate without serializing NaN or infinity."""
+    finite_values = [
+        float(value) for value in values if math.isfinite(float(value))
+    ]
+    return {
+        "count": len(values),
+        "finite_count": len(finite_values),
+        "nonfinite_count": len(values) - len(finite_values),
+        "min_finite": min(finite_values) if finite_values else None,
+        "max_finite": max(finite_values) if finite_values else None,
+        "mean_finite": (
+            sum(finite_values) / len(finite_values)
+            if finite_values
+            else None
+        ),
+        "all_finite": len(finite_values) == len(values),
+    }
 
 
 def _normalized(vector: Vector2) -> Vector2:
@@ -425,389 +455,158 @@ def signed_geometric_gap_statistics(
         "finite": all(math.isfinite(value) for value in gaps),
     }
 
-
-def _write_json(path: Path, value: Mapping[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(value, indent=2, sort_keys=True, allow_nan=False) + "\n",
-        encoding="utf-8",
-    )
-
-
-def _write_history_csv(path: Path, history: Sequence[Mapping[str, Any]]) -> None:
-    fields = (
-        "step",
-        "pseudo_time",
-        "prescribed_indenter_travel_mm",
-        "achieved_indentation_mm",
-        "indenter_normal_reaction_n",
-        "support_signed_reaction_along_loading_n",
-        "force_equilibrium_error",
-        "nonlinear_iterations",
-        "solver_converged",
-        "active_set_converged",
-        "external_active_condition_count",
-        "internal_left_active_condition_count",
-        "internal_right_active_condition_count",
-        "internal_bottom_active_condition_count",
-        "external_weighted_gap_min",
-        "external_weighted_gap_mean",
-        "external_contact_chord_width_mm",
-        "external_contact_arc_length_mm",
-        "maximum_principal_green_lagrange_strain",
-        "minimum_pad_det_f",
-        "maximum_pad_displacement_mm",
-        "maximum_contact_penetration_mm",
-        "solve_wall_clock_seconds",
-    )
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8", newline="") as stream:
-        writer = csv.DictWriter(stream, fieldnames=fields)
-        writer.writeheader()
-        for point in history:
-            groups = point["contact_groups"]
-            external = groups["external_pad_indenter"]
-            writer.writerow(
-                {
-                    "step": point["step"],
-                    "pseudo_time": point["pseudo_time"],
-                    "prescribed_indenter_travel_mm": point[
-                        "prescribed_indenter_travel_mm"
-                    ],
-                    "achieved_indentation_mm": point["achieved_indentation_mm"],
-                    "indenter_normal_reaction_n": point[
-                        "indenter_normal_reaction_n"
-                    ],
-                    "support_signed_reaction_along_loading_n": point[
-                        "support_signed_reaction_along_loading_n"
-                    ],
-                    "force_equilibrium_error": point["force_equilibrium_error"],
-                    "nonlinear_iterations": point["nonlinear_iterations"],
-                    "solver_converged": point["solver_converged"],
-                    "active_set_converged": point["active_set_converged"],
-                    "external_active_condition_count": external[
-                        "active_condition_count"
-                    ],
-                    "internal_left_active_condition_count": groups[
-                        "internal_left"
-                    ]["active_condition_count"]
-                    if "internal_left" in groups
-                    else 0,
-                    "internal_right_active_condition_count": groups[
-                        "internal_right"
-                    ]["active_condition_count"]
-                    if "internal_right" in groups
-                    else 0,
-                    "internal_bottom_active_condition_count": groups[
-                        "internal_bottom"
-                    ]["active_condition_count"]
-                    if "internal_bottom" in groups
-                    else 0,
-                    "external_weighted_gap_min": external["weighted_gap"]["min"],
-                    "external_weighted_gap_mean": external["weighted_gap"]["mean"],
-                    "external_contact_chord_width_mm": point[
-                        "external_contact_width"
-                    ]["chord_width_mm"],
-                    "external_contact_arc_length_mm": point[
-                        "external_contact_width"
-                    ]["arc_length_mm"],
-                    "maximum_principal_green_lagrange_strain": point[
-                        "pad_strain_det_f"
-                    ]["maximum_principal_green_lagrange_strain"]["value"],
-                    "minimum_pad_det_f": point["pad_strain_det_f"]["det_f"]["min"],
-                    "maximum_pad_displacement_mm": point[
-                        "maximum_pad_displacement_mm"
-                    ],
-                    "maximum_contact_penetration_mm": max(
-                        float(group["signed_geometric_gap"].get("maximum_penetration_mm") or 0.0)
-                        for group in groups.values()
-                    ),
-                    "solve_wall_clock_seconds": point["solve_wall_clock_seconds"],
-                }
-            )
+def extract_nodal_fields(model_part: Any, node_ids: Sequence[int]) -> tuple[dict[int, tuple[float, float]], dict[int, tuple[float, float]]]:
+    KM, _, _, _ = import_kratos()
+    displacements: dict[int, tuple[float, float]] = {}
+    reactions: dict[int, tuple[float, float]] = {}
+    for node_id in node_ids:
+        node = model_part.Nodes[node_id]
+        displacement = node.GetSolutionStepValue(KM.DISPLACEMENT)
+        reaction = node.GetSolutionStepValue(KM.REACTION)
+        displacements[node_id] = (float(displacement[0]), float(displacement[1]))
+        reactions[node_id] = (float(reaction[0]), float(reaction[1]))
+    return displacements, reactions
 
 
-def _write_profile_csv(path: Path, profile: Sequence[Mapping[str, Any]]) -> None:
-    fields = (
-        "node_id",
-        "reference_x_mm",
-        "reference_y_mm",
-        "normalized_arc_coordinate",
-        "tangent_coordinate_from_crown_mm",
-        "side",
-        "ux_mm",
-        "uy_mm",
-        "local_normal_displacement_mm",
-        "local_tangential_displacement_mm",
-        "deformed_x_mm",
-        "deformed_y_mm",
-    )
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8", newline="") as stream:
-        writer = csv.DictWriter(stream, fieldnames=fields)
-        writer.writeheader()
-        for record in profile:
-            writer.writerow({field: record[field] for field in fields})
+def finite_field_failures(model_part: Any, pad_node_ids: Sequence[int]) -> list[str]:
+    KM, CSMA, _, _ = import_kratos()
+    failures: list[str] = []
+    pad_ids = set(pad_node_ids)
+    for node in model_part.Nodes:
+        displacement = node.GetSolutionStepValue(KM.DISPLACEMENT)
+        reaction = node.GetSolutionStepValue(KM.REACTION)
+        if not all(math.isfinite(float(displacement[index])) for index in range(2)):
+            failures.append(f"node_{node.Id}_DISPLACEMENT")
+        if not all(math.isfinite(float(reaction[index])) for index in range(2)):
+            failures.append(f"node_{node.Id}_REACTION")
+        if node.Id in pad_ids and not math.isfinite(
+            float(node.GetSolutionStepValue(KM.VOLUMETRIC_STRAIN))
+        ):
+            failures.append(f"node_{node.Id}_VOLUMETRIC_STRAIN")
+        if node.Is(KM.SLAVE):
+            for variable in (
+                CSMA.WEIGHTED_GAP,
+                CSMA.LAGRANGE_MULTIPLIER_CONTACT_PRESSURE,
+            ):
+                if node.SolutionStepsDataHas(variable) and not math.isfinite(
+                    float(node.GetSolutionStepValue(variable))
+                ):
+                    failures.append(f"node_{node.Id}_{variable.Name()}")
+    return failures
 
 
-def _save_history_plots(
-    result: Mapping[str, Any],
-    plots_directory: Path,
-) -> None:
-    import matplotlib.pyplot as plt
-
-    history = result.get("history", [])
-    if not history:
-        return
-    plots_directory.mkdir(parents=True, exist_ok=True)
-    indentation = [point["achieved_indentation_mm"] for point in history]
-
-    figure, axis = plt.subplots(figsize=(6.4, 4.2))
-    axis.plot(
-        indentation,
-        [point["indenter_normal_reaction_n"] for point in history],
-        marker="o",
-        markersize=2.5,
-    )
-    axis.set(xlabel="Indentation [mm]", ylabel="Normal reaction [N]", title="Reaction–indentation")
-    axis.grid(alpha=0.25)
-    figure.tight_layout()
-    figure.savefig(plots_directory / "reaction_curve.png", dpi=180)
-    plt.close(figure)
-
-    figure, axis = plt.subplots(figsize=(6.4, 4.2))
-    axis.plot(
-        indentation,
-        [point["external_contact_width"]["chord_width_mm"] for point in history],
-        label="Chord width",
-    )
-    axis.plot(
-        indentation,
-        [point["external_contact_width"]["arc_length_mm"] for point in history],
-        label="Arc length",
-    )
-    axis.set(xlabel="Indentation [mm]", ylabel="Contact extent [mm]", title="External contact width")
-    axis.grid(alpha=0.25)
-    axis.legend()
-    figure.tight_layout()
-    figure.savefig(plots_directory / "contact_width.png", dpi=180)
-    plt.close(figure)
-
-    figure, axis = plt.subplots(figsize=(7.0, 4.4))
-    for group_name in (
-        "external_pad_indenter",
-        "internal_left",
-        "internal_right",
-        "internal_bottom",
-    ):
-        if group_name not in history[0]["contact_groups"]:
-            continue
-        axis.plot(
-            indentation,
-            [point["contact_groups"][group_name]["active_condition_count"] for point in history],
-            label=group_name,
+def rigid_domain_validation(
+    model_part: Any,
+    node_ids: Sequence[int],
+    element_ids: Sequence[int],
+    prescribed_displacement: Sequence[float],
+) -> dict[str, Any]:
+    KM, _, _, _ = import_kratos()
+    maximum_translation_error = 0.0
+    for node_id in node_ids:
+        displacement = model_part.Nodes[node_id].GetSolutionStepValue(KM.DISPLACEMENT)
+        maximum_translation_error = max(
+            maximum_translation_error,
+            math.hypot(
+                float(displacement[0]) - float(prescribed_displacement[0]),
+                float(displacement[1]) - float(prescribed_displacement[1]),
+            ),
         )
-    axis.set(xlabel="Indentation [mm]", ylabel="ACTIVE generated conditions", title="Contact groups")
-    axis.grid(alpha=0.25)
-    axis.legend(fontsize=8)
-    figure.tight_layout()
-    figure.savefig(plots_directory / "contact_groups.png", dpi=180)
-    plt.close(figure)
-
-    figure, first_axis = plt.subplots(figsize=(6.8, 4.4))
-    second_axis = first_axis.twinx()
-    first_axis.plot(
-        indentation,
-        [point["pad_strain_det_f"]["maximum_principal_green_lagrange_strain"]["value"] for point in history],
-        color="#B2182B",
-        label="Maximum principal strain",
-    )
-    second_axis.plot(
-        indentation,
-        [point["pad_strain_det_f"]["det_f"]["min"] for point in history],
-        color="#2166AC",
-        label="Minimum det(F)",
-    )
-    first_axis.set(xlabel="Indentation [mm]", ylabel="Green–Lagrange strain", title="Pad strain and det(F)")
-    second_axis.set_ylabel("Minimum det(F)")
-    first_axis.grid(alpha=0.25)
-    figure.tight_layout()
-    figure.savefig(plots_directory / "strain_detf.png", dpi=180)
-    plt.close(figure)
-
-
-def _save_outer_profile_plot(snapshots: Mapping[str, Mapping[str, Any]], path: Path) -> None:
-    import matplotlib.pyplot as plt
-
-    if not snapshots:
-        return
-    figure, axes = plt.subplots(2, 1, figsize=(7.2, 7.0), sharex=True)
-    for key, snapshot in sorted(snapshots.items(), key=lambda item: float(item[0])):
-        profile = snapshot["profile"]
-        coordinate = [record["normalized_arc_coordinate"] for record in profile]
-        axes[0].plot(
-            coordinate,
-            [record["local_normal_displacement_mm"] for record in profile],
-            label=f"{float(key):g} mm",
-        )
-        axes[1].plot(
-            coordinate,
-            [record["local_tangential_displacement_mm"] for record in profile],
-            label=f"{float(key):g} mm",
-        )
-    axes[0].set_ylabel("Normal displacement [mm]")
-    axes[1].set_ylabel("Tangential displacement [mm]")
-    axes[1].set_xlabel("Normalized reference PadOuterArc coordinate")
-    for axis in axes:
-        axis.grid(alpha=0.25)
-        axis.legend()
-    figure.suptitle("Pad outer-arc displacement profiles")
-    figure.tight_layout()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    figure.savefig(path, dpi=180)
-    plt.close(figure)
-
-
-def _save_deformed_mesh_plot(
-    artifacts: Any,
-    snapshot: Mapping[str, Any],
-    path: Path,
-) -> None:
-    import matplotlib.pyplot as plt
-    from matplotlib.collections import LineCollection, PolyCollection
-
-    mesh = artifacts.mesh
-    displacements = snapshot["displacements"]
-    figure, axis = plt.subplots(figsize=(8.2, 8.2))
-
-    undeformed_pad = [
-        [(mesh.nodes[node_id].x_mm, mesh.nodes[node_id].y_mm) for node_id in element.node_ids]
-        for element in mesh.pad_elements
-    ]
-    deformed_pad = [
-        [
-            (
-                mesh.nodes[node_id].x_mm + displacements[node_id][0],
-                mesh.nodes[node_id].y_mm + displacements[node_id][1],
-            )
-            for node_id in element.node_ids
+    maximum_strain = 0.0
+    maximum_det_error = 0.0
+    nonpositive_det_count = 0
+    for element_id in element_ids:
+        geometry = model_part.Elements[element_id].GetGeometry()
+        reference = [
+            (float(node.X0), float(node.Y0)) for node in geometry
         ]
-        for element in mesh.pad_elements
-    ]
-    axis.add_collection(
-        PolyCollection(undeformed_pad, facecolors="none", edgecolors="#9E9E9E", linewidths=0.08, alpha=0.35)
-    )
-    axis.add_collection(
-        PolyCollection(deformed_pad, facecolors="#9ED7E5", edgecolors="#3B7C8C", linewidths=0.08, alpha=0.62)
-    )
-
-    carrier = [
-        [
-            (
-                mesh.nodes[node_id].x_mm + displacements[node_id][0],
-                mesh.nodes[node_id].y_mm + displacements[node_id][1],
-            )
-            for node_id in element.node_ids
-        ]
-        for element in mesh.carrier_elements
-    ]
-    axis.add_collection(
-        PolyCollection(carrier, facecolors="#747B84", edgecolors="#444A50", linewidths=0.08, alpha=0.8)
-    )
-
-    node_map = artifacts.indenter_topology.local_to_global_node_id
-    indenter = [
-        [
-            (
-                artifacts.indenter_mesh.nodes[local_id].x_mm + displacements[node_map[local_id]][0],
-                artifacts.indenter_mesh.nodes[local_id].y_mm + displacements[node_map[local_id]][1],
-            )
-            for local_id in element.node_ids
-        ]
-        for element in artifacts.indenter_mesh.elements
-    ]
-    axis.add_collection(
-        PolyCollection(indenter, facecolors="#D0D0D0", edgecolors="#555555", linewidths=0.1, alpha=0.9)
-    )
-
-    active_external = snapshot["active_external_node_ids"]
-    if active_external:
-        axis.scatter(
-            [mesh.nodes[node_id].x_mm + displacements[node_id][0] for node_id in active_external],
-            [mesh.nodes[node_id].y_mm + displacements[node_id][1] for node_id in active_external],
-            s=12,
-            color="#D73027",
-            label="ACTIVE external",
-            zorder=8,
+        current = [(float(node.X), float(node.Y)) for node in geometry]
+        reference_edges = (
+            (reference[1][0] - reference[0][0], reference[2][0] - reference[0][0]),
+            (reference[1][1] - reference[0][1], reference[2][1] - reference[0][1]),
         )
-    internal_colors = {
-        "internal_left": "#7B3294",
-        "internal_right": "#008837",
-        "internal_bottom": "#F46D43",
+        current_edges = (
+            (current[1][0] - current[0][0], current[2][0] - current[0][0]),
+            (current[1][1] - current[0][1], current[2][1] - current[0][1]),
+        )
+        determinant_reference = (
+            reference_edges[0][0] * reference_edges[1][1]
+            - reference_edges[0][1] * reference_edges[1][0]
+        )
+        inverse = (
+            (reference_edges[1][1] / determinant_reference, -reference_edges[0][1] / determinant_reference),
+            (-reference_edges[1][0] / determinant_reference, reference_edges[0][0] / determinant_reference),
+        )
+        deformation_gradient = (
+            (
+                current_edges[0][0] * inverse[0][0] + current_edges[0][1] * inverse[1][0],
+                current_edges[0][0] * inverse[0][1] + current_edges[0][1] * inverse[1][1],
+            ),
+            (
+                current_edges[1][0] * inverse[0][0] + current_edges[1][1] * inverse[1][0],
+                current_edges[1][0] * inverse[0][1] + current_edges[1][1] * inverse[1][1],
+            ),
+        )
+        determinant_f = (
+            deformation_gradient[0][0] * deformation_gradient[1][1]
+            - deformation_gradient[0][1] * deformation_gradient[1][0]
+        )
+        c00 = deformation_gradient[0][0] ** 2 + deformation_gradient[1][0] ** 2
+        c01 = deformation_gradient[0][0] * deformation_gradient[0][1] + deformation_gradient[1][0] * deformation_gradient[1][1]
+        c11 = deformation_gradient[0][1] ** 2 + deformation_gradient[1][1] ** 2
+        strain_norm = math.sqrt((0.5 * (c00 - 1.0)) ** 2 + 2.0 * (0.5 * c01) ** 2 + (0.5 * (c11 - 1.0)) ** 2)
+        maximum_strain = max(maximum_strain, strain_norm)
+        maximum_det_error = max(maximum_det_error, abs(determinant_f - 1.0))
+        nonpositive_det_count += determinant_f <= 0.0
+    tolerance = 1.0e-10
+    return {
+        "node_count": len(node_ids),
+        "element_count": len(element_ids),
+        "maximum_translation_error_mm": maximum_translation_error,
+        "maximum_green_lagrange_strain_norm": maximum_strain,
+        "maximum_abs_det_f_error_from_one": maximum_det_error,
+        "nonpositive_det_f_count": nonpositive_det_count,
+        "numerical_tolerance": tolerance,
+        "strain_energy_interpretation": "negligible because F=I and strain is numerical zero",
+        "pass": maximum_translation_error <= tolerance
+        and maximum_strain <= tolerance
+        and maximum_det_error <= tolerance
+        and nonpositive_det_count == 0,
     }
-    for name, node_ids in snapshot["active_internal_node_ids"].items():
-        if node_ids:
-            axis.scatter(
-                [mesh.nodes[node_id].x_mm + displacements[node_id][0] for node_id in node_ids],
-                [mesh.nodes[node_id].y_mm + displacements[node_id][1] for node_id in node_ids],
-                s=10,
-                color=internal_colors[name],
-                label=f"ACTIVE {name}",
-                zorder=8,
-            )
-    statistics = snapshot["pad_strain_det_f"]
-    strain_point = statistics["maximum_principal_green_lagrange_strain"]["reference_coordinate_mm"]
-    det_point = statistics["det_f"]["minimum_reference_coordinate_mm"]
-    axis.scatter(*strain_point, marker="*", s=90, color="#B2182B", label="Maximum strain location", zorder=9)
-    axis.scatter(*det_point, marker="X", s=55, color="#2166AC", label="Minimum det(F) location", zorder=9)
-
-    all_points = [point for polygon in (*deformed_pad, *carrier, *indenter) for point in polygon]
-    x_values = [point[0] for point in all_points]
-    y_values = [point[1] for point in all_points]
-    padding = 0.04 * max(max(x_values) - min(x_values), max(y_values) - min(y_values))
-    axis.set_xlim(min(x_values) - padding, max(x_values) + padding)
-    axis.set_ylim(min(y_values) - padding, max(y_values) + padding)
-    axis.set_aspect("equal", adjustable="box")
-    axis.set(xlabel="x [mm]", ylabel="y [mm]", title=f"Phase 4I at {snapshot['depth_mm']:g} mm — displacement scale 1×")
-    axis.legend(loc="upper center", bbox_to_anchor=(0.5, -0.08), ncol=2, fontsize=7, frameon=False)
-    figure.tight_layout()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    figure.savefig(path, dpi=180, bbox_inches="tight")
-    plt.close(figure)
 
 
-def write_indentation_case_outputs(
-    result: Mapping[str, Any],
-    artifacts: Any | None,
-    output_directory: str | Path,
-) -> dict[str, str]:
-    """Write one case's JSON, CSV, and available diagnostic PNG files."""
-    directory = Path(output_directory).expanduser().resolve()
-    directory.mkdir(parents=True, exist_ok=True)
-    result_path = directory / "result.json"
-    history_path = directory / "history.csv"
-    _write_json(result_path, result)
-    _write_history_csv(history_path, result.get("history", []))
-    outputs = {"result": str(result_path), "history": str(history_path)}
-    if artifacts is None:
-        return outputs
-    profiles_directory = directory / "profiles"
-    plots_directory = directory / "plots"
-    for key, snapshot in artifacts.snapshots.items():
-        label = str(key).replace(".", "p")
-        profile_path = profiles_directory / f"profile_{label}.csv"
-        _write_profile_csv(profile_path, snapshot["profile"])
-        outputs[f"profile_{label}"] = str(profile_path)
-        deformed_path = plots_directory / f"deformed_mesh_{label}.png"
-        _save_deformed_mesh_plot(artifacts, snapshot, deformed_path)
-        outputs[f"deformed_mesh_{label}"] = str(deformed_path)
-    _save_history_plots(result, plots_directory)
-    _save_outer_profile_plot(
-        artifacts.snapshots, plots_directory / "outer_arc_profiles.png"
+def curve_acceptance(curve: Sequence[Mapping[str, Any]], force_tolerance_n: float) -> dict[str, Any]:
+    active_points = [
+        point
+        for point in curve
+        if point["contact_groups"]["external_pad_indenter"]["active_condition_count"] > 0
+        and point["indenter_normal_reaction_n"] > force_tolerance_n
+    ]
+    if len(active_points) < 2:
+        return {
+            "first_load_bearing_step": None,
+            "monotonic": False,
+            "smooth": False,
+            "reason": "fewer than two load-bearing contact steps",
+        }
+    reactions = [float(point["indenter_normal_reaction_n"]) for point in active_points]
+    allowed_decrease = max(0.02 * reactions[-1], force_tolerance_n)
+    monotonic = all(
+        second >= first - allowed_decrease
+        for first, second in zip(reactions, reactions[1:])
     )
-    if artifacts.snapshots:
-        final_key = max(artifacts.snapshots, key=float)
-        final_path = directory / "deformed_mesh.png"
-        _save_deformed_mesh_plot(artifacts, artifacts.snapshots[final_key], final_path)
-        outputs["deformed_mesh"] = str(final_path)
-    return outputs
+    second_differences = [
+        abs(reactions[index + 1] - 2.0 * reactions[index] + reactions[index - 1])
+        for index in range(1, len(reactions) - 1)
+    ]
+    normalized_second = max(second_differences, default=0.0) / max(
+        reactions[-1], force_tolerance_n
+    )
+    return {
+        "first_load_bearing_step": int(active_points[0]["step"]),
+        "allowed_reaction_decrease_n": allowed_decrease,
+        "monotonic": monotonic,
+        "normalized_max_second_difference": normalized_second,
+        "smoothness_limit": 0.15,
+        "smooth": monotonic and normalized_second <= 0.15,
+    }

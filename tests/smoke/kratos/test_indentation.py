@@ -8,7 +8,7 @@ import pytest
 
 pytest.importorskip("KratosMultiphysics")
 
-from fem.indentation_analysis import (
+from fem.indentation import (
     IndentationSettings,
     inspect_indentation_runtime_contract,
     run_indentation_case,

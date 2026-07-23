@@ -12,7 +12,7 @@ import subprocess
 import sys
 from typing import Any, Mapping, Sequence
 
-from fem.internal_contact_diagnostic import (
+from validation.fingertip.internal_contact.diagnostics import (
     CASE_CONFIGURATIONS,
     CASE_DIRECTORY_NAMES,
     assemble_first_step_diagnostics,
@@ -23,7 +23,7 @@ from fem.internal_contact_diagnostic import (
 )
 
 
-DEFAULT_OUTPUT = Path("output/phase4_internal_contact_diagnostic")
+DEFAULT_OUTPUT = Path("output/validation/fingertip/internal_contact/diagnostics")
 
 
 def _parse_arguments() -> argparse.Namespace:
@@ -274,7 +274,7 @@ def _child_command(
         sys.executable,
         "-B",
         "-m",
-        "analysis.phase4_internal_contact_diagnostic",
+        "validation.fingertip.internal_contact.run_diagnostics",
         "--mesh-level",
         arguments.mesh_level,
         "--output-directory",

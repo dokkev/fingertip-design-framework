@@ -2,25 +2,13 @@
 
 from __future__ import annotations
 
-import json
 import math
-import os
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from fem.mesh_types import FingertipMesh
+from mesh.types import FingertipMesh
 from model.fingertip_model import FingertipModel
-
-
-def atomic_write_json(path: Path, value: Mapping[str, Any]) -> None:
-    """Strictly serialize JSON and atomically replace one checkpoint file."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    temporary.write_text(
-        json.dumps(value, indent=2, sort_keys=True, allow_nan=False) + "\n",
-        encoding="utf-8",
-    )
-    os.replace(temporary, path)
+from validation.common.io import strict_read_json
 
 
 def completed_case_result(path: Path, case_name: str) -> dict[str, Any] | None:
@@ -28,8 +16,8 @@ def completed_case_result(path: Path, case_name: str) -> dict[str, Any] | None:
     if not path.is_file():
         return None
     try:
-        result = json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
+        result = strict_read_json(path)
+    except (ValueError, OSError):
         return None
     if (
         result.get("phase") != "4J"

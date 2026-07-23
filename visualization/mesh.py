@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 from matplotlib.collections import LineCollection, PolyCollection
 from matplotlib.lines import Line2D
 
-from fem.mesh_types import FingertipMesh
+from mesh.types import FingertipMesh
 
 PAD_FACE = "#9ED7E5"
 CARRIER_FACE = "#747B84"

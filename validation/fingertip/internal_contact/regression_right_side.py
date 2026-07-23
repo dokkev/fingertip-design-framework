@@ -6,9 +6,9 @@ import math
 
 import pytest
 
-from fem.fingertip_mesher import generate_fingertip_mesh
-from fem.mesh_types import mesh_settings_for_level
-from fem.right_side_audit import (
+from mesh.fingertip import generate_fingertip_mesh
+from mesh.types import mesh_settings_for_level
+from validation.fingertip.internal_contact.right_side_core import (
     ORIENTATION_VARIANTS,
     audit_side_orientation,
     boundary_orientation_contract,

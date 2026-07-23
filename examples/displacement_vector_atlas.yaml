@@ -2,46 +2,46 @@
   "schema_version": "1.0",
   "datasets": [
     {
-      "adapter": "phase4k",
+      "adapter": "normal_indentation_full_field",
       "design_id": "baseline",
-      "input_dir": "output/phase4_mechanical_transfer_map"
+      "input_dir": "output/validation/fingertip/indentation/normal_full_field"
     }
   ],
   "figure": {
     "kind": "displacement_vector_atlas",
-    "title": "Press here: measured sidewall displacement response",
+    "title": "Local-normal indentation: full FEM displacement field",
     "basename": "displacement_vector_atlas",
     "designs": [
       "baseline"
     ],
     "mesh": "medium",
-    "quantity": "raw_displacement",
+    "quantity": "displacement_magnitude_and_vector",
+    "contact_coordinate": "surface_x_mm",
     "contact_locations": [
-      0.2,
-      0.5,
-      0.8
+      -5.0,
+      0.0,
+      5.0
     ],
     "indentation_mm": 1.5,
     "interpolation": {
       "enabled": false
     },
     "color_scale": {
-      "mode": "shared_symmetric",
+      "mode": "shared_sequential",
       "center": 0.0
     },
     "panels": {
-      "undeformed_mesh": true,
-      "deformed_observation_boundary": true,
+      "fem_heatmap": true,
       "displacement_vectors": true,
       "contact_annotation": true
     },
     "theme": "blog",
     "scale": {
       "deformation": 1.0,
-      "arrows": 3.0
+      "arrows": 1.0
     },
     "arrows": {
-      "maximum_per_panel": 18,
+      "maximum_per_panel": 80,
       "minimum_magnitude_mm": 0.001
     },
     "export": {
@@ -52,7 +52,7 @@
       "dpi": 300,
       "source_data": true,
       "manifest": true,
-      "output_directory": "output/geometry_aware_figures/displacement_vector_atlas"
+      "output_directory": "output/figures/displacement_vector_atlas"
     }
   }
 }

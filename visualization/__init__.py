@@ -7,6 +7,8 @@ from visualization.data import (
     ObservationChain,
     TransferSignature,
     VisualizationDataset,
+)
+from visualization.adapters.phase4k_dataset import (
     load_phase4k_visualization_dataset,
 )
 from visualization.framework import (
@@ -29,4 +31,3 @@ __all__ = [
     "load_visualization_dataset",
     "render_figure",
 ]
-

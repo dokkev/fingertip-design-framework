@@ -53,8 +53,9 @@ normal projection, gain, interpolation, or signature distance.
   validity, units, and provenance.
 - `ObservationChain`: independent `left` or `right` material chain with eta,
   undeformed coordinates, unit outward normals, and interpolation provenance.
-- `ContactCase`: xi, prescribed indentation, reaction, input direction,
-  contact point, solve/CODTM validity, descriptor validity, and source.
+- `ContactCase`: xi and optional surface x, prescribed indentation, reaction,
+  input direction, contact point, solve/CODTM validity, descriptor validity,
+  and source.
 - `TransferSignature`: side-specific eta, raw `u_normal`, tangential response,
   stored gains, indentation, reaction, validity, units, and provenance.
 
@@ -78,6 +79,30 @@ The adapter therefore:
 5. never interpolates or colors an internal displacement field.
 
 This reconstruction performs no FEM solve.
+
+## Local-normal full-field adapter
+
+`validation/fingertip/indentation/normal_field_atlas.py` runs exactly three independent
+medium-mesh cases at surface `x=-5, 0, +5 mm`. Each circular fixture is tangent
+to the actual Shapely `pad_outer_arc` and positive travel follows the local
+inward curvature normal, `-pad_outward_normal`. The material, 1.5 mm/48-step
+loading, contact configuration, and solver settings are common to all cases.
+
+Each child process persists the complete deformable-pad nodal
+`u=[u_x,u_y]` field and exact T3 topology. The carrier and rigid indenter are
+excluded from response statistics and the heatmap.
+`load_normal_indentation_visualization_dataset()` checks:
+
+1. the manifest and per-case SHA-256 values;
+2. three converged, finite terminal states;
+3. identical pad node IDs, reference coordinates, and connectivity;
+4. stored `|u|` against the norm of stored `u_x/u_y`;
+5. exact mesh-node coverage before allowing deformation, heatmap, or arrows.
+
+The displacement atlas draws nodal `|u|` on the 1× deformed T3 mesh using
+linear T3 interpolation and overlays deterministically subsampled physical
+`u_x/u_y` arrows. A single sequential color limit and one vector scale are
+shared by all three panels.
 
 To support another artifact format, implement an adapter that returns
 `VisualizationDataset`. Builders and rendering panels do not change.
@@ -131,7 +156,8 @@ syntax avoids adding a YAML dependency.
 Important sections are:
 
 - `datasets`: adapter, design ID, and artifact directory;
-- `kind`, `designs`, `mesh`, `contact_locations`, and `indentation_mm`;
+- `kind`, `designs`, `mesh`, `contact_coordinate`, `contact_locations`, and
+  `indentation_mm`;
 - `quantity`;
 - explicit interpolation policy;
 - shared color-scale policy;
@@ -182,6 +208,9 @@ is computed over both designs.
 ## CLI
 
 ```bash
+/home/dk/miniconda3/envs/lit/bin/python -B \
+  validation/fingertip/indentation/normal_field_atlas.py
+
 /home/dk/miniconda3/envs/lit/bin/python -B -m visualization \
   examples/transfer_map_comparison.yaml
 
@@ -196,7 +225,7 @@ removed.
 ## Reusable components and themes
 
 The rendering layer provides `MeshPanel`, `DeformedMeshPanel`,
-`DisplacementVectorPanel`, `ContactInputAnnotation`,
+`NodalDisplacementMagnitudePanel`, `DisplacementVectorPanel`, `ContactInputAnnotation`,
 `ObservationBoundaryOverlay`, `TransferMapPanel`,
 `LocationDistanceMatrixPanel`, `ProfilePanel`, `MetricSummaryPanel`,
 `SharedColorbar`, `PanelLabelManager`, `FigureComposer`, and
@@ -205,8 +234,9 @@ The rendering layer provides `MeshPanel`, `DeformedMeshPanel`,
 `FigureTheme` has journal/blog presets for typography, lines, colormaps,
 invalid data, mesh appearance, annotations, DPI, and PDF fonts.
 `ScalePolicy` independently owns deformation scale, arrow scale, arrow
-threshold, and color limits. Compared panels compute one common symmetric
-limit before rendering and record it.
+threshold, and color limits. Signed transfer panels compute one common
+symmetric limit; displacement-magnitude panels compute one common sequential
+limit from zero. Both policies are recorded.
 
 `DisplacementVectorPanel` uses deterministic spatial bins rather than array
 stride. Arrows are actual `u_x/u_y`, are not normalized, and use one physical
@@ -224,7 +254,8 @@ zero-filled, interpolated, mirrored, or shown as verified.
 Exact stored states are the default. Delta interpolation must be explicitly
 enabled and bracketed by two valid finite states of the same case.
 Extrapolation and invalid brackets are rejected. Xi interpolation is disabled.
-The vector atlas requires an exact stored `u_xy` state.
+The vector atlas requires an exact stored `u_xy` state. Its full-field mode
+also requires one valid vector for every pad mesh node.
 
 ## Adding a panel or design
 
@@ -253,7 +284,7 @@ Every figure produces PNG, vector PDF, numerical source CSVs, and
 
 - serialized spec and source path;
 - source artifacts and SHA-256;
-- design/mesh/case IDs, xi, and indentation;
+- design/mesh/case IDs, xi, optional surface x, and indentation;
 - represented variable, normalization, units, and coordinate contract;
 - interpolation and validity policies;
 - deformation/arrow scales and color limits;
@@ -265,11 +296,11 @@ the same environment. PDF timestamps are suppressed.
 
 ## Current limitations
 
-- The reference artifacts contain sidewall displacement, not full-volume nodal
-  displacement. Internal deformation vectors are therefore not rendered.
-- Only the Phase 4K adapter is implemented.
+- Phase 4K transfer artifacts still contain sidewall displacement only. The
+  transfer-map figures therefore do not infer internal fields.
+- The local-normal reference atlas is fixed to the three requested surface x
+  positions and the medium mesh; it is not a general load-sweep study.
 - No real optimized design is currently available, so comparison mode is
   implemented but the reference output is single-design.
 - Metrics are descriptive mechanical quantities. Optical observability and
   optimization benefit are not evaluated.
-

@@ -6,21 +6,20 @@ import json
 
 import pytest
 
-from fem.indentation_analysis import set_indenter_travel
-from fem.internal_contact_diagnostic import (
+from validation.fingertip.internal_contact.diagnostics import (
     FIRST_STEP_TRAVEL_MM,
-    _build_context,
-    _contact_condition_records,
+    build_diagnostic_context,
+    contact_condition_records,
 )
-from fem.kratos_adapter import _import_kratos
-from fem.search_crosspoint_audit import (
+from fem.kratos_adapter import import_kratos, set_indenter_travel
+from validation.fingertip.internal_contact.search_crosspoint_core import (
     CAUSAL_VARIANTS,
     endpoint_pair_records,
     endpoint_snapshot,
     line2_projection_local_domain,
     unavailable_case_records,
 )
-from fem.right_side_audit import _endpoint_id
+from validation.fingertip.internal_contact.right_side_core import endpoint_id
 
 
 @pytest.mark.parametrize(
@@ -70,7 +69,7 @@ def test_diagnostic_variants_do_not_change_production_configuration() -> None:
 
 @pytest.fixture(scope="module")
 def right_search_context():
-    context = _build_context("medium", "right_only")
+    context = build_diagnostic_context("medium", "right_only")
     solver = context.analysis._GetSolver()
     context.analysis.time = solver.AdvanceInTime(context.analysis.time)
     set_indenter_travel(
@@ -93,7 +92,7 @@ def right_search_context():
 def test_runtime_search_identifies_invalid_and_preserves_valid_endpoint_pair(
     right_search_context,
 ) -> None:
-    endpoint_id = _endpoint_id(
+    endpoint_id = endpoint_id(
         right_search_context.model_part, "right", slave=True
     )
     pairs = endpoint_pair_records(right_search_context, 1, endpoint_id)
@@ -132,7 +131,7 @@ def test_endpoint_snapshot_is_json_serializable_and_identifies_crosspoint(
 def test_runtime_pairs_remain_pure_and_have_unique_generated_ids(
     right_search_context,
 ) -> None:
-    records, summary = _contact_condition_records(right_search_context)
+    records, summary = contact_condition_records(right_search_context)
     identifiers = [
         record["generated_condition_id"] for record in records
     ]
@@ -143,8 +142,8 @@ def test_runtime_pairs_remain_pure_and_have_unique_generated_ids(
 def test_f02_flag_mutation_preserves_condition_container(
     right_search_context,
 ) -> None:
-    KM, _, _, _ = _import_kratos()
-    endpoint_id = _endpoint_id(
+    KM, _, _, _ = import_kratos()
+    endpoint_id = endpoint_id(
         right_search_context.model_part, "right", slave=True
     )
     before = endpoint_pair_records(right_search_context, 1, endpoint_id)

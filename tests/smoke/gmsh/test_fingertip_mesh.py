@@ -9,8 +9,8 @@ import sys
 
 import pytest
 
-from fem.fingertip_mesher import generate_fingertip_mesh
-from fem.mesh_types import InvalidMeshSettings, MeshSettings, mesh_settings_for_level
+from mesh.fingertip import generate_fingertip_mesh
+from mesh.types import InvalidMeshSettings, MeshSettings, mesh_settings_for_level
 from model.fingertip_model import FingertipModel
 from model.fingertip_parameters import FingertipParameters
 
@@ -24,7 +24,7 @@ def test_geometry_mesh_api_imports_without_kratos() -> None:
             "-B",
             "-c",
             (
-                "import sys; import fem; "
+                "import sys; import model, mesh; "
                 "assert not any(name.startswith('KratosMultiphysics') "
                 "for name in sys.modules)"
             ),

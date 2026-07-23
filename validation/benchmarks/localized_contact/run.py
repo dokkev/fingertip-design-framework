@@ -419,7 +419,7 @@ def _nodal_h_statistics(
     }
 
 
-def _finite_field_failures(model_part: KM.ModelPart) -> list[str]:
+def finite_field_failures(model_part: KM.ModelPart) -> list[str]:
     failures: list[str] = []
     for node in model_part.Nodes:
         displacement = node.GetSolutionStepValue(KM.DISPLACEMENT)
@@ -786,7 +786,7 @@ def _run_case(mesh_level: str) -> dict[str, Any]:
             solve_time += step_solve_time
             analysis.FinalizeSolutionStep()
 
-            field_failures = _finite_field_failures(model_part)
+            field_failures = finite_field_failures(model_part)
             computing_contact = _contact_model_part(
                 model, "Structure.ComputingContact"
             )

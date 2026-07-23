@@ -15,9 +15,9 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 from shapely.geometry import LineString, Point
 
-from fem.indentation_analysis import ConvergedIndentationStep
-from fem.indentation_postprocess import IndentationPostprocessError
-from fem.mesh_types import BoundaryEdge, FingertipMesh
+from fem.indentation import ConvergedIndentationStep
+from fem.results import IndentationPostprocessError
+from mesh.types import BoundaryEdge, FingertipMesh
 from model.fingertip_model import FingertipModel
 
 Vector2 = tuple[float, float]

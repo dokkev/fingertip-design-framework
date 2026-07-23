@@ -1122,7 +1122,7 @@ Mechanical separability:         DESCRIPTIVE ONLY
 Geometry optimization:           NOT STARTED
 ```
 
-상세 정의와 결과는 `Mechanical-Deformation-Transfer-Map.md`, artifact는
+상세 정의와 결과는 `mechanical-deformation-transfer-map.md`, artifact는
 `output/phase4_mechanical_transfer_map/`에 저장했다.
 
 ---
@@ -1163,5 +1163,5 @@ Optical observability:          NOT EVALUATED
 Contact centroid/length는 기존 force-closure mask를 유지해 256/384 record만
 verified로 취급했다. Visualization 작업만으로 Phase 4K ledger, descriptor
 closure, CODTM mesh-convergence, optical observability를 승격하지 않았다.
-상세 설명은 `CODTM-Visualization.md`, 산출물은
+상세 설명은 `codtm-visualization.md`, 산출물은
 `output/phase4_codtm_visualization/`에 있다.

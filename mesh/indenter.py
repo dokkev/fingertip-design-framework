@@ -281,6 +281,97 @@ def surface_frame_from_normalized_location(
     )
 
 
+def surface_frame_from_x_coordinate(
+    model: FingertipModel,
+    surface_x_mm: float,
+) -> CrownFrame:
+    """Return the pad frame at one global x coordinate with local-normal loading.
+
+    ``surface_x_mm`` is expressed in the repository's 2D model frame.  The
+    selected point is the intersection of that vertical line with the actual
+    Shapely ``pad_outer_arc``.  Positive fixture travel follows the local
+    inward pad normal, i.e. the negative of ``pad_outward_normal``.
+    """
+    if not math.isfinite(surface_x_mm):
+        raise InvalidIndenterSettings("surface_x_mm must be finite")
+    arc = model.boundaries.segments["pad_outer_arc"].geometry
+    minimum_x, minimum_y, maximum_x, maximum_y = arc.bounds
+    tolerance = model.parameters.geometry_tolerance
+    if (
+        surface_x_mm < minimum_x - tolerance
+        or surface_x_mm > maximum_x + tolerance
+    ):
+        raise InvalidIndenterSettings(
+            f"surface_x_mm={surface_x_mm:g} lies outside pad_outer_arc "
+            f"x range [{minimum_x:g}, {maximum_x:g}] mm"
+        )
+    vertical_span = max(maximum_x - minimum_x, maximum_y - minimum_y, 1.0)
+    intersection = arc.intersection(
+        LineString(
+            [
+                (surface_x_mm, minimum_y - vertical_span),
+                (surface_x_mm, maximum_y + vertical_span),
+            ]
+        )
+    )
+    if isinstance(intersection, Point):
+        points = [intersection]
+    elif hasattr(intersection, "geoms"):
+        points = [
+            geometry
+            for geometry in intersection.geoms
+            if isinstance(geometry, Point)
+        ]
+    else:
+        points = []
+    if not points:
+        raise InvalidIndenterSettings(
+            "requested x coordinate does not intersect pad_outer_arc"
+        )
+    point = min(points, key=lambda candidate: (candidate.y, abs(candidate.x)))
+    distance = float(arc.project(point))
+    sample_distance = max(
+        1.0e-6 * arc.length,
+        100.0 * model.parameters.geometry_tolerance,
+    )
+    before = arc.interpolate(max(0.0, distance - sample_distance))
+    after = arc.interpolate(min(arc.length, distance + sample_distance))
+    tangent = _normalized((after.x - before.x, after.y - before.y))
+    candidates = ((-tangent[1], tangent[0]), (tangent[1], -tangent[0]))
+    probe_distance = max(
+        1.0e-4, 1000.0 * model.parameters.geometry_tolerance
+    )
+    outside = [
+        candidate
+        for candidate in candidates
+        if not model.pad_material_geometry.covers(
+            Point(
+                point.x + probe_distance * candidate[0],
+                point.y + probe_distance * candidate[1],
+            )
+        )
+    ]
+    if len(outside) == 1:
+        outward = outside[0]
+    else:
+        interior = model.pad_material_geometry.representative_point()
+        radial = (point.x - interior.x, point.y - interior.y)
+        outward = max(
+            candidates,
+            key=lambda candidate: (
+                candidate[0] * radial[0] + candidate[1] * radial[1]
+            ),
+        )
+    outward = _normalized(outward)
+    return CrownFrame(
+        point_mm=(float(point.x), float(point.y)),
+        tangent=tangent,
+        pad_outward_normal=outward,
+        loading_direction=(-outward[0], -outward[1]),
+        arc_distance_mm=distance,
+    )
+
+
 def _sample_circle_arc(
     center: Vector2,
     radius: float,
@@ -437,6 +528,79 @@ def build_indenter_fixture_at_location(
         1.0e-8, 10.0 * model.parameters.geometry_tolerance
     ):
         raise InvalidIndenterSettings("contact arc does not contain its target point")
+    return fixture
+
+
+def build_normal_indenter_fixture_at_x(
+    model: FingertipModel,
+    surface_x_mm: float,
+    settings: IndenterSettings | None = None,
+) -> IndenterFixture:
+    """Place and move the circular fixture along a local surface normal."""
+    resolved = settings or IndenterSettings()
+    frame = surface_frame_from_x_coordinate(model, surface_x_mm)
+    center = (
+        frame.point_mm[0]
+        + (resolved.radius_mm + resolved.initial_gap_mm)
+        * frame.pad_outward_normal[0],
+        frame.point_mm[1]
+        + (resolved.radius_mm + resolved.initial_gap_mm)
+        * frame.pad_outward_normal[1],
+    )
+    contact_direction = frame.loading_direction
+    contact_direction_angle = math.atan2(
+        contact_direction[1], contact_direction[0]
+    )
+    half_angle = math.radians(resolved.contact_half_angle_degrees)
+    contact_arc = _sample_circle_arc(
+        center,
+        resolved.radius_mm,
+        contact_direction_angle - half_angle,
+        contact_direction_angle + half_angle,
+        resolved.geometry_resolution,
+    )
+    remainder_arc = _sample_circle_arc(
+        center,
+        resolved.radius_mm,
+        contact_direction_angle + half_angle,
+        contact_direction_angle + 2.0 * math.pi - half_angle,
+        resolved.geometry_resolution,
+    )
+    carrier = Point(center).buffer(
+        resolved.radius_mm, quad_segs=resolved.geometry_resolution
+    )
+    if not isinstance(carrier, Polygon) or not carrier.is_valid:
+        raise InvalidIndenterSettings("failed to construct the circular carrier")
+    fixture = IndenterFixture(
+        settings=resolved,
+        frame=frame,
+        center_mm=center,
+        contact_direction=contact_direction,
+        carrier_geometry=carrier,
+        contact_arc=contact_arc,
+        outer_remainder=MultiLineString([remainder_arc.coords]),
+    )
+    target = Point(frame.point_mm)
+    target_gap = fixture.contact_arc.distance(target)
+    if abs(target_gap - resolved.initial_gap_mm) > max(
+        1.0e-8, 10.0 * model.parameters.geometry_tolerance
+    ):
+        raise InvalidIndenterSettings(
+            f"target-point gap {target_gap:g} does not reproduce "
+            f"{resolved.initial_gap_mm:g} mm"
+        )
+    if not math.isclose(
+        math.hypot(*frame.loading_direction), 1.0, abs_tol=1.0e-12
+    ):
+        raise InvalidIndenterSettings("local-normal loading direction is not unit")
+    if (
+        frame.loading_direction[0] * frame.pad_outward_normal[0]
+        + frame.loading_direction[1] * frame.pad_outward_normal[1]
+        > -1.0 + 1.0e-12
+    ):
+        raise InvalidIndenterSettings(
+            "local-normal loading direction does not point into the pad"
+        )
     return fixture
 
 

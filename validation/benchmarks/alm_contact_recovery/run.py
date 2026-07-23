@@ -21,7 +21,7 @@ import tempfile
 import time
 from typing import Any
 
-WORKSPACE_ROOT = Path(__file__).resolve().parents[1]
+WORKSPACE_ROOT = Path(__file__).resolve().parents[3]
 if str(WORKSPACE_ROOT) not in sys.path:
     sys.path.insert(0, str(WORKSPACE_ROOT))
 
@@ -31,7 +31,7 @@ from KratosMultiphysics.StructuralMechanicsApplication.structural_mechanics_anal
     StructuralMechanicsAnalysis,
 )
 
-import benchmark.phase3_benchmark.run_localized_contact_benchmark as phase3
+import validation.benchmarks.localized_contact.run as phase3
 
 
 BASELINE_STEPS = 48
@@ -750,7 +750,7 @@ def _run_model(
             solve_time += step_solve_time
             analysis.FinalizeSolutionStep()
 
-            field_failures = phase3._finite_field_failures(model_part)
+            field_failures = phase3.finite_field_failures(model_part)
             reaction_y = phase3._reaction_sum(
                 model_part, mesh_data["indenter_node_ids"]
             )

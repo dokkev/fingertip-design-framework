@@ -1,23 +1,7 @@
-"""Solver-independent FEM mesh interfaces for the LIT fingertip."""
+"""Kratos backend for LIT fingertip finite-element analyses.
 
-from fem.fingertip_mesher import (
-    GmshDependencyError,
-    generate_fingertip_mesh,
-    validate_fingertip_mesh,
-)
-from fem.mesh_types import (
-    FingertipMesh,
-    InvalidMeshSettings,
-    MeshSettings,
-    mesh_settings_for_level,
-)
+Kratos is loaded lazily by the concrete adapter and solve modules so importing
+this package does not require the external Kratos environment.
+"""
 
-__all__ = [
-    "FingertipMesh",
-    "GmshDependencyError",
-    "InvalidMeshSettings",
-    "MeshSettings",
-    "generate_fingertip_mesh",
-    "mesh_settings_for_level",
-    "validate_fingertip_mesh",
-]
+__all__: list[str] = []

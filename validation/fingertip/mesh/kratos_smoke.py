@@ -6,9 +6,9 @@ import argparse
 import json
 from pathlib import Path
 
-from fem.fingertip_mesher import generate_fingertip_mesh
+from mesh.fingertip import generate_fingertip_mesh
 from fem.kratos_adapter import run_initialization_smoke
-from fem.mesh_types import mesh_settings_for_level
+from mesh.types import mesh_settings_for_level
 from model.fingertip_model import FingertipModel
 from model.fingertip_parameters import FingertipParameters
 
@@ -21,7 +21,7 @@ def _parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path("output/phase4_mesh/kratos_smoke_medium.json"),
+        default=Path("output/validation/fingertip/mesh/kratos_smoke_medium.json"),
     )
     return parser.parse_args()
 

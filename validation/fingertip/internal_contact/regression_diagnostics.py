@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import pytest
 
-from fem.fingertip_mesher import generate_fingertip_mesh
-from fem.indentation_analysis import (
+from mesh.fingertip import generate_fingertip_mesh
+from fem.indentation import (
     IndentationSettings,
     inspect_indentation_runtime_contract,
 )
-from fem.internal_contact_configuration import (
+from fem.contact import (
     PAD_U_AGGREGATE,
     PAD_U_SEGMENTS,
     STEM_U_AGGREGATE,
@@ -17,19 +17,19 @@ from fem.internal_contact_configuration import (
     create_continuous_u_submodel_parts,
     u_corner_node_ids,
 )
-from fem.internal_contact_diagnostic import (
+from validation.fingertip.internal_contact.diagnostics import (
     assemble_first_step_diagnostics,
     run_first_step_case,
 )
-from fem.kratos_adapter import _import_kratos, populate_kratos_model_part
-from fem.mesh_types import mesh_settings_for_level
+from fem.kratos_adapter import import_kratos, populate_kratos_model_part
+from mesh.types import mesh_settings_for_level
 from model.fingertip_model import FingertipModel
 from model.fingertip_parameters import FingertipParameters
 
 
 @pytest.fixture(scope="module")
 def continuous_u_membership():
-    KM, _, _, _ = _import_kratos()
+    KM, _, _, _ = import_kratos()
     fingertip_model = FingertipModel(FingertipParameters())
     mesh = generate_fingertip_mesh(
         fingertip_model, mesh_settings_for_level("medium")
