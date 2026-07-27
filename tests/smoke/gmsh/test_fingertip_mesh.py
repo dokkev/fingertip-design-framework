@@ -8,6 +8,7 @@ import subprocess
 import sys
 
 import pytest
+from shapely.geometry import MultiLineString
 
 from mesh.fingertip import generate_fingertip_mesh
 from mesh.types import InvalidMeshSettings, MeshSettings, mesh_settings_for_level
@@ -53,7 +54,7 @@ def zero_clearance_fine():
 @pytest.fixture(scope="module")
 def u_clearance_medium():
     model = FingertipModel(
-        FingertipParameters(void_width=2.5, void_height=3.0)
+        FingertipParameters(void_width=1.0, void_height=2.0)
     )
     return model, generate_fingertip_mesh(model, mesh_settings_for_level("medium"))
 
@@ -106,6 +107,29 @@ def test_all_source_and_adapter_boundary_tags_are_preserved(
     assert all(mesh.boundary_edges[tag] for tag in model.boundaries.segments)
     assert mesh.validation.checks["semantic_edges_lie_on_source_segments"]
     assert mesh.validation.checks["no_edge_has_multiple_semantic_tags"]
+
+
+@pytest.mark.parametrize(
+    "tag",
+    ["pad_outer_left", "pad_outer_right", "pad_outer_arc"],
+)
+def test_external_pad_components_match_model_geometry(
+    zero_clearance_medium,
+    tag: str,
+) -> None:
+    model, mesh = zero_clearance_medium
+    meshed = MultiLineString(
+        [
+            [
+                (mesh.nodes[node_id].x_mm, mesh.nodes[node_id].y_mm)
+                for node_id in edge.node_ids
+            ]
+            for edge in mesh.boundary_edges[tag]
+        ]
+    )
+    assert meshed.hausdorff_distance(
+        model.boundaries.segments[tag].geometry
+    ) <= mesh.settings.classification_tolerance_mm
 
 
 def test_nonzero_contact_gaps_match_contact_pair_metadata(

@@ -47,6 +47,8 @@ class FingertipBoundaries:
 
     pad_bond_left: BoundarySegment
     pad_bond_right: BoundarySegment
+    pad_outer_left: BoundarySegment
+    pad_outer_right: BoundarySegment
     pad_cutout_left: BoundarySegment
     pad_cutout_right: BoundarySegment
     pad_cutout_bottom: BoundarySegment
@@ -62,6 +64,8 @@ class FingertipBoundaries:
         boundary_segments = (
             self.pad_bond_left,
             self.pad_bond_right,
+            self.pad_outer_left,
+            self.pad_outer_right,
             self.pad_cutout_left,
             self.pad_cutout_right,
             self.pad_cutout_bottom,
@@ -85,22 +89,24 @@ class InterfaceDefinition:
 class FingertipModel:
     """Build the symmetric compliant pad, rigid link/stem, and clearance.
 
-    The compliant pad is the lower half of an ellipse whose top diameter lies
-    on ``y = 0``. A rigid plate sits above that line and its centered stem
-    extends downward into the pad. The rectangular cutout around the stem has
-    width ``stem_width + 2 * void_width`` and depth
-    ``stem_height + void_height``.
+    The outer pad is a vertical rectangle from ``y = 0`` to
+    ``-vertical_pad_height`` joined directly to a lower semi-ellipse. A rigid
+    plate sits above ``y = 0`` and its independently sized centered stem extends
+    downward into the completed envelope.
     """
 
     def __init__(self, parameters: FingertipParameters):
         parameters.validate()
         self._parameters = parameters
+        self._vertical_pad_geometry = self._build_vertical_pad()
         self._pad_outer_arc_geometry = self._build_pad_outer_arc()
+        self._semielliptical_pad_geometry = self._build_semielliptical_pad()
         self._outer_pad_geometry = self._build_outer_pad()
-        self._link_plate_geometry = self._build_link_plate()
         self._stem_geometry = self._build_stem()
-        self._link_geometry = self._build_rigid_link()
         self._cutout_geometry = self._build_cutout()
+        self._validate_internal_geometry()
+        self._link_plate_geometry = self._build_link_plate()
+        self._link_geometry = self._build_rigid_link()
         self._pad_material_geometry = self._validated_polygonal_geometry(
             self._outer_pad_geometry.difference(self._cutout_geometry),
             "compliant pad material",
@@ -122,7 +128,7 @@ class FingertipModel:
             ]
         )
         self._symmetry_axis = LineString(
-            [(0.0, -parameters.pad_height), (0.0, parameters.link_thickness)]
+            [(0.0, parameters.pad_tip_y), (0.0, parameters.link_thickness)]
         )
         self._interface_definition = InterfaceDefinition(
             name="pad_link_interface",
@@ -138,8 +144,18 @@ class FingertipModel:
 
     @property
     def outer_pad_geometry(self) -> Polygon:
-        """Return the complete half-ellipse before the stem cutout."""
+        """Return the completed rectangle-plus-semi-ellipse outer envelope."""
         return self._outer_pad_geometry
+
+    @property
+    def vertical_pad_geometry(self) -> Polygon:
+        """Return the external vertical rectangular pad component."""
+        return self._vertical_pad_geometry
+
+    @property
+    def semielliptical_pad_geometry(self) -> Polygon:
+        """Return the external lower semi-elliptical pad component."""
+        return self._semielliptical_pad_geometry
 
     @property
     def pad_material_geometry(self) -> PolygonalGeometry:
@@ -247,6 +263,10 @@ class FingertipModel:
                 raise InvalidFingertipGeometry(f"{name} geometry is empty")
             if not geometry.is_valid:
                 raise InvalidFingertipGeometry(f"{name} geometry is invalid")
+        if isinstance(self._pad_material_geometry, MultiPolygon):
+            raise InvalidFingertipGeometry(
+                "the cutout creates disconnected compliant-pad fragments"
+            )
         if self.pad_link_connection_length() <= self._parameters.geometry_tolerance:
             raise InvalidFingertipGeometry(
                 "the always-bonded upper interface has zero effective length"
@@ -265,6 +285,11 @@ class FingertipModel:
             },
             "cutout_width": self._parameters.cutout_width,
             "cutout_height": self._parameters.cutout_height,
+            "ellipse_start_y": self._parameters.ellipse_start_y,
+            "stem_tip_y": self._parameters.stem_tip_y,
+            "void_bottom_y": self._parameters.void_bottom_y,
+            "pad_tip_y": self._parameters.pad_tip_y,
+            "total_pad_depth": self._parameters.total_pad_depth,
             "material_area": float(self._material_geometry.area),
             "raw_material_area": float(self._raw_material_geometry.area),
             "outer_pad_area": float(self._outer_pad_geometry.area),
@@ -280,34 +305,59 @@ class FingertipModel:
             "bounds": tuple(float(value) for value in self._material_geometry.bounds),
         }
 
+    def _build_vertical_pad(self) -> Polygon:
+        parameters = self._parameters
+        return orient(
+            box(
+                -parameters.vertical_pad_width / 2.0,
+                parameters.ellipse_start_y,
+                parameters.vertical_pad_width / 2.0,
+                0.0,
+            ),
+            sign=1.0,
+        )
+
     def _build_pad_outer_arc(self) -> LineString:
-        half_width = self._parameters.pad_width / 2.0
-        pad_depth = self._parameters.pad_height
+        # Widths accepted within numerical tolerance represent one physical
+        # join, so snap the sampled arc to the vertical-pad endpoints.
+        half_width = self._parameters.vertical_pad_width / 2.0
+        semi_axis = self._parameters.semielliptical_pad_height
+        ellipse_start_y = self._parameters.ellipse_start_y
         arc_segments = (
             self._parameters.arc_resolution
             if self._parameters.arc_resolution % 2 == 0
             else self._parameters.arc_resolution + 1
         )
         angles = np.linspace(0.0, np.pi, arc_segments + 1)
-        return LineString(
-            [
-                (
-                    float(half_width * np.cos(angle)),
-                    float(-pad_depth * np.sin(angle)),
-                )
-                for angle in angles
-            ]
-        )
+        coordinates = [
+            (
+                float(half_width * np.cos(angle)),
+                float(ellipse_start_y - semi_axis * np.sin(angle)),
+            )
+            for angle in angles
+        ]
+        coordinates[0] = (half_width, ellipse_start_y)
+        coordinates[-1] = (-half_width, ellipse_start_y)
+        return LineString(coordinates)
+
+    def _build_semielliptical_pad(self) -> Polygon:
+        semiellipse = orient(Polygon(self._pad_outer_arc_geometry.coords), sign=1.0)
+        if semiellipse.is_empty or not semiellipse.is_valid:
+            raise InvalidFingertipGeometry(
+                "semi-elliptical pad construction failed"
+            )
+        return semiellipse
 
     def _build_outer_pad(self) -> Polygon:
-        half_width = self._parameters.pad_width / 2.0
-        pad = orient(
-            Polygon([(-half_width, 0.0), *self._pad_outer_arc_geometry.coords]),
-            sign=1.0,
+        outer_pad = self._validated_polygonal_geometry(
+            self._vertical_pad_geometry.union(self._semielliptical_pad_geometry),
+            "outer pad",
         )
-        if pad.is_empty or not pad.is_valid:
-            raise InvalidFingertipGeometry("half-ellipse pad construction failed")
-        return pad
+        if not isinstance(outer_pad, Polygon):
+            raise InvalidFingertipGeometry(
+                "vertical and semi-elliptical pads do not form one envelope"
+            )
+        return outer_pad
 
     def _build_link_plate(self) -> Polygon:
         parameters = self._parameters
@@ -347,10 +397,26 @@ class FingertipModel:
         parameters = self._parameters
         return box(
             -parameters.cutout_half_width,
-            -parameters.cutout_depth,
+            parameters.void_bottom_y,
             parameters.cutout_half_width,
             0.0,
         )
+
+    def _validate_internal_geometry(self) -> None:
+        tolerance = self._parameters.geometry_tolerance
+        if not self._outer_pad_geometry.buffer(tolerance).covers(
+            self._cutout_geometry
+        ):
+            raise InvalidFingertipGeometry(
+                "the internal cutout exits the completed outer pad envelope: "
+                f"cutout_bottom_y={self._parameters.void_bottom_y:g}, "
+                f"ellipse_start_y={self._parameters.ellipse_start_y:g}, "
+                f"pad_tip_y={self._parameters.pad_tip_y:g}"
+            )
+        if not self._cutout_geometry.buffer(tolerance).covers(self._stem_geometry):
+            raise InvalidFingertipGeometry(
+                "the rigid stem is not fully contained by the internal cutout"
+            )
 
     def _build_void_geometry(self) -> PolygonalGeometry | None:
         clearance = self._cutout_geometry.difference(self._stem_geometry)
@@ -360,17 +426,26 @@ class FingertipModel:
 
     def _build_boundaries(self) -> FingertipBoundaries:
         parameters = self._parameters
-        pad_edge = parameters.pad_width / 2.0
+        pad_edge = parameters.vertical_pad_width / 2.0
         cutout_edge = parameters.cutout_half_width
         stem_edge = parameters.stem_width / 2.0
-        stem_bottom_y = -parameters.stem_height
-        cutout_bottom_y = -parameters.cutout_depth
+        ellipse_start_y = parameters.ellipse_start_y
+        stem_bottom_y = parameters.stem_tip_y
+        cutout_bottom_y = parameters.void_bottom_y
 
         pad_bond_left = BoundarySegment(
             "pad_bond_left", LineString([(-pad_edge, 0.0), (-cutout_edge, 0.0)])
         )
         pad_bond_right = BoundarySegment(
             "pad_bond_right", LineString([(cutout_edge, 0.0), (pad_edge, 0.0)])
+        )
+        pad_outer_left = BoundarySegment(
+            "pad_outer_left",
+            LineString([(-pad_edge, 0.0), (-pad_edge, ellipse_start_y)]),
+        )
+        pad_outer_right = BoundarySegment(
+            "pad_outer_right",
+            LineString([(pad_edge, ellipse_start_y), (pad_edge, 0.0)]),
         )
         pad_cutout_left = BoundarySegment(
             "pad_cutout_left",
@@ -421,6 +496,8 @@ class FingertipModel:
         return FingertipBoundaries(
             pad_bond_left=pad_bond_left,
             pad_bond_right=pad_bond_right,
+            pad_outer_left=pad_outer_left,
+            pad_outer_right=pad_outer_right,
             pad_cutout_left=pad_cutout_left,
             pad_cutout_right=pad_cutout_right,
             pad_cutout_bottom=pad_cutout_bottom,

@@ -8,17 +8,17 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.axes import Axes
-from matplotlib.patches import PathPatch
+from matplotlib.legend_handler import HandlerPatch
+from matplotlib.patches import FancyArrowPatch, PathPatch
 from matplotlib.path import Path as MatplotlibPath
 from shapely.geometry import MultiPolygon, Polygon
 
 from model.fingertip_model import BoundarySegment, FingertipModel, PolygonalGeometry
 
-PAD_COLOR = "#9ED7E5"
-PAD_EDGE = "#287D91"
-RIGID_COLOR = "#747B84"
-RIGID_EDGE = "#2D3339"
-STEM_COLOR = "#626A74"
+PAD_COLOR = "#C7E8D2"
+PAD_EDGE = "#4E9270"
+ALUMINUM_COLOR = "#D9DCDF"
+ALUMINUM_EDGE = "#7B8288"
 VOID_COLOR = "#F7B4AE"
 VOID_EDGE = "#C9473D"
 PAD_CONTACT_COLOR = "#D95F02"
@@ -33,7 +33,6 @@ def plot_fingertip(
     show_interface: bool = True,
     show_contact_boundaries: bool = True,
     show_symmetry_axis: bool = False,
-    show_dimensions: bool = False,
     show_axes: bool = True,
     show_legend: bool = True,
     title: str | None = None,
@@ -54,19 +53,19 @@ def plot_fingertip(
     _add_polygonal_patches(
         ax,
         model.link_plate_geometry,
-        facecolor=RIGID_COLOR,
-        edgecolor=RIGID_EDGE,
+        facecolor=ALUMINUM_COLOR,
+        edgecolor=ALUMINUM_EDGE,
         linewidth=1.5,
-        label="Rigid link",
+        label="Rigid link / stem",
         zorder=5,
     )
     _add_polygonal_patches(
         ax,
         model.stem_geometry,
-        facecolor=STEM_COLOR,
-        edgecolor=RIGID_EDGE,
+        facecolor=ALUMINUM_COLOR,
+        edgecolor=ALUMINUM_EDGE,
         linewidth=1.5,
-        label="Rigid stem",
+        label="_nolegend_",
         zorder=6,
     )
 
@@ -84,17 +83,7 @@ def plot_fingertip(
         )
 
     if show_interface:
-        for index, segment in enumerate(model.pad_link_interface.geoms):
-            interface_x, interface_y = segment.xy
-            ax.plot(
-                interface_x,
-                interface_y,
-                color="black",
-                linestyle="-",
-                linewidth=4.2,
-                label="Bonded interface" if index == 0 else None,
-                zorder=8,
-            )
+        _plot_bonded_interface_arrows(ax, model)
 
     if show_contact_boundaries:
         pad_contact_boundaries = (
@@ -138,9 +127,6 @@ def plot_fingertip(
             zorder=2,
         )
 
-    if show_dimensions:
-        _draw_clearance_dimensions(ax, model)
-
     _set_padded_limits(ax, model)
     ax.set_aspect("equal", adjustable="box")
     ax.set_title(title or "Parameterized LIT Hand pad")
@@ -150,7 +136,16 @@ def plot_fingertip(
     else:
         ax.axis("off")
     if show_legend:
-        ax.legend(loc="best", fontsize=8)
+        ax.legend(
+            loc="upper center",
+            fontsize=8,
+            ncol=2,
+            handler_map={
+                FancyArrowPatch: HandlerPatch(
+                    patch_func=_legend_bidirectional_arrow
+                )
+            },
+        )
     return ax
 
 
@@ -172,53 +167,52 @@ def save_fingertip_figure(
     return path
 
 
-def _draw_clearance_dimensions(ax: Axes, model: FingertipModel) -> None:
-    parameters = model.parameters
-    dimension_color = "#A62F28"
-    text_color = "#8E2923"
+def _plot_bonded_interface_arrows(ax: Axes, model: FingertipModel) -> None:
+    """Mark bonded spans with closely spaced red bidirectional arrows."""
+    is_first_arrow = True
+    for segment in model.pad_link_interface.geoms:
+        arrow_count = max(1, int(round(segment.length / 1.8)))
+        arrow_distances = np.linspace(
+            segment.length / (arrow_count + 1),
+            segment.length * arrow_count / (arrow_count + 1),
+            arrow_count,
+        )
+        for distance in arrow_distances:
+            center = segment.interpolate(float(distance))
+            arrow = FancyArrowPatch(
+                (center.x, center.y + 1.0),
+                (center.x, center.y - 1.0),
+                arrowstyle="<->",
+                mutation_scale=12.0,
+                color="#C9473D",
+                linewidth=1.5,
+                label="Bonded interface" if is_first_arrow else "_nolegend_",
+                zorder=8,
+            )
+            ax.add_patch(arrow)
+            is_first_arrow = False
 
-    if parameters.void_width > 0.0:
-        dimension_y = -0.45 * parameters.stem_height
-        stem_edge = parameters.stem_width / 2.0
-        cutout_edge = parameters.cutout_half_width
-        ax.annotate(
-            "",
-            xy=(cutout_edge, dimension_y),
-            xytext=(stem_edge, dimension_y),
-            arrowprops={"arrowstyle": "<->", "color": dimension_color, "lw": 1.2},
-            zorder=9,
-        )
-        ax.text(
-            (stem_edge + cutout_edge) / 2.0,
-            dimension_y + 0.45,
-            r"$w_v$",
-            color=text_color,
-            ha="center",
-            va="bottom",
-            fontsize=10,
-            zorder=9,
-        )
 
-    if parameters.void_height > 0.0:
-        stem_bottom = -parameters.stem_height
-        cutout_bottom = -parameters.cutout_depth
-        ax.annotate(
-            "",
-            xy=(0.0, cutout_bottom),
-            xytext=(0.0, stem_bottom),
-            arrowprops={"arrowstyle": "<->", "color": dimension_color, "lw": 1.2},
-            zorder=9,
-        )
-        ax.text(
-            0.45,
-            (stem_bottom + cutout_bottom) / 2.0,
-            r"$h_v$",
-            color=text_color,
-            ha="left",
-            va="center",
-            fontsize=10,
-            zorder=9,
-        )
+def _legend_bidirectional_arrow(
+    legend: object,
+    original_handle: FancyArrowPatch,
+    xdescent: float,
+    ydescent: float,
+    width: float,
+    height: float,
+    fontsize: float,
+) -> FancyArrowPatch:
+    """Draw a bidirectional arrow instead of the default legend rectangle."""
+    del legend
+    center_y = ydescent + height / 2.0
+    return FancyArrowPatch(
+        (xdescent, center_y),
+        (xdescent + width, center_y),
+        arrowstyle="<->",
+        mutation_scale=fontsize,
+        color=original_handle.get_edgecolor(),
+        linewidth=original_handle.get_linewidth(),
+    )
 
 
 def _add_polygonal_patches(
@@ -297,6 +291,7 @@ def _set_padded_limits(ax: Axes, model: FingertipModel) -> None:
     min_x, min_y, max_x, max_y = model.raw_material_geometry.bounds
     width = max_x - min_x
     height = max_y - min_y
-    padding = 0.08 * max(width, height, 1.0)
+    base_span = max(width, height, 2.0)
+    padding = 0.08 * base_span
     ax.set_xlim(min_x - padding, max_x + padding)
     ax.set_ylim(min_y - padding, max_y + padding)

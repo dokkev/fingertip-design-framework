@@ -21,6 +21,8 @@ $LIT_PYTHON -m validation.benchmarks.volumetric_locking run \
   --output output/validation/benchmarks/volumetric_locking.json
 $LIT_PYTHON -m validation.benchmarks.mixed_volumetric run \
   --output output/validation/benchmarks/mixed_volumetric.json
+$LIT_PYTHON -m validation.fingertip.geometry \
+  --output-directory output/validation/fingertip/geometry
 $LIT_PYTHON -m validation.fingertip.mesh --levels medium fine \
   --output-directory output/validation/fingertip/mesh
 $LIT_PYTHON -m validation.fingertip.indentation.no_void

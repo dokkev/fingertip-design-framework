@@ -6,8 +6,6 @@ from dataclasses import dataclass
 import math
 from typing import Mapping
 
-import matplotlib
-matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from visualization.data import ScientificFigureError

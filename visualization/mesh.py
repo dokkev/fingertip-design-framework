@@ -17,6 +17,8 @@ MESH_EDGE = "#56616A"
 BOUNDARY_STYLE = {
     "pad_bond_left": ("#111111", "-", 2.4),
     "pad_bond_right": ("#111111", "-", 2.4),
+    "pad_outer_left": ("#287D91", "-", 2.0),
+    "pad_outer_right": ("#287D91", "-", 2.0),
     "pad_cutout_left": ("#D95F02", "-", 2.7),
     "pad_cutout_right": ("#E67E22", "-", 2.7),
     "pad_cutout_bottom": ("#F39C12", "-", 2.7),

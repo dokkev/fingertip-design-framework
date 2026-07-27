@@ -56,6 +56,8 @@ def test_required_submodel_parts_have_topology(smoke_result) -> None:
     for name in (
         "PadBondLeft",
         "PadBondRight",
+        "PadOuterLeft",
+        "PadOuterRight",
         "PadOuterArc",
         "PadCutoutLeft",
         "PadCutoutRight",

@@ -35,7 +35,7 @@ def test_crown_point_and_outward_normal_come_from_pad_boundary(
     assert model.boundaries.segments["pad_outer_arc"].geometry.distance(
         __import__("shapely.geometry", fromlist=["Point"]).Point(crown)
     ) <= model.parameters.geometry_tolerance
-    assert crown == pytest.approx((0.0, -18.0))
+    assert crown == pytest.approx((0.0, model.parameters.pad_tip_y))
     assert fixture.frame.pad_outward_normal == pytest.approx((0.0, -1.0))
     assert fixture.frame.loading_direction == pytest.approx((0.0, 1.0))
     assert math.isclose(
@@ -126,4 +126,3 @@ def test_baseline_capture_depths_are_exact_solution_steps() -> None:
     assert settings.capture_step(0.5) == 16
     assert settings.capture_step(1.0) == 32
     assert settings.capture_step(1.5) == 48
-

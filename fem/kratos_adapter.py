@@ -31,6 +31,8 @@ class KratosAdapterError(RuntimeError):
 BOUNDARY_MODEL_PART_NAMES = {
     "pad_bond_left": "PadBondLeft",
     "pad_bond_right": "PadBondRight",
+    "pad_outer_left": "PadOuterLeft",
+    "pad_outer_right": "PadOuterRight",
     "pad_outer_arc": "PadOuterArc",
     "pad_cutout_left": "PadCutoutLeft",
     "pad_cutout_right": "PadCutoutRight",
@@ -652,15 +654,7 @@ def run_initialization_smoke(mesh: FingertipMesh) -> dict[str, Any]:
             for name in (
                 "PadDomain",
                 "RigidCarrier",
-                "PadBondLeft",
-                "PadBondRight",
-                "PadOuterArc",
-                "PadCutoutLeft",
-                "PadCutoutRight",
-                "PadCutoutBottom",
-                "StemLeft",
-                "StemRight",
-                "StemBottom",
+                *BOUNDARY_MODEL_PART_NAMES.values(),
                 "RigidMotion",
             )
         }

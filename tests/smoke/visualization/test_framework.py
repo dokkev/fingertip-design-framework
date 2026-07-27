@@ -57,6 +57,21 @@ def framework_outputs(tmp_path_factory):
         (PHASE4K_INPUT / name).is_file() for name in CANONICAL_INPUT_FILES
     ) or not (NORMAL_INPUT / "dataset_manifest.json").is_file():
         pytest.skip("generated visualization smoke artifacts are not available")
+    reference_result = json.loads(
+        (
+            PHASE4K_INPUT
+            / "k2_center_baseline"
+            / "medium"
+            / "result.json"
+        ).read_text()
+    )
+    reference_parameters = reference_result["configuration"][
+        "fingertip_parameters"
+    ]
+    if "pad_width" in reference_parameters or "pad_height" in reference_parameters:
+        pytest.skip(
+            "generated Phase 4K artifacts use the obsolete geometry schema"
+        )
     before = input_checksums(PHASE4K_INPUT)
     root = tmp_path_factory.mktemp("scientific_figures")
     transfer_raw = json.loads(

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from math import isfinite
+from typing import Any, Mapping
 from warnings import warn
 
 
@@ -13,21 +14,21 @@ class InvalidFingertipParameters(ValueError):
 
 @dataclass(frozen=True)
 class FingertipParameters:
-    """Dimensions for a rigid link inserted into a compliant half-ellipse pad.
+    """Independent rigid-stem, vertical-pad, semi-ellipse, and void dimensions.
 
-    All values are in millimeters. The flat link-pad plane is ``y = 0``. The
-    compliant pad occupies ``y <= 0`` and the rigid link plate occupies
-    ``y >= 0``. ``void_width`` is the clearance on each side of the stem, while
-    ``void_height`` is the clearance below the stem tip. ``bonded`` is retained
-    only for source compatibility; the upper link-pad interface is always
-    bonded regardless of its value.
+    All dimensions are in millimeters. The link-pad interface is ``y = 0`` and
+    the distal direction is negative ``y``. ``void_width`` is the one-sided
+    clearance beside the stem; ``void_height`` is the additional clearance
+    below the stem tip.
     """
 
-    pad_width: float = 30.0
-    pad_height: float = 18.0
+    vertical_pad_width: float = 20.0
+    vertical_pad_height: float = 3.0
+    semielliptical_pad_width: float = 20.0
+    semielliptical_pad_height: float = 7.0
     link_thickness: float = 3.5
-    stem_width: float = 7.0
-    stem_height: float = 7.0
+    stem_width: float = 7.6
+    stem_height: float = 6.0
     void_width: float = 0.0
     void_height: float = 0.0
     bonded: bool = True
@@ -45,10 +46,76 @@ class FingertipParameters:
                 stacklevel=2,
             )
 
+    @classmethod
+    def from_legacy_mapping(
+        cls,
+        values: Mapping[str, Any],
+        *,
+        vertical_pad_height: float,
+    ) -> FingertipParameters:
+        """Migrate an old ``pad_width/pad_height`` mapping explicitly.
+
+        The former ``pad_width`` supplies both component widths because the new
+        geometry requires width continuity. The former ``pad_height`` was the
+        semi-axis and therefore maps only to ``semielliptical_pad_height``.
+        ``vertical_pad_height`` has no legacy equivalent and must be supplied.
+        """
+        migrated = dict(values)
+        if "pad_width" not in migrated or "pad_height" not in migrated:
+            raise InvalidFingertipParameters(
+                "legacy migration requires pad_width and pad_height"
+            )
+        new_names = {
+            "vertical_pad_width",
+            "vertical_pad_height",
+            "semielliptical_pad_width",
+            "semielliptical_pad_height",
+        }
+        conflicts = sorted(new_names.intersection(migrated))
+        if conflicts:
+            raise InvalidFingertipParameters(
+                "legacy migration cannot mix old and new pad parameters: "
+                + ", ".join(conflicts)
+            )
+        legacy_width = migrated.pop("pad_width")
+        legacy_semi_axis = migrated.pop("pad_height")
+        return cls(
+            vertical_pad_width=legacy_width,
+            vertical_pad_height=vertical_pad_height,
+            semielliptical_pad_width=legacy_width,
+            semielliptical_pad_height=legacy_semi_axis,
+            **migrated,
+        )
+
     @property
     def link_width(self) -> float:
-        """Width of the top rigid plate, equal to the pad width."""
-        return self.pad_width
+        """Width of the top rigid plate, equal to the vertical-pad width."""
+        return self.vertical_pad_width
+
+    @property
+    def ellipse_start_y(self) -> float:
+        """Vertical coordinate where the lower semi-ellipse begins."""
+        return -self.vertical_pad_height
+
+    @property
+    def stem_tip_y(self) -> float:
+        """Vertical coordinate of the rigid stem tip."""
+        return -self.stem_height
+
+    @property
+    def void_bottom_y(self) -> float:
+        """Vertical coordinate of the complete internal cutout bottom."""
+        return -(self.stem_height + self.void_height)
+
+    @property
+    def pad_tip_y(self) -> float:
+        """Distal-most coordinate of the complete external pad envelope."""
+        return -(self.vertical_pad_height + self.semielliptical_pad_height)
+
+    @property
+    def total_pad_depth(self) -> float:
+        """Total external depth from the interface to the distal pad tip."""
+        return self.vertical_pad_height + self.semielliptical_pad_height
 
     @property
     def cutout_width(self) -> float:
@@ -58,7 +125,7 @@ class FingertipParameters:
     @property
     def cutout_half_width(self) -> float:
         """Distance from the symmetry axis to either cutout side."""
-        return self.stem_width / 2.0 + self.void_width
+        return self.cutout_width / 2.0
 
     @property
     def cutout_height(self) -> float:
@@ -67,13 +134,13 @@ class FingertipParameters:
 
     @property
     def cutout_depth(self) -> float:
-        """Alias for the cutout depth used by boundary construction."""
+        """Depth alias retained for boundary and mesh construction."""
         return self.cutout_height
 
     @property
     def bonded_segment_length(self) -> float:
         """Length of either upper bonded segment outside the cutout."""
-        return self.pad_width / 2.0 - self.cutout_half_width
+        return self.vertical_pad_width / 2.0 - self.cutout_half_width
 
     @property
     def void_area(self) -> float:
@@ -85,8 +152,10 @@ class FingertipParameters:
     def validate(self) -> None:
         """Raise ``InvalidFingertipParameters`` for inconsistent dimensions."""
         dimensions = {
-            "pad_width": self.pad_width,
-            "pad_height": self.pad_height,
+            "vertical_pad_width": self.vertical_pad_width,
+            "vertical_pad_height": self.vertical_pad_height,
+            "semielliptical_pad_width": self.semielliptical_pad_width,
+            "semielliptical_pad_height": self.semielliptical_pad_height,
             "link_thickness": self.link_thickness,
             "stem_width": self.stem_width,
             "stem_height": self.stem_height,
@@ -99,8 +168,10 @@ class FingertipParameters:
                 raise InvalidFingertipParameters(f"{name} must be finite")
 
         for name in (
-            "pad_width",
-            "pad_height",
+            "vertical_pad_width",
+            "vertical_pad_height",
+            "semielliptical_pad_width",
+            "semielliptical_pad_height",
             "link_thickness",
             "stem_width",
             "stem_height",
@@ -127,29 +198,17 @@ class FingertipParameters:
         if not isinstance(self.bonded, bool):
             raise InvalidFingertipParameters("bonded must be a boolean")
 
-        if self.stem_width > self.pad_width + self.geometry_tolerance:
+        if (
+            abs(self.vertical_pad_width - self.semielliptical_pad_width)
+            > self.geometry_tolerance
+        ):
             raise InvalidFingertipParameters(
-                "stem_width must not exceed pad_width: "
-                f"stem_width={self.stem_width:g}, pad_width={self.pad_width:g}"
+                "vertical_pad_width and semielliptical_pad_width must be equal "
+                "within geometry_tolerance to avoid a shoulder"
             )
-
-        if self.bonded_segment_length <= self.geometry_tolerance:
+        if self.cutout_width >= self.vertical_pad_width - self.geometry_tolerance:
             raise InvalidFingertipParameters(
-                "the cutout must leave a positive bonded segment on both sides: "
-                f"pad_width={self.pad_width:g}, cutout_width={self.cutout_width:g}, "
-                f"geometry_tolerance={self.geometry_tolerance:g}"
-            )
-
-        normalized_corner_radius = (
-            self.cutout_half_width / (self.pad_width / 2.0)
-        ) ** 2 + (self.cutout_depth / self.pad_height) ** 2
-        normalized_tolerance = self.geometry_tolerance / min(
-            self.pad_width / 2.0, self.pad_height
-        )
-        if normalized_corner_radius > 1.0 + normalized_tolerance:
-            raise InvalidFingertipParameters(
-                "the cutout lower corners lie outside the half-ellipse: "
-                f"cutout_half_width={self.cutout_half_width:g}, "
-                f"cutout_depth={self.cutout_depth:g}, "
-                f"normalized_ellipse_value={normalized_corner_radius:.6g}"
+                "cutout_width must be smaller than vertical_pad_width: "
+                f"cutout_width={self.cutout_width:g}, "
+                f"vertical_pad_width={self.vertical_pad_width:g}"
             )

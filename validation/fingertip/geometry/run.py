@@ -18,23 +18,32 @@ from model.fingertip_parameters import FingertipParameters
 from visualization.geometry import plot_fingertip
 
 
+REFERENCE_SIDE_GAP = 1.0
+REFERENCE_BOTTOM_GAP = 2.0
+
+
 def _four_cases() -> list[tuple[str, FingertipParameters]]:
     base = FingertipParameters()
-    side_gap = 2.5
-    bottom_gap = 3.0
     return [
         (r"Zero-clearance fit: $w_v=0, h_v=0$", base),
         (
-            rf"Side clearance: $w_v={side_gap:g}, h_v=0$",
-            replace(base, void_width=side_gap),
+            rf"Side clearance: $w_v={REFERENCE_SIDE_GAP:g}, h_v=0$",
+            replace(base, void_width=REFERENCE_SIDE_GAP),
         ),
         (
-            rf"Bottom clearance: $w_v=0, h_v={bottom_gap:g}$",
-            replace(base, void_height=bottom_gap),
+            rf"Bottom clearance: $w_v=0, h_v={REFERENCE_BOTTOM_GAP:g}$",
+            replace(base, void_height=REFERENCE_BOTTOM_GAP),
         ),
         (
-            rf"U-clearance: $w_v={side_gap:g}, h_v={bottom_gap:g}$",
-            replace(base, void_width=side_gap, void_height=bottom_gap),
+            (
+                rf"U-clearance: $w_v={REFERENCE_SIDE_GAP:g}, "
+                rf"h_v={REFERENCE_BOTTOM_GAP:g}$"
+            ),
+            replace(
+                base,
+                void_width=REFERENCE_SIDE_GAP,
+                void_height=REFERENCE_BOTTOM_GAP,
+            ),
         ),
     ]
 
@@ -42,13 +51,12 @@ def _four_cases() -> list[tuple[str, FingertipParameters]]:
 def run_sanity_checks() -> None:
     """Verify the four limiting clearance areas before plotting."""
     base = FingertipParameters()
-    side_gap = 2.5
-    bottom_gap = 3.0
     expected_areas = [
         0.0,
-        2.0 * side_gap * base.stem_height,
-        base.stem_width * bottom_gap,
-        (base.stem_width + 2.0 * side_gap) * (base.stem_height + bottom_gap)
+        2.0 * REFERENCE_SIDE_GAP * base.stem_height,
+        base.stem_width * REFERENCE_BOTTOM_GAP,
+        (base.stem_width + 2.0 * REFERENCE_SIDE_GAP)
+        * (base.stem_height + REFERENCE_BOTTOM_GAP)
         - base.stem_width * base.stem_height,
     ]
 
@@ -79,7 +87,6 @@ def make_four_case_figure(output_directory: Path) -> Path:
         plot_fingertip(
             FingertipModel(parameters),
             ax=axis,
-            show_dimensions=True,
             show_axes=False,
             show_legend=False,
             title=title,
@@ -108,8 +115,8 @@ def make_four_case_figure(output_directory: Path) -> Path:
 def make_parameter_grid(output_directory: Path) -> Path:
     """Save a 3x3 sweep of side and bottom clearance dimensions."""
     base = FingertipParameters()
-    widths = [0.0, 1.5, 3.0]
-    heights = [0.0, 2.0, 4.0]
+    widths = [0.0, REFERENCE_SIDE_GAP / 2.0, REFERENCE_SIDE_GAP]
+    heights = [0.0, REFERENCE_BOTTOM_GAP / 2.0, REFERENCE_BOTTOM_GAP]
     figure, axes = plt.subplots(3, 3, figsize=(12.5, 10.5), constrained_layout=True)
 
     for row, void_height in enumerate(heights):
@@ -122,7 +129,6 @@ def make_parameter_grid(output_directory: Path) -> Path:
             plot_fingertip(
                 FingertipModel(parameters),
                 ax=axes[row, column],
-                show_dimensions=True,
                 show_axes=False,
                 show_legend=False,
                 title=rf"$w_v={void_width:g},\ h_v={void_height:g}$",

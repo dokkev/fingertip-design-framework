@@ -190,6 +190,8 @@ def _semantic_split_points(
         tags = (
             "pad_bond_left",
             "pad_bond_right",
+            "pad_outer_left",
+            "pad_outer_right",
             "pad_cutout_left",
             "pad_cutout_right",
             "pad_cutout_bottom",
@@ -404,6 +406,8 @@ def _classify_boundaries(
     pad_tags = {
         "pad_bond_left",
         "pad_bond_right",
+        "pad_outer_left",
+        "pad_outer_right",
         "pad_cutout_left",
         "pad_cutout_right",
         "pad_cutout_bottom",

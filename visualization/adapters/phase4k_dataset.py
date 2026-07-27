@@ -73,7 +73,19 @@ def _build_mesh_and_chains(
     reference_by_side: Mapping[str, np.ndarray],
 ) -> tuple[MeshData, dict[str, ObservationChain]]:
     result = _strict_json(_case_result_path(input_dir, case_name))
-    parameters = FingertipParameters(**result["configuration"]["fingertip_parameters"])
+    parameter_data = result["configuration"]["fingertip_parameters"]
+    if "pad_width" in parameter_data or "pad_height" in parameter_data:
+        raise ScientificFigureError(
+            "Phase 4K artifact uses the obsolete pad_width/pad_height geometry "
+            "schema and must be regenerated. Automatic migration is disabled "
+            "because vertical_pad_height has no legacy value."
+        )
+    try:
+        parameters = FingertipParameters(**parameter_data)
+    except (TypeError, ValueError) as exc:
+        raise ScientificFigureError(
+            "Phase 4K artifact contains invalid fingertip parameters"
+        ) from exc
     model = FingertipModel(parameters)
     mesh = generate_fingertip_mesh(model, mesh_settings_for_level(mesh_id))
     expected = result["mesh"]

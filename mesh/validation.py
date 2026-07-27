@@ -203,6 +203,8 @@ def validate_fingertip_mesh(
     pad_semantic_tags = {
         "pad_bond_left",
         "pad_bond_right",
+        "pad_outer_left",
+        "pad_outer_right",
         "pad_cutout_left",
         "pad_cutout_right",
         "pad_cutout_bottom",

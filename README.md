@@ -21,6 +21,9 @@ The enforced dependency and ownership rules are in
 the only source of physical shape and boundary semantics; meshing, Kratos, and
 plotting do not reimplement it.
 
+The parameter meanings, construction order, derived coordinates, and explicit
+legacy migration path are documented in [docs/geometry.md](docs/geometry.md).
+
 ## Environment
 
 Python 3.11 or newer is required. Optional dependency groups are declared in
