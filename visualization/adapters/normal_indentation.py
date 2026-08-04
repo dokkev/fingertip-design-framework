@@ -21,15 +21,39 @@ from visualization.data import (
 
 
 def _strict_json(path: Path) -> dict[str, Any]:
-    value = json.loads(
-        path.read_text(encoding="utf-8"),
-        parse_constant=lambda constant: (_ for _ in ()).throw(
-            ValueError(f"non-standard JSON constant {constant}")
-        ),
-    )
+    try:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError as exc:
+        if path.name == "dataset_manifest.json":
+            raise ScientificFigureError(
+                "Persisted full-field FEM dataset was not found:\n"
+                f"{path.resolve()}\n\n"
+                "Generate it first with:\n"
+                "python -m validation.fingertip.indentation.normal_field_atlas"
+            ) from None
+        raise ScientificFigureError(
+            f"JSON artifact was not found: {path.resolve()}"
+        ) from exc
+    except OSError as exc:
+        raise ScientificFigureError(
+            f"JSON artifact could not be read: {path.resolve()}"
+        ) from exc
+
+    try:
+        value = json.loads(
+            text,
+            parse_constant=lambda constant: (_ for _ in ()).throw(
+                ValueError(f"non-standard JSON constant {constant}")
+            ),
+        )
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise ScientificFigureError(
+            f"JSON artifact is malformed: {path.resolve()}"
+        ) from exc
     if not isinstance(value, dict):
         raise ScientificFigureError(f"JSON root must be an object: {path}")
     return value
+
 
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -58,6 +82,27 @@ def load_normal_indentation_visualization_dataset(
     if not isinstance(case_records, list) or len(case_records) != 3:
         raise ScientificFigureError(
             "local-normal full-field manifest must contain exactly three cases"
+        )
+    manifest_radii = manifest.get("indenter_radii_mm")
+    if not isinstance(manifest_radii, list) or len(manifest_radii) != 3:
+        raise ScientificFigureError(
+            "local-normal full-field manifest must define three indenter radii"
+        )
+    try:
+        radii = tuple(float(value) for value in manifest_radii)
+        surface_x_mm = float(manifest["surface_x_mm"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ScientificFigureError(
+            "local-normal full-field radius sweep metadata is invalid"
+        ) from exc
+    if (
+        surface_x_mm != 0.0
+        or not all(np.isfinite(radius) and radius > 0.0 for radius in radii)
+        or len(set(radii)) != 3
+    ):
+        raise ScientificFigureError(
+            "local-normal full-field cases must use three unique positive "
+            "radii at surface x=0 mm"
         )
 
     mesh_data: MeshData | None = None
@@ -160,6 +205,16 @@ def load_normal_indentation_visualization_dataset(
         final = result["final"]
         indenter = result["configuration"]["indenter"]
         surface_x_mm = float(result["surface_x_command_mm"])
+        indenter_radius_mm = float(result["indenter_radius_mm"])
+        if (
+            surface_x_mm != 0.0
+            or indenter_radius_mm != float(record["indenter_radius_mm"])
+            or indenter_radius_mm
+            != float(indenter["settings"]["radius_mm"])
+        ):
+            raise ScientificFigureError(
+                f"full-field indenter geometry is inconsistent: {result_path}"
+            )
         actual_xi = float(result["actual_reference_xi"])
         step = int(final["step"])
         case_id = str(result["case_name"])
@@ -183,6 +238,7 @@ def load_normal_indentation_visualization_dataset(
                 descriptor_valid=False,
                 source_artifact=str(result_path),
                 surface_x_mm=surface_x_mm,
+                indenter_radius_mm=indenter_radius_mm,
             )
         )
         fields.append(
@@ -228,7 +284,9 @@ def load_normal_indentation_visualization_dataset(
             "units": {"length": "mm", "force": "N"},
             "coordinate_convention": {
                 "frame": "2D FingertipModel x-y frame",
-                "contact_coordinate": "global surface x [mm]",
+                "contact_coordinate": (
+                    "indenter radius [mm] at fixed global surface x=0 mm"
+                ),
                 "positive_travel": (
                     "local inward pad normal, equal to -pad_outward_normal"
                 ),

@@ -7,6 +7,9 @@
 - Kratos is an external environment dependency and must not be added to
   `pyproject.toml`.
 - Generated files belong under `output/` and remain untracked.
+- Do not add or run unit, smoke, integration, FEM, or validation tests unless
+  the user explicitly requests them. Do not automatically chain implementation
+  into testing or validation; this minimizes token and execution-time usage.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for ownership and
 [docs/COMMANDS.md](docs/COMMANDS.md) for supported commands.

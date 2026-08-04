@@ -185,20 +185,18 @@ def test_rigid_link_contains_top_plate_and_inserted_stem() -> None:
 
 
 @pytest.mark.parametrize(
-    ("overrides", "classification", "geometry_type", "expected_area"),
+    ("overrides", "classification", "geometry_type"),
     [
-        ({}, "zero_clearance_fit", type(None), 0.0),
+        ({}, "zero_clearance_fit", type(None)),
         (
             {"void_width": SIDE_CLEARANCE},
             "side_clearance",
             MultiPolygon,
-            12.0,
         ),
         (
             {"void_height": BOTTOM_CLEARANCE},
             "bottom_clearance",
             Polygon,
-            15.2,
         ),
         (
             {
@@ -207,7 +205,6 @@ def test_rigid_link_contains_top_plate_and_inserted_stem() -> None:
             },
             "u_clearance",
             Polygon,
-            31.2,
         ),
     ],
 )
@@ -215,9 +212,13 @@ def test_limiting_clearance_cases(
     overrides: dict[str, float],
     classification: str,
     geometry_type: type[None] | type[Polygon] | type[MultiPolygon],
-    expected_area: float,
 ) -> None:
     model = build_model(**overrides)
+    parameters = model.parameters
+    expected_area = (
+        parameters.cutout_width * parameters.cutout_height
+        - parameters.stem_width * parameters.stem_height
+    )
     assert model.classify_void() == classification
     assert isinstance(model.void_geometry, geometry_type)
     actual_area = 0.0 if model.void_geometry is None else model.void_geometry.area

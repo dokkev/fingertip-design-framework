@@ -54,3 +54,16 @@ def test_mesh_is_solver_and_plotting_independent() -> None:
 
 def test_fem_has_no_plotting_dependency() -> None:
     _assert_no_prefix("fem", ("visualization", "matplotlib"))
+
+
+def test_full_field_producer_uses_active_python_interpreter() -> None:
+    path = (
+        REPOSITORY_ROOT
+        / "validation"
+        / "fingertip"
+        / "indentation"
+        / "normal_field_atlas.py"
+    )
+    source = path.read_text(encoding="utf-8")
+    assert "PYTHON = Path(sys.executable).resolve()" in source
+    assert "/home/dk/" not in source

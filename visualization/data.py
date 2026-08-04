@@ -168,6 +168,7 @@ class ContactCase:
     descriptor_valid: bool
     source_artifact: str
     surface_x_mm: float | None = None
+    indenter_radius_mm: float | None = None
 
     def __post_init__(self) -> None:
         scalar_values = (self.xi, self.delta_mm, *self.indentation_direction)
@@ -188,6 +189,11 @@ class ContactCase:
             raise ScientificFigureError("contact point is non-finite")
         if self.surface_x_mm is not None and not math.isfinite(self.surface_x_mm):
             raise ScientificFigureError("surface x coordinate is non-finite")
+        if self.indenter_radius_mm is not None and (
+            not math.isfinite(self.indenter_radius_mm)
+            or self.indenter_radius_mm <= 0.0
+        ):
+            raise ScientificFigureError("indenter radius must be positive and finite")
 
 
 @dataclass(frozen=True)

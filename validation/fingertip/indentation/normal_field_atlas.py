@@ -20,7 +20,7 @@ if str(Path(__file__).resolve().parents[3]) not in sys.path:
     sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from fem.indentation import IndentationSettings, run_indentation_case
-from mesh.indenter import build_normal_indenter_fixture_at_x
+from mesh.indenter import IndenterSettings, build_normal_indenter_fixture_at_x
 from validation.common.io import atomic_write_json, strict_read_json
 from validation.common.provenance import sha256_file
 from validation.common.runner import run_isolated
@@ -37,20 +37,22 @@ DEFAULT_OUTPUT = (
     / "indentation"
     / "normal_full_field"
 )
-PYTHON = Path("/home/dk/miniconda3/envs/lit/bin/python")
-SURFACE_X_LOCATIONS_MM = (-5.0, 0.0, 5.0)
+PYTHON = Path(sys.executable).resolve()
+SURFACE_X_MM = 0.0
+INDENTER_RADII_MM = (2.0, 4.0, 6.0)
 MESH_LEVEL = "medium"
 INDENTATION_MM = 1.5
 NUMBER_OF_STEPS = 48
 CASE_TIMEOUT_SECONDS = 1800
 
 
-def _case_name(surface_x_mm: float) -> str:
-    if surface_x_mm == 0.0:
-        return "x_0"
-    sign = "m" if surface_x_mm < 0.0 else "p"
-    magnitude = f"{abs(surface_x_mm):g}".replace(".", "p")
-    return f"x_{sign}{magnitude}"
+class NormalFieldAtlasError(RuntimeError):
+    """Raised when one or more full-field atlas FEM cases fail."""
+
+
+def _case_name(radius_mm: float) -> str:
+    magnitude = f"{radius_mm:g}".replace(".", "p")
+    return f"radius_{magnitude}"
 
 
 def _atomic_write_npz(path: Path, **arrays: np.ndarray) -> None:
@@ -111,10 +113,14 @@ def _pad_field_arrays(artifacts: Any, depth_mm: float) -> dict[str, np.ndarray]:
     return arrays
 
 
-def _run_case(surface_x_mm: float, case_directory: Path) -> int:
+def _run_case(radius_mm: float, case_directory: Path) -> int:
     case_directory.mkdir(parents=True, exist_ok=True)
     model = FingertipModel(FingertipParameters())
-    fixture = build_normal_indenter_fixture_at_x(model, surface_x_mm)
+    fixture = build_normal_indenter_fixture_at_x(
+        model,
+        SURFACE_X_MM,
+        IndenterSettings(radius_mm=radius_mm),
+    )
     result, artifacts = run_indentation_case(
         model,
         MESH_LEVEL,
@@ -152,9 +158,10 @@ def _run_case(surface_x_mm: float, case_directory: Path) -> int:
     result.update(
         {
             "phase": "normal_indentation_full_field",
-            "case_name": _case_name(surface_x_mm),
+            "case_name": _case_name(radius_mm),
             "solver_case_status": solver_case_status,
-            "surface_x_command_mm": surface_x_mm,
+            "surface_x_command_mm": SURFACE_X_MM,
+            "indenter_radius_mm": radius_mm,
             "actual_surface_point_mm": list(fixture.frame.point_mm),
             "actual_reference_xi": actual_xi,
             "load_direction_contract": (
@@ -195,7 +202,7 @@ def _run_case(surface_x_mm: float, case_directory: Path) -> int:
 
 def _completed_case(
     case_directory: Path,
-    surface_x_mm: float,
+    radius_mm: float,
 ) -> Mapping[str, Any] | None:
     result_path = case_directory / "result.json"
     field_path = case_directory / "full_pad_field.npz"
@@ -209,24 +216,25 @@ def _completed_case(
         return None
     if (
         result.get("phase") != "normal_indentation_full_field"
-        or result.get("case_name") != _case_name(surface_x_mm)
+        or result.get("case_name") != _case_name(radius_mm)
         or result.get("status") != "PASS"
         or float(result.get("surface_x_command_mm", float("nan")))
-        != surface_x_mm
+        != SURFACE_X_MM
+        or float(result.get("indenter_radius_mm", float("nan"))) != radius_mm
         or not finite
     ):
         return None
     return result
 
 
-def _case_command(surface_x_mm: float, case_directory: Path) -> list[str]:
+def _case_command(radius_mm: float, case_directory: Path) -> list[str]:
     return [
         str(PYTHON),
         "-B",
         str(Path(__file__).resolve()),
         "--run-case",
-        "--surface-x-mm",
-        f"{surface_x_mm:.17g}",
+        "--radius-mm",
+        f"{radius_mm:.17g}",
         "--case-output",
         str(case_directory),
     ]
@@ -236,11 +244,11 @@ def _run_parent(output: Path, force: bool) -> int:
     output.mkdir(parents=True, exist_ok=True)
     records = []
     all_pass = True
-    for surface_x_mm in SURFACE_X_LOCATIONS_MM:
-        case_name = _case_name(surface_x_mm)
+    for radius_mm in INDENTER_RADII_MM:
+        case_name = _case_name(radius_mm)
         case_directory = output / case_name
-        existing = None if force else _completed_case(case_directory, surface_x_mm)
-        command = _case_command(surface_x_mm, case_directory)
+        existing = None if force else _completed_case(case_directory, radius_mm)
+        command = _case_command(radius_mm, case_directory)
         if existing is None:
             completed = run_isolated(
                 command,
@@ -250,7 +258,7 @@ def _run_parent(output: Path, force: bool) -> int:
             return_code = completed.return_code
             if return_code != 0:
                 all_pass = False
-        result = _completed_case(case_directory, surface_x_mm)
+        result = _completed_case(case_directory, radius_mm)
         if result is None:
             all_pass = False
             status = "FAIL"
@@ -261,7 +269,8 @@ def _run_parent(output: Path, force: bool) -> int:
         records.append(
             {
                 "case_name": case_name,
-                "surface_x_mm": surface_x_mm,
+                "surface_x_mm": SURFACE_X_MM,
+                "indenter_radius_mm": radius_mm,
                 "status": status,
                 "command": command,
                 "result": str(result_path.relative_to(output)),
@@ -283,8 +292,9 @@ def _run_parent(output: Path, force: bool) -> int:
         "indentation_mm": INDENTATION_MM,
         "number_of_steps": NUMBER_OF_STEPS,
         "case_timeout_seconds": CASE_TIMEOUT_SECONDS,
-        "surface_x_locations_mm": list(SURFACE_X_LOCATIONS_MM),
-        "loading": "local inward surface normal at each x location",
+        "surface_x_mm": SURFACE_X_MM,
+        "indenter_radii_mm": list(INDENTER_RADII_MM),
+        "loading": "local inward surface normal at x=0 mm",
         "heatmap_quantity": "nodal displacement magnitude |u| [mm]",
         "vector_quantity": "nodal displacement u=[u_x,u_y] [mm]",
         "cases": records,
@@ -295,12 +305,28 @@ def _run_parent(output: Path, force: bool) -> int:
     return 0 if all_pass else 1
 
 
+def run_normal_field_atlas(
+    output_directory: str | Path = DEFAULT_OUTPUT,
+    *,
+    force: bool = False,
+) -> Path:
+    """Run or reuse the three FEM cases and return the dataset manifest."""
+    output = Path(output_directory).expanduser().resolve()
+    manifest_path = output / "dataset_manifest.json"
+    if _run_parent(output, force) != 0:
+        raise NormalFieldAtlasError(
+            "One or more full-field FEM atlas cases failed. "
+            f"Output directory: {output}. Manifest: {manifest_path}."
+        )
+    return manifest_path
+
+
 def _arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output-directory", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--run-case", action="store_true", help=argparse.SUPPRESS)
-    parser.add_argument("--surface-x-mm", type=float, help=argparse.SUPPRESS)
+    parser.add_argument("--radius-mm", type=float, help=argparse.SUPPRESS)
     parser.add_argument("--case-output", type=Path, help=argparse.SUPPRESS)
     return parser.parse_args()
 
@@ -308,13 +334,21 @@ def _arguments() -> argparse.Namespace:
 def main() -> int:
     arguments = _arguments()
     if arguments.run_case:
-        if arguments.surface_x_mm is None or arguments.case_output is None:
+        if arguments.radius_mm is None or arguments.case_output is None:
             raise ValueError("child case arguments are incomplete")
         return _run_case(
-            float(arguments.surface_x_mm),
+            float(arguments.radius_mm),
             arguments.case_output.resolve(),
         )
-    return _run_parent(arguments.output_directory.resolve(), arguments.force)
+    try:
+        run_normal_field_atlas(
+            arguments.output_directory,
+            force=arguments.force,
+        )
+    except NormalFieldAtlasError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    return 0
 
 
 if __name__ == "__main__":

@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.axes import Axes
 from matplotlib.legend_handler import HandlerPatch
-from matplotlib.patches import FancyArrowPatch, PathPatch
+from matplotlib.patches import FancyArrowPatch, PathPatch, Rectangle
 from matplotlib.path import Path as MatplotlibPath
 from shapely.geometry import MultiPolygon, Polygon
 
@@ -23,6 +23,10 @@ VOID_COLOR = "#F7B4AE"
 VOID_EDGE = "#C9473D"
 PAD_CONTACT_COLOR = "#D95F02"
 STEM_CONTACT_COLOR = "#6A3D9A"
+LED_WIDTH_MM = 4.0
+LED_HEIGHT_MM = 2.0
+LED_COLOR = "#F6C453"
+LED_EDGE = "#9A6700"
 
 
 def plot_fingertip(
@@ -30,6 +34,7 @@ def plot_fingertip(
     *,
     ax: Axes | None = None,
     show_void: bool = True,
+    show_led: bool = True,
     show_interface: bool = True,
     show_contact_boundaries: bool = True,
     show_symmetry_axis: bool = False,
@@ -37,7 +42,7 @@ def plot_fingertip(
     show_legend: bool = True,
     title: str | None = None,
 ) -> Axes:
-    """Plot the compliant pad, rigid link/stem, clearance, and interface."""
+    """Plot the pad, rigid link/stem, LED overlay, clearance, and interface."""
     if ax is None:
         _, ax = plt.subplots(figsize=(6.0, 5.0))
 
@@ -68,6 +73,9 @@ def plot_fingertip(
         label="_nolegend_",
         zorder=6,
     )
+
+    if show_led:
+        _add_led_overlay(ax, model)
 
     if show_void and model.void_geometry is not None:
         _add_polygonal_patches(
@@ -149,6 +157,34 @@ def plot_fingertip(
     return ax
 
 
+def _add_led_overlay(ax: Axes, model: FingertipModel) -> Rectangle:
+    """Add the fixed-size LED centered in width and flush with the stem tip."""
+    parameters = model.parameters
+    tolerance = parameters.geometry_tolerance
+    if (
+        parameters.stem_width < LED_WIDTH_MM - tolerance
+        or parameters.stem_height < LED_HEIGHT_MM - tolerance
+    ):
+        raise ValueError(
+            "The fixed 4 mm × 2 mm LED overlay does not fit inside the rigid stem."
+        )
+
+    x_min = -LED_WIDTH_MM / 2.0
+    y_min = -parameters.stem_height
+    led = Rectangle(
+        (x_min, y_min),
+        LED_WIDTH_MM,
+        LED_HEIGHT_MM,
+        facecolor=LED_COLOR,
+        edgecolor=LED_EDGE,
+        linewidth=1.2,
+        label="LED",
+        zorder=7,
+    )
+    ax.add_patch(led)
+    return led
+
+
 def save_fingertip_figure(
     model: FingertipModel,
     output_path: str | Path,
@@ -195,7 +231,7 @@ def _plot_bonded_interface_arrows(ax: Axes, model: FingertipModel) -> None:
 
 def _legend_bidirectional_arrow(
     legend: object,
-    original_handle: FancyArrowPatch,
+    orig_handle: FancyArrowPatch,
     xdescent: float,
     ydescent: float,
     width: float,
@@ -210,8 +246,8 @@ def _legend_bidirectional_arrow(
         (xdescent + width, center_y),
         arrowstyle="<->",
         mutation_scale=fontsize,
-        color=original_handle.get_edgecolor(),
-        linewidth=original_handle.get_linewidth(),
+        color=orig_handle.get_edgecolor(),
+        linewidth=orig_handle.get_linewidth(),
     )
 
 

@@ -110,7 +110,10 @@ class FigureSpec:
                 "displacement atlas color scale must be shared_symmetric "
                 "or shared_sequential"
             )
-        if self.contact_coordinate not in {"normalized_arc", "surface_x_mm"}:
+        if self.contact_coordinate not in {
+            "normalized_arc",
+            "indenter_radius_mm",
+        }:
             raise ScientificFigureError("unsupported contact coordinate")
         if set(self.export_formats) - {"png", "pdf"}:
             raise ScientificFigureError("export formats must be png/pdf")
@@ -522,7 +525,7 @@ class DisplacementVectorAtlasFigure:
         spec: FigureSpec,
         theme: FigureTheme,
     ) -> RenderedFigure:
-        if spec.contact_coordinate == "surface_x_mm":
+        if spec.contact_coordinate == "indenter_radius_mm":
             return self._build_full_field(dataset, spec, theme)
         return self._build_observation_chain(dataset, spec, theme)
 
@@ -543,15 +546,18 @@ class DisplacementVectorAtlasFigure:
         design_id = spec.designs[0]
         mesh = dataset.mesh(design_id, spec.mesh_id)
         selected: list[tuple[Any, Any]] = []
-        for surface_x_mm in spec.contact_locations:
+        for contact_location in spec.contact_locations:
             matches = [
                 case
                 for case in dataset.contact_cases
                 if case.design_id == design_id
                 and case.mesh_id == spec.mesh_id
-                and case.surface_x_mm is not None
+                and case.indenter_radius_mm is not None
                 and np.isclose(
-                    case.surface_x_mm, surface_x_mm, rtol=0.0, atol=1.0e-12
+                    case.indenter_radius_mm,
+                    contact_location,
+                    rtol=0.0,
+                    atol=1.0e-12,
                 )
                 and np.isclose(
                     case.delta_mm,
@@ -564,7 +570,7 @@ class DisplacementVectorAtlasFigure:
             if len(matches) != 1:
                 raise ScientificFigureError(
                     f"expected one converged full-field state at "
-                    f"x={surface_x_mm:g} mm"
+                    f"radius={contact_location:g} mm"
                 )
             case = matches[0]
             field = dataset.displacement_state(
@@ -666,7 +672,7 @@ class DisplacementVectorAtlasFigure:
                 else f"F={case.reaction_force_n:.4f} N"
             )
             axis.set_title(
-                f"x={case.surface_x_mm:g} mm, "
+                f"R={case.indenter_radius_mm:g} mm at x={case.surface_x_mm:g} mm, "
                 f"n_in=({case.indentation_direction[0]:+.3f}, "
                 f"{case.indentation_direction[1]:+.3f})\n"
                 f"δ={case.delta_mm:.2f} mm, {reaction_text}"
@@ -689,6 +695,7 @@ class DisplacementVectorAtlasFigure:
                         design_id,
                         spec.mesh_id,
                         case.case_id,
+                        case.indenter_radius_mm,
                         case.surface_x_mm,
                         case.xi,
                         case.delta_mm,
@@ -756,12 +763,15 @@ class DisplacementVectorAtlasFigure:
             surface_x_values_mm=tuple(
                 float(case.surface_x_mm) for case, _ in selected
             ),
+            indenter_radius_values_mm=tuple(
+                float(case.indenter_radius_mm) for case, _ in selected
+            ),
             indentation_values_mm=(spec.indentation_mm,),
             coordinate_convention=dataset.metadata["adapters"][0][
                 "coordinate_convention"
             ],
             interpolation={
-                "state_selection": "exact surface x and indentation",
+                "state_selection": "exact indenter radius and indentation",
                 "state_interpolation": False,
                 "heatmap": "linear T3 nodal interpolation",
                 "vector_subsampling": "deterministic spatial binning",
@@ -769,7 +779,7 @@ class DisplacementVectorAtlasFigure:
             validity={
                 "displacement": "converged, finite, full pad mesh-node field",
                 "field_nodes": "exact match to persisted pad mesh",
-                "contact_direction": "local inward normal at each surface x",
+                "contact_direction": "central inward normal at fixed surface x=0",
             },
             scale_policy=scale_policy,
             color_limits=color_limits,
@@ -800,6 +810,7 @@ class DisplacementVectorAtlasFigure:
                         "design_id",
                         "mesh_id",
                         "case_id",
+                        "indenter_radius_mm",
                         "surface_x_mm",
                         "xi",
                         "delta_mm",
@@ -1073,6 +1084,25 @@ class DisplacementVectorAtlasFigure:
         )
 
 
+def _build_figure(
+    dataset: VisualizationDataset,
+    spec: FigureSpec,
+) -> RenderedFigure:
+    theme = FigureTheme.preset(spec.theme)
+    theme.apply()
+    if spec.kind == "transfer_map_comparison":
+        return TransferMapComparisonFigure().build(dataset, spec, theme)
+    if spec.kind == "displacement_vector_atlas":
+        return DisplacementVectorAtlasFigure().build(dataset, spec, theme)
+    raise ScientificFigureError(f"unsupported builder {spec.kind}")
+
+
+def show_figure(dataset: VisualizationDataset, spec: FigureSpec) -> None:
+    """Build one figure and show it without writing figure artifacts."""
+    _build_figure(dataset, spec)
+    plt.show()
+
+
 def render_figure(
     dataset: VisualizationDataset,
     spec: FigureSpec,
@@ -1080,14 +1110,7 @@ def render_figure(
     output_directory: str | Path | None = None,
 ) -> dict[str, Any]:
     """Render and export one figure through the public framework API."""
-    theme = FigureTheme.preset(spec.theme)
-    theme.apply()
-    if spec.kind == "transfer_map_comparison":
-        rendered = TransferMapComparisonFigure().build(dataset, spec, theme)
-    elif spec.kind == "displacement_vector_atlas":
-        rendered = DisplacementVectorAtlasFigure().build(dataset, spec, theme)
-    else:
-        raise ScientificFigureError(f"unsupported builder {spec.kind}")
+    rendered = _build_figure(dataset, spec)
     target = (
         Path(output_directory)
         if output_directory is not None

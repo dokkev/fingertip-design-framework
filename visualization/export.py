@@ -71,6 +71,7 @@ class RenderedFigure:
     source_tables: tuple[SourceTable, ...]
     notes: tuple[str, ...] = ()
     surface_x_values_mm: tuple[float, ...] = ()
+    indenter_radius_values_mm: tuple[float, ...] = ()
 class FigureExporter:
     """Write PNG/PDF, deterministic source CSVs, and one strict manifest."""
 
@@ -156,6 +157,9 @@ class FigureExporter:
             "cases": list(rendered.cases),
             "xi_values": list(rendered.xi_values),
             "surface_x_values_mm": list(rendered.surface_x_values_mm),
+            "indenter_radius_values_mm": list(
+                rendered.indenter_radius_values_mm
+            ),
             "indentation_values_mm": list(rendered.indentation_values_mm),
             "represented_variable": rendered.represented_variable,
             "normalization": rendered.normalization,

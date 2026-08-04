@@ -298,8 +298,9 @@ the same environment. PDF timestamps are suppressed.
 
 - Phase 4K transfer artifacts still contain sidewall displacement only. The
   transfer-map figures therefore do not infer internal fields.
-- The local-normal reference atlas is fixed to the three requested surface x
-  positions and the medium mesh; it is not a general load-sweep study.
+- The local-normal reference atlas fixes contact at surface `x=0 mm` and
+  compares `2`, `4`, and `6 mm` indenter radii on the medium mesh; it is not a
+  general load-sweep study.
 - No real optimized design is currently available, so comparison mode is
   implemented but the reference output is single-design.
 - Metrics are descriptive mechanical quantities. Optical observability and

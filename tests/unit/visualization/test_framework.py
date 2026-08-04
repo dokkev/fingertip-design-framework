@@ -83,6 +83,14 @@ def test_json_compatible_yaml_spec_parses() -> None:
     assert spec.contact_locations == (0.2, 0.35, 0.5, 0.65, 0.8)
 
 
+def test_displacement_atlas_sweeps_indenter_radius() -> None:
+    spec = load_figure_spec(
+        REPOSITORY_ROOT / "examples/displacement_vector_atlas.yaml"
+    )
+    assert spec.contact_coordinate == "indenter_radius_mm"
+    assert spec.contact_locations == (2.0, 4.0, 6.0)
+
+
 def test_signed_figure_spec_rejects_nonzero_center() -> None:
     raw = json.loads(
         (REPOSITORY_ROOT / "examples/transfer_map_comparison.yaml").read_text()

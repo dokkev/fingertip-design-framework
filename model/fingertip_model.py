@@ -409,6 +409,7 @@ class FingertipModel:
         ):
             raise InvalidFingertipGeometry(
                 "the internal cutout exits the completed outer pad envelope: "
+                f"cutout_half_width={self._parameters.cutout_half_width:g}, "
                 f"cutout_bottom_y={self._parameters.void_bottom_y:g}, "
                 f"ellipse_start_y={self._parameters.ellipse_start_y:g}, "
                 f"pad_tip_y={self._parameters.pad_tip_y:g}"

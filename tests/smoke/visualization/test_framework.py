@@ -25,7 +25,14 @@ from visualization.framework import (
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 PHASE4K_INPUT = REPOSITORY_ROOT / "output" / "phase4_mechanical_transfer_map"
-NORMAL_INPUT = REPOSITORY_ROOT / "output" / "normal_indentation_full_field"
+NORMAL_INPUT = (
+    REPOSITORY_ROOT
+    / "output"
+    / "validation"
+    / "fingertip"
+    / "indentation"
+    / "normal_full_field"
+)
 
 
 def test_visualization_import_does_not_load_kratos() -> None:

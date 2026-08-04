@@ -8,8 +8,6 @@ The script can be run from any working directory:
 
 from __future__ import annotations
 
-import argparse
-
 import matplotlib.pyplot as plt
 
 if __package__:
@@ -24,30 +22,20 @@ from model.fingertip_parameters import FingertipParameters
 from visualization.geometry import plot_fingertip
 
 
-def parse_arguments() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Render one parametric LIT Hand fingertip cross-section."
-    )
-    parser.add_argument(
-        "--void-width",
-        type=float,
-        default=0.0,
-        help="Clearance on each side of the stem in mm.",
-    )
-    parser.add_argument(
-        "--void-height",
-        type=float,
-        default=0.0,
-        help="Clearance below the stem in mm.",
-    )
-    return parser.parse_args()
-
-
 def main() -> int:
-    arguments = parse_arguments()
     parameters = FingertipParameters(
-        void_width=arguments.void_width,
-        void_height=arguments.void_height,
+        vertical_pad_width=20.0,
+        vertical_pad_height=3.0,
+        semielliptical_pad_width=20.0,
+        semielliptical_pad_height=7.0,
+        link_thickness=3.5,
+        stem_width=7.6,
+        stem_height=6.0,
+        void_width=0.0,
+        void_height=0.0,
+        bonded=True,
+        arc_resolution=128,
+        geometry_tolerance=1e-9,
     )
     model = FingertipModel(parameters)
 
@@ -58,11 +46,7 @@ def main() -> int:
         show_void=True,
         show_interface=True,
         show_contact_boundaries=True,
-        title=(
-            "Parametric fingertip"
-            f"  ($w_v={parameters.void_width:g}$ mm,"
-            f" $h_v={parameters.void_height:g}$ mm)"
-        ),
+ 
     )
 
     plt.show()

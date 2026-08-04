@@ -9,18 +9,18 @@
   ],
   "figure": {
     "kind": "displacement_vector_atlas",
-    "title": "Local-normal indentation: full FEM displacement field",
+    "title": "Centered indentation radius sweep: full FEM displacement field",
     "basename": "displacement_vector_atlas",
     "designs": [
       "baseline"
     ],
     "mesh": "medium",
     "quantity": "displacement_magnitude_and_vector",
-    "contact_coordinate": "surface_x_mm",
+    "contact_coordinate": "indenter_radius_mm",
     "contact_locations": [
-      -5.0,
-      0.0,
-      5.0
+      2.0,
+      4.0,
+      6.0
     ],
     "indentation_mm": 1.5,
     "interpolation": {
