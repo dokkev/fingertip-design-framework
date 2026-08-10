@@ -50,6 +50,46 @@ Camera formation is an optional validation path behind
 `optics.mitsuba.MitsubaRenderer`; transport density is not labeled as camera
 brightness or physical irradiance.
 
+## Examples
+
+The examples follow the framework from design to mechanics to sensing:
+
+1. `view_fingertip.py` defines a `Fingertip` and plots its geometry.
+2. `view_fea.py` meshes one design, solves three circular contact cases, and
+   compares their displacement fields.
+3. `view_light.py` carries one deformation through `trace()` and compares the
+   reference and loaded transport with `evaluate()`.
+
+The public flow used by the latter two examples is:
+
+```python
+from fem import IndenterSettings, solve
+from model import Fingertip, FingertipParameters
+from optics import evaluate, trace
+
+tip = Fingertip(FingertipParameters())
+mesh = tip.mesh()
+fea = solve(
+    tip,
+    mesh,
+    indentation=1.5,
+    indenter=IndenterSettings(radius_mm=4.0),
+)
+reference = trace(tip, mesh)
+loaded = trace(tip, fea.deformed_mesh)
+metrics = evaluate(reference, loaded)
+```
+
+Run them directly from the repository root with the project environment:
+
+```bash
+python examples/view_fingertip.py
+python examples/view_fea.py
+python examples/view_light.py
+```
+
+`camera_render.py` remains an optional Mitsuba camera-validation example.
+
 ## Environment
 
 Python 3.11 or newer is required. Optional dependency groups are declared in

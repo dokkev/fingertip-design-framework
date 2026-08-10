@@ -56,8 +56,8 @@ It does not replace mesh-based reference/loaded comparisons.
   compliant-pad topology used across subsystem boundaries.
 - `fem/` owns Kratos assembly, constitutive models, contact, constraints,
   nonlinear solves, and extraction of `FEAResult`. Its public surface is
-  `solve()` and `FEAResult`; Kratos objects do not cross into optics or
-  visualization.
+  `solve()`, `FEAResult`, and the solver-facing `IndenterSettings` fixture;
+  Kratos objects do not cross into optics or visualization.
 - `optics/` owns deterministic ray transport and adapters from neutral meshes
   and displacement fields. Its public transport surface is `TraceSettings`,
   `RaySegment`, `TransportResult`, `trace()`, and `evaluate()`.

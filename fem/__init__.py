@@ -5,5 +5,6 @@ this package does not require the external Kratos environment.
 """
 
 from fem.solve import FEAResult, solve
+from mesh.indenter import IndenterSettings
 
-__all__ = ["FEAResult", "solve"]
+__all__ = ["FEAResult", "IndenterSettings", "solve"]

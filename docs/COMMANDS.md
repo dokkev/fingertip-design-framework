@@ -51,24 +51,28 @@ python -m validation.figures.displacement_atlas \
   --output output/figures/displacement_vector_atlas/displacement_vector_atlas.png
 ```
 
-## End-to-end FEM example
+## Tutorial examples
 
 From the repository root, run:
 
 ```bash
-python examples/fem_visualize.py
+python examples/view_fingertip.py
+python examples/view_fea.py
+python examples/view_light.py
 ```
 
 The direct script is also launchable from any working directory:
 
 ```bash
-python /path/to/lit_ws/examples/fem_visualize.py
+python /path/to/lit_ws/examples/view_light.py
 ```
 
-The example constructs one fingertip and mesh, runs `solve()`, traces reference
-and loaded optical states, prints the camera-independent proxy metrics, and
-opens the loaded transport plot. It does not write artifacts. The solve can
-take significant time.
+`view_fingertip.py` teaches the `Fingertip` → `plot_fingertip` flow.
+`view_fea.py` compares three indentation diameters with a shared displacement
+color scale. `view_light.py` demonstrates the
+`Fingertip` → mesh → `solve()` → `trace()` → `evaluate()` flow with shared
+reference/loaded transport normalization. The solver-backed examples can take
+significant time and do not write artifacts.
 
 The resumable three-radius scientific atlas remains a validation command:
 
@@ -85,19 +89,6 @@ resolution, so module commands still require the editable installation.
 The public `visualization` package contains plotting functions only. Persisted
 scientific figures are rendered by validation-specific commands above; they
 validate their own artifact manifests and never start the solver.
-
-For a direct geometry-only visualization:
-
-```bash
-python /path/to/lit_ws/examples/fingertip_visualize.py
-```
-
-For interactive optical previews that do not write artifacts:
-
-```bash
-python /path/to/lit_ws/examples/light_transport.py
-python /path/to/lit_ws/examples/loaded_light_transport.py
-```
 
 The optional Mitsuba camera validator is demonstrated by:
 

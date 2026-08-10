@@ -497,7 +497,46 @@ def _trace_transport(
             terminated_weight += end_weight
             continue
         if not domain.outer_envelope.covers(forward_probe):
-            escaped_weight += end_weight
+            if state.medium == "air":
+                escaped_weight += end_weight
+                continue
+
+            silicone_outward_normal = _silicone_outward_normal(
+                hit_point,
+                domain,
+                prepared,
+                trace_settings,
+            )
+            reflected_direction, transmitted_direction, reflectance = (
+                _interface_directions_and_reflectance(
+                    state.direction,
+                    silicone_outward_normal,
+                    material_properties.refractive_index_silicone,
+                    material_properties.refractive_index_air,
+                )
+            )
+            reflected_weight = end_weight * reflectance
+            transmitted_weight = end_weight * (1.0 - reflectance)
+            escaped_weight += transmitted_weight
+            next_interaction = state.interaction_count + 1
+
+            if reflected_weight >= branch_weight_threshold:
+                active.append(
+                    _RayState(
+                        origin=(
+                            hit_point
+                            + trace_settings.intersection_epsilon_mm
+                            * reflected_direction
+                        ),
+                        direction=reflected_direction,
+                        weight=reflected_weight,
+                        medium="silicone",
+                        interaction_count=next_interaction,
+                        primary_ray_index=state.primary_ray_index,
+                    )
+                )
+            else:
+                terminated_weight += reflected_weight
             continue
 
         next_medium: OpticalMedium = (
