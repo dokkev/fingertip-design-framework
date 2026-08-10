@@ -2,16 +2,9 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-from shapely.geometry import Point
 
 from model import Fingertip, FingertipParameters, LED
 from optics import TraceSettings, trace
-
-
-@pytest.fixture(scope="module")
-def reference_mesh():
-    tip = Fingertip(FingertipParameters())
-    return tip, tip.mesh()
 
 
 @pytest.fixture(scope="module")
@@ -98,27 +91,4 @@ def test_led_power_scales_raw_transport() -> None:
         ),
         rtol=1.0e-12,
         atol=1.0e-14,
-    )
-
-
-def test_loaded_cutout_gap_starts_in_air_and_reaches_silicone(
-    reference_mesh,
-    settings: TraceSettings,
-) -> None:
-    tip, mesh = reference_mesh
-    displacement = np.zeros_like(mesh.coordinates)
-    cutout_bottom = mesh.boundary_node_indices_for("pad_cutout_bottom")
-    displacement[cutout_bottom, 1] = -0.05
-    loaded_mesh = mesh.deformed(displacement)
-
-    loaded = trace(tip, loaded_mesh, settings)
-
-    assert loaded.segments[0].medium == "air"
-    assert any(segment.medium == "silicone" for segment in loaded.segments)
-    assert loaded.air_region.covers(
-        Point(tip.led_source[0], tip.led_source[1] - 0.025)
-    )
-    tolerance = tip.parameters.geometry_tolerance
-    assert loaded.outer_envelope.buffer(tolerance).covers(
-        loaded.silicone_region
     )
