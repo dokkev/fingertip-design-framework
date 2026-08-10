@@ -153,7 +153,7 @@ def write_indentation_case_outputs(
     output_directory: str | Path,
 ) -> dict[str, str]:
     """Write validation artifacts without adding I/O to the FEM backend."""
-    from visualization.indentation import (
+    from validation.fingertip.indentation.figures import (
         save_deformed_mesh_plot,
         save_history_plots,
         save_outer_profile_plot,

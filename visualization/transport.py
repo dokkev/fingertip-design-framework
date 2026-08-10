@@ -8,7 +8,7 @@ from matplotlib.axes import Axes
 from matplotlib.patches import Rectangle
 
 from optics import RaySegment, TransportResult
-from visualization.geometry import (
+from visualization._plotting import (
     ALUMINUM_COLOR,
     ALUMINUM_EDGE,
     LED_COLOR,
@@ -18,7 +18,7 @@ from visualization.geometry import (
     PAD_EDGE,
     VOID_COLOR,
     VOID_EDGE,
-    _add_polygonal_patches,
+    add_polygonal_patches,
 )
 
 RAY_DISPLAY_WEIGHT_THRESHOLD = 1.0e-4
@@ -87,7 +87,7 @@ def plot_transport(
     )
 
     if not result.air_region.is_empty:
-        _add_polygonal_patches(
+        add_polygonal_patches(
             ax,
             result.air_region,
             facecolor=VOID_COLOR,
@@ -97,7 +97,7 @@ def plot_transport(
             label="Internal air",
             zorder=1,
         )
-    _add_polygonal_patches(
+    add_polygonal_patches(
         ax,
         result.silicone_region,
         facecolor=(0.0, 0.0, 0.0, 0.0),
@@ -106,7 +106,7 @@ def plot_transport(
         label="Silicone pad",
         zorder=3,
     )
-    _add_polygonal_patches(
+    add_polygonal_patches(
         ax,
         result.rigid_region,
         facecolor=ALUMINUM_COLOR,

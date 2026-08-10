@@ -13,6 +13,7 @@ matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
 
+from model import Fingertip
 from model.fingertip_model import FingertipModel
 from model.fingertip_parameters import FingertipParameters
 from visualization.geometry import plot_fingertip
@@ -85,7 +86,7 @@ def make_four_case_figure(output_directory: Path) -> Path:
     figure, axes = plt.subplots(2, 2, figsize=(11.5, 9.0), constrained_layout=True)
     for axis, (title, parameters) in zip(axes.flat, _four_cases(), strict=True):
         plot_fingertip(
-            FingertipModel(parameters),
+            Fingertip(parameters),
             ax=axis,
             show_axes=False,
             show_legend=False,
@@ -127,7 +128,7 @@ def make_parameter_grid(output_directory: Path) -> Path:
                 void_height=void_height,
             )
             plot_fingertip(
-                FingertipModel(parameters),
+                Fingertip(parameters),
                 ax=axes[row, column],
                 show_axes=False,
                 show_legend=False,

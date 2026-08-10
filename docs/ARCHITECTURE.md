@@ -64,9 +64,13 @@ It does not replace mesh-based reference/loaded comparisons.
 - `optics.mitsuba` owns the optional camera validator. Its public surface is
   `Camera`, `RenderSettings`, `RenderResult`, and `MitsubaRenderer`; extrusion,
   scene construction, and persistent renderer state are implementation details.
-- `visualization/` owns Matplotlib figures and display normalization.
-  `plot_transport(result)` needs no separate model or optical-domain argument
-  because `TransportResult` owns the geometry used to produce the field.
+- `visualization/` is a thin Matplotlib layer. It exposes only
+  `plot_fingertip`, `plot_mesh`, `plot_displacement`, `plot_transport`, and
+  `plot_camera`; these functions consume model/mesh/result objects and return
+  an `Axes`. It does not own a second scientific data model, artifact loader,
+  figure DSL, panel hierarchy, or export framework. `plot_transport(result)`
+  needs no separate model or optical-domain argument because `TransportResult`
+  owns the geometry used to produce the field.
 - `validation/` owns scientific baselines, Phase acceptance, provenance,
   checkpointing, reports, and generated artifact schemas.
 
@@ -153,6 +157,15 @@ No PLY, OBJ, or STL intermediary is created.
 The internal files remain separated because immutable camera/settings data,
 procedural scene construction, and the mutable persistent session have distinct
 owners; only `renderer.py` forms the public boundary.
+
+## Visualization and validation figures
+
+The public plotting helpers do not generate Gmsh meshes, start Kratos, or
+import Mitsuba. Full scientific figure workflows remain explicit under
+`validation/figures/` or the relevant validation package. For example,
+`validation.figures.displacement_atlas` validates persisted normal-indentation
+NPZ artifacts and calls `plot_displacement`; `validation.figures.transfer_map`
+owns the Phase 4K artifact tables and direct plots from canonical arrays.
 
 ## Artifact boundary
 

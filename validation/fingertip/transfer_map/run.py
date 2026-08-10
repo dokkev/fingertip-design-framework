@@ -47,7 +47,7 @@ from fem.observables import (
 from validation.common.io import atomic_write_json, strict_read_json
 from validation.common.provenance import git_revision
 from validation.common.runner import run_isolated
-from validation.fingertip.transfer_map.artifacts import (
+from validation.figures.transfer_map import (
     write_case_summary,
     write_long_csv,
     write_plots,

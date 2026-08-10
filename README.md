@@ -9,7 +9,7 @@ the LIT Hand fingertip.
 - `model/`: Shapely geometry, parameters, boundary and contact semantics.
 - `mesh/`: Gmsh conversion, discrete topology, quality, and indenter geometry.
 - `fem/`: Kratos settings, adapters, contact, solves, and neutral results.
-- `visualization/`: artifact adapters, transforms, panels, themes, and export.
+- `visualization/`: thin Matplotlib plotting helpers for model and neutral results.
 - `validation/`: scientific benchmarks and Phase workflows.
 - `tests/unit/`: fast deterministic contracts without solver execution.
 - `tests/smoke/`: minimal Gmsh, Kratos, and headless-renderer wiring.
@@ -85,8 +85,9 @@ $LIT_PYTHON -m validation.fingertip.transfer_map \
   --output-dir output/validation/fingertip/transfer_map \
   --reference-dir output/validation/fingertip/indentation/no_void
 
-$LIT_PYTHON -m visualization examples/displacement_vector_atlas.yaml \
-  --output-dir output/figures/displacement_vector_atlas
+$LIT_PYTHON -m validation.figures.displacement_atlas \
+  --input-dir output/validation/fingertip/indentation/normal_full_field \
+  --output output/figures/displacement_vector_atlas/displacement_vector_atlas.png
 ```
 
 The complete command index is [docs/COMMANDS.md](docs/COMMANDS.md).

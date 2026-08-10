@@ -43,11 +43,12 @@ python -m validation.fingertip.transfer_map \
 
 ## Figures
 
+Validation figure workflows read persisted artifacts and save directly:
+
 ```bash
-python -m visualization examples/transfer_map_comparison.yaml \
-  --output-dir output/figures/transfer_map_comparison
-python -m visualization examples/displacement_vector_atlas.yaml \
-  --output-dir output/figures/displacement_vector_atlas
+python -m validation.figures.displacement_atlas \
+  --input-dir output/validation/fingertip/indentation/normal_full_field \
+  --output output/figures/displacement_vector_atlas/displacement_vector_atlas.png
 ```
 
 ## End-to-end FEM example
@@ -81,14 +82,9 @@ resolution, so module commands still require the editable installation.
 
 ## Result-only visualization
 
-To render already-persisted artifacts without starting FEM:
-
-```bash
-python -m visualization examples/displacement_vector_atlas.yaml
-```
-
-The declarative visualization command preserves the artifact boundary:
-`visualization` reads the dataset manifest and never starts the solver.
+The public `visualization` package contains plotting functions only. Persisted
+scientific figures are rendered by validation-specific commands above; they
+validate their own artifact manifests and never start the solver.
 
 For a direct geometry-only visualization:
 

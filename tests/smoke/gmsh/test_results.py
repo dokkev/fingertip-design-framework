@@ -18,7 +18,7 @@ from fem.results import (
     unique_projected_reaction,
 )
 from validation.common.io import write_indentation_history
-from visualization.indentation import save_history_plots
+from validation.fingertip.indentation.figures import save_history_plots
 from mesh.types import mesh_settings_for_level
 from model.fingertip_model import FingertipModel
 from model.fingertip_parameters import FingertipParameters

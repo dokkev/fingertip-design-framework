@@ -1,37 +1,36 @@
-"""Matplotlib visualization for the parameterized LIT Hand pad."""
+"""Matplotlib visualization for the public fingertip geometry facade."""
 
 from __future__ import annotations
 
-from collections.abc import Iterable
-from pathlib import Path
+from typing import Any
 
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.axes import Axes
 from matplotlib.legend_handler import HandlerPatch
-from matplotlib.patches import FancyArrowPatch, PathPatch, Rectangle
-from matplotlib.path import Path as MatplotlibPath
-from shapely.geometry import MultiPolygon, Polygon
+from matplotlib.patches import FancyArrowPatch, Rectangle
 
 from model import Fingertip
-from model.fingertip_model import BoundarySegment, FingertipModel, PolygonalGeometry
-
-PAD_COLOR = "#C7E8D2"
-PAD_EDGE = "#4E9270"
-ALUMINUM_COLOR = "#D9DCDF"
-ALUMINUM_EDGE = "#7B8288"
-VOID_COLOR = "#F7B4AE"
-VOID_EDGE = "#C9473D"
-PAD_CONTACT_COLOR = "#D95F02"
-STEM_CONTACT_COLOR = "#6A3D9A"
-LED_COLOR = "#F6C453"
-LED_EDGE = "#9A6700"
-LIGHT_SOURCE_COLOR = "#E63946"
-LIGHT_SOURCE_EDGE = "#4A1018"
+from model.fingertip_model import BoundarySegment
+from visualization._plotting import (
+    ALUMINUM_COLOR,
+    ALUMINUM_EDGE,
+    LED_COLOR,
+    LED_EDGE,
+    LIGHT_SOURCE_COLOR,
+    LIGHT_SOURCE_EDGE,
+    PAD_COLOR,
+    PAD_CONTACT_COLOR,
+    PAD_EDGE,
+    STEM_CONTACT_COLOR,
+    VOID_COLOR,
+    VOID_EDGE,
+    add_polygonal_patches,
+)
 
 
 def plot_fingertip(
-    tip: Fingertip | FingertipModel,
+    tip: Fingertip,
     *,
     ax: Axes | None = None,
     show_void: bool = True,
@@ -44,13 +43,14 @@ def plot_fingertip(
     show_legend: bool = True,
     title: str | None = None,
 ) -> Axes:
-    """Plot the pad, rigid link/stem, LED overlay, clearance, and interface."""
-    physical = tip if isinstance(tip, Fingertip) else Fingertip(tip.parameters)
-    model = physical.geometry
+    """Plot one :class:`model.Fingertip` and its display-only overlays."""
+    if not isinstance(tip, Fingertip):
+        raise TypeError("tip must be a Fingertip")
+    model = tip.geometry
     if ax is None:
         _, ax = plt.subplots(figsize=(6.0, 5.0))
 
-    _add_polygonal_patches(
+    add_polygonal_patches(
         ax,
         model.pad_material_geometry,
         facecolor=PAD_COLOR,
@@ -59,7 +59,7 @@ def plot_fingertip(
         label="Silicone pad",
         zorder=1,
     )
-    _add_polygonal_patches(
+    add_polygonal_patches(
         ax,
         model.link_plate_geometry,
         facecolor=ALUMINUM_COLOR,
@@ -68,7 +68,7 @@ def plot_fingertip(
         label="Rigid link / stem",
         zorder=5,
     )
-    _add_polygonal_patches(
+    add_polygonal_patches(
         ax,
         model.stem_geometry,
         facecolor=ALUMINUM_COLOR,
@@ -79,13 +79,11 @@ def plot_fingertip(
     )
 
     if show_led:
-        _add_led_overlay(ax, physical)
-
+        _add_led_overlay(ax, tip)
     if show_light_source:
-        _add_light_source_overlay(ax, physical)
-
+        _add_light_source_overlay(ax, tip)
     if show_void and model.void_geometry is not None:
-        _add_polygonal_patches(
+        add_polygonal_patches(
             ax,
             model.void_geometry,
             facecolor=VOID_COLOR,
@@ -96,24 +94,16 @@ def plot_fingertip(
             label="Void",
             zorder=3,
         )
-
     if show_interface:
         _plot_bonded_interface_arrows(ax, model)
-
     if show_contact_boundaries:
-        pad_contact_boundaries = (
-            model.boundaries.pad_cutout_left,
-            model.boundaries.pad_cutout_right,
-            model.boundaries.pad_cutout_bottom,
-        )
-        stem_contact_boundaries = (
-            model.boundaries.stem_left,
-            model.boundaries.stem_right,
-            model.boundaries.stem_bottom,
-        )
         _plot_boundary_segments(
             ax,
-            pad_contact_boundaries,
+            (
+                model.boundaries.pad_cutout_left,
+                model.boundaries.pad_cutout_right,
+                model.boundaries.pad_cutout_bottom,
+            ),
             color=PAD_CONTACT_COLOR,
             linestyle="--",
             linewidth=3.0,
@@ -122,14 +112,17 @@ def plot_fingertip(
         )
         _plot_boundary_segments(
             ax,
-            stem_contact_boundaries,
+            (
+                model.boundaries.stem_left,
+                model.boundaries.stem_right,
+                model.boundaries.stem_bottom,
+            ),
             color=STEM_CONTACT_COLOR,
             linestyle=":",
             linewidth=1.8,
             label="Stem contact boundary",
             zorder=10,
         )
-
     if show_symmetry_axis:
         symmetry_x, symmetry_y = model.symmetry_axis.xy
         ax.plot(
@@ -164,16 +157,12 @@ def plot_fingertip(
     return ax
 
 
-def _add_led_overlay(
-    ax: Axes,
-    tip: Fingertip,
-) -> Rectangle:
-    """Draw the fingertip-owned LED package with visualization-only styling."""
+def _add_led_overlay(ax: Axes, tip: Fingertip) -> Rectangle:
     x_min, y_min, x_max, y_max = tip.led_package_geometry.bounds
     led = Rectangle(
         (x_min, y_min),
-        x_max - x_min,
-        y_max - y_min,
+        tip.led.width_mm,
+        tip.led.height_mm,
         facecolor=LED_COLOR,
         edgecolor=LED_EDGE,
         linewidth=1.2,
@@ -184,11 +173,7 @@ def _add_led_overlay(
     return led
 
 
-def _add_light_source_overlay(
-    ax: Axes,
-    tip: Fingertip,
-) -> None:
-    """Mark the ideal optical source at the LED's lower emitting edge."""
+def _add_light_source_overlay(ax: Axes, tip: Fingertip) -> None:
     x, y = tip.led_source
     ax.scatter(
         [x],
@@ -202,26 +187,7 @@ def _add_light_source_overlay(
     )
 
 
-def save_fingertip_figure(
-    tip: Fingertip | FingertipModel,
-    output_path: str | Path,
-    *,
-    dpi: int = 200,
-    **plot_kwargs: object,
-) -> Path:
-    """Plot a model, save it to ``output_path``, and return the resolved path."""
-    path = Path(output_path).expanduser().resolve()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    figure, axis = plt.subplots(figsize=(6.0, 5.0))
-    plot_fingertip(tip, ax=axis, **plot_kwargs)
-    figure.tight_layout()
-    figure.savefig(path, dpi=dpi, bbox_inches="tight", facecolor="white")
-    plt.close(figure)
-    return path
-
-
-def _plot_bonded_interface_arrows(ax: Axes, model: FingertipModel) -> None:
-    """Mark bonded spans with closely spaced red bidirectional arrows."""
+def _plot_bonded_interface_arrows(ax: Axes, model: Any) -> None:
     is_first_arrow = True
     for segment in model.pad_link_interface.geoms:
         arrow_count = max(1, int(round(segment.length / 1.8)))
@@ -232,17 +198,18 @@ def _plot_bonded_interface_arrows(ax: Axes, model: FingertipModel) -> None:
         )
         for distance in arrow_distances:
             center = segment.interpolate(float(distance))
-            arrow = FancyArrowPatch(
-                (center.x, center.y + 1.0),
-                (center.x, center.y - 1.0),
-                arrowstyle="<->",
-                mutation_scale=12.0,
-                color="#C9473D",
-                linewidth=1.5,
-                label="Bonded interface" if is_first_arrow else "_nolegend_",
-                zorder=8,
+            ax.add_patch(
+                FancyArrowPatch(
+                    (center.x, center.y + 1.0),
+                    (center.x, center.y - 1.0),
+                    arrowstyle="<->",
+                    mutation_scale=12.0,
+                    color="#C9473D",
+                    linewidth=1.5,
+                    label="Bonded interface" if is_first_arrow else "_nolegend_",
+                    zorder=8,
+                )
             )
-            ax.add_patch(arrow)
             is_first_arrow = False
 
 
@@ -255,7 +222,6 @@ def _legend_bidirectional_arrow(
     height: float,
     fontsize: float,
 ) -> FancyArrowPatch:
-    """Draw a bidirectional arrow instead of the default legend rectangle."""
     del legend
     center_y = ydescent + height / 2.0
     return FancyArrowPatch(
@@ -266,33 +232,6 @@ def _legend_bidirectional_arrow(
         color=orig_handle.get_edgecolor(),
         linewidth=orig_handle.get_linewidth(),
     )
-
-
-def _add_polygonal_patches(
-    ax: Axes,
-    geometry: PolygonalGeometry,
-    *,
-    facecolor: str,
-    edgecolor: str,
-    linewidth: float,
-    label: str,
-    zorder: int,
-    linestyle: str = "-",
-    hatch: str | None = None,
-) -> None:
-    for index, polygon in enumerate(_iter_polygons(geometry)):
-        ax.add_patch(
-            PathPatch(
-                _polygon_to_path(polygon),
-                facecolor=facecolor,
-                edgecolor=edgecolor,
-                linewidth=linewidth,
-                linestyle=linestyle,
-                hatch=hatch,
-                label=label if index == 0 else None,
-                zorder=zorder,
-            )
-        )
 
 
 def _plot_boundary_segments(
@@ -318,29 +257,7 @@ def _plot_boundary_segments(
         )
 
 
-def _iter_polygons(geometry: PolygonalGeometry) -> Iterable[Polygon]:
-    if isinstance(geometry, Polygon):
-        return (geometry,)
-    if isinstance(geometry, MultiPolygon):
-        return geometry.geoms
-    return ()
-
-
-def _polygon_to_path(polygon: Polygon) -> MatplotlibPath:
-    vertices: list[tuple[float, float]] = []
-    codes: list[int] = []
-    for ring in (polygon.exterior, *polygon.interiors):
-        ring_vertices = [(float(x), float(y)) for x, y in ring.coords]
-        vertices.extend(ring_vertices)
-        codes.extend(
-            [MatplotlibPath.MOVETO]
-            + [MatplotlibPath.LINETO] * (len(ring_vertices) - 2)
-            + [MatplotlibPath.CLOSEPOLY]
-        )
-    return MatplotlibPath(np.asarray(vertices, dtype=float), codes)
-
-
-def _set_padded_limits(ax: Axes, model: FingertipModel) -> None:
+def _set_padded_limits(ax: Axes, model: Any) -> None:
     min_x, min_y, max_x, max_y = model.raw_material_geometry.bounds
     width = max_x - min_x
     height = max_y - min_y
@@ -348,3 +265,6 @@ def _set_padded_limits(ax: Axes, model: FingertipModel) -> None:
     padding = 0.08 * base_span
     ax.set_xlim(min_x - padding, max_x + padding)
     ax.set_ylim(min_y - padding, max_y + padding)
+
+
+__all__ = ["plot_fingertip"]

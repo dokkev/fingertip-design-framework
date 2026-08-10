@@ -1,9 +1,10 @@
-"""Indentation history, profile, and deformed-mesh plotting."""
+"""Validation-specific indentation history and deformed-state figures."""
 
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, Mapping
+
 
 def save_history_plots(
     result: Mapping[str, Any],
@@ -24,7 +25,11 @@ def save_history_plots(
         marker="o",
         markersize=2.5,
     )
-    axis.set(xlabel="Indentation [mm]", ylabel="Normal reaction [N]", title="Reaction–indentation")
+    axis.set(
+        xlabel="Indentation [mm]",
+        ylabel="Normal reaction [N]",
+        title="Reaction–indentation",
+    )
     axis.grid(alpha=0.25)
     figure.tight_layout()
     figure.savefig(plots_directory / "reaction_curve.png", dpi=180)
@@ -41,7 +46,11 @@ def save_history_plots(
         [point["external_contact_width"]["arc_length_mm"] for point in history],
         label="Arc length",
     )
-    axis.set(xlabel="Indentation [mm]", ylabel="Contact extent [mm]", title="External contact width")
+    axis.set(
+        xlabel="Indentation [mm]",
+        ylabel="Contact extent [mm]",
+        title="External contact width",
+    )
     axis.grid(alpha=0.25)
     axis.legend()
     figure.tight_layout()
@@ -59,10 +68,17 @@ def save_history_plots(
             continue
         axis.plot(
             indentation,
-            [point["contact_groups"][group_name]["active_condition_count"] for point in history],
+            [
+                point["contact_groups"][group_name]["active_condition_count"]
+                for point in history
+            ],
             label=group_name,
         )
-    axis.set(xlabel="Indentation [mm]", ylabel="ACTIVE generated conditions", title="Contact groups")
+    axis.set(
+        xlabel="Indentation [mm]",
+        ylabel="ACTIVE generated conditions",
+        title="Contact groups",
+    )
     axis.grid(alpha=0.25)
     axis.legend(fontsize=8)
     figure.tight_layout()
@@ -73,7 +89,12 @@ def save_history_plots(
     second_axis = first_axis.twinx()
     first_axis.plot(
         indentation,
-        [point["pad_strain_det_f"]["maximum_principal_green_lagrange_strain"]["value"] for point in history],
+        [
+            point["pad_strain_det_f"][
+                "maximum_principal_green_lagrange_strain"
+            ]["value"]
+            for point in history
+        ],
         color="#B2182B",
         label="Maximum principal strain",
     )
@@ -83,7 +104,11 @@ def save_history_plots(
         color="#2166AC",
         label="Minimum det(F)",
     )
-    first_axis.set(xlabel="Indentation [mm]", ylabel="Green–Lagrange strain", title="Pad strain and det(F)")
+    first_axis.set(
+        xlabel="Indentation [mm]",
+        ylabel="Green–Lagrange strain",
+        title="Pad strain and det(F)",
+    )
     second_axis.set_ylabel("Minimum det(F)")
     first_axis.grid(alpha=0.25)
     figure.tight_layout()
@@ -91,7 +116,10 @@ def save_history_plots(
     plt.close(figure)
 
 
-def save_outer_profile_plot(snapshots: Mapping[str, Mapping[str, Any]], path: Path) -> None:
+def save_outer_profile_plot(
+    snapshots: Mapping[str, Mapping[str, Any]],
+    path: Path,
+) -> None:
     import matplotlib.pyplot as plt
 
     if not snapshots:
@@ -129,7 +157,7 @@ def save_deformed_mesh_plot(
     path: Path,
 ) -> None:
     import matplotlib.pyplot as plt
-    from matplotlib.collections import LineCollection, PolyCollection
+    from matplotlib.collections import PolyCollection
 
     mesh = artifacts.mesh
     displacements = snapshot["displacements"]
@@ -150,10 +178,22 @@ def save_deformed_mesh_plot(
         for element in mesh.pad_elements
     ]
     axis.add_collection(
-        PolyCollection(undeformed_pad, facecolors="none", edgecolors="#9E9E9E", linewidths=0.08, alpha=0.35)
+        PolyCollection(
+            undeformed_pad,
+            facecolors="none",
+            edgecolors="#9E9E9E",
+            linewidths=0.08,
+            alpha=0.35,
+        )
     )
     axis.add_collection(
-        PolyCollection(deformed_pad, facecolors="#9ED7E5", edgecolors="#3B7C8C", linewidths=0.08, alpha=0.62)
+        PolyCollection(
+            deformed_pad,
+            facecolors="#9ED7E5",
+            edgecolors="#3B7C8C",
+            linewidths=0.08,
+            alpha=0.62,
+        )
     )
 
     carrier = [
@@ -167,22 +207,36 @@ def save_deformed_mesh_plot(
         for element in mesh.carrier_elements
     ]
     axis.add_collection(
-        PolyCollection(carrier, facecolors="#747B84", edgecolors="#444A50", linewidths=0.08, alpha=0.8)
+        PolyCollection(
+            carrier,
+            facecolors="#747B84",
+            edgecolors="#444A50",
+            linewidths=0.08,
+            alpha=0.8,
+        )
     )
 
     node_map = artifacts.indenter_topology.local_to_global_node_id
     indenter = [
         [
             (
-                artifacts.indenter_mesh.nodes[local_id].x_mm + displacements[node_map[local_id]][0],
-                artifacts.indenter_mesh.nodes[local_id].y_mm + displacements[node_map[local_id]][1],
+                artifacts.indenter_mesh.nodes[local_id].x_mm
+                + displacements[node_map[local_id]][0],
+                artifacts.indenter_mesh.nodes[local_id].y_mm
+                + displacements[node_map[local_id]][1],
             )
             for local_id in element.node_ids
         ]
         for element in artifacts.indenter_mesh.elements
     ]
     axis.add_collection(
-        PolyCollection(indenter, facecolors="#D0D0D0", edgecolors="#555555", linewidths=0.1, alpha=0.9)
+        PolyCollection(
+            indenter,
+            facecolors="#D0D0D0",
+            edgecolors="#555555",
+            linewidths=0.1,
+            alpha=0.9,
+        )
     )
 
     active_external = snapshot["active_external_node_ids"]
@@ -211,10 +265,26 @@ def save_deformed_mesh_plot(
                 zorder=8,
             )
     statistics = snapshot["pad_strain_det_f"]
-    strain_point = statistics["maximum_principal_green_lagrange_strain"]["reference_coordinate_mm"]
+    strain_point = statistics["maximum_principal_green_lagrange_strain"][
+        "reference_coordinate_mm"
+    ]
     det_point = statistics["det_f"]["minimum_reference_coordinate_mm"]
-    axis.scatter(*strain_point, marker="*", s=90, color="#B2182B", label="Maximum strain location", zorder=9)
-    axis.scatter(*det_point, marker="X", s=55, color="#2166AC", label="Minimum det(F) location", zorder=9)
+    axis.scatter(
+        *strain_point,
+        marker="*",
+        s=90,
+        color="#B2182B",
+        label="Maximum strain location",
+        zorder=9,
+    )
+    axis.scatter(
+        *det_point,
+        marker="X",
+        s=55,
+        color="#2166AC",
+        label="Minimum det(F) location",
+        zorder=9,
+    )
 
     all_points = [point for polygon in (*deformed_pad, *carrier, *indenter) for point in polygon]
     x_values = [point[0] for point in all_points]
@@ -223,10 +293,19 @@ def save_deformed_mesh_plot(
     axis.set_xlim(min(x_values) - padding, max(x_values) + padding)
     axis.set_ylim(min(y_values) - padding, max(y_values) + padding)
     axis.set_aspect("equal", adjustable="box")
-    axis.set(xlabel="x [mm]", ylabel="y [mm]", title=f"Phase 4I at {snapshot['depth_mm']:g} mm — displacement scale 1×")
-    axis.legend(loc="upper center", bbox_to_anchor=(0.5, -0.08), ncol=2, fontsize=7, frameon=False)
+    axis.set(
+        xlabel="x [mm]",
+        ylabel="y [mm]",
+        title=f"Phase 4I at {snapshot['depth_mm']:g} mm — displacement scale 1×",
+    )
+    axis.legend(
+        loc="upper center",
+        bbox_to_anchor=(0.5, -0.08),
+        ncol=2,
+        fontsize=7,
+        frameon=False,
+    )
     figure.tight_layout()
     path.parent.mkdir(parents=True, exist_ok=True)
     figure.savefig(path, dpi=180, bbox_inches="tight")
     plt.close(figure)
-
