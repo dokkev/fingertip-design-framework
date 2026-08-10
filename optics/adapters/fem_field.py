@@ -8,8 +8,6 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 
 from mesh import FingertipMesh, InvalidPadMesh, PadMesh
-from model import Fingertip
-from optics.adapters.semantic_boundaries import tag_reference_pad_boundaries
 
 
 class OpticalFieldAdapterError(ValueError):
@@ -33,9 +31,12 @@ def build_pad_mesh_from_arrays(
     displacement_mm: np.ndarray,
     boundary_edge_node_ids_by_tag: Mapping[str, np.ndarray] | None = None,
     metadata: Mapping[str, Any] | None = None,
-    tip: Fingertip | None = None,
 ) -> Any:
     """Build one loaded pad mesh from an external array boundary."""
+    if not boundary_edge_node_ids_by_tag:
+        raise OpticalFieldAdapterError(
+            "external optical pad arrays must include semantic boundary edges"
+        )
     try:
         mesh = PadMesh.from_arrays(
             node_ids=node_ids,
@@ -43,8 +44,6 @@ def build_pad_mesh_from_arrays(
             element_connectivity_node_ids=element_connectivity_node_ids,
             boundary_edge_node_ids_by_tag=boundary_edge_node_ids_by_tag,
         )
-        if not mesh.boundaries and tip is not None:
-            mesh = tag_reference_pad_boundaries(tip, mesh)
         return mesh.deformed(displacement_mm, metadata=metadata)
     except (InvalidPadMesh, ValueError) as exc:
         raise OpticalFieldAdapterError(f"invalid optical pad mesh: {exc}") from exc
@@ -54,7 +53,6 @@ def load_pad_mesh_npz(
     path: str | Path,
     *,
     metadata: Mapping[str, Any] | None = None,
-    tip: Fingertip | None = None,
 ) -> Any:
     """Load a deformed pad mesh, preserving stored semantic boundaries."""
     source = Path(path).expanduser()
@@ -87,7 +85,6 @@ def load_pad_mesh_npz(
     return build_pad_mesh_from_arrays(
         boundary_edge_node_ids_by_tag=boundaries or None,
         metadata=metadata,
-        tip=tip,
         **arrays,
     )
 

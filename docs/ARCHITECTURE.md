@@ -157,10 +157,9 @@ owners; only `renderer.py` forms the public boundary.
 ## Artifact boundary
 
 New full-field NPZ artifacts store semantic edge groups under
-`boundary_edge_node_ids__<tag>`. The loader preserves those groups directly.
-The analytic boundary classifier is isolated as a fallback for legacy NPZ
-artifacts that omitted semantic tags; it is not a second source of physical
-boundary semantics.
+`boundary_edge_node_ids__<tag>`. The loader preserves those groups directly;
+missing semantic tags are rejected by the external optical adapter rather
+than reconstructed from a legacy classifier.
 
 ## Failure and artifact policy
 

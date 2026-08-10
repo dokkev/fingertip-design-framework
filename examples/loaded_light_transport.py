@@ -22,7 +22,7 @@ def main() -> int:
     mesh = tip.mesh()
     displacement = np.zeros_like(mesh.coordinates)
     cutout_bottom = mesh.boundary_node_indices_for("pad_cutout_bottom")
-    displacement[cutout_bottom, 1] = -0.25
+    displacement[cutout_bottom, 1] = -0.05
 
     loaded = trace(
         tip,
