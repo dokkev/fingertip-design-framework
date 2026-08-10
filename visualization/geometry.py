@@ -14,6 +14,7 @@ from matplotlib.path import Path as MatplotlibPath
 from shapely.geometry import MultiPolygon, Polygon
 
 from model.fingertip_model import BoundarySegment, FingertipModel, PolygonalGeometry
+from model.fingertip_sensor_model import FingertipSensorModel
 
 PAD_COLOR = "#C7E8D2"
 PAD_EDGE = "#4E9270"
@@ -23,18 +24,20 @@ VOID_COLOR = "#F7B4AE"
 VOID_EDGE = "#C9473D"
 PAD_CONTACT_COLOR = "#D95F02"
 STEM_CONTACT_COLOR = "#6A3D9A"
-LED_WIDTH_MM = 4.0
-LED_HEIGHT_MM = 2.0
 LED_COLOR = "#F6C453"
 LED_EDGE = "#9A6700"
+LIGHT_SOURCE_COLOR = "#E63946"
+LIGHT_SOURCE_EDGE = "#4A1018"
 
 
 def plot_fingertip(
     model: FingertipModel,
     *,
+    sensor_model: FingertipSensorModel | None = None,
     ax: Axes | None = None,
     show_void: bool = True,
     show_led: bool = True,
+    show_light_source: bool = True,
     show_interface: bool = True,
     show_contact_boundaries: bool = True,
     show_symmetry_axis: bool = False,
@@ -43,6 +46,9 @@ def plot_fingertip(
     title: str | None = None,
 ) -> Axes:
     """Plot the pad, rigid link/stem, LED overlay, clearance, and interface."""
+    sensor = sensor_model or FingertipSensorModel.from_geometry(model)
+    if sensor.geometry is not model:
+        raise ValueError("sensor_model.geometry must be the plotted model")
     if ax is None:
         _, ax = plt.subplots(figsize=(6.0, 5.0))
 
@@ -75,7 +81,10 @@ def plot_fingertip(
     )
 
     if show_led:
-        _add_led_overlay(ax, model)
+        _add_led_overlay(ax, sensor)
+
+    if show_light_source:
+        _add_light_source_overlay(ax, sensor)
 
     if show_void and model.void_geometry is not None:
         _add_polygonal_patches(
@@ -157,24 +166,16 @@ def plot_fingertip(
     return ax
 
 
-def _add_led_overlay(ax: Axes, model: FingertipModel) -> Rectangle:
-    """Add the fixed-size LED centered in width and flush with the stem tip."""
-    parameters = model.parameters
-    tolerance = parameters.geometry_tolerance
-    if (
-        parameters.stem_width < LED_WIDTH_MM - tolerance
-        or parameters.stem_height < LED_HEIGHT_MM - tolerance
-    ):
-        raise ValueError(
-            "The fixed 4 mm × 2 mm LED overlay does not fit inside the rigid stem."
-        )
-
-    x_min = -LED_WIDTH_MM / 2.0
-    y_min = -parameters.stem_height
+def _add_led_overlay(
+    ax: Axes,
+    sensor_model: FingertipSensorModel,
+) -> Rectangle:
+    """Draw the sensor-owned LED package with visualization-only styling."""
+    x_min, y_min, x_max, y_max = sensor_model.led_package_geometry.bounds
     led = Rectangle(
         (x_min, y_min),
-        LED_WIDTH_MM,
-        LED_HEIGHT_MM,
+        x_max - x_min,
+        y_max - y_min,
         facecolor=LED_COLOR,
         edgecolor=LED_EDGE,
         linewidth=1.2,
@@ -183,6 +184,24 @@ def _add_led_overlay(ax: Axes, model: FingertipModel) -> Rectangle:
     )
     ax.add_patch(led)
     return led
+
+
+def _add_light_source_overlay(
+    ax: Axes,
+    sensor_model: FingertipSensorModel,
+) -> None:
+    """Mark the ideal optical source at the LED's lower emitting edge."""
+    x, y = sensor_model.led_source_position_2d
+    ax.scatter(
+        [x],
+        [y],
+        s=42.0,
+        color=LIGHT_SOURCE_COLOR,
+        edgecolors=LIGHT_SOURCE_EDGE,
+        linewidths=0.8,
+        label="Light source",
+        zorder=8,
+    )
 
 
 def save_fingertip_figure(

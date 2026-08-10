@@ -16,10 +16,11 @@ dependencies = [
 mesh = ["gmsh>=4.12"]
 visualization = ["matplotlib>=3.8"]
 validation = ["scipy>=1.11"]
+optics = ["mitsuba>=3.8"]
 test = ["pytest>=8"]
 
 [tool.setuptools.packages.find]
-include = ["model*", "mesh*", "fem*", "visualization*", "validation*"]
+include = ["model*", "mesh*", "fem*", "visualization*", "validation*", "optics*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests/unit", "tests/smoke"]
