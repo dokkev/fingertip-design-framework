@@ -3,141 +3,169 @@
 ## Dependency direction
 
 ```text
-model -> mesh -> fem -> neutral result/artifact data
-  \        \       \              \
-   \        \       +-------------> validation
-    \        +---------------------> validation
-     +------------------------------> visualization / validation
-
-model -> optics adapters/geometry -> neutral optical result -> visualization
-                    \-> optional Mitsuba session -> camera result -> visualization
-
-visualization -> model + mesh + neutral artifacts
-validation    -> model + mesh + fem + visualization
-tests         -> the package under test
+model -> mesh -> fem -> neutral FEA results
+   \       \                     \
+    \       +-------> optics ----> validation
+     +---------------> optics ----> visualization
 ```
 
-Dependencies only flow to the right/down. Production packages never import
-`validation` or `tests`. `visualization` has no Kratos import-time dependency.
+Dependencies flow to the right. Production packages never import `validation`
+or `tests`; `model`, `mesh`, and `fem` never import Matplotlib. Kratos and
+Mitsuba remain optional environment dependencies and do not leak through
+neutral result objects.
+
+## Public workflow
+
+The framework assumes a two-dimensional fingertip cross-section. Dimension
+suffixes are therefore not part of the main API. Physical data is arranged
+vertically, while subsystem boundaries use a small set of verbs:
+
+```text
+Fingertip -> mesh -> deformed mesh
+                 \
+                  solve(...) -> FEA result
+                  trace(...) -> TransportResult
+                  evaluate(...) -> proxy metrics
+                  render(...) -> RenderResult   [optional]
+```
+
+Typical optical use reads as:
+
+```python
+tip = Fingertip(parameters)
+mesh = tip.mesh()
+
+fea = solve(tip, mesh, indentation=1.5)
+reference = trace(tip, mesh)
+loaded = trace(tip, fea.deformed_mesh)
+metrics = evaluate(reference, loaded)
+plot_transport(loaded)
+```
+
+`trace(tip)` is also supported as a dependency-light analytic no-load preview.
+It does not replace mesh-based reference/loaded comparisons.
 
 ## Ownership
 
-- `model/` owns parametric Shapely geometry and physical sensor metadata.
-  `FingertipSensorModel` combines a `FingertipModel`, `LEDParameters`, and
-  `OpticalMaterialParameters`. LED package/source placement is sensor metadata;
-  it is never unioned into, or subtracted from, FEM material, collision, or mesh
-  geometry. The package owns no Gmsh, Kratos, optics algorithm, plotting, or
-  file output.
-- `optics/` owns immutable reference topology, replaceable deformation state,
-  FEA-to-optics adapters, deterministic 2D ray transport, 2D-to-3D extrusion,
-  optional Mitsuba integration, and solver-specific numerical settings. It
-  consumes model-owned LED and material properties without changing mechanical
-  geometry and never imports visualization.
-- `mesh/` owns the deterministic conversion from `FingertipModel` to discrete
-  Gmsh topology, mesh settings, quality, and the solver-independent indenter.
-- `fem/` is the Kratos backend. It owns model-part assembly, materials,
-  contact, constraints, nonlinear indentation, observations, and conversion to
-  neutral Python results. It owns no PASS/FAIL policy, report files, or plots.
-- `visualization/` owns semantic figure data, transforms, themes, panels,
-  plotting, and export. Repository artifact parsers live in
-  `visualization/adapters/`.
-- `validation/` owns scientific benchmarks, Phase acceptance, subprocess
-  isolation, checkpointing, provenance, reports, and generated artifact
-  schemas.
-- `tests/unit/` owns fast dependency-light contracts. `tests/smoke/` only
-  verifies Gmsh, Kratos, or headless-renderer wiring.
+- `model/` owns `Fingertip`, mechanical parameters, exact Shapely geometry,
+  boundary semantics, LED metadata, and bulk optical material. LED geometry is
+  metadata only: it is not unioned with or subtracted from mechanical material,
+  collision, mesh, or FEM geometry.
+- `mesh/` owns discrete topology, coordinates, semantic boundary groups, Gmsh
+  conversion, settings, and quality. A `PadMesh` is a neutral view of the
+  compliant-pad topology used across subsystem boundaries.
+- `fem/` owns Kratos assembly, constitutive models, contact, constraints,
+  nonlinear solves, and extraction of `FEAResult`. Its public surface is
+  `solve()` and `FEAResult`; Kratos objects do not cross into optics or
+  visualization.
+- `optics/` owns deterministic ray transport and adapters from neutral meshes
+  and displacement fields. Its public transport surface is `TraceSettings`,
+  `RaySegment`, `TransportResult`, `trace()`, and `evaluate()`.
+- `optics.mitsuba` owns the optional camera validator. Its public surface is
+  `Camera`, `RenderSettings`, `RenderResult`, and `MitsubaRenderer`; extrusion,
+  scene construction, and persistent renderer state are implementation details.
+- `visualization/` owns Matplotlib figures and display normalization.
+  `plot_transport(result)` needs no separate model or optical-domain argument
+  because `TransportResult` owns the geometry used to produce the field.
+- `validation/` owns scientific baselines, Phase acceptance, provenance,
+  checkpointing, reports, and generated artifact schemas.
 
-## Runtime flow
+## Fingertip and mesh state
 
-Validation entrypoints construct immutable model parameters, build a discrete
-mesh, configure a fresh Kratos model, run a bounded solve, extract neutral
-results, apply scientific acceptance, and write to an explicit output
-directory. Visualization reads declared input artifacts and never starts a
-solver.
-
-## Deformation-aware optical state
-
-One physical sensor and one fixed FEA pad topology support every load condition:
+`Fingertip` is the physical root:
 
 ```text
-FingertipSensorModel
-    physical geometry + LED + optical material
-
-PadMeshTemplate2D
-    reference coordinates + fixed triangles + semantic pad boundaries
-
-PadDeformationState2D
-    replaceable x-y nodal displacement field
+Fingertip
+├── parameters
+├── geometry
+├── boundaries
+├── led
+├── optical
+├── led_source
+└── mesh(settings)
 ```
 
-No-load is not a separate geometry type. It is
-`PadDeformationState2D.zero(template)`. A loaded condition uses the same
-`PadMeshTemplate2D` with a nonzero state. `PadField2D` is the small aggregate
-that pairs those two values.
+It is a mesh factory, not the owner of one permanent mesh: a single design can
+be discretized at several resolutions. The returned mesh retains the rigid
+carrier and contact information required by FEM while exposing the neutral pad
+contract through `node_ids`, `coordinates`, `triangles`, and `boundaries`.
+Its cached `.pad` view owns that neutral topology for optics.
 
-Persisted NPZ fields and in-memory `FingertipMesh` plus displacement mappings
-both converge through `optics.adapters` to the same `PadField2D`. The in-memory
-path accepts the neutral mesh and displacement values returned by the FEM
-indentation layer; it does not require Kratos objects or intermediary files.
+A `PadMesh` owns reference coordinates, triangles, and a complete semantic
+partition of its boundary edges. Load state is expressed by composition:
 
-The two optical consumers are:
-
-```text
-Cross-section path
-    template + state
-    -> deformed triangle union / optical domain
-    -> deterministic 2D ray transport
-    -> diagnostic Matplotlib visualization
-
-Camera path
-    template + state
-    -> stable extrusion vertices
-    -> persistent in-memory Mitsuba scene
-    -> raw linear-RGB camera result
-    -> visualization-owned normalization and PNG export
+```python
+loaded_mesh = reference_mesh.deformed(displacement)
 ```
 
-The cross-section mesh-state builder treats the deformed triangles as the
-loaded silicone source of truth. It does not perturb analytic arc parameters or
-redraw the undeformed pad. The rigid link and LED remain fixed in the stem frame
-for this iteration.
+The returned immutable view presents the same `coordinates`, `triangles`, and
+`boundaries` interface. Deformation is not a mesh subtype and has no public
+state-container class.
 
-Semantic boundary topology is also required to recover the completed loaded
-optical envelope. The silicone mesh is an open U-shaped material region: its
-cutout is connected to the top boundary, so filling polygon holes cannot close
-that concavity. `PadMeshTemplate2D` therefore stores a complete partition of
-its fixed boundary edges under stable pad tags, while
-`PadDeformationState2D` continues to own only replaceable nodal displacement.
+`FEAResult.displacement` follows the pad mesh's node order. On a converged
+solve, `FEAResult.deformed_mesh` delegates directly to
+`mesh.deformed(displacement)`; it neither rebuilds nor copies topology.
 
-Loaded cross-section geometry is reconstructed as:
+Strong validation remains at user, Gmsh/Kratos, and artifact boundaries.
+`PadMesh.deformed()` still rejects non-finite fields and degenerate or inverted
+triangles. The facade does not weaken geometry validation.
 
-```text
-deformed external pad shell
-    + virtual closure across the cutout mouth
-    - fixed rigid link/stem
-    = accessible optical region
-```
+## Optical transport
 
-The virtual closure is not silicone; it only completes the optical envelope.
-Space inside that envelope but outside the deformed silicone and fixed rigid
-material is air. This includes a gap opened between the fixed LED/stem and a
-distally displaced cutout bottom. No-load remains a zero-displacement state,
-and the rigid stem and LED remain fixed in the current sensor frame.
+The loaded silicone region is reconstructed from deformed mesh triangles. The
+fixed rigid link is then excluded from the envelope used by the ray tracer.
+The compliant pad's open U-shaped cutout makes semantic boundary topology
+essential: the tagged external shell is closed virtually across the cutout
+mouth to recover the loaded outer envelope.
 
-One `MitsubaRenderSession` represents one design, one fixed 2D topology, one
-fixed extrusion topology, and one fixed camera framing. Switching load state
-updates only the in-memory pad vertex positions; face connectivity and the
-Python scene remain unchanged. Mitsuba may rebuild its internal acceleration
-structure. A changed design or remesh requires a new template and session.
+That virtual closure is not silicone. Space inside the envelope but outside
+the deformed silicone and fixed rigid material is air, including any gap opened
+between the fixed stem/LED and the displaced cutout bottom.
 
-Mitsuba remains optional. The analytic preview adapter is the only place that
-uses Shapely triangulation for the dependency-light no-load camera example;
-normal rendering creates no PLY, OBJ, or STL intermediary.
+`TransportResult` contains raw weighted path density, grid edges, retained ray
+segments, silicone/air/rigid/LED regions, source position, and energy
+bookkeeping. The density is a deterministic light-transport proxy, not camera
+brightness, irradiance, or a predicted sensor image.
+
+`evaluate(reference, loaded)` remains camera-independent and returns a plain
+dictionary. Its deliberately small initial contract is:
+
+- `field_difference`: total-variation distance between normalized path-density
+  distributions after conservative redistribution onto one physical grid;
+- `centroid_shift_mm`: displacement of the path-density centroid;
+- `escaped_fraction_change` and `absorbed_fraction_change`: changes relative to
+  launched ray weight.
+
+These are optimization proxies, not camera or irradiance metrics. Thresholded
+effective area, entropy, and other research-dependent metrics remain undefined
+until their scientific conventions are accepted.
+
+## Optional camera validation
+
+`MitsubaRenderer` represents one design, one fixed reference topology, one
+fixed extrusion depth, and one fixed camera. `render()` accepts the reference
+mesh, a matching deformed mesh view, or a displacement array. Internally, only
+vertex positions change between load states; face connectivity and the Python
+scene remain stable. A changed design or remesh requires a new renderer.
+
+The 2D mesh is extruded to a fixed z-depth only inside this optional boundary.
+No PLY, OBJ, or STL intermediary is created.
+The internal files remain separated because immutable camera/settings data,
+procedural scene construction, and the mutable persistent session have distinct
+owners; only `renderer.py` forms the public boundary.
+
+## Artifact boundary
+
+New full-field NPZ artifacts store semantic edge groups under
+`boundary_edge_node_ids__<tag>`. The loader preserves those groups directly.
+The analytic boundary classifier is isolated as a fallback for legacy NPZ
+artifacts that omitted semantic tags; it is not a second source of physical
+boundary semantics.
 
 ## Failure and artifact policy
 
-Numerical failures stay explicit; non-finite fields, non-convergence, and
-invalid contact states are not clamped or hidden. Every repeated solve has a
-step/iteration/process timeout boundary. `output/` is only a generated sink.
-Reference inputs needed by a clean checkout belong in `tests/fixtures/` or
-`validation/reference_data/`.
+Numerical failures remain explicit; non-finite fields, non-convergence, invalid
+contact states, and invalid geometry are not clamped or hidden. Repeated solves
+have step, iteration, and process timeout boundaries. `output/` is only an
+untracked generated sink. Reference inputs required by a clean checkout belong
+in `tests/fixtures/` or `validation/reference_data/`.

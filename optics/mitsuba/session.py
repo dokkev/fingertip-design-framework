@@ -7,44 +7,43 @@ from typing import Any
 
 import numpy as np
 
-from model.fingertip_sensor_model import FingertipSensorModel
-from optics.geometry.deformation_state import PadDeformationState2D
-from optics.geometry.extrusion import ExtrudedOpticalMeshTemplate
-from optics.geometry.pad_mesh_template import PadMeshTemplate2D
-from optics.mitsuba.parameters import MitsubaCameraParameters, MitsubaRenderSettings
-from optics.mitsuba.result import CameraRenderResult
+from mesh import PadMesh
+from model.fingertip import Fingertip
+from optics.geometry.extrusion import _ExtrudedMesh
+from optics.mitsuba.parameters import Camera, RenderSettings
+from optics.mitsuba.result import RenderResult
 from optics.mitsuba.scene import build_in_memory_mitsuba_scene
 
 
-class MitsubaSessionError(RuntimeError):
+class MitsubaError(RuntimeError):
     """Raised when a persistent Mitsuba session cannot satisfy its contract."""
 
 
-class MitsubaRenderSession:
+class _MitsubaSession:
     """Reusable, non-thread-safe Mitsuba scene for one fixed mesh topology."""
 
     def __init__(
         self,
         *,
-        sensor_model: FingertipSensorModel,
-        mesh_template: PadMeshTemplate2D,
-        extrusion: ExtrudedOpticalMeshTemplate,
-        camera: MitsubaCameraParameters,
-        settings: MitsubaRenderSettings | None = None,
+        tip: Fingertip,
+        reference_mesh: PadMesh,
+        extrusion: _ExtrudedMesh,
+        camera: Camera,
+        settings: RenderSettings | None = None,
     ) -> None:
-        self.sensor_model = sensor_model
-        self.mesh_template = mesh_template
+        self.tip = tip
+        self.reference_mesh = reference_mesh
         self.extrusion = extrusion
         self.camera = camera
-        self.settings = settings or MitsubaRenderSettings()
-        if extrusion.node_count_2d != len(mesh_template.node_ids):
-            raise MitsubaSessionError(
-                "extrusion and mesh template node counts differ"
+        self.settings = settings or RenderSettings()
+        if extrusion.node_count_2d != len(reference_mesh.node_ids):
+            raise MitsubaError(
+                "extrusion and reference mesh node counts differ"
             )
         try:
             import mitsuba as mi
         except ImportError as exc:
-            raise MitsubaSessionError(
+            raise MitsubaError(
                 "Mitsuba is required for camera rendering; install the "
                 "optional 'optics' dependency"
             ) from exc
@@ -52,19 +51,15 @@ class MitsubaRenderSession:
         if active_variant is None:
             mi.set_variant(self.settings.variant)
         elif active_variant != self.settings.variant:
-            raise MitsubaSessionError(
+            raise MitsubaError(
                 f"Mitsuba variant '{active_variant}' is active; this session "
                 f"requires '{self.settings.variant}'"
             )
         self._mi = mi
-        zero_state = PadDeformationState2D.zero(mesh_template)
-        reference_vertices = extrusion.vertices_for_state(
-            mesh_template,
-            zero_state,
-        )
+        reference_vertices = extrusion.vertices_for_mesh(reference_mesh)
         self._scene = build_in_memory_mitsuba_scene(
             mi,
-            sensor_model=sensor_model,
+            tip=tip,
             extrusion=extrusion,
             vertices_mm=reference_vertices,
             camera=camera,
@@ -80,31 +75,30 @@ class MitsubaRenderSession:
             "led.intensity.value",
             available_keys,
         )
-        self._current_state_metadata: dict[str, Any] = dict(zero_state.metadata)
-        self._relative_led_power = sensor_model.led.relative_radiant_power
+        self._current_state_metadata: dict[str, Any] = dict(
+            reference_mesh.metadata
+        )
+        self._relative_led_power = tip.led.relative_radiant_power
 
     @staticmethod
     def _required_key(expected: str, available_keys: tuple[str, ...]) -> str:
         if expected not in available_keys:
             available = ", ".join(available_keys) or "<none>"
-            raise MitsubaSessionError(
+            raise MitsubaError(
                 f"required Mitsuba scene parameter '{expected}' is absent; "
                 f"available keys: {available}"
             )
         return expected
 
-    def update_state(self, state: PadDeformationState2D) -> None:
-        """Update only pad vertex positions for one new deformation state."""
-        vertices = self.extrusion.vertices_for_state(
-            self.mesh_template,
-            state,
-        )
+    def update_mesh(self, mesh: Any) -> None:
+        """Update only pad vertex positions for one mesh state."""
+        vertices = self.extrusion.vertices_for_mesh(mesh)
         self._scene_parameters[self._vertex_position_key] = np.asarray(
             vertices,
             dtype=np.float32,
         ).reshape(-1)
         self._scene_parameters.update()
-        self._current_state_metadata = dict(state.metadata)
+        self._current_state_metadata = dict(mesh.metadata)
 
     def set_led_relative_power(self, relative_radiant_power: float) -> None:
         """Update point-emitter intensity without rebuilding mesh geometry."""
@@ -118,13 +112,13 @@ class MitsubaRenderSession:
         intensity = (
             self.settings.point_emitter_scale
             * relative_radiant_power
-            * np.asarray(self.sensor_model.led.emission_rgb, dtype=float)
+            * np.asarray(self.tip.led.emission_rgb, dtype=float)
         )
         self._scene_parameters[self._led_intensity_key] = intensity.tolist()
         self._scene_parameters.update()
         self._relative_led_power = float(relative_radiant_power)
 
-    def render(self, *, spp: int | None = None) -> CameraRenderResult:
+    def render(self, *, spp: int | None = None) -> RenderResult:
         """Render the current in-memory state as raw linear RGB."""
         sample_count = self.settings.spp if spp is None else spp
         if (
@@ -138,25 +132,25 @@ class MitsubaRenderSession:
             dtype=float,
         )
         if rendered.ndim != 3 or rendered.shape[2] < 3:
-            raise MitsubaSessionError(
+            raise MitsubaError(
                 "Mitsuba returned an image without three RGB channels"
             )
-        return CameraRenderResult(
+        return RenderResult(
             linear_rgb=rendered[:, :, :3],
             spp=sample_count,
             relative_led_power=self._relative_led_power,
             state_metadata=self._current_state_metadata,
         )
 
-    def render_state(
+    def render_mesh(
         self,
-        state: PadDeformationState2D,
+        mesh: Any,
         *,
         spp: int | None = None,
         relative_led_power: float | None = None,
-    ) -> CameraRenderResult:
-        """Update deformation and optional source power, then render."""
-        self.update_state(state)
+    ) -> RenderResult:
+        """Update mesh coordinates and optional source power, then render."""
+        self.update_mesh(mesh)
         if relative_led_power is not None:
             self.set_led_relative_power(relative_led_power)
         return self.render(spp=spp)

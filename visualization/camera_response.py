@@ -8,7 +8,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
-from optics.mitsuba.result import CameraRenderResult
+from optics.mitsuba.result import RenderResult
 
 
 def _display_rgb(
@@ -37,7 +37,7 @@ def _display_rgb(
 
 
 def save_camera_render(
-    result: CameraRenderResult,
+    result: RenderResult,
     output_path: str | Path,
     *,
     normalization_max: float | None = None,
@@ -58,8 +58,8 @@ def save_camera_render(
 
 
 def save_camera_comparison(
-    reference: CameraRenderResult,
-    loaded: CameraRenderResult,
+    reference: RenderResult,
+    loaded: RenderResult,
     output_path: str | Path,
 ) -> Path:
     """Save reference, loaded, and absolute raw difference on one scale."""

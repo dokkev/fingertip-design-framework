@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from functools import cached_property
 import math
 from typing import Any, Literal
 
@@ -159,10 +160,68 @@ class FingertipMesh:
     validation: MeshValidationReport
     gmsh_version: str
 
+    @cached_property
+    def pad(self):
+        """Return the compliant-pad topology as the public neutral mesh."""
+        from mesh.pad import PadMesh
+
+        return PadMesh.from_fingertip_mesh(self)
+
+    @property
+    def node_ids(self):
+        """Return compliant-pad node IDs in local coordinate order."""
+        return self.pad.node_ids
+
+    @property
+    def coordinates(self):
+        """Return compliant-pad reference coordinates in millimeters."""
+        return self.pad.coordinates
+
+    @property
+    def triangles(self):
+        """Return compliant-pad local triangle connectivity."""
+        return self.pad.triangles
+
+    @property
+    def boundaries(self):
+        """Return compliant-pad semantic boundary groups."""
+        return self.pad.boundaries
+
+    @property
+    def semantic_boundary_tags(self):
+        return self.pad.semantic_boundary_tags
+
+    @property
+    def reference_mesh(self):
+        return self.pad
+
+    @property
+    def displacement(self):
+        return self.pad.displacement
+
+    @property
+    def metadata(self):
+        return self.pad.metadata
+
+    def boundary_edges_for(self, tag):
+        return self.pad.boundary_edges_for(tag)
+
+    def boundary_node_indices_for(self, tag):
+        return self.pad.boundary_node_indices_for(tag)
+
+    def deformed(self, displacement, *, metadata=None):
+        """Return a deformed compliant-pad view for subsystem handoff."""
+        return self.pad.deformed(displacement, metadata=metadata)
+
     @property
     def elements(self) -> tuple[T3Element, ...]:
         """Return pad and carrier elements in deterministic ID order."""
-        return tuple(sorted((*self.pad_elements, *self.carrier_elements), key=lambda e: e.id))
+        return tuple(
+            sorted(
+                (*self.pad_elements, *self.carrier_elements),
+                key=lambda element: element.id,
+            )
+        )
 
     def canonical_signature(self) -> tuple[Any, ...]:
         """Return a deterministic representation suitable for regression tests."""

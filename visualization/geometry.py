@@ -13,8 +13,8 @@ from matplotlib.patches import FancyArrowPatch, PathPatch, Rectangle
 from matplotlib.path import Path as MatplotlibPath
 from shapely.geometry import MultiPolygon, Polygon
 
+from model import Fingertip
 from model.fingertip_model import BoundarySegment, FingertipModel, PolygonalGeometry
-from model.fingertip_sensor_model import FingertipSensorModel
 
 PAD_COLOR = "#C7E8D2"
 PAD_EDGE = "#4E9270"
@@ -31,9 +31,8 @@ LIGHT_SOURCE_EDGE = "#4A1018"
 
 
 def plot_fingertip(
-    model: FingertipModel,
+    tip: Fingertip | FingertipModel,
     *,
-    sensor_model: FingertipSensorModel | None = None,
     ax: Axes | None = None,
     show_void: bool = True,
     show_led: bool = True,
@@ -46,9 +45,8 @@ def plot_fingertip(
     title: str | None = None,
 ) -> Axes:
     """Plot the pad, rigid link/stem, LED overlay, clearance, and interface."""
-    sensor = sensor_model or FingertipSensorModel.from_geometry(model)
-    if sensor.geometry is not model:
-        raise ValueError("sensor_model.geometry must be the plotted model")
+    physical = tip if isinstance(tip, Fingertip) else Fingertip(tip.parameters)
+    model = physical.geometry
     if ax is None:
         _, ax = plt.subplots(figsize=(6.0, 5.0))
 
@@ -81,10 +79,10 @@ def plot_fingertip(
     )
 
     if show_led:
-        _add_led_overlay(ax, sensor)
+        _add_led_overlay(ax, physical)
 
     if show_light_source:
-        _add_light_source_overlay(ax, sensor)
+        _add_light_source_overlay(ax, physical)
 
     if show_void and model.void_geometry is not None:
         _add_polygonal_patches(
@@ -168,10 +166,10 @@ def plot_fingertip(
 
 def _add_led_overlay(
     ax: Axes,
-    sensor_model: FingertipSensorModel,
+    tip: Fingertip,
 ) -> Rectangle:
-    """Draw the sensor-owned LED package with visualization-only styling."""
-    x_min, y_min, x_max, y_max = sensor_model.led_package_geometry.bounds
+    """Draw the fingertip-owned LED package with visualization-only styling."""
+    x_min, y_min, x_max, y_max = tip.led_package_geometry.bounds
     led = Rectangle(
         (x_min, y_min),
         x_max - x_min,
@@ -188,10 +186,10 @@ def _add_led_overlay(
 
 def _add_light_source_overlay(
     ax: Axes,
-    sensor_model: FingertipSensorModel,
+    tip: Fingertip,
 ) -> None:
     """Mark the ideal optical source at the LED's lower emitting edge."""
-    x, y = sensor_model.led_source_position_2d
+    x, y = tip.led_source
     ax.scatter(
         [x],
         [y],
@@ -205,7 +203,7 @@ def _add_light_source_overlay(
 
 
 def save_fingertip_figure(
-    model: FingertipModel,
+    tip: Fingertip | FingertipModel,
     output_path: str | Path,
     *,
     dpi: int = 200,
@@ -215,7 +213,7 @@ def save_fingertip_figure(
     path = Path(output_path).expanduser().resolve()
     path.parent.mkdir(parents=True, exist_ok=True)
     figure, axis = plt.subplots(figsize=(6.0, 5.0))
-    plot_fingertip(model, ax=axis, **plot_kwargs)
+    plot_fingertip(tip, ax=axis, **plot_kwargs)
     figure.tight_layout()
     figure.savefig(path, dpi=dpi, bbox_inches="tight", facecolor="white")
     plt.close(figure)

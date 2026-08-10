@@ -11,7 +11,7 @@ import numpy as np
 
 
 @dataclass(frozen=True)
-class CameraRenderResult:
+class RenderResult:
     """Unnormalized linear RGB data and render-state metadata."""
 
     linear_rgb: np.ndarray

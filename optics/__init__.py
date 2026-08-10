@@ -1,18 +1,12 @@
-"""Deformation-aware optical geometry, transport, and rendering contracts."""
+"""Public deterministic optical-transport API."""
 
-from optics.geometry import (
-    ExtrudedOpticalMeshTemplate,
-    PadDeformationState2D,
-    PadField2D,
-    PadMeshTemplate2D,
-)
-from optics.source import led_source_position_2d, led_source_position_3d
+from optics.transport import RaySegment, TraceSettings, TransportResult, trace
+from optics.metrics import evaluate
 
 __all__ = [
-    "ExtrudedOpticalMeshTemplate",
-    "PadDeformationState2D",
-    "PadField2D",
-    "PadMeshTemplate2D",
-    "led_source_position_2d",
-    "led_source_position_3d",
+    "RaySegment",
+    "TraceSettings",
+    "TransportResult",
+    "evaluate",
+    "trace",
 ]

@@ -24,6 +24,32 @@ plotting do not reimplement it.
 The parameter meanings, construction order, derived coordinates, and explicit
 legacy migration path are documented in [docs/geometry.md](docs/geometry.md).
 
+## Public workflow
+
+The physical, FEM, and optical API is intentionally shallow:
+
+```python
+from fem import solve
+from model import Fingertip, FingertipParameters
+from optics import evaluate, trace
+from visualization import plot_transport
+
+tip = Fingertip(FingertipParameters())
+mesh = tip.mesh()
+
+fea = solve(tip, mesh, indentation=1.5)
+reference = trace(tip, mesh)
+loaded = trace(tip, fea.deformed_mesh)
+metrics = evaluate(reference, loaded)
+plot_transport(loaded)
+```
+
+`FEAResult` contains neutral displacement, reaction, contact, and convergence
+data; no Kratos object crosses into optics.
+Camera formation is an optional validation path behind
+`optics.mitsuba.MitsubaRenderer`; transport density is not labeled as camera
+brightness or physical irradiance.
+
 ## Environment
 
 Python 3.11 or newer is required. Optional dependency groups are declared in

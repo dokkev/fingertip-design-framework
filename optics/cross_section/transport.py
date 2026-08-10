@@ -22,23 +22,17 @@ from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 
 from model.fingertip_model import PolygonalGeometry
-from model.fingertip_sensor_model import FingertipSensorModel
-from model.led_parameters import LEDParameters
-from model.optical_material_parameters import OpticalMaterialParameters
+from model.optical import LED, OpticalMaterial
 from optics.cross_section.domain import (
-    CrossSectionOpticalDomain,
     CrossSectionOpticsError,
-    build_mesh_state_optical_domain,
-    build_no_load_optical_domain,
+    _OpticalDomain,
 )
 from optics.cross_section.result import (
-    CrossSectionTransportResult,
     OpticalMedium,
-    RaySegment2D,
+    _RawRaySegment,
+    _RawTransportResult,
 )
-from optics.cross_section.settings import CrossSectionTraceSettings
-from optics.geometry.deformation_state import PadDeformationState2D
-from optics.geometry.pad_mesh_template import PadMeshTemplate2D
+from optics.cross_section.settings import TraceSettings
 
 
 @dataclass(frozen=True)
@@ -74,7 +68,7 @@ def _iter_polygons(geometry: PolygonalGeometry) -> Iterable[Polygon]:
     return geometry.geoms
 
 
-def _prepare_geometry(domain: CrossSectionOpticalDomain) -> _PreparedGeometry:
+def _prepare_geometry(domain: _OpticalDomain) -> _PreparedGeometry:
     accessible_region = domain.accessible_region
     if accessible_region.is_empty or not accessible_region.is_valid:
         raise CrossSectionOpticsError("the accessible optical region is invalid")
@@ -108,9 +102,9 @@ def _prepare_geometry(domain: CrossSectionOpticalDomain) -> _PreparedGeometry:
 
 
 def _sample_primary_directions(
-    led: LEDParameters,
+    led: LED,
     emission_axis_2d: tuple[float, float],
-    settings: CrossSectionTraceSettings,
+    settings: TraceSettings,
 ) -> tuple[np.ndarray, ...]:
     half_angle = radians(led.emission_half_angle_deg)
     half_angle_sine = sin(half_angle)
@@ -138,7 +132,7 @@ def _sample_primary_directions(
 
 def _classify_medium(
     point_xy: np.ndarray,
-    domain: CrossSectionOpticalDomain,
+    domain: _OpticalDomain,
     prepared: _PreparedGeometry,
 ) -> OpticalMedium:
     point = Point(float(point_xy[0]), float(point_xy[1]))
@@ -179,7 +173,7 @@ def _intersection_points(geometry: BaseGeometry) -> Iterable[Point]:
 def _find_next_hit(
     state: _RayState,
     prepared: _PreparedGeometry,
-    settings: CrossSectionTraceSettings,
+    settings: TraceSettings,
 ) -> np.ndarray:
     ray_end = (
         state.origin + prepared.maximum_ray_length_mm * state.direction
@@ -215,9 +209,9 @@ def _find_next_hit(
 
 def _silicone_outward_normal(
     hit_point: np.ndarray,
-    domain: CrossSectionOpticalDomain,
+    domain: _OpticalDomain,
     prepared: _PreparedGeometry,
-    settings: CrossSectionTraceSettings,
+    settings: TraceSettings,
 ) -> np.ndarray:
     hit = Point(float(hit_point[0]), float(hit_point[1]))
     ring = min(prepared.silicone_rings, key=lambda candidate: candidate.distance(hit))
@@ -323,7 +317,7 @@ def _interface_directions_and_reflectance(
 
 def _refractive_index(
     medium: OpticalMedium,
-    material: OpticalMaterialParameters,
+    material: OpticalMaterial,
 ) -> float:
     if medium == "air":
         return material.refractive_index_air
@@ -331,10 +325,10 @@ def _refractive_index(
 
 
 def _build_path_density_grid(
-    domain: CrossSectionOpticalDomain,
+    domain: _OpticalDomain,
     prepared: _PreparedGeometry,
-    settings: CrossSectionTraceSettings,
-    segments: tuple[RaySegment2D, ...],
+    settings: TraceSettings,
+    segments: tuple[_RawRaySegment, ...],
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     min_x, min_y, max_x, max_y = domain.outer_envelope.bounds
     margin = 0.04 * max(max_x - min_x, max_y - min_y)
@@ -407,15 +401,15 @@ def _build_path_density_grid(
     return x_edges, y_edges, density, optical_mask
 
 
-def trace_cross_section_transport(
-    domain: CrossSectionOpticalDomain,
+def _trace_transport(
+    domain: _OpticalDomain,
     *,
-    led: LEDParameters,
-    material: OpticalMaterialParameters,
-    settings: CrossSectionTraceSettings | None = None,
-) -> CrossSectionTransportResult:
+    led: LED,
+    material: OpticalMaterial,
+    settings: TraceSettings | None = None,
+) -> _RawTransportResult:
     """Trace deterministic Fresnel ray branches through a neutral 2D domain."""
-    trace_settings = settings or CrossSectionTraceSettings()
+    trace_settings = settings or TraceSettings()
     led_properties = led
     material_properties = material
     trace_settings.validate(geometry_tolerance_mm=domain.geometry_tolerance_mm)
@@ -452,7 +446,7 @@ def trace_cross_section_transport(
         if led_properties.relative_radiant_power > 0.0
     )
 
-    segments: list[RaySegment2D] = []
+    segments: list[_RawRaySegment] = []
     escaped_weight = 0.0
     absorbed_weight = 0.0
     terminated_weight = 0.0
@@ -480,7 +474,7 @@ def trace_cross_section_transport(
             end_weight = state.weight
         absorbed_weight += state.weight - end_weight
         segments.append(
-            RaySegment2D(
+            _RawRaySegment(
                 start_mm=(float(state.origin[0]), float(state.origin[1])),
                 end_mm=(float(hit_point[0]), float(hit_point[1])),
                 medium=state.medium,
@@ -602,7 +596,7 @@ def trace_cross_section_transport(
             "transport accounting is non-finite or negative"
         )
 
-    return CrossSectionTransportResult(
+    return _RawTransportResult(
         source_position_mm=(float(source[0]), float(source[1])),
         x_edges_mm=x_edges,
         y_edges_mm=y_edges,
@@ -615,35 +609,3 @@ def trace_cross_section_transport(
         absorbed_weight=float(absorbed_weight),
         terminated_weight=float(terminated_weight),
     )
-
-
-def trace_no_load_sensor(
-    sensor_model: FingertipSensorModel,
-    settings: CrossSectionTraceSettings | None = None,
-) -> tuple[CrossSectionOpticalDomain, CrossSectionTransportResult]:
-    """Build and trace the analytic no-load sensor domain."""
-    domain = build_no_load_optical_domain(sensor_model)
-    result = trace_cross_section_transport(
-        domain,
-        led=sensor_model.led,
-        material=sensor_model.optical_material,
-        settings=settings,
-    )
-    return domain, result
-
-
-def trace_pad_state(
-    sensor_model: FingertipSensorModel,
-    template: PadMeshTemplate2D,
-    state: PadDeformationState2D,
-    settings: CrossSectionTraceSettings | None = None,
-) -> tuple[CrossSectionOpticalDomain, CrossSectionTransportResult]:
-    """Build and trace one deformed pad-mesh state."""
-    domain = build_mesh_state_optical_domain(sensor_model, template, state)
-    result = trace_cross_section_transport(
-        domain,
-        led=sensor_model.led,
-        material=sensor_model.optical_material,
-        settings=settings,
-    )
-    return domain, result

@@ -17,6 +17,9 @@ from visualization.framework import (
     load_visualization_dataset,
     render_figure,
 )
+from visualization.camera import plot_camera
+from visualization.geometry import plot_fingertip
+from visualization.transport import plot_transport
 
 __all__ = [
     "ContactCase",
@@ -29,5 +32,8 @@ __all__ = [
     "load_figure_spec",
     "load_phase4k_visualization_dataset",
     "load_visualization_dataset",
+    "plot_camera",
+    "plot_fingertip",
+    "plot_transport",
     "render_figure",
 ]

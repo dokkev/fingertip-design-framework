@@ -7,7 +7,7 @@ from math import isfinite
 
 
 @dataclass(frozen=True)
-class CrossSectionTraceSettings:
+class TraceSettings:
     """Discretization, termination, and geometric-tolerance settings."""
 
     ray_count: int = 161

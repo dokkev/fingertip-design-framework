@@ -6,8 +6,8 @@ import numpy as np
 from shapely.geometry import LineString
 from shapely.geometry.base import BaseGeometry
 
-from model.fingertip_sensor_model import FingertipSensorModel
-from optics.geometry.pad_mesh_template import PadMeshTemplate2D
+from mesh import PadMesh
+from model.fingertip import Fingertip
 
 
 class OpticalBoundaryClassificationError(ValueError):
@@ -36,11 +36,11 @@ def _covers_complete_edge(
 
 
 def tag_reference_pad_boundaries(
-    sensor_model: FingertipSensorModel,
-    template: PadMeshTemplate2D,
-) -> PadMeshTemplate2D:
+    tip: Fingertip,
+    mesh: PadMesh,
+) -> PadMesh:
     """Return a copy whose reference boundary has one semantic pad tag each."""
-    geometry = sensor_model.geometry
+    geometry = tip.geometry
     scale = max(
         1.0,
         *(abs(value) for value in geometry.outer_pad_geometry.bounds),
@@ -57,13 +57,13 @@ def tag_reference_pad_boundaries(
     }
     edges_by_tag["pad_void_unpaired"] = []
 
-    for first_value, second_value in template.boundary_edges:
+    for first_value, second_value in mesh.boundary_edges:
         first = int(first_value)
         second = int(second_value)
         edge = LineString(
             [
-                template.reference_coordinates_mm[first],
-                template.reference_coordinates_mm[second],
+                mesh.coordinates[first],
+                mesh.coordinates[second],
             ]
         )
         matches = [
@@ -77,8 +77,8 @@ def tag_reference_pad_boundaries(
         ]
         if len(matches) > 1:
             global_ids = (
-                int(template.node_ids[first]),
-                int(template.node_ids[second]),
+                int(mesh.node_ids[first]),
+                int(mesh.node_ids[second]),
             )
             raise OpticalBoundaryClassificationError(
                 f"pad boundary edge {global_ids} with coordinates "
@@ -102,8 +102,8 @@ def tag_reference_pad_boundaries(
             edges_by_tag["pad_void_unpaired"].append((first, second))
             continue
         global_ids = (
-            int(template.node_ids[first]),
-            int(template.node_ids[second]),
+            int(mesh.node_ids[first]),
+            int(mesh.node_ids[second]),
         )
         raise OpticalBoundaryClassificationError(
             f"pad boundary edge {global_ids} with coordinates "
@@ -116,11 +116,11 @@ def tag_reference_pad_boundaries(
         if edges
     }
     try:
-        return PadMeshTemplate2D(
-            node_ids=template.node_ids,
-            reference_coordinates_mm=template.reference_coordinates_mm,
-            triangles=template.triangles,
-            boundary_edges=template.boundary_edges,
+        return PadMesh(
+            node_ids=mesh.node_ids,
+            reference_coordinates_mm=mesh.coordinates,
+            triangles=mesh.triangles,
+            boundary_edges=mesh.boundary_edges,
             boundary_edges_by_tag=populated,
         )
     except ValueError as exc:

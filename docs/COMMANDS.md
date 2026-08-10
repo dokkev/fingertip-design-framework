@@ -64,14 +64,12 @@ The direct script is also launchable from any working directory:
 python /path/to/lit_ws/examples/fem_visualize.py
 ```
 
-The example runs or reuses three FEM cases with contact fixed at `x=0 mm` and
-indenter radii of `2`, `4`, and `6 mm`. It persists neutral artifacts with
-full-pad nodal displacement fields, validates and reloads them through the
-visualization adapter, and opens the atlas with Matplotlib. It does not export
-PNG, PDF, source-data, or figure-manifest files. The first execution can take
-significant time.
-Subsequent executions reuse every valid completed case. To deliberately
-recompute all cases:
+The example constructs one fingertip and mesh, runs `solve()`, traces reference
+and loaded optical states, prints the camera-independent proxy metrics, and
+opens the loaded transport plot. It does not write artifacts. The solve can
+take significant time.
+
+The resumable three-radius scientific atlas remains a validation command:
 
 ```bash
 python -m validation.fingertip.indentation.normal_field_atlas --force
@@ -96,6 +94,19 @@ For a direct geometry-only visualization:
 
 ```bash
 python /path/to/lit_ws/examples/fingertip_visualize.py
+```
+
+For interactive optical previews that do not write artifacts:
+
+```bash
+python /path/to/lit_ws/examples/light_transport.py
+python /path/to/lit_ws/examples/loaded_light_transport.py
+```
+
+The optional Mitsuba camera validator is demonstrated by:
+
+```bash
+python /path/to/lit_ws/examples/camera_render.py
 ```
 
 All generated validation artifacts and figures are written below `output/`.

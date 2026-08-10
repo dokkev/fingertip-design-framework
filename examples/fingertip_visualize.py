@@ -17,9 +17,8 @@ else:
 
 ensure_repository_root()
 
-from model.fingertip_model import FingertipModel
-from model.fingertip_parameters import FingertipParameters
-from visualization.geometry import plot_fingertip
+from model import Fingertip, FingertipParameters
+from visualization import plot_fingertip
 
 
 def main() -> int:
@@ -37,11 +36,11 @@ def main() -> int:
         arc_resolution=128,
         geometry_tolerance=1e-9,
     )
-    model = FingertipModel(parameters)
+    tip = Fingertip(parameters)
 
     figure, axis = plt.subplots(figsize=(7.2, 6.0), constrained_layout=True)
     plot_fingertip(
-        model,
+        tip,
         ax=axis,
         show_void=True,
         show_interface=True,

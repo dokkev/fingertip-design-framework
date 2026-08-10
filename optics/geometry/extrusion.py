@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from math import isfinite
+from typing import Any
 
 import numpy as np
 
-from optics.geometry.deformation_state import PadDeformationState2D
-from optics.geometry.pad_mesh_template import PadMeshTemplate2D
+from mesh import PadMesh
 
 
 class InvalidExtrudedOpticalMesh(ValueError):
@@ -16,7 +16,7 @@ class InvalidExtrudedOpticalMesh(ValueError):
 
 
 @dataclass(frozen=True)
-class ExtrudedOpticalMeshTemplate:
+class _ExtrudedMesh:
     """Fixed face topology for a pad extruded through a constant depth."""
 
     depth_mm: float
@@ -86,16 +86,16 @@ class ExtrudedOpticalMeshTemplate:
     @classmethod
     def from_pad_mesh(
         cls,
-        template: PadMeshTemplate2D,
+        mesh: PadMesh,
         *,
         depth_mm: float,
-    ) -> ExtrudedOpticalMeshTemplate:
+    ) -> _ExtrudedMesh:
         """Create fixed caps and side faces from oriented 2D topology."""
-        node_count = len(template.node_ids)
-        rear_faces = template.triangles[:, [0, 2, 1]]
-        front_faces = template.triangles + node_count
+        node_count = len(mesh.node_ids)
+        rear_faces = mesh.triangles[:, [0, 2, 1]]
+        front_faces = mesh.triangles + node_count
         side_faces: list[tuple[int, int, int]] = []
-        for first, second in template.boundary_edges:
+        for first, second in mesh.boundary_edges:
             i = int(first)
             j = int(second)
             side_faces.extend(
@@ -140,14 +140,13 @@ class ExtrudedOpticalMeshTemplate:
         vertices.setflags(write=False)
         return vertices
 
-    def vertices_for_state(
+    def vertices_for_mesh(
         self,
-        template: PadMeshTemplate2D,
-        state: PadDeformationState2D,
+        mesh: Any,
     ) -> np.ndarray:
-        """Extrude one validated state without changing face topology."""
-        if len(template.node_ids) != self.node_count_2d:
+        """Extrude one mesh view without changing face topology."""
+        if len(mesh.node_ids) != self.node_count_2d:
             raise InvalidExtrudedOpticalMesh(
-                "mesh template node count does not match the extrusion"
+                "mesh node count does not match the extrusion"
             )
-        return self.vertices_for_coordinates(template.coordinates_for(state))
+        return self.vertices_for_coordinates(mesh.coordinates)

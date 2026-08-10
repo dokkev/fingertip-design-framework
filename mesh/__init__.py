@@ -1,23 +1,18 @@
-"""Solver-independent fingertip and indenter meshing."""
+"""Public solver-independent mesh data contracts."""
 
-from mesh.fingertip import (
-    GmshDependencyError,
-    generate_fingertip_mesh,
-)
+from mesh.pad import InvalidPadMesh, PadMesh
 from mesh.types import (
     FingertipMesh,
     InvalidMeshSettings,
     MeshSettings,
     mesh_settings_for_level,
 )
-from mesh.validation import validate_fingertip_mesh
 
 __all__ = [
     "FingertipMesh",
-    "GmshDependencyError",
     "InvalidMeshSettings",
+    "InvalidPadMesh",
     "MeshSettings",
-    "generate_fingertip_mesh",
+    "PadMesh",
     "mesh_settings_for_level",
-    "validate_fingertip_mesh",
 ]

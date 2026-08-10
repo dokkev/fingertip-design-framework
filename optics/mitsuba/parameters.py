@@ -8,8 +8,8 @@ from typing import Literal
 
 import numpy as np
 
-from model.fingertip_sensor_model import FingertipSensorModel
-from optics.geometry.pad_mesh_template import PadMeshTemplate2D
+from mesh import PadMesh
+from model.fingertip import Fingertip
 
 
 def _finite_vector3(
@@ -24,7 +24,7 @@ def _finite_vector3(
 
 
 @dataclass(frozen=True)
-class MitsubaCameraParameters:
+class Camera:
     """Fixed diagnostic camera framing for one optical render session."""
 
     position_mm: tuple[float, float, float]
@@ -74,7 +74,7 @@ class MitsubaCameraParameters:
 
 
 @dataclass(frozen=True)
-class MitsubaRenderSettings:
+class RenderSettings:
     """Sampling and renderer-scale settings, separate from physical data."""
 
     variant: str = "scalar_rgb"
@@ -109,16 +109,16 @@ class MitsubaRenderSettings:
             )
 
 
-def default_cross_section_camera(
-    sensor_model: FingertipSensorModel,
-    template: PadMeshTemplate2D,
-) -> MitsubaCameraParameters:
+def _default_camera(
+    tip: Fingertip,
+    mesh: PadMesh,
+) -> Camera:
     """Frame reference geometry once for comparable no-load/loaded renders."""
-    coordinates = template.reference_coordinates_mm
+    coordinates = mesh.coordinates
     min_x, min_y = np.min(coordinates, axis=0)
     max_x, max_y = np.max(coordinates, axis=0)
     rigid_min_x, rigid_min_y, rigid_max_x, rigid_max_y = (
-        sensor_model.geometry.link_geometry.bounds
+        tip.geometry.link_geometry.bounds
     )
     min_x = min(float(min_x), rigid_min_x)
     min_y = min(float(min_y), rigid_min_y)
@@ -127,7 +127,7 @@ def default_cross_section_camera(
     center_x = 0.5 * (min_x + max_x)
     center_y = 0.5 * (min_y + max_y)
     span = 1.16 * max(max_x - min_x, max_y - min_y, 1.0)
-    return MitsubaCameraParameters(
+    return Camera(
         position_mm=(center_x, center_y, 40.0),
         target_mm=(center_x, center_y, 0.0),
         up=(0.0, 1.0, 0.0),

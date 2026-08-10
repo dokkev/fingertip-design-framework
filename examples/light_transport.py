@@ -1,4 +1,4 @@
-"""Show the fingertip LED package and optical source schematic."""
+"""Show deterministic reference light transport in the fingertip."""
 
 from __future__ import annotations
 
@@ -12,18 +12,15 @@ else:
 ensure_repository_root()
 
 from model import Fingertip, FingertipParameters
-from visualization import plot_fingertip
+from optics import trace
+from visualization import plot_transport
 
 
 def main() -> int:
-    tip = Fingertip(FingertipParameters())
-    figure, axis = plt.subplots(figsize=(7.2, 6.0), constrained_layout=True)
-    plot_fingertip(
-        tip,
-        ax=axis,
-        show_void=True,
-        show_light_source=True,
-    )
+    tip = Fingertip(FingertipParameters(void_width=1.0, void_height=2.0))
+    mesh = tip.mesh()
+    result = trace(tip, mesh)
+    plot_transport(result, title="Reference qualitative light transport")
     plt.show()
     return 0
 

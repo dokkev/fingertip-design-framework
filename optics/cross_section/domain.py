@@ -10,9 +10,8 @@ from shapely.geometry import LineString, MultiLineString, MultiPolygon, Point, P
 from shapely.ops import linemerge, unary_union
 
 from model.fingertip_model import PolygonalGeometry
-from model.fingertip_sensor_model import FingertipSensorModel
-from optics.geometry.deformation_state import PadDeformationState2D
-from optics.geometry.pad_mesh_template import PadMeshTemplate2D
+from model.fingertip import Fingertip
+from mesh.pad import PadMesh
 
 
 class CrossSectionOpticsError(RuntimeError):
@@ -20,7 +19,7 @@ class CrossSectionOpticsError(RuntimeError):
 
 
 @dataclass(frozen=True)
-class CrossSectionOpticalDomain:
+class _OpticalDomain:
     """FEA-independent regions used by the cross-sectional ray tracer."""
 
     outer_envelope: PolygonalGeometry
@@ -42,7 +41,7 @@ _OUTER_ENVELOPE_TAGS = (
 
 
 def _build_deformed_outer_envelope(
-    template: PadMeshTemplate2D,
+    template: PadMesh,
     coordinates_mm: np.ndarray,
     silicone_region: Polygon,
     *,
@@ -129,12 +128,12 @@ def _build_deformed_outer_envelope(
 
 
 def _validate_domain(
-    sensor_model: FingertipSensorModel,
+    tip: Fingertip,
     *,
     outer_envelope: PolygonalGeometry,
     silicone_region: PolygonalGeometry,
-) -> CrossSectionOpticalDomain:
-    rigid_region = sensor_model.geometry.link_geometry
+) -> _OpticalDomain:
+    rigid_region = tip.geometry.link_geometry
     accessible_region = outer_envelope.difference(rigid_region)
     if not isinstance(accessible_region, Polygon | MultiPolygon):
         raise CrossSectionOpticsError(
@@ -151,13 +150,13 @@ def _validate_domain(
         if not geometry.is_valid:
             raise CrossSectionOpticsError(f"{name} is invalid")
 
-    tolerance = sensor_model.geometry.parameters.geometry_tolerance
+    tolerance = tip.geometry.parameters.geometry_tolerance
     if not isfinite(tolerance) or tolerance <= 0.0:
         raise CrossSectionOpticsError(
             "geometry_tolerance_mm must be finite and greater than zero"
         )
-    source_position = sensor_model.led_source_position_2d
-    emission_axis = sensor_model.led_emission_axis_2d
+    source_position = tip.led_source
+    emission_axis = tip.emission_axis
     emission_axis_norm = hypot(*emission_axis)
     if (
         not isfinite(emission_axis_norm)
@@ -166,7 +165,7 @@ def _validate_domain(
         raise CrossSectionOpticsError("the LED emission axis must be a unit vector")
 
     led_min_x, led_min_y, led_max_x, _ = (
-        sensor_model.led_package_geometry.bounds
+        tip.led_package_geometry.bounds
     )
     expected_source = (0.5 * (led_min_x + led_max_x), led_min_y)
     if (
@@ -189,7 +188,7 @@ def _validate_domain(
         raise CrossSectionOpticsError(
             "a distal step from the LED source does not enter the optical region"
         )
-    return CrossSectionOpticalDomain(
+    return _OpticalDomain(
         outer_envelope=outer_envelope,
         silicone_region=silicone_region,
         rigid_region=rigid_region,
@@ -200,26 +199,25 @@ def _validate_domain(
     )
 
 
-def build_no_load_optical_domain(
-    sensor_model: FingertipSensorModel,
-) -> CrossSectionOpticalDomain:
+def _build_no_load_domain(
+    tip: Fingertip,
+) -> _OpticalDomain:
     """Build a neutral optical domain from the analytic undeformed geometry."""
     return _validate_domain(
-        sensor_model,
-        outer_envelope=sensor_model.geometry.outer_pad_geometry,
-        silicone_region=sensor_model.geometry.pad_material_geometry,
+        tip,
+        outer_envelope=tip.geometry.outer_pad_geometry,
+        silicone_region=tip.geometry.pad_material_geometry,
     )
 
 
-def build_mesh_state_optical_domain(
-    sensor_model: FingertipSensorModel,
-    template: PadMeshTemplate2D,
-    state: PadDeformationState2D,
-) -> CrossSectionOpticalDomain:
-    """Build a loaded domain from the deformed triangular pad mesh."""
-    coordinates = template.coordinates_for(state)
+def _build_mesh_domain(
+    tip: Fingertip,
+    mesh: PadMesh,
+) -> _OpticalDomain:
+    """Build an optical domain from a reference or deformed pad mesh view."""
+    coordinates = mesh.coordinates
     triangle_polygons = [
-        Polygon(coordinates[triangle]) for triangle in template.triangles
+        Polygon(coordinates[triangle]) for triangle in mesh.triangles
     ]
     silicone_region = unary_union(triangle_polygons)
     if not isinstance(silicone_region, Polygon | MultiPolygon):
@@ -233,13 +231,13 @@ def build_mesh_state_optical_domain(
             "deformed silicone triangles form a disconnected pad"
         )
     outer_envelope = _build_deformed_outer_envelope(
-        template,
+        mesh,
         coordinates,
         silicone_region,
-        tolerance_mm=sensor_model.geometry.parameters.geometry_tolerance,
+        tolerance_mm=tip.geometry.parameters.geometry_tolerance,
     )
     return _validate_domain(
-        sensor_model,
+        tip,
         outer_envelope=outer_envelope,
         silicone_region=silicone_region,
     )

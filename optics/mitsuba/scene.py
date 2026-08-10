@@ -6,16 +6,16 @@ from typing import Any
 
 import numpy as np
 
-from model.fingertip_sensor_model import FingertipSensorModel
-from optics.geometry.extrusion import ExtrudedOpticalMeshTemplate
-from optics.mitsuba.parameters import MitsubaCameraParameters, MitsubaRenderSettings
+from model.fingertip import Fingertip
+from optics.geometry.extrusion import _ExtrudedMesh
+from optics.mitsuba.parameters import Camera, RenderSettings
 
 
 class MitsubaSceneError(RuntimeError):
     """Raised when an in-memory Mitsuba scene cannot be constructed."""
 
 
-def _camera_dict(mi: Any, camera: MitsubaCameraParameters) -> dict[str, Any]:
+def _camera_dict(mi: Any, camera: Camera) -> dict[str, Any]:
     to_world = mi.ScalarTransform4f.look_at(
         origin=list(camera.position_mm),
         target=list(camera.target_mm),
@@ -46,11 +46,11 @@ def _camera_dict(mi: Any, camera: MitsubaCameraParameters) -> dict[str, Any]:
 def build_in_memory_mitsuba_scene(
     mi: Any,
     *,
-    sensor_model: FingertipSensorModel,
-    extrusion: ExtrudedOpticalMeshTemplate,
+    tip: Fingertip,
+    extrusion: _ExtrudedMesh,
     vertices_mm: np.ndarray,
-    camera: MitsubaCameraParameters,
-    settings: MitsubaRenderSettings,
+    camera: Camera,
+    settings: RenderSettings,
 ) -> Any:
     """Build one scene containing a procedural pad mesh and point emitter."""
     vertices = np.asarray(vertices_mm, dtype=np.float32)
@@ -58,7 +58,7 @@ def build_in_memory_mitsuba_scene(
     if vertices.shape != (2 * extrusion.node_count_2d, 3):
         raise MitsubaSceneError("extruded vertices have an unexpected shape")
 
-    material = sensor_model.optical_material
+    material = tip.optical
     mesh_properties = mi.Properties()
     mesh_properties["bsdf"] = mi.load_dict({"type": "null"})
     mesh_properties["interior"] = mi.load_dict(
@@ -82,12 +82,13 @@ def build_in_memory_mitsuba_scene(
     mesh_parameters["faces"] = faces.reshape(-1)
     mesh_parameters.update()
 
-    source = np.asarray(sensor_model.led_source_position_3d, dtype=float)
+    source_x, source_y = tip.led_source
+    source = np.asarray((source_x, source_y, 0.0), dtype=float)
     source += settings.source_epsilon_mm * np.asarray([0.0, -1.0, 0.0])
     intensity = settings.point_emitter_scale * np.asarray(
-        sensor_model.led.emission_rgb,
+        tip.led.emission_rgb,
         dtype=float,
-    ) * sensor_model.led.relative_radiant_power
+    ) * tip.led.relative_radiant_power
     return mi.load_dict(
         {
             "type": "scene",

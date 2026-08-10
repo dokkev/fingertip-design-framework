@@ -105,6 +105,19 @@ def _pad_field_arrays(artifacts: Any, depth_mm: float) -> dict[str, np.ndarray]:
         "displacement_mm": displacement,
         "displacement_magnitude_mm": np.linalg.norm(displacement, axis=1),
     }
+    pad_node_id_set = set(pad_node_ids)
+    for tag, edges in mesh.boundary_edges.items():
+        tagged_pad_edges = [
+            edge.node_ids
+            for edge in edges
+            if edge.domain == "pad"
+            and set(edge.node_ids).issubset(pad_node_id_set)
+        ]
+        if tagged_pad_edges:
+            arrays[f"boundary_edge_node_ids__{tag}"] = np.asarray(
+                tagged_pad_edges,
+                dtype=np.int64,
+            )
     for name, values in arrays.items():
         if np.issubdtype(values.dtype, np.floating) and not np.isfinite(values).all():
             raise RuntimeError(f"full-field array {name} contains non-finite values")

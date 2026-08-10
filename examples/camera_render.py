@@ -1,4 +1,4 @@
-"""Show the fingertip LED package and optical source schematic."""
+"""Show the reference state with the optional Mitsuba camera validator."""
 
 from __future__ import annotations
 
@@ -12,18 +12,16 @@ else:
 ensure_repository_root()
 
 from model import Fingertip, FingertipParameters
-from visualization import plot_fingertip
+from optics.mitsuba import MitsubaRenderer
+from visualization import plot_camera
 
 
 def main() -> int:
     tip = Fingertip(FingertipParameters())
-    figure, axis = plt.subplots(figsize=(7.2, 6.0), constrained_layout=True)
-    plot_fingertip(
-        tip,
-        ax=axis,
-        show_void=True,
-        show_light_source=True,
-    )
+    mesh = tip.mesh()
+    renderer = MitsubaRenderer(tip, mesh, depth_mm=10.0)
+    image = renderer.render()
+    plot_camera(image)
     plt.show()
     return 0
 

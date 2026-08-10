@@ -1,16 +1,13 @@
-"""Matplotlib rendering for neutral 2D optical-transport results."""
+"""Matplotlib rendering for self-contained optical transport results."""
 
 from __future__ import annotations
-
-from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.axes import Axes
+from matplotlib.patches import Rectangle
 
-from model.fingertip_sensor_model import FingertipSensorModel
-from optics.cross_section.domain import CrossSectionOpticalDomain
-from optics.cross_section.result import CrossSectionTransportResult, RaySegment2D
+from optics import RaySegment, TransportResult
 from visualization.geometry import (
     ALUMINUM_COLOR,
     ALUMINUM_EDGE,
@@ -30,9 +27,9 @@ SILICONE_RAY_COLOR = "#FFF3B0"
 
 
 def _selected_segments(
-    segments: tuple[RaySegment2D, ...],
+    segments: tuple[RaySegment, ...],
     maximum_display_segments: int,
-) -> tuple[RaySegment2D, ...]:
+) -> tuple[RaySegment, ...]:
     if maximum_display_segments < 1:
         raise ValueError("maximum_display_segments must be at least one")
     candidates = tuple(
@@ -52,44 +49,36 @@ def _selected_segments(
     return tuple(candidates[index] for index in indices)
 
 
-def plot_cross_section_transport(
-    sensor_model: FingertipSensorModel,
-    domain: CrossSectionOpticalDomain,
-    result: CrossSectionTransportResult,
+def plot_transport(
+    result: TransportResult,
     *,
     ax: Axes | None = None,
     normalization_max: float | None = None,
     show_rays: bool = True,
     maximum_display_segments: int = 600,
-    title: str = "2D light transport",
+    title: str = "Qualitative light transport",
 ) -> Axes:
-    """Plot a transport result against its matching analytic or loaded domain."""
-    if not np.allclose(
-        result.source_position_mm,
-        sensor_model.led_source_position_2d,
-        rtol=0.0,
-        atol=sensor_model.geometry.parameters.geometry_tolerance,
-    ):
-        raise ValueError("transport and sensor LED source positions do not match")
+    """Plot a normalized path-density proxy using result-owned geometry."""
+    if not isinstance(result, TransportResult):
+        raise TypeError("result must be a TransportResult")
     if ax is None:
         _, ax = plt.subplots(figsize=(8.0, 7.0))
 
     if normalization_max is None:
-        normalization_scale = float(np.max(result.weighted_path_density))
+        normalization_scale = float(np.max(result.density))
     else:
         normalization_scale = float(normalization_max)
         if not np.isfinite(normalization_scale) or normalization_scale <= 0.0:
             raise ValueError("normalization_max must be finite and positive")
     display_density = (
-        np.zeros_like(result.weighted_path_density)
+        np.zeros_like(result.density)
         if normalization_scale <= 0.0
-        else np.clip(result.weighted_path_density / normalization_scale, 0.0, 1.0)
+        else np.clip(result.density / normalization_scale, 0.0, 1.0)
     )
-    masked_density = np.ma.masked_where(~result.optical_mask, display_density)
     heatmap = ax.pcolormesh(
-        result.x_edges_mm,
-        result.y_edges_mm,
-        masked_density,
+        result.x_edges,
+        result.y_edges,
+        np.ma.masked_where(~result.optical_mask, display_density),
         shading="flat",
         cmap="magma",
         vmin=0.0,
@@ -97,11 +86,10 @@ def plot_cross_section_transport(
         zorder=0,
     )
 
-    internal_air = domain.accessible_region.difference(domain.silicone_region)
-    if not internal_air.is_empty:
+    if not result.air_region.is_empty:
         _add_polygonal_patches(
             ax,
-            internal_air,
+            result.air_region,
             facecolor=VOID_COLOR,
             edgecolor=VOID_EDGE,
             linewidth=1.1,
@@ -111,7 +99,7 @@ def plot_cross_section_transport(
         )
     _add_polygonal_patches(
         ax,
-        domain.silicone_region,
+        result.silicone_region,
         facecolor=(0.0, 0.0, 0.0, 0.0),
         edgecolor=PAD_EDGE,
         linewidth=1.8,
@@ -120,18 +108,14 @@ def plot_cross_section_transport(
     )
     _add_polygonal_patches(
         ax,
-        domain.rigid_region,
+        result.rigid_region,
         facecolor=ALUMINUM_COLOR,
         edgecolor=ALUMINUM_EDGE,
         linewidth=1.5,
         label="Rigid link / stem",
         zorder=5,
     )
-    led_min_x, led_min_y, led_max_x, led_max_y = (
-        sensor_model.led_package_geometry.bounds
-    )
-    from matplotlib.patches import Rectangle
-
+    led_min_x, led_min_y, led_max_x, led_max_y = result.led_region.bounds
     ax.add_patch(
         Rectangle(
             (led_min_x, led_min_y),
@@ -144,10 +128,9 @@ def plot_cross_section_transport(
             zorder=7,
         )
     )
-    source_x, source_y = sensor_model.led_source_position_2d
     ax.scatter(
-        [source_x],
-        [source_y],
+        [result.source[0]],
+        [result.source[1]],
         s=42.0,
         color=LIGHT_SOURCE_COLOR,
         edgecolors=LIGHT_SOURCE_EDGE,
@@ -169,8 +152,8 @@ def plot_cross_section_transport(
                 else "_nolegend_"
             )
             ax.plot(
-                [segment.start_mm[0], segment.end_mm[0]],
-                [segment.start_mm[1], segment.end_mm[1]],
+                [segment.start[0], segment.end[0]],
+                [segment.start[1], segment.end[1]],
                 color=color,
                 linewidth=0.55,
                 alpha=0.62,
@@ -181,7 +164,7 @@ def plot_cross_section_transport(
 
     colorbar = ax.figure.colorbar(heatmap, ax=ax, fraction=0.046, pad=0.04)
     colorbar.set_label("Normalized weighted ray-path density")
-    min_x, min_y, max_x, max_y = domain.outer_envelope.bounds
+    min_x, min_y, max_x, max_y = result.outer_envelope.bounds
     span = max(max_x - min_x, max_y - min_y, 2.0)
     padding = 0.08 * span
     ax.set_xlim(min_x - padding, max_x + padding)
@@ -194,33 +177,4 @@ def plot_cross_section_transport(
     return ax
 
 
-def save_cross_section_transport_figure(
-    sensor_model: FingertipSensorModel,
-    domain: CrossSectionOpticalDomain,
-    result: CrossSectionTransportResult,
-    output_path: str | Path,
-    *,
-    dpi: int = 200,
-    normalization_max: float | None = None,
-    show_rays: bool = True,
-    maximum_display_segments: int = 600,
-    title: str = "2D light transport",
-) -> Path:
-    """Render a 2D transport result, save its PNG, and return its path."""
-    output = Path(output_path).expanduser().resolve()
-    output.parent.mkdir(parents=True, exist_ok=True)
-    figure, axis = plt.subplots(figsize=(8.0, 7.0))
-    plot_cross_section_transport(
-        sensor_model,
-        domain,
-        result,
-        ax=axis,
-        normalization_max=normalization_max,
-        show_rays=show_rays,
-        maximum_display_segments=maximum_display_segments,
-        title=title,
-    )
-    figure.tight_layout()
-    figure.savefig(output, dpi=dpi, bbox_inches="tight", facecolor="white")
-    plt.close(figure)
-    return output
+__all__ = ["plot_transport"]
