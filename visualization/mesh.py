@@ -7,9 +7,11 @@ from typing import Any
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.axes import Axes
+from matplotlib.collections import PolyCollection
 from matplotlib.tri import Triangulation
 
 from mesh import FingertipMesh, PadMesh
+from visualization._plotting import ALUMINUM_COLOR, ALUMINUM_EDGE
 
 
 def _pad_view(mesh: Any) -> Any:
@@ -33,6 +35,32 @@ def _mesh_arrays(mesh: Any) -> tuple[np.ndarray, np.ndarray]:
         raise ValueError("mesh.triangles must have shape (M, 3)")
     if np.any(triangles < 0) or np.any(triangles >= len(coordinates)):
         raise ValueError("mesh.triangles contains an invalid node index")
+    return coordinates, triangles
+
+
+def _carrier_arrays(mesh: FingertipMesh) -> tuple[np.ndarray, np.ndarray]:
+    node_ids = sorted(
+        {
+            int(node_id)
+            for element in mesh.carrier_elements
+            for node_id in element.node_ids
+        }
+    )
+    node_indices = {node_id: index for index, node_id in enumerate(node_ids)}
+    coordinates = np.asarray(
+        [
+            [mesh.nodes[node_id].x_mm, mesh.nodes[node_id].y_mm]
+            for node_id in node_ids
+        ],
+        dtype=float,
+    )
+    triangles = np.asarray(
+        [
+            [node_indices[int(node_id)] for node_id in element.node_ids]
+            for element in mesh.carrier_elements
+        ],
+        dtype=np.int64,
+    )
     return coordinates, triangles
 
 
@@ -147,11 +175,12 @@ def plot_displacement(
     arrow_minimum_mm: float = 0.0,
     maximum_arrows: int = 80,
     normalization_max: float | None = None,
+    show_rigid_structure: bool = True,
     contact_point: Any | None = None,
     indentation_direction: Any | None = None,
     title: str | None = None,
 ) -> Axes:
-    """Plot nodal displacement magnitude and physical displacement vectors."""
+    """Plot displacement and, for a full mesh, its undeformed rigid carrier."""
     coordinates, triangles = _mesh_arrays(mesh)
     values = _validate_displacement(coordinates, displacement)
     for name, value in (
@@ -189,6 +218,19 @@ def plot_displacement(
         _, ax = plt.subplots(figsize=(7.0, 6.0))
     deformed = coordinates + deformation_scale * values
     magnitude = np.linalg.norm(values, axis=1)
+    carrier_coordinates: np.ndarray | None = None
+    if show_rigid_structure and isinstance(mesh, FingertipMesh):
+        carrier_coordinates, carrier_triangles = _carrier_arrays(mesh)
+        ax.add_collection(
+            PolyCollection(
+                carrier_coordinates[carrier_triangles],
+                facecolors=ALUMINUM_COLOR,
+                edgecolors=ALUMINUM_EDGE,
+                linewidths=0.35,
+                label="Rigid link / stem",
+                zorder=1,
+            )
+        )
     triangulation = Triangulation(
         deformed[:, 0], deformed[:, 1], triangles
     )
@@ -262,7 +304,10 @@ def plot_displacement(
                 label="Indentation direction",
                 zorder=7,
             )
-    _set_limits(ax, deformed)
+    limits_coordinates = deformed
+    if carrier_coordinates is not None:
+        limits_coordinates = np.vstack((limits_coordinates, carrier_coordinates))
+    _set_limits(ax, limits_coordinates)
     ax.set_aspect("equal", adjustable="box")
     ax.set_xlabel("x [mm]")
     ax.set_ylabel("y [mm]")

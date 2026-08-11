@@ -277,12 +277,24 @@ def _properties(model_part: Any, identifier: int) -> Any:
     return model_part.CreateNewProperties(identifier)
 
 
-def _configure_properties(model_part: Any, KM: Any, CLA: Any) -> tuple[Any, Any]:
+def _configure_properties(
+    model_part: Any,
+    KM: Any,
+    CLA: Any,
+    mesh: FingertipMesh,
+) -> tuple[Any, Any]:
     pad_properties = _properties(model_part, 1)
     carrier_properties = _properties(model_part, 2)
-    for properties in (pad_properties, carrier_properties):
-        properties[KM.YOUNG_MODULUS] = YOUNG_MODULUS_MPA
-        properties[KM.POISSON_RATIO] = POISSON_RATIO
+    for properties, young_modulus, poisson_ratio in (
+        (
+            pad_properties,
+            mesh.parameters.young_modulus_mpa,
+            mesh.parameters.poisson_ratio,
+        ),
+        (carrier_properties, YOUNG_MODULUS_MPA, POISSON_RATIO),
+    ):
+        properties[KM.YOUNG_MODULUS] = young_modulus
+        properties[KM.POISSON_RATIO] = poisson_ratio
         properties[KM.THICKNESS] = THICKNESS_MM
         properties[KM.DENSITY] = 1.0
         properties[KM.VOLUME_ACCELERATION] = [0.0, 0.0, 0.0]
@@ -318,7 +330,7 @@ def populate_kratos_model_part(
     KM, _, CLA, _ = import_kratos()
     model_part.ProcessInfo[KM.DOMAIN_SIZE] = 2
     pad_properties, carrier_properties = _configure_properties(
-        model_part, KM, CLA
+        model_part, KM, CLA, mesh
     )
     for node in sorted(mesh.nodes.values(), key=lambda item: item.id):
         model_part.CreateNewNode(node.id, node.x_mm, node.y_mm, 0.0)
@@ -681,9 +693,9 @@ def run_initialization_smoke(mesh: FingertipMesh) -> dict[str, Any]:
                 "element": MIXED_PAD_ELEMENT,
                 "constitutive_law": CONSTITUTIVE_LAW,
                 "plane_strain": True,
-                "young_modulus_mpa": YOUNG_MODULUS_MPA,
-                "young_modulus_role": "validation placeholder, not calibrated silicone",
-                "poisson_ratio": POISSON_RATIO,
+                "young_modulus_mpa": mesh.parameters.young_modulus_mpa,
+                "young_modulus_role": "fingertip parameter, not calibrated silicone",
+                "poisson_ratio": mesh.parameters.poisson_ratio,
                 "thickness_mm": THICKNESS_MM,
                 "volumetric_strain_initial_value": 0.0,
             },

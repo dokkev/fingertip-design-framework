@@ -14,13 +14,18 @@ from model import Fingertip, FingertipParameters
 from visualization import plot_displacement
 
 
-DIAMETERS_MM = (4.0, 8.0, 12.0)
+DIAMETERS_MM = (4.0, 8.0)
 INDENTATION_MM = 1.5
 
 
 def main() -> int:
     tip = Fingertip(
-        FingertipParameters(void_width=1.0, void_height=2.0)
+        FingertipParameters(
+            void_width=1.0,
+            void_height=0.0,
+            young_modulus_mpa=1.0,
+            poisson_ratio=0.49,
+        )
     )
     mesh = tip.mesh()
 

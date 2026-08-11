@@ -10,6 +10,9 @@ CARRIER_ELEMENT = "TotalLagrangianElement2D3N"
 CONSTITUTIVE_LAW = "HyperElasticPlaneStrain2DLaw"
 MORTAR_TYPE = "ALMContactFrictionless"
 
+# Backend defaults retained for the constrained rigid carrier/indenter and
+# standalone validation benchmarks. Production compliant-pad properties come
+# from FingertipParameters through the mesh.
 YOUNG_MODULUS_MPA = 1.0
 POISSON_RATIO = 0.49
 THICKNESS_MM = 1.0

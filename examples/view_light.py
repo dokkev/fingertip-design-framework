@@ -20,7 +20,12 @@ INDENTATION_MM = 1.5
 
 def main() -> int:
     tip = Fingertip(
-        FingertipParameters(void_width=1.0, void_height=2.0)
+        FingertipParameters(
+            void_width=1.0,
+            void_height=2.0,
+            young_modulus_mpa=1.0,
+            poisson_ratio=0.49,
+        )
     )
     mesh = tip.mesh()
 

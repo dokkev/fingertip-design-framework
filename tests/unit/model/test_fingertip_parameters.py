@@ -21,6 +21,8 @@ def test_default_parameters_are_component_specific() -> None:
     assert parameters.cutout_width == parameters.stem_width
     assert parameters.cutout_height == parameters.stem_height
     assert parameters.void_area == 0.0
+    assert parameters.young_modulus_mpa == 1.0
+    assert parameters.poisson_ratio == 0.49
 
 
 def test_derived_coordinates_and_dimensions_have_one_definition() -> None:
@@ -124,9 +126,23 @@ def test_legacy_mapping_rejects_mixed_schema() -> None:
         ("semielliptical_pad_height", math.inf),
         ("stem_width", math.nan),
         ("void_height", math.nan),
+        ("young_modulus_mpa", math.inf),
+        ("poisson_ratio", math.nan),
         ("geometry_tolerance", math.inf),
     ],
 )
 def test_nonfinite_values_are_rejected(name: str, value: float) -> None:
     with pytest.raises(InvalidFingertipParameters):
         FingertipParameters(**{name: value})
+
+
+@pytest.mark.parametrize("value", [0.0, -1.0])
+def test_nonpositive_young_modulus_is_rejected(value: float) -> None:
+    with pytest.raises(InvalidFingertipParameters, match="young_modulus_mpa"):
+        FingertipParameters(young_modulus_mpa=value)
+
+
+@pytest.mark.parametrize("value", [-1.0, 0.5])
+def test_poisson_ratio_must_be_in_open_physical_range(value: float) -> None:
+    with pytest.raises(InvalidFingertipParameters, match="poisson_ratio"):
+        FingertipParameters(poisson_ratio=value)

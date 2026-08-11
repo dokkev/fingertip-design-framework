@@ -14,12 +14,13 @@ class InvalidFingertipParameters(ValueError):
 
 @dataclass(frozen=True)
 class FingertipParameters:
-    """Independent rigid-stem, vertical-pad, semi-ellipse, and void dimensions.
+    """Fingertip geometry and compliant-pad mechanical parameters.
 
     All dimensions are in millimeters. The link-pad interface is ``y = 0`` and
     the distal direction is negative ``y``. ``void_width`` is the one-sided
     clearance beside the stem; ``void_height`` is the additional clearance
-    below the stem tip.
+    below the stem tip. ``young_modulus_mpa`` is in MPa and ``poisson_ratio``
+    is dimensionless.
     """
 
     vertical_pad_width: float = 20.0
@@ -34,6 +35,8 @@ class FingertipParameters:
     bonded: bool = True
     arc_resolution: int = 128
     geometry_tolerance: float = 1e-9
+    young_modulus_mpa: float = 1.0
+    poisson_ratio: float = 0.49
 
     def __post_init__(self) -> None:
         """Validate values immediately so every instance is usable."""
@@ -161,6 +164,8 @@ class FingertipParameters:
             "stem_height": self.stem_height,
             "void_width": self.void_width,
             "void_height": self.void_height,
+            "young_modulus_mpa": self.young_modulus_mpa,
+            "poisson_ratio": self.poisson_ratio,
             "geometry_tolerance": self.geometry_tolerance,
         }
         for name, value in dimensions.items():
@@ -182,6 +187,14 @@ class FingertipParameters:
         if self.void_width < 0.0 or self.void_height < 0.0:
             raise InvalidFingertipParameters(
                 "void_width and void_height must be nonnegative"
+            )
+        if self.young_modulus_mpa <= 0.0:
+            raise InvalidFingertipParameters(
+                "young_modulus_mpa must be greater than zero"
+            )
+        if not -1.0 < self.poisson_ratio < 0.5:
+            raise InvalidFingertipParameters(
+                "poisson_ratio must lie strictly between -1 and 0.5"
             )
         if self.geometry_tolerance <= 0.0:
             raise InvalidFingertipParameters(

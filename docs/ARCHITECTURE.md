@@ -47,15 +47,17 @@ It does not replace mesh-based reference/loaded comparisons.
 
 ## Ownership
 
-- `model/` owns `Fingertip`, mechanical parameters, exact Shapely geometry,
-  boundary semantics, LED metadata, and bulk optical material. LED geometry is
+- `model/` owns `Fingertip`, geometry and compliant-pad mechanical parameters,
+  exact Shapely geometry, boundary semantics, LED metadata, and bulk optical
+  material. LED geometry is
   metadata only: it is not unioned with or subtracted from mechanical material,
   collision, mesh, or FEM geometry.
 - `mesh/` owns discrete topology, coordinates, semantic boundary groups, Gmsh
   conversion, settings, and quality. A `PadMesh` is a neutral view of the
   compliant-pad topology used across subsystem boundaries.
 - `fem/` owns Kratos assembly, constitutive models, contact, constraints,
-  nonlinear solves, and extraction of `FEAResult`. Its public surface is
+  nonlinear solves, and extraction of `FEAResult`. The pad's Young's modulus
+  and Poisson ratio come from `FingertipMesh.parameters`; its public surface is
   `solve()`, `FEAResult`, and the solver-facing `IndenterSettings` fixture;
   Kratos objects do not cross into optics or visualization.
 - `optics/` owns deterministic ray transport and adapters from neutral meshes

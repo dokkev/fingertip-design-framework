@@ -15,6 +15,22 @@ dimensions of four physical components:
 uses `stem_height = 6 mm` and `vertical_pad_height = 3 mm` so this distinction
 is visible.
 
+## Mechanical pad material
+
+`FingertipParameters` also owns the compliant pad material values used by the
+production FEM path:
+
+| Parameter | Meaning | Default |
+| --- | --- | --- |
+| `young_modulus_mpa` | pad Young's modulus [MPa] | `1.0` |
+| `poisson_ratio` | pad Poisson ratio [-] | `0.49` |
+
+`young_modulus_mpa = 1.0` is the current FEM baseline/default and is not an
+experimentally calibrated LIT silicone modulus. `poisson_ratio = 0.49` is the
+current validated nearly-incompressible FEM baseline. The production solver
+reads these values through the meshed fingertip; the rigid carrier and
+indenter remain backend-constrained parts.
+
 ## Central derived coordinates
 
 `FingertipParameters` owns the coordinates and dimensions consumed by the
