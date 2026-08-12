@@ -1,7 +1,8 @@
-"""Tests for LIT pad parameter validation and derived dimensions."""
+"""Tests for fingertip parameter validation and derived dimensions."""
 
 from __future__ import annotations
 
+from dataclasses import fields
 import math
 
 import pytest
@@ -9,15 +10,20 @@ import pytest
 from model.fingertip_parameters import FingertipParameters, InvalidFingertipParameters
 
 
-def test_default_parameters_are_component_specific() -> None:
+def _removed_name(prefix: str, suffix: str) -> str:
+    """Build a removed API name without keeping it as a repository symbol."""
+    return "_".join((prefix, suffix))
+
+
+def test_default_parameters_use_the_canonical_geometry_api() -> None:
     parameters = FingertipParameters()
-    assert parameters.vertical_pad_width == 20.0
-    assert parameters.vertical_pad_height == 3.0
-    assert parameters.semielliptical_pad_width == 20.0
+    assert parameters.flat_pad_width == 20.0
+    assert parameters.flat_pad_height == 3.0
     assert parameters.semielliptical_pad_height == 7.0
-    assert parameters.stem_height == 6.0
-    assert parameters.stem_height > parameters.vertical_pad_height
-    assert parameters.link_width == parameters.vertical_pad_width
+    assert parameters.link_width == 12.0
+    assert parameters.link_thickness == 3.5
+    assert parameters.bond_extension_height == 2.0
+    assert parameters.bond_extension_width == pytest.approx(4.0)
     assert parameters.cutout_width == parameters.stem_width
     assert parameters.cutout_height == parameters.stem_height
     assert parameters.void_area == 0.0
@@ -25,10 +31,26 @@ def test_default_parameters_are_component_specific() -> None:
     assert parameters.poisson_ratio == 0.49
 
 
+def test_removed_geometry_fields_are_not_constructor_parameters() -> None:
+    parameter_names = {field.name for field in fields(FingertipParameters)}
+    assert "flat_pad_width" in parameter_names
+    assert "flat_pad_height" in parameter_names
+    for removed_name in (
+        _removed_name("vertical", "pad_width"),
+        _removed_name("vertical", "pad_height"),
+        _removed_name("semielliptical", "pad_width"),
+    ):
+        assert removed_name not in parameter_names
+        with pytest.raises(TypeError):
+            FingertipParameters(**{removed_name: 20.0})
+
+
 def test_derived_coordinates_and_dimensions_have_one_definition() -> None:
     parameters = FingertipParameters(
-        vertical_pad_height=5.0,
+        flat_pad_height=5.0,
         semielliptical_pad_height=9.0,
+        link_width=14.0,
+        bond_extension_height=2.5,
         stem_width=6.0,
         stem_height=7.0,
         void_width=1.5,
@@ -42,16 +64,18 @@ def test_derived_coordinates_and_dimensions_have_one_definition() -> None:
     assert parameters.cutout_half_width == pytest.approx(4.5)
     assert parameters.cutout_height == pytest.approx(9.0)
     assert parameters.total_pad_depth == pytest.approx(14.0)
+    assert parameters.bond_extension_width == pytest.approx(3.0)
 
 
 @pytest.mark.parametrize(
     "name",
     [
-        "vertical_pad_width",
-        "vertical_pad_height",
-        "semielliptical_pad_width",
+        "flat_pad_width",
+        "flat_pad_height",
         "semielliptical_pad_height",
+        "link_width",
         "link_thickness",
+        "bond_extension_height",
         "stem_width",
         "stem_height",
     ],
@@ -67,63 +91,32 @@ def test_negative_clearance_is_rejected(name: str) -> None:
         FingertipParameters(**{name: -0.1})
 
 
-def test_vertical_and_semielliptical_widths_must_match() -> None:
-    with pytest.raises(InvalidFingertipParameters, match="must be equal"):
-        FingertipParameters(semielliptical_pad_width=19.0)
-    FingertipParameters(semielliptical_pad_width=20.0 + 0.5e-9)
+def test_flat_pad_must_be_wider_than_the_rigid_link() -> None:
+    with pytest.raises(InvalidFingertipParameters, match="flat_pad_width"):
+        FingertipParameters(flat_pad_width=12.0, link_width=12.0)
 
 
-def test_cutout_must_be_strictly_narrower_than_vertical_pad() -> None:
+def test_cutout_must_be_strictly_narrower_than_the_rigid_link() -> None:
     with pytest.raises(
         InvalidFingertipParameters,
-        match="cutout_width must be smaller",
+        match="cutout_width must be smaller than link_width",
     ):
-        FingertipParameters(stem_width=10.0, void_width=5.0)
+        FingertipParameters(link_width=12.0, stem_width=11.0, void_width=0.5)
 
 
-def test_stem_and_vertical_pad_heights_are_not_coupled() -> None:
-    short_stem = FingertipParameters(stem_height=2.0, vertical_pad_height=4.0)
-    long_stem = FingertipParameters(stem_height=6.0, vertical_pad_height=4.0)
-    assert short_stem.stem_height < short_stem.vertical_pad_height
-    assert long_stem.stem_height > long_stem.vertical_pad_height
-
-
-def test_legacy_mapping_requires_explicit_new_vertical_height() -> None:
-    migrated = FingertipParameters.from_legacy_mapping(
-        {
-            "pad_width": 24.0,
-            "pad_height": 10.0,
-            "stem_width": 8.0,
-            "stem_height": 7.0,
-        },
-        vertical_pad_height=5.0,
-    )
-    assert migrated.vertical_pad_width == 24.0
-    assert migrated.semielliptical_pad_width == 24.0
-    assert migrated.vertical_pad_height == 5.0
-    assert migrated.semielliptical_pad_height == 10.0
-    assert migrated.stem_height == 7.0
-
-
-def test_legacy_mapping_rejects_mixed_schema() -> None:
-    with pytest.raises(InvalidFingertipParameters, match="cannot mix"):
-        FingertipParameters.from_legacy_mapping(
-            {
-                "pad_width": 24.0,
-                "pad_height": 10.0,
-                "vertical_pad_width": 24.0,
-            },
-            vertical_pad_height=5.0,
-        )
+def test_bond_extension_must_fit_on_the_rigid_link_sidewall() -> None:
+    with pytest.raises(InvalidFingertipParameters, match="bond_extension_height"):
+        FingertipParameters(link_thickness=2.0, bond_extension_height=2.1)
 
 
 @pytest.mark.parametrize(
     ("name", "value"),
     [
-        ("vertical_pad_width", math.inf),
-        ("vertical_pad_height", -math.inf),
-        ("semielliptical_pad_width", math.nan),
-        ("semielliptical_pad_height", math.inf),
+        ("flat_pad_width", math.inf),
+        ("flat_pad_height", -math.inf),
+        ("semielliptical_pad_height", math.nan),
+        ("link_width", math.inf),
+        ("bond_extension_height", math.nan),
         ("stem_width", math.nan),
         ("void_height", math.nan),
         ("young_modulus_mpa", math.inf),

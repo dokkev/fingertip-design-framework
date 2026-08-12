@@ -15,8 +15,12 @@ from visualization import plot_fingertip
 def main() -> int:
     # Change these dimensions to explore the fingertip geometry.
     parameters = FingertipParameters(
-        semielliptical_pad_width=20.0,
+        flat_pad_width=20.0,
+        flat_pad_height=3.0,
         semielliptical_pad_height=7.0,
+        link_width=12.0,
+        link_thickness=3.5,
+        bond_extension_height=2.0,
         stem_width=7.6,
         stem_height=6.0,
     )

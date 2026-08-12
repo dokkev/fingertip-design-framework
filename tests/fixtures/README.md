@@ -4,9 +4,8 @@ Keep only small, deterministic inputs needed by `tests/unit` or `tests/smoke`
 here. Generated validation artifacts belong under `output/`, and scientific
 reference datasets belong under `validation/reference_data/`.
 
-Fingertip geometry fixtures must use the component-specific
-`vertical_pad_*` and `semielliptical_pad_*` schema and must keep the complete
-stem-clearance cutout inside the outer pad envelope. The canonical nonzero
+Fingertip geometry fixtures must use the canonical `flat_pad_*`, explicit
+`link_width`, and `bond_extension_height` schema. The complete stem-clearance
+cutout must remain inside the outer pad envelope. The canonical nonzero
 clearance fixture uses `void_width=1.0` and `void_height=2.0`. Artifacts
-containing the obsolete `pad_width` or `pad_height` schema describe the old
-single semi-ellipse and must be regenerated rather than reused.
+containing obsolete single-pad schemas must be regenerated rather than reused.

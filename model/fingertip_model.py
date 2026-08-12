@@ -89,16 +89,19 @@ class InterfaceDefinition:
 class FingertipModel:
     """Build the symmetric compliant pad, rigid link/stem, and clearance.
 
-    The outer pad is a vertical rectangle from ``y = 0`` to
-    ``-vertical_pad_height`` joined directly to a lower semi-ellipse. A rigid
-    plate sits above ``y = 0`` and its independently sized centered stem extends
-    downward into the completed envelope.
+    The outer pad is a flat rectangle from ``y = 0`` to
+    ``-flat_pad_height`` joined directly to a lower semi-ellipse. Two
+    compliant extensions rise outside the narrower rigid plate. The rigid
+    plate sits above ``y = 0`` and its centered stem extends downward into the
+    completed envelope.
     """
 
     def __init__(self, parameters: FingertipParameters):
         parameters.validate()
         self._parameters = parameters
-        self._vertical_pad_geometry = self._build_vertical_pad()
+        self._flat_pad_geometry = self._build_flat_pad()
+        self._left_bond_extension_geometry = self._build_bond_extension("left")
+        self._right_bond_extension_geometry = self._build_bond_extension("right")
         self._pad_outer_arc_geometry = self._build_pad_outer_arc()
         self._semielliptical_pad_geometry = self._build_semielliptical_pad()
         self._outer_pad_geometry = self._build_outer_pad()
@@ -144,13 +147,23 @@ class FingertipModel:
 
     @property
     def outer_pad_geometry(self) -> Polygon:
-        """Return the completed rectangle-plus-semi-ellipse outer envelope."""
+        """Return the flat-pad, extension, and semi-ellipse outer envelope."""
         return self._outer_pad_geometry
 
     @property
-    def vertical_pad_geometry(self) -> Polygon:
-        """Return the external vertical rectangular pad component."""
-        return self._vertical_pad_geometry
+    def flat_pad_geometry(self) -> Polygon:
+        """Return the external flat rectangular pad component."""
+        return self._flat_pad_geometry
+
+    @property
+    def left_bond_extension_geometry(self) -> Polygon:
+        """Return the compliant extension beside the rigid link's left side."""
+        return self._left_bond_extension_geometry
+
+    @property
+    def right_bond_extension_geometry(self) -> Polygon:
+        """Return the compliant extension beside the rigid link's right side."""
+        return self._right_bond_extension_geometry
 
     @property
     def semielliptical_pad_geometry(self) -> Polygon:
@@ -285,6 +298,7 @@ class FingertipModel:
             },
             "cutout_width": self._parameters.cutout_width,
             "cutout_height": self._parameters.cutout_height,
+            "bond_extension_width": self._parameters.bond_extension_width,
             "ellipse_start_y": self._parameters.ellipse_start_y,
             "stem_tip_y": self._parameters.stem_tip_y,
             "void_bottom_y": self._parameters.void_bottom_y,
@@ -305,22 +319,42 @@ class FingertipModel:
             "bounds": tuple(float(value) for value in self._material_geometry.bounds),
         }
 
-    def _build_vertical_pad(self) -> Polygon:
+    def _build_flat_pad(self) -> Polygon:
         parameters = self._parameters
         return orient(
             box(
-                -parameters.vertical_pad_width / 2.0,
+                -parameters.flat_pad_width / 2.0,
                 parameters.ellipse_start_y,
-                parameters.vertical_pad_width / 2.0,
+                parameters.flat_pad_width / 2.0,
                 0.0,
             ),
             sign=1.0,
         )
 
+    def _build_bond_extension(self, side: Literal["left", "right"]) -> Polygon:
+        parameters = self._parameters
+        half_flat_width = parameters.flat_pad_width / 2.0
+        half_link_width = parameters.link_width / 2.0
+        if side == "left":
+            bounds = (
+                -half_flat_width,
+                0.0,
+                -half_link_width,
+                parameters.bond_extension_height,
+            )
+        else:
+            bounds = (
+                half_link_width,
+                0.0,
+                half_flat_width,
+                parameters.bond_extension_height,
+            )
+        return orient(box(*bounds), sign=1.0)
+
     def _build_pad_outer_arc(self) -> LineString:
-        # Widths accepted within numerical tolerance represent one physical
-        # join, so snap the sampled arc to the vertical-pad endpoints.
-        half_width = self._parameters.vertical_pad_width / 2.0
+        # Snap the sampled arc to the flat-pad endpoints so there is no
+        # numerical shoulder at the rectangle/ellipse join.
+        half_width = self._parameters.flat_pad_width / 2.0
         semi_axis = self._parameters.semielliptical_pad_height
         ellipse_start_y = self._parameters.ellipse_start_y
         arc_segments = (
@@ -350,12 +384,17 @@ class FingertipModel:
 
     def _build_outer_pad(self) -> Polygon:
         outer_pad = self._validated_polygonal_geometry(
-            self._vertical_pad_geometry.union(self._semielliptical_pad_geometry),
+            self._flat_pad_geometry.union(
+                self._semielliptical_pad_geometry
+            ).union(self._left_bond_extension_geometry).union(
+                self._right_bond_extension_geometry
+            ),
             "outer pad",
         )
         if not isinstance(outer_pad, Polygon):
             raise InvalidFingertipGeometry(
-                "vertical and semi-elliptical pads do not form one envelope"
+                "flat pad, bond extensions, and semi-elliptical pad do not "
+                "form one envelope"
             )
         return outer_pad
 
@@ -427,26 +466,54 @@ class FingertipModel:
 
     def _build_boundaries(self) -> FingertipBoundaries:
         parameters = self._parameters
-        pad_edge = parameters.vertical_pad_width / 2.0
+        flat_pad_edge = parameters.flat_pad_width / 2.0
+        link_edge = parameters.link_width / 2.0
         cutout_edge = parameters.cutout_half_width
         stem_edge = parameters.stem_width / 2.0
         ellipse_start_y = parameters.ellipse_start_y
         stem_bottom_y = parameters.stem_tip_y
         cutout_bottom_y = parameters.void_bottom_y
+        bond_height = parameters.bond_extension_height
 
         pad_bond_left = BoundarySegment(
-            "pad_bond_left", LineString([(-pad_edge, 0.0), (-cutout_edge, 0.0)])
+            "pad_bond_left",
+            LineString(
+                [
+                    (-cutout_edge, 0.0),
+                    (-link_edge, 0.0),
+                    (-link_edge, bond_height),
+                ]
+            ),
         )
         pad_bond_right = BoundarySegment(
-            "pad_bond_right", LineString([(cutout_edge, 0.0), (pad_edge, 0.0)])
+            "pad_bond_right",
+            LineString(
+                [
+                    (link_edge, bond_height),
+                    (link_edge, 0.0),
+                    (cutout_edge, 0.0),
+                ]
+            ),
         )
         pad_outer_left = BoundarySegment(
             "pad_outer_left",
-            LineString([(-pad_edge, 0.0), (-pad_edge, ellipse_start_y)]),
+            LineString(
+                [
+                    (-link_edge, bond_height),
+                    (-flat_pad_edge, bond_height),
+                    (-flat_pad_edge, ellipse_start_y),
+                ]
+            ),
         )
         pad_outer_right = BoundarySegment(
             "pad_outer_right",
-            LineString([(pad_edge, ellipse_start_y), (pad_edge, 0.0)]),
+            LineString(
+                [
+                    (flat_pad_edge, ellipse_start_y),
+                    (flat_pad_edge, bond_height),
+                    (link_edge, bond_height),
+                ]
+            ),
         )
         pad_cutout_left = BoundarySegment(
             "pad_cutout_left",
