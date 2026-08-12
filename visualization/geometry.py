@@ -5,16 +5,16 @@ from __future__ import annotations
 from typing import Any
 
 import matplotlib.pyplot as plt
-import numpy as np
 from matplotlib.axes import Axes
-from matplotlib.legend_handler import HandlerPatch
-from matplotlib.patches import FancyArrowPatch, Rectangle
+from matplotlib.patches import Rectangle
 
 from model import Fingertip
 from model.fingertip_model import BoundarySegment
 from visualization._plotting import (
     ALUMINUM_COLOR,
     ALUMINUM_EDGE,
+    BONDED_INTERFACE_COLOR,
+    BONDED_INTERFACE_EDGE,
     LED_COLOR,
     LED_EDGE,
     LIGHT_SOURCE_COLOR,
@@ -22,7 +22,6 @@ from visualization._plotting import (
     PAD_COLOR,
     PAD_CONTACT_COLOR,
     PAD_EDGE,
-    STEM_CONTACT_COLOR,
     VOID_COLOR,
     VOID_EDGE,
     add_polygonal_patches,
@@ -95,7 +94,7 @@ def plot_fingertip(
             zorder=3,
         )
     if show_interface:
-        _plot_bonded_interface_arrows(ax, model)
+        _plot_bonded_interface(ax, model)
     if show_contact_boundaries:
         _plot_boundary_segments(
             ax,
@@ -109,19 +108,6 @@ def plot_fingertip(
             linewidth=3.0,
             label="Pad contact boundary",
             zorder=9,
-        )
-        _plot_boundary_segments(
-            ax,
-            (
-                model.boundaries.stem_left,
-                model.boundaries.stem_right,
-                model.boundaries.stem_bottom,
-            ),
-            color=STEM_CONTACT_COLOR,
-            linestyle=":",
-            linewidth=1.8,
-            label="Stem contact boundary",
-            zorder=10,
         )
     if show_symmetry_axis:
         symmetry_x, symmetry_y = model.symmetry_axis.xy
@@ -148,11 +134,6 @@ def plot_fingertip(
             loc="upper center",
             fontsize=8,
             ncol=2,
-            handler_map={
-                FancyArrowPatch: HandlerPatch(
-                    patch_func=_legend_bidirectional_arrow
-                )
-            },
         )
     return ax
 
@@ -187,51 +168,29 @@ def _add_light_source_overlay(ax: Axes, tip: Fingertip) -> None:
     )
 
 
-def _plot_bonded_interface_arrows(ax: Axes, model: Any) -> None:
-    is_first_arrow = True
-    for segment in model.pad_link_interface.geoms:
-        arrow_count = max(1, int(round(segment.length / 1.8)))
-        arrow_distances = np.linspace(
-            segment.length / (arrow_count + 1),
-            segment.length * arrow_count / (arrow_count + 1),
-            arrow_count,
+def _plot_bonded_interface(ax: Axes, model: Any) -> None:
+    """Highlight the two L-shaped bonded surfaces as translucent overlays.
+
+    The analytic interface is a line in this 2D model. A small display-only
+    buffer makes that surface visible without changing the physical geometry.
+    """
+    display_half_width_mm = 0.22
+    for index, segment in enumerate(model.pad_link_interface.geoms):
+        overlay = segment.buffer(
+            display_half_width_mm,
+            cap_style=2,
+            join_style=2,
         )
-        for distance in arrow_distances:
-            center = segment.interpolate(float(distance))
-            ax.add_patch(
-                FancyArrowPatch(
-                    (center.x, center.y + 1.0),
-                    (center.x, center.y - 1.0),
-                    arrowstyle="<->",
-                    mutation_scale=12.0,
-                    color="#C9473D",
-                    linewidth=1.5,
-                    label="Bonded interface" if is_first_arrow else "_nolegend_",
-                    zorder=8,
-                )
-            )
-            is_first_arrow = False
-
-
-def _legend_bidirectional_arrow(
-    legend: object,
-    orig_handle: FancyArrowPatch,
-    xdescent: float,
-    ydescent: float,
-    width: float,
-    height: float,
-    fontsize: float,
-) -> FancyArrowPatch:
-    del legend
-    center_y = ydescent + height / 2.0
-    return FancyArrowPatch(
-        (xdescent, center_y),
-        (xdescent + width, center_y),
-        arrowstyle="<->",
-        mutation_scale=fontsize,
-        color=orig_handle.get_edgecolor(),
-        linewidth=orig_handle.get_linewidth(),
-    )
+        add_polygonal_patches(
+            ax,
+            overlay,
+            facecolor=BONDED_INTERFACE_COLOR,
+            edgecolor=BONDED_INTERFACE_EDGE,
+            linewidth=0.8,
+            label="Bonded interface" if index == 0 else "_nolegend_",
+            zorder=8,
+            alpha=0.62,
+        )
 
 
 def _plot_boundary_segments(

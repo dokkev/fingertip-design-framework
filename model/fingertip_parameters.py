@@ -14,18 +14,18 @@ class InvalidFingertipParameters(ValueError):
 class FingertipParameters:
     """Fingertip geometry and compliant-pad mechanical parameters.
 
-    All dimensions are in millimeters. The link-pad interface is ``y = 0``
-    and the distal direction is negative ``y``. ``void_width`` is the
-    one-sided clearance beside the stem; ``void_height`` is the additional
-    clearance below the stem tip. ``young_modulus_mpa`` is in MPa and
-    ``poisson_ratio`` is dimensionless.
+    All dimensions are in millimeters. The flat-pad, semi-ellipse, and rigid
+    link share one full width: ``flat_pad_width``. The link-pad interface is
+    ``y = 0`` and the distal direction is negative ``y``. ``void_width`` is
+    the one-sided clearance beside the stem; ``void_height`` is the
+    additional clearance below the stem tip.
     """
 
     flat_pad_width: float = 20.0
     flat_pad_height: float = 3.0
     semielliptical_pad_height: float = 7.0
-    link_width: float = 12.0
     link_thickness: float = 3.5
+    bond_extension_width: float = 4.0
     bond_extension_height: float = 2.0
     stem_width: float = 7.6
     stem_height: float = 6.0
@@ -86,15 +86,10 @@ class FingertipParameters:
         return self.cutout_height
 
     @property
-    def bond_extension_width(self) -> float:
-        """Width of either compliant extension beside the rigid link."""
-        return (self.flat_pad_width - self.link_width) / 2.0
-
-    @property
     def bonded_segment_length(self) -> float:
-        """Length of either L-shaped bonded pad-to-link segment."""
+        """Length of either three-segment bonded pad-to-link boundary."""
         return self.bond_extension_height + (
-            self.link_width - self.cutout_width
+            self.flat_pad_width - self.cutout_width
         ) / 2.0
 
     @property
@@ -111,8 +106,8 @@ class FingertipParameters:
             "flat_pad_width": self.flat_pad_width,
             "flat_pad_height": self.flat_pad_height,
             "semielliptical_pad_height": self.semielliptical_pad_height,
-            "link_width": self.link_width,
             "link_thickness": self.link_thickness,
+            "bond_extension_width": self.bond_extension_width,
             "bond_extension_height": self.bond_extension_height,
             "stem_width": self.stem_width,
             "stem_height": self.stem_height,
@@ -130,8 +125,8 @@ class FingertipParameters:
             "flat_pad_width",
             "flat_pad_height",
             "semielliptical_pad_height",
-            "link_width",
             "link_thickness",
+            "bond_extension_width",
             "bond_extension_height",
             "stem_width",
             "stem_height",
@@ -163,17 +158,18 @@ class FingertipParameters:
             raise InvalidFingertipParameters(
                 "arc_resolution must be an integer of at least 16"
             )
-        if self.flat_pad_width <= self.link_width:
+        if self.bond_extension_height >= self.link_thickness:
             raise InvalidFingertipParameters(
-                "flat_pad_width must be greater than link_width"
+                "bond_extension_height must be smaller than link_thickness"
             )
-        if self.cutout_width >= self.link_width:
+        if (
+            2.0 * self.bond_extension_width + self.cutout_width
+            >= self.flat_pad_width
+        ):
             raise InvalidFingertipParameters(
-                "cutout_width must be smaller than link_width: "
+                "2*bond_extension_width + cutout_width must be smaller than "
+                "flat_pad_width: "
+                f"bond_extension_width={self.bond_extension_width:g}, "
                 f"cutout_width={self.cutout_width:g}, "
-                f"link_width={self.link_width:g}"
-            )
-        if self.bond_extension_height > self.link_thickness:
-            raise InvalidFingertipParameters(
-                "bond_extension_height must not exceed link_thickness"
+                f"flat_pad_width={self.flat_pad_width:g}"
             )

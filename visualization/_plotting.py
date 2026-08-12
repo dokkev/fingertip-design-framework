@@ -19,7 +19,8 @@ ALUMINUM_EDGE = "#7B8288"
 VOID_COLOR = "#F7B4AE"
 VOID_EDGE = "#C9473D"
 PAD_CONTACT_COLOR = "#D95F02"
-STEM_CONTACT_COLOR = "#6A3D9A"
+BONDED_INTERFACE_COLOR = "#F4E04D"
+BONDED_INTERFACE_EDGE = "#C49A00"
 LED_COLOR = "#F6C453"
 LED_EDGE = "#9A6700"
 LIGHT_SOURCE_COLOR = "#E63946"
@@ -37,6 +38,7 @@ def add_polygonal_patches(
     zorder: int,
     linestyle: str = "-",
     hatch: str | None = None,
+    alpha: float = 1.0,
 ) -> None:
     for index, polygon in enumerate(iter_polygons(geometry)):
         ax.add_patch(
@@ -47,6 +49,7 @@ def add_polygonal_patches(
                 linewidth=linewidth,
                 linestyle=linestyle,
                 hatch=hatch,
+                alpha=alpha,
                 label=label if index == 0 else None,
                 zorder=zorder,
             )

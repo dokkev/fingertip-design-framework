@@ -91,9 +91,8 @@ class FingertipModel:
 
     The outer pad is a flat rectangle from ``y = 0`` to
     ``-flat_pad_height`` joined directly to a lower semi-ellipse. Two
-    compliant extensions rise outside the narrower rigid plate. The rigid
-    plate sits above ``y = 0`` and its centered stem extends downward into the
-    completed envelope.
+    compliant extensions occupy lower-corner recesses in a full-width rigid
+    plate. The centered stem extends downward into the completed envelope.
     """
 
     def __init__(self, parameters: FingertipParameters):
@@ -157,12 +156,12 @@ class FingertipModel:
 
     @property
     def left_bond_extension_geometry(self) -> Polygon:
-        """Return the compliant extension beside the rigid link's left side."""
+        """Return the compliant material in the rigid link's left recess."""
         return self._left_bond_extension_geometry
 
     @property
     def right_bond_extension_geometry(self) -> Polygon:
-        """Return the compliant extension beside the rigid link's right side."""
+        """Return the compliant material in the rigid link's right recess."""
         return self._right_bond_extension_geometry
 
     @property
@@ -280,6 +279,14 @@ class FingertipModel:
             raise InvalidFingertipGeometry(
                 "the cutout creates disconnected compliant-pad fragments"
             )
+        overlap_area = self._pad_material_geometry.intersection(
+            self._link_geometry
+        ).area
+        if overlap_area > self._parameters.geometry_tolerance:
+            raise InvalidFingertipGeometry(
+                "compliant pad and rigid link materials overlap: "
+                f"overlap_area={overlap_area:g}"
+            )
         if self.pad_link_connection_length() <= self._parameters.geometry_tolerance:
             raise InvalidFingertipGeometry(
                 "the always-bonded upper interface has zero effective length"
@@ -334,17 +341,16 @@ class FingertipModel:
     def _build_bond_extension(self, side: Literal["left", "right"]) -> Polygon:
         parameters = self._parameters
         half_flat_width = parameters.flat_pad_width / 2.0
-        half_link_width = parameters.link_width / 2.0
         if side == "left":
             bounds = (
                 -half_flat_width,
                 0.0,
-                -half_link_width,
+                -half_flat_width + parameters.bond_extension_width,
                 parameters.bond_extension_height,
             )
         else:
             bounds = (
-                half_link_width,
+                half_flat_width - parameters.bond_extension_width,
                 0.0,
                 half_flat_width,
                 parameters.bond_extension_height,
@@ -400,15 +406,34 @@ class FingertipModel:
 
     def _build_link_plate(self) -> Polygon:
         parameters = self._parameters
-        return orient(
-            box(
-                -parameters.link_width / 2.0,
-                0.0,
-                parameters.link_width / 2.0,
-                parameters.link_thickness,
-            ),
-            sign=1.0,
+        half_width = parameters.flat_pad_width / 2.0
+        full_link_plate = box(
+            -half_width,
+            0.0,
+            half_width,
+            parameters.link_thickness,
         )
+        left_recess = box(
+            -half_width,
+            0.0,
+            -half_width + parameters.bond_extension_width,
+            parameters.bond_extension_height,
+        )
+        right_recess = box(
+            half_width - parameters.bond_extension_width,
+            0.0,
+            half_width,
+            parameters.bond_extension_height,
+        )
+        link_plate = self._validated_polygonal_geometry(
+            full_link_plate.difference(left_recess.union(right_recess)),
+            "rigid link plate",
+        )
+        if not isinstance(link_plate, Polygon):
+            raise InvalidFingertipGeometry(
+                "rigid link plate recesses do not form one polygon"
+            )
+        return orient(link_plate, sign=1.0)
 
     def _build_stem(self) -> Polygon:
         parameters = self._parameters
@@ -467,7 +492,8 @@ class FingertipModel:
     def _build_boundaries(self) -> FingertipBoundaries:
         parameters = self._parameters
         flat_pad_edge = parameters.flat_pad_width / 2.0
-        link_edge = parameters.link_width / 2.0
+        recess_inner_left = -flat_pad_edge + parameters.bond_extension_width
+        recess_inner_right = flat_pad_edge - parameters.bond_extension_width
         cutout_edge = parameters.cutout_half_width
         stem_edge = parameters.stem_width / 2.0
         ellipse_start_y = parameters.ellipse_start_y
@@ -480,8 +506,9 @@ class FingertipModel:
             LineString(
                 [
                     (-cutout_edge, 0.0),
-                    (-link_edge, 0.0),
-                    (-link_edge, bond_height),
+                    (recess_inner_left, 0.0),
+                    (recess_inner_left, bond_height),
+                    (-flat_pad_edge, bond_height),
                 ]
             ),
         )
@@ -489,8 +516,9 @@ class FingertipModel:
             "pad_bond_right",
             LineString(
                 [
-                    (link_edge, bond_height),
-                    (link_edge, 0.0),
+                    (flat_pad_edge, bond_height),
+                    (recess_inner_right, bond_height),
+                    (recess_inner_right, 0.0),
                     (cutout_edge, 0.0),
                 ]
             ),
@@ -499,7 +527,6 @@ class FingertipModel:
             "pad_outer_left",
             LineString(
                 [
-                    (-link_edge, bond_height),
                     (-flat_pad_edge, bond_height),
                     (-flat_pad_edge, ellipse_start_y),
                 ]
@@ -511,7 +538,6 @@ class FingertipModel:
                 [
                     (flat_pad_edge, ellipse_start_y),
                     (flat_pad_edge, bond_height),
-                    (link_edge, bond_height),
                 ]
             ),
         )
