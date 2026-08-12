@@ -26,7 +26,7 @@ def test_default_parameters_use_the_canonical_geometry_api() -> None:
     assert parameters.cutout_width == parameters.stem_width
     assert parameters.cutout_height == parameters.stem_height
     assert parameters.void_area == 0.0
-    assert parameters.young_modulus_mpa == 1.0
+    assert parameters.young_modulus_mpa == 0.55
     assert parameters.poisson_ratio == 0.49
 
 

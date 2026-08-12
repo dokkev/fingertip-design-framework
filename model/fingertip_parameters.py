@@ -33,7 +33,7 @@ class FingertipParameters:
     void_height: float = 0.0
     arc_resolution: int = 128
     geometry_tolerance: float = 1e-9
-    young_modulus_mpa: float = 1.0
+    young_modulus_mpa: float = 0.55
     poisson_ratio: float = 0.49
 
     def __post_init__(self) -> None:

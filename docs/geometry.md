@@ -162,22 +162,9 @@ production FEM path:
 
 | Parameter | Meaning | Default |
 | --- | --- | --- |
-| `young_modulus_mpa` | pad Young's modulus [MPa] | `1.0` |
+| `young_modulus_mpa` | pad Young's modulus [MPa] | `0.55` |
 | `poisson_ratio` | pad Poisson ratio [-] | `0.49` |
 
 These are the current validated FEM baseline values, not an experimentally
 calibrated silicone characterization. The rigid carrier and indenter remain
 backend-constrained parts.
-
-## Validation checklist
-
-- [ ] The rigid-link width is not an independent parameter.
-- [ ] The semi-ellipse width is not an independent parameter.
-- [ ] `flat_pad_width` is the single width source for link, flat pad, and ellipse.
-- [ ] `bond_extension_width` is an independent parameter.
-- [ ] The rigid link contains two symmetric lower-corner recesses.
-- [ ] Compliant extensions occupy those recesses without material overlap.
-- [ ] Each pad bond is one connected three-segment line.
-- [ ] `bond_extension_height < link_thickness` is enforced.
-- [ ] `2*bond_extension_width + cutout_width < flat_pad_width` is enforced.
-- [ ] Total bond length is `flat_pad_width - cutout_width + 2*bond_extension_height`.

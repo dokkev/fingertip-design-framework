@@ -177,3 +177,4 @@ poisson_ratio = 0.49
 refractive_index_air = 1.00
 refractive_index_silicone = 1.41
 absorption_per_mm = 0.02
+```

@@ -169,10 +169,10 @@ def _add_light_source_overlay(ax: Axes, tip: Fingertip) -> None:
 
 
 def _plot_bonded_interface(ax: Axes, model: Any) -> None:
-    """Highlight the two L-shaped bonded surfaces as translucent overlays.
+    """Highlight the two three-segment recess bonds as translucent overlays.
 
-    The analytic interface is a line in this 2D model. A small display-only
-    buffer makes that surface visible without changing the physical geometry.
+    Each analytic interface is a line in this 2D model. A small display-only
+    buffer makes those surfaces visible without changing the physical geometry.
     """
     display_half_width_mm = 0.22
     for index, segment in enumerate(model.pad_link_interface.geoms):

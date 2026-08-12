@@ -23,7 +23,6 @@ def main() -> int:
         FingertipParameters(
             void_width=1.0,
             void_height=0.0,
-            young_modulus_mpa=1.0,
             poisson_ratio=0.49,
         )
     )
