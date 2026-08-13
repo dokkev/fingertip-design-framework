@@ -89,6 +89,14 @@ It does not replace mesh-based reference/loaded comparisons.
   transport, camera rendering, GUI code, optimizer algorithms, or
   Ax/BoTorch models.
 
+- `optimization/ax_adapter.py` is the optional Ax 1.3.1 boundary. It translates
+  active `DesignVariable` bounds into an Ax search space, configures the
+  explicit Sobol-to-Modular-BoTorch strategy, attaches the baseline, performs
+  sequential ask/evaluate/tell orchestration, reports failed Ax trials, and
+  returns compact observed run records. It does not own geometry, scientific
+  bounds, contact scenarios, FEM, optical transport, the scientific score, or
+  GUI behavior.
+
   The intended future boundary is:
 
   ```text

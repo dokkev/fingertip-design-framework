@@ -29,6 +29,14 @@ is `python design_space_app.py`.
 It uses the model and existing visualization only; it does not require Kratos,
 Gmsh, or an optical transport backend.
 
+The optional Ax adapter can be installed with:
+
+```bash
+python -m pip install -e ".[ax]"
+```
+
+It has no CLI or GUI entry point in this iteration.
+
 ## Tests
 
 ```bash
