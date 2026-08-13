@@ -13,7 +13,10 @@ from fem.indentation import (
     IndentationSettings,
     run_indentation_case,
 )
-from mesh.indenter import IndenterSettings
+from mesh.indenter import (
+    IndenterSettings,
+    build_normal_indenter_fixture_at_x,
+)
 from mesh.pad import PadMesh
 from mesh.types import FingertipMesh
 from model import Fingertip
@@ -65,11 +68,12 @@ def solve(
     mesh: FingertipMesh,
     *,
     indentation: float,
+    surface_x_mm: float = 0.0,
     steps: int = 48,
     indenter: IndenterSettings | None = None,
     internal_contact: str = "three_pairs",
 ) -> FEAResult:
-    """Solve one indentation case and return only solver-independent data."""
+    """Solve one local-normal indentation case and return neutral data."""
     if not isinstance(tip, Fingertip):
         raise TypeError("tip must be a Fingertip")
     if not isinstance(mesh, FingertipMesh):
@@ -86,6 +90,11 @@ def solve(
             for node_id, value in step.displacements.items()
         }
 
+    fixture = build_normal_indenter_fixture_at_x(
+        tip.geometry,
+        surface_x_mm,
+        indenter,
+    )
     details, _ = run_indentation_case(
         tip.geometry,
         mesh.settings.level,
@@ -93,9 +102,9 @@ def solve(
             indentation_mm=indentation,
             number_of_steps=steps,
         ),
-        indenter_settings=indenter,
         internal_contact_configuration=internal_contact,
         mesh_override=mesh,
+        fixture_override=fixture,
         converged_step_observer=capture,
     )
     pad_mesh = mesh.pad

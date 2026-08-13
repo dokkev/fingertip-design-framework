@@ -20,7 +20,15 @@ optics = ["mitsuba>=3.8"]
 test = ["pytest>=8"]
 
 [tool.setuptools.packages.find]
-include = ["model*", "mesh*", "fem*", "visualization*", "validation*", "optics*"]
+include = [
+  "model*",
+  "mesh*",
+  "fem*",
+  "visualization*",
+  "validation*",
+  "optics*",
+  "optimization*",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests/unit", "tests/smoke"]

@@ -75,6 +75,11 @@ It does not replace mesh-based reference/loaded comparisons.
   owns the geometry used to produce the field.
 - `validation/` owns scientific baselines, Phase acceptance, provenance,
   checkpointing, reports, and generated artifact schemas.
+- `optimization/` is a top-level consumer of neutral `model`, `mesh`, `fem`,
+  and `optics` APIs. It owns contact-scenario protocols, required adjacent
+  scenario transitions, and aggregation of scientific design scores. It does
+  not own fingertip geometry, meshing, FEM, optical transport, camera
+  rendering, or validation baselines.
 
 ## Fingertip and mesh state
 

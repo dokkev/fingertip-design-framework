@@ -9,6 +9,10 @@ import numpy as np
 from optics.transport import TransportResult
 
 
+class OpticalMetricError(ValueError):
+    """Raised when a transport result cannot support metric evaluation."""
+
+
 def _path_mass(result: TransportResult) -> np.ndarray:
     return np.where(result.optical_mask, result.density, 0.0)
 
@@ -17,7 +21,9 @@ def _centroid(result: TransportResult) -> tuple[float, float]:
     mass = _path_mass(result)
     total = float(np.sum(mass))
     if total <= 0.0:
-        raise ValueError("transport path density must have positive total weight")
+        raise OpticalMetricError(
+            "transport path density must have positive total weight"
+        )
     x = 0.5 * (result.x_edges[:-1] + result.x_edges[1:])
     y = 0.5 * (result.y_edges[:-1] + result.y_edges[1:])
     return (
@@ -46,42 +52,55 @@ def _mass_on_grid(
     return y_fraction @ _path_mass(result) @ x_fraction.T
 
 
+def field_difference(
+    first: TransportResult,
+    second: TransportResult,
+) -> float:
+    """Return TV distance between two normalized transport path fields."""
+    if not isinstance(first, TransportResult) or not isinstance(
+        second,
+        TransportResult,
+    ):
+        raise TypeError("first and second must be TransportResult values")
+    if first.launched_weight <= 0.0 or second.launched_weight <= 0.0:
+        raise OpticalMetricError("evaluation requires positive launched weight")
+
+    x_edges = np.linspace(
+        min(float(first.x_edges[0]), float(second.x_edges[0])),
+        max(float(first.x_edges[-1]), float(second.x_edges[-1])),
+        max(len(first.x_edges), len(second.x_edges)),
+    )
+    y_edges = np.linspace(
+        min(float(first.y_edges[0]), float(second.y_edges[0])),
+        max(float(first.y_edges[-1]), float(second.y_edges[-1])),
+        max(len(first.y_edges), len(second.y_edges)),
+    )
+    first_mass = _mass_on_grid(first, x_edges, y_edges)
+    second_mass = _mass_on_grid(second, x_edges, y_edges)
+    first_total = float(np.sum(first_mass))
+    second_total = float(np.sum(second_mass))
+    if first_total <= 0.0 or second_total <= 0.0:
+        raise OpticalMetricError("evaluation requires positive path-density mass")
+    first_distribution = first_mass / first_total
+    second_distribution = second_mass / second_total
+    distance = 0.5 * float(
+        np.sum(np.abs(second_distribution - first_distribution))
+    )
+    return min(1.0, max(0.0, distance))
+
+
 def evaluate(
     reference: TransportResult,
     loaded: TransportResult,
 ) -> dict[str, float]:
-    """Compare two light-transport proxies without camera-image assumptions.
-
-    ``field_difference`` is total-variation distance after conservative
-    redistribution onto a common grid spanning both physical domains. It lies
-    in ``[0, 1]``.
-    """
+    """Compare two light-transport proxies without camera-image assumptions."""
     if not isinstance(reference, TransportResult) or not isinstance(
         loaded,
         TransportResult,
     ):
         raise TypeError("reference and loaded must be TransportResult values")
     if reference.launched_weight <= 0.0 or loaded.launched_weight <= 0.0:
-        raise ValueError("evaluation requires positive launched weight")
-
-    x_edges = np.linspace(
-        min(float(reference.x_edges[0]), float(loaded.x_edges[0])),
-        max(float(reference.x_edges[-1]), float(loaded.x_edges[-1])),
-        max(len(reference.x_edges), len(loaded.x_edges)),
-    )
-    y_edges = np.linspace(
-        min(float(reference.y_edges[0]), float(loaded.y_edges[0])),
-        max(float(reference.y_edges[-1]), float(loaded.y_edges[-1])),
-        max(len(reference.y_edges), len(loaded.y_edges)),
-    )
-    reference_mass = _mass_on_grid(reference, x_edges, y_edges)
-    loaded_mass = _mass_on_grid(loaded, x_edges, y_edges)
-    reference_total = float(np.sum(reference_mass))
-    loaded_total = float(np.sum(loaded_mass))
-    if reference_total <= 0.0 or loaded_total <= 0.0:
-        raise ValueError("evaluation requires positive path-density mass")
-    reference_distribution = reference_mass / reference_total
-    loaded_distribution = loaded_mass / loaded_total
+        raise OpticalMetricError("evaluation requires positive launched weight")
 
     reference_centroid = _centroid(reference)
     loaded_centroid = _centroid(loaded)
@@ -90,8 +109,7 @@ def evaluate(
         loaded_centroid[1] - reference_centroid[1],
     )
     return {
-        "field_difference": 0.5
-        * float(np.sum(np.abs(loaded_distribution - reference_distribution))),
+        "field_difference": field_difference(reference, loaded),
         "centroid_shift_mm": centroid_shift,
         "escaped_fraction_change": (
             loaded.escaped_weight / loaded.launched_weight
@@ -104,4 +122,4 @@ def evaluate(
     }
 
 
-__all__ = ["evaluate"]
+__all__ = ["OpticalMetricError", "evaluate", "field_difference"]
