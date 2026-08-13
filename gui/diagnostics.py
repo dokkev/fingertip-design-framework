@@ -8,7 +8,7 @@ from numbers import Real
 from typing import Literal, Mapping
 
 from model import Fingertip, FingertipParameters, LED, OpticalMaterial
-from optimization.design_space import SUPPORTED_PARAMETER_NAMES
+from optimization.design_space import OPTIMIZABLE_PARAMETER_NAMES
 
 
 DiagnosticSeverity = Literal["INFO", "WARN", "ERROR"]
@@ -510,7 +510,7 @@ def diagnose_design_space(
 ) -> tuple[Diagnostic, ...]:
     """Report incomplete or out-of-range researcher-selected bounds."""
     result: list[Diagnostic] = []
-    for name in SUPPORTED_PARAMETER_NAMES:
+    for name in OPTIMIZABLE_PARAMETER_NAMES:
         variable = variables.get(name)
         if variable is None:
             result.append(_message("ERROR", "DESIGN SPACE", f"Missing variable entry: {name}."))
@@ -572,7 +572,7 @@ def diagnose_design_space(
                     )
     active_count = sum(
         bool(variables.get(name, {}).get("optimize", False))
-        for name in SUPPORTED_PARAMETER_NAMES
+        for name in OPTIMIZABLE_PARAMETER_NAMES
     )
     if active_count == 0:
         result.append(

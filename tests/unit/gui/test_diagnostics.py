@@ -12,7 +12,7 @@ from gui.diagnostics import (
     diagnose_mechanical,
     diagnose_optical,
 )
-from optimization.design_space import current_lit_baseline
+from gui.baseline import current_lit_baseline
 
 
 def _geometry() -> dict[str, object]:
@@ -78,6 +78,7 @@ def test_active_bounds_must_enclose_baseline_in_the_correct_direction() -> None:
         "semielliptical_pad_height",
         "stem_width",
         "stem_height",
+        "void_width",
     )}
     variables = {
         name: {"optimize": False, "lower": 1.0, "upper": 1.0}

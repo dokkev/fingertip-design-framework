@@ -23,13 +23,13 @@ from nicegui import ui
 
 from model import Fingertip, FingertipParameters, LED, OpticalMaterial
 from optimization.design_space import (
+    OPTIMIZABLE_PARAMETER_NAMES,
     DesignSpace,
     DesignVariable,
-    SUPPORTED_PARAMETER_NAMES,
-    current_lit_baseline,
 )
 from visualization import plot_fingertip
 
+from gui.baseline import current_lit_baseline
 from gui.diagnostics import (
     Diagnostic,
     build_led,
@@ -46,19 +46,18 @@ _VARIABLE_LABELS = {
     "semielliptical_pad_height": "Elliptical-pad height (h_ep)",
     "stem_width": "Stem width (w_s)",
     "stem_height": "Stem height (h_s)",
+    "void_width": "Void width (w_v)",
 }
 _FIXED_GEOMETRY_NAMES = (
     "link_thickness",
     "bond_extension_width",
     "bond_extension_height",
-    "void_width",
     "void_height",
 )
 _FIXED_GEOMETRY_LABELS = {
     "link_thickness": "Link thickness (h_l)",
     "bond_extension_width": "Connector-pad width (w_cp)",
     "bond_extension_height": "Connector-pad height (h_cp)",
-    "void_width": "Void width (w_v)",
     "void_height": "Void height (h_v)",
 }
 _MECHANICAL_NAMES = ("young_modulus_mpa", "poisson_ratio")
@@ -76,10 +75,10 @@ _OPTICAL_NAMES = (
     "anisotropy_g",
 )
 _GEOMETRY_PRECISION = {
-    name: 2 for name in (*SUPPORTED_PARAMETER_NAMES, *_FIXED_GEOMETRY_NAMES)
+    name: 2 for name in (*OPTIMIZABLE_PARAMETER_NAMES, *_FIXED_GEOMETRY_NAMES)
 }
 _GEOMETRY_STEP = {
-    name: 0.1 for name in (*SUPPORTED_PARAMETER_NAMES, *_FIXED_GEOMETRY_NAMES)
+    name: 0.1 for name in (*OPTIMIZABLE_PARAMETER_NAMES, *_FIXED_GEOMETRY_NAMES)
 }
 
 
@@ -124,7 +123,7 @@ def _initial_state() -> dict[str, object]:
     parameters = asdict(baseline)
     geometry = {
         name: parameters[name]
-        for name in (*SUPPORTED_PARAMETER_NAMES, *_FIXED_GEOMETRY_NAMES)
+        for name in (*OPTIMIZABLE_PARAMETER_NAMES, *_FIXED_GEOMETRY_NAMES)
     }
     variables = {
         name: {
@@ -132,7 +131,7 @@ def _initial_state() -> dict[str, object]:
             "lower": geometry[name],
             "upper": geometry[name],
         }
-        for name in SUPPORTED_PARAMETER_NAMES
+        for name in OPTIMIZABLE_PARAMETER_NAMES
     }
     return {
         "geometry": geometry,
@@ -178,7 +177,7 @@ def _corner_values(state: Mapping[str, object]) -> tuple[dict[str, float], ...] 
     assert isinstance(variables, Mapping)
     active = [
         variables[name]
-        for name in SUPPORTED_PARAMETER_NAMES
+        for name in OPTIMIZABLE_PARAMETER_NAMES
         if bool(variables[name]["optimize"])
     ]
     if not all(
@@ -191,7 +190,7 @@ def _corner_values(state: Mapping[str, object]) -> tuple[dict[str, float], ...] 
         return ({},)
     active_names = [
         name
-        for name in SUPPORTED_PARAMETER_NAMES
+        for name in OPTIMIZABLE_PARAMETER_NAMES
         if bool(variables[name]["optimize"])
     ]
     return tuple(
@@ -269,7 +268,7 @@ def _build_design_space(state: Mapping[str, object]) -> DesignSpace | None:
                 lower=state["variables"][name]["lower"],
                 upper=state["variables"][name]["upper"],
             )
-            for name in SUPPORTED_PARAMETER_NAMES
+            for name in OPTIMIZABLE_PARAMETER_NAMES
         )
         return DesignSpace(baseline=baseline, variables=variables)
     except Exception:
@@ -289,10 +288,10 @@ def _analyze(state: Mapping[str, object]) -> Analysis:
     state_diagnostics = diagnose_state(geometry, mechanical, led, optical)
     variables = state["variables"]
     assert isinstance(variables, Mapping)
-    baseline_values = {name: geometry[name] for name in SUPPORTED_PARAMETER_NAMES}
+    baseline_values = {name: geometry[name] for name in OPTIMIZABLE_PARAMETER_NAMES}
     design_diagnostics = diagnose_design_space(baseline_values, variables)
     active_count = sum(
-        bool(variables[name]["optimize"]) for name in SUPPORTED_PARAMETER_NAMES
+        bool(variables[name]["optimize"]) for name in OPTIMIZABLE_PARAMETER_NAMES
     )
     optical_valid = not any(
         item.severity == "ERROR" and item.source == "OPTICAL"
@@ -388,7 +387,7 @@ def _corner_diagnostics(state: Mapping[str, object]) -> tuple[Diagnostic, ...]:
         if not any(item.severity == "ERROR" for item in details):
             continue
         labels = []
-        for name in SUPPORTED_PARAMETER_NAMES:
+        for name in OPTIMIZABLE_PARAMETER_NAMES:
             if bool(variables[name]["optimize"]):
                 bound = (
                     "MIN"
@@ -532,7 +531,7 @@ def _render_geometry_editor(state: dict[str, object]) -> None:
         variables = state["variables"]
         assert isinstance(geometry, Mapping)
         assert isinstance(variables, Mapping)
-        for name in SUPPORTED_PARAMETER_NAMES:
+        for name in OPTIMIZABLE_PARAMETER_NAMES:
             variable = variables[name]
             with ui.row().classes("items-center no-wrap"):
                 ui.label(_VARIABLE_LABELS[name]).classes("w-56")
