@@ -16,6 +16,19 @@ python -m pip install -e ".[mesh,visualization,validation,test]"
 After installation, package and module commands work from any working
 directory.
 
+The optional NiceGUI design-space explorer can be installed and launched with:
+
+```bash
+python -m pip install -e ".[gui]"
+python -m gui.design_space_app
+```
+
+For direct development from the application directory, the equivalent command
+is `python design_space_app.py`.
+
+It uses the model and existing visualization only; it does not require Kratos,
+Gmsh, or an optical transport backend.
+
 ## Tests
 
 ```bash

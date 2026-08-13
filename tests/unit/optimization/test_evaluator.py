@@ -8,7 +8,7 @@ import optimization.evaluator as evaluator_module
 from mesh import mesh_settings_for_level
 from optics import TraceSettings
 from optics.cross_section.domain import CrossSectionOpticsError
-from model import FingertipParameters
+from model import FingertipParameters, LED, OpticalMaterial
 from optimization import DesignEvaluator, ScenarioGrid
 
 
@@ -35,8 +35,8 @@ def test_evaluator_reuses_reference_and_forwards_every_scenario(monkeypatch) -> 
     calls = {"mesh": 0, "trace": [], "solve": []}
     fake_tip = SimpleNamespace()
 
-    def fake_fingertip(parameters):
-        del parameters
+    def fake_fingertip(parameters, *, led, optical):
+        del parameters, led, optical
         return fake_tip
 
     def fake_mesh(settings):
@@ -122,7 +122,9 @@ def test_evaluator_reports_reference_difference_without_changing_score(
     monkeypatch.setattr(
         evaluator_module,
         "Fingertip",
-        lambda parameters: SimpleNamespace(mesh=lambda settings: "reference_mesh"),
+        lambda parameters, **kwargs: SimpleNamespace(
+            mesh=lambda settings: "reference_mesh"
+        ),
     )
     monkeypatch.setattr(
         evaluator_module,
@@ -194,7 +196,9 @@ def test_missing_axis_separability_is_none(monkeypatch) -> None:
     monkeypatch.setattr(
         evaluator_module,
         "Fingertip",
-        lambda parameters: SimpleNamespace(mesh=lambda settings: "reference_mesh"),
+        lambda parameters, **kwargs: SimpleNamespace(
+            mesh=lambda settings: "reference_mesh"
+        ),
     )
     monkeypatch.setattr(
         evaluator_module,
@@ -246,7 +250,7 @@ def test_nonconverged_fea_is_a_failure_without_a_penalty(monkeypatch) -> None:
     monkeypatch.setattr(
         evaluator_module,
         "Fingertip",
-        lambda parameters: SimpleNamespace(mesh=lambda settings: "mesh"),
+        lambda parameters, **kwargs: SimpleNamespace(mesh=lambda settings: "mesh"),
     )
     monkeypatch.setattr(
         evaluator_module,
@@ -277,7 +281,7 @@ def test_expected_optics_failure_is_classified(monkeypatch) -> None:
     monkeypatch.setattr(
         evaluator_module,
         "Fingertip",
-        lambda parameters: SimpleNamespace(mesh=lambda settings: "mesh"),
+        lambda parameters, **kwargs: SimpleNamespace(mesh=lambda settings: "mesh"),
     )
 
     def fake_trace(tip, mesh, settings):
@@ -307,7 +311,7 @@ def test_unexpected_runtime_error_is_not_swallowed(monkeypatch) -> None:
     monkeypatch.setattr(
         evaluator_module,
         "Fingertip",
-        lambda parameters: SimpleNamespace(mesh=lambda settings: "mesh"),
+        lambda parameters, **kwargs: SimpleNamespace(mesh=lambda settings: "mesh"),
     )
     monkeypatch.setattr(
         evaluator_module,
@@ -317,3 +321,62 @@ def test_unexpected_runtime_error_is_not_swallowed(monkeypatch) -> None:
 
     with pytest.raises(RuntimeError, match="bug"):
         _evaluator(grid).evaluate(FingertipParameters())
+
+
+def test_explicit_led_and_optical_configuration_reaches_fingertip(monkeypatch) -> None:
+    grid = ScenarioGrid((0.0, 1.0), (0.5,), (2.0,))
+    led = LED(width_mm=3.0, height_mm=1.5, relative_radiant_power=0.7)
+    optical = OpticalMaterial(absorption_per_mm=0.04, anisotropy_g=0.2)
+    calls = {}
+
+    def fake_fingertip(parameters, *, led, optical):
+        calls["led"] = led
+        calls["optical"] = optical
+        return SimpleNamespace(mesh=lambda settings: "mesh")
+
+    monkeypatch.setattr(evaluator_module, "Fingertip", fake_fingertip)
+    monkeypatch.setattr(
+        evaluator_module,
+        "trace",
+        lambda tip, mesh, settings: (_ for _ in ()).throw(
+            CrossSectionOpticsError("stop after construction")
+        ),
+    )
+
+    base = _evaluator(grid)
+    result = DesignEvaluator(
+        grid,
+        mesh_settings=base.mesh_settings,
+        trace_settings=base.trace_settings,
+        led=led,
+        optical=optical,
+    ).evaluate(FingertipParameters())
+
+    assert result.status == "optics_failure"
+    assert calls["led"] is led
+    assert calls["optical"] is optical
+
+
+def test_evaluator_resolves_canonical_led_and_optical_defaults() -> None:
+    evaluator = _evaluator(ScenarioGrid((0.0, 1.0), (0.5,), (2.0,)))
+    assert evaluator.led == LED()
+    assert evaluator.optical == OpticalMaterial()
+
+
+def test_fixed_led_incompatibility_is_invalid_design_without_solver() -> None:
+    grid = ScenarioGrid((0.0, 1.0), (0.5,), (2.0,))
+    evaluator = DesignEvaluator(
+        grid,
+        mesh_settings=mesh_settings_for_level("medium"),
+        trace_settings=TraceSettings(
+            ray_count=3,
+            grid_width=16,
+            grid_height=16,
+            maximum_segment_count=32,
+        ),
+        led=LED(width_mm=8.0),
+    )
+    result = evaluator.evaluate(FingertipParameters())
+
+    assert result.status == "invalid_design"
+    assert result.score is None

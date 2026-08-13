@@ -27,6 +27,8 @@ from model import (
     FingertipParameters,
     InvalidFingertip,
     InvalidFingertipParameters,
+    LED,
+    OpticalMaterial,
 )
 from model.fingertip_model import InvalidFingertipGeometry
 from optics import (
@@ -240,6 +242,8 @@ class DesignEvaluator:
         *,
         mesh_settings: MeshSettings,
         trace_settings: TraceSettings,
+        led: LED | None = None,
+        optical: OpticalMaterial | None = None,
         fem_steps: int = 48,
         internal_contact: str = "three_pairs",
     ) -> None:
@@ -253,6 +257,10 @@ class DesignEvaluator:
             raise TypeError("mesh_settings must be MeshSettings")
         if not isinstance(trace_settings, TraceSettings):
             raise TypeError("trace_settings must be TraceSettings")
+        if led is not None and not isinstance(led, LED):
+            raise TypeError("led must be an LED or None")
+        if optical is not None and not isinstance(optical, OpticalMaterial):
+            raise TypeError("optical must be an OpticalMaterial or None")
         if (
             not isinstance(fem_steps, int)
             or isinstance(fem_steps, bool)
@@ -262,13 +270,19 @@ class DesignEvaluator:
         self.scenario_grid = scenario_grid
         self.mesh_settings = mesh_settings
         self.trace_settings = trace_settings
+        self.led = LED() if led is None else led
+        self.optical = OpticalMaterial() if optical is None else optical
         self.fem_steps = fem_steps
         self.internal_contact = internal_contact
 
     def evaluate(self, parameters: FingertipParameters) -> DesignEvaluation:
         """Run one deterministic mesh/FEM/optical design evaluation."""
         try:
-            tip = Fingertip(parameters)
+            tip = Fingertip(
+                parameters,
+                led=self.led,
+                optical=self.optical,
+            )
         except _DESIGN_ERRORS as exc:
             return _failure("invalid_design", f"{type(exc).__name__}: {exc}")
 

@@ -75,11 +75,30 @@ It does not replace mesh-based reference/loaded comparisons.
   owns the geometry used to produce the field.
 - `validation/` owns scientific baselines, Phase acceptance, provenance,
   checkpointing, reports, and generated artifact schemas.
+- `optimization/design_space.py` owns algorithm-independent study geometry
+  variable and bound definitions. It does not import NiceGUI or an optimizer.
+- `gui/` is a top-level interactive consumer. It owns parameter editing,
+  design-space presentation, validation feedback, and embedded visualization
+  composition. It does not own geometry equations, meshing, FEM, optical
+  transport, or optimization algorithms.
 - `optimization/` is a top-level consumer of neutral `model`, `mesh`, `fem`,
-  and `optics` APIs. It owns contact-scenario protocols, required adjacent
-  scenario transitions, and aggregation of scientific design scores. It does
-  not own fingertip geometry, meshing, FEM, optical transport, camera
-  rendering, or validation baselines.
+  and `optics` APIs. It owns the algorithm-independent morphology design
+  space, fixed optimization-study configuration, contact-scenario protocols,
+  required adjacent scenario transitions, and aggregation of scientific
+  design scores. It does not own fingertip geometry, meshing, FEM, optical
+  transport, camera rendering, GUI code, optimizer algorithms, or
+  Ax/BoTorch models.
+
+  The intended future boundary is:
+
+  ```text
+  GUI / CLI
+      -> DesignSpace + OptimizationStudy
+  future optimizer adapter
+      -> active DesignVariable bounds
+      -> DesignSpace.decode(...)
+      -> DesignEvaluator
+  ```
 
 ## Fingertip and mesh state
 
