@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import isfinite
+from math import isfinite, sqrt
 
 
 class InvalidFingertipParameters(ValueError):
@@ -173,3 +173,31 @@ class FingertipParameters:
                 f"cutout_width={self.cutout_width:g}, "
                 f"flat_pad_width={self.flat_pad_width:g}"
             )
+
+        half_width = self.flat_pad_width / 2.0
+        cutout_half_width = self.cutout_half_width
+        if cutout_half_width >= half_width - self.geometry_tolerance:
+            raise InvalidFingertipParameters(
+                "cutout must remain strictly inside the external half-width: "
+                f"cutout_half_width={cutout_half_width:g}, "
+                f"available_half_width={half_width - self.geometry_tolerance:g}, "
+                f"geometry_tolerance={self.geometry_tolerance:g}"
+            )
+
+        penetration_depth = max(
+            0.0,
+            self.cutout_height - self.flat_pad_height,
+        )
+        if penetration_depth > 0.0:
+            normalized_x = cutout_half_width / half_width
+            available_ellipse_depth = self.semielliptical_pad_height * sqrt(
+                1.0 - normalized_x**2
+            )
+            if penetration_depth >= available_ellipse_depth - self.geometry_tolerance:
+                raise InvalidFingertipParameters(
+                    "cutout bottom must remain strictly inside the "
+                    "semielliptical envelope: "
+                    f"penetration_depth={penetration_depth:g}, "
+                    f"available_depth={available_ellipse_depth:g}, "
+                    f"geometry_tolerance={self.geometry_tolerance:g}"
+                )

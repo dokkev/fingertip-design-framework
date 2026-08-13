@@ -17,7 +17,11 @@ from mesh.fingertip import (
     FingertipMeshingError,
     GmshDependencyError,
 )
-from mesh.indenter import IndenterMeshingError, IndenterSettings, InvalidIndenterSettings
+from mesh.indenter import (
+    IndenterMeshingError,
+    IndenterSettings,
+    InvalidIndenterSettings,
+)
 from model import (
     Fingertip,
     FingertipParameters,
@@ -25,7 +29,12 @@ from model import (
     InvalidFingertipParameters,
 )
 from model.fingertip_model import InvalidFingertipGeometry
-from optics import TraceSettings, evaluate as evaluate_transport, field_difference, trace
+from optics import (
+    TraceSettings,
+    evaluate as evaluate_transport,
+    field_difference,
+    trace,
+)
 from optics.cross_section.domain import CrossSectionOpticsError
 from optics.metrics import OpticalMetricError
 
@@ -54,10 +63,16 @@ def _finite_metric(name: str, value: Real, *, bounded: bool = False) -> float:
 
 @dataclass(frozen=True)
 class ScenarioEvaluation:
-    """Compact diagnostics for one successfully simulated contact scenario."""
+    """Compact diagnostics for one contact-induced optical response.
+
+    ``reference_field_difference`` is the normalized optical-field difference
+    between the unloaded reference state and this loaded contact state. It is
+    a descriptor of the contact-induced optomechanical response, not a camera
+    signal or a contact detection probability.
+    """
 
     scenario: ContactScenario
-    detectability: float
+    reference_field_difference: float
     reaction_force_n: float | None
     centroid_shift_mm: float
     escaped_fraction_change: float
@@ -68,8 +83,12 @@ class ScenarioEvaluation:
             raise TypeError("scenario must be a ContactScenario")
         object.__setattr__(
             self,
-            "detectability",
-            _finite_metric("detectability", self.detectability, bounded=True),
+            "reference_field_difference",
+            _finite_metric(
+                "reference_field_difference",
+                self.reference_field_difference,
+                bounded=True,
+            ),
         )
         if self.reaction_force_n is not None:
             object.__setattr__(
@@ -115,7 +134,10 @@ class DesignEvaluation:
     minimum_separability: float | None
     mean_separability: float | None
     median_separability: float | None
-    minimum_detectability: float | None
+    minimum_location_separability: float | None
+    minimum_indentation_separability: float | None
+    minimum_radius_separability: float | None
+    minimum_reference_field_difference: float | None
     limiting_pair: ScenarioPair | None
     scenarios: tuple[ScenarioEvaluation, ...]
     pairs: tuple[PairEvaluation, ...]
@@ -144,7 +166,10 @@ class DesignEvaluation:
             "minimum_separability",
             "mean_separability",
             "median_separability",
-            "minimum_detectability",
+            "minimum_location_separability",
+            "minimum_indentation_separability",
+            "minimum_radius_separability",
+            "minimum_reference_field_difference",
         ):
             value = getattr(self, name)
             if value is not None:
@@ -195,7 +220,10 @@ def _failure(
         minimum_separability=None,
         mean_separability=None,
         median_separability=None,
-        minimum_detectability=None,
+        minimum_location_separability=None,
+        minimum_indentation_separability=None,
+        minimum_radius_separability=None,
+        minimum_reference_field_difference=None,
         limiting_pair=None,
         scenarios=scenarios,
         pairs=pairs,
@@ -301,7 +329,7 @@ class DesignEvaluator:
                 metrics = evaluate_transport(reference_transport, loaded)
                 scenario_result = ScenarioEvaluation(
                     scenario=scenario,
-                    detectability=metrics["field_difference"],
+                    reference_field_difference=metrics["field_difference"],
                     reaction_force_n=fea.reaction_force,
                     centroid_shift_mm=metrics["centroid_shift_mm"],
                     escaped_fraction_change=metrics["escaped_fraction_change"],
@@ -342,7 +370,19 @@ class DesignEvaluator:
             for result in pair_results
             if result.separability == minimum_separability
         )
-        detectabilities = tuple(result.detectability for result in scenario_results)
+        reference_field_differences = tuple(
+            result.reference_field_difference for result in scenario_results
+        )
+        axis_minima = {
+            axis: min(
+                result.separability
+                for result in pair_results
+                if result.pair.axis == axis
+            )
+            if any(result.pair.axis == axis for result in pair_results)
+            else None
+            for axis in ("location", "indentation", "radius")
+        }
         ordered_separabilities = sorted(separabilities)
         midpoint = len(ordered_separabilities) // 2
         if len(ordered_separabilities) % 2:
@@ -358,7 +398,10 @@ class DesignEvaluator:
             minimum_separability=minimum_separability,
             mean_separability=sum(separabilities) / len(separabilities),
             median_separability=median_separability,
-            minimum_detectability=min(detectabilities),
+            minimum_location_separability=axis_minima["location"],
+            minimum_indentation_separability=axis_minima["indentation"],
+            minimum_radius_separability=axis_minima["radius"],
+            minimum_reference_field_difference=min(reference_field_differences),
             limiting_pair=limiting_pair,
             scenarios=tuple(scenario_results),
             pairs=tuple(pair_results),

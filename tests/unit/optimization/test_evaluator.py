@@ -5,7 +5,6 @@ from types import SimpleNamespace
 import pytest
 
 import optimization.evaluator as evaluator_module
-from fem import FEAResult
 from mesh import mesh_settings_for_level
 from optics import TraceSettings
 from optics.cross_section.domain import CrossSectionOpticsError
@@ -56,7 +55,11 @@ def test_evaluator_reuses_reference_and_forwards_every_scenario(monkeypatch) -> 
 
     def fake_solve(tip, mesh, **kwargs):
         del tip, mesh
-        scenario = (kwargs["surface_x_mm"], kwargs["indentation"], kwargs["indenter"].radius_mm)
+        scenario = (
+            kwargs["surface_x_mm"],
+            kwargs["indentation"],
+            kwargs["indenter"].radius_mm,
+        )
         calls["solve"].append(scenario)
         return SimpleNamespace(
             converged=True,
@@ -97,15 +100,24 @@ def test_evaluator_reuses_reference_and_forwards_every_scenario(monkeypatch) -> 
     }
 
 
-def test_evaluator_uses_minimum_pair_separability_without_detectability_weight(
+def test_evaluator_reports_reference_difference_without_changing_score(
     monkeypatch,
 ) -> None:
     grid = ScenarioGrid(
-        locations_x_mm=(0.0, 1.0, 2.0),
-        indentations_mm=(0.5,),
-        indenter_radii_mm=(2.0,),
+        locations_x_mm=(0.0, 1.0),
+        indentations_mm=(0.5, 1.0),
+        indenter_radii_mm=(2.0, 4.0),
     )
-    states = {0.0: 0.0, 1.0: 0.4, 2.0: 0.7}
+    reference_differences = {
+        (0.0, 0.5, 2.0): 0.1,
+        (1.0, 0.5, 2.0): 0.8,
+        (0.0, 1.0, 2.0): 0.8,
+        (1.0, 1.0, 2.0): 0.8,
+        (0.0, 0.5, 4.0): 0.8,
+        (1.0, 0.5, 4.0): 0.8,
+        (0.0, 1.0, 4.0): 0.8,
+        (1.0, 1.0, 4.0): 0.8,
+    }
 
     monkeypatch.setattr(
         evaluator_module,
@@ -116,9 +128,9 @@ def test_evaluator_uses_minimum_pair_separability_without_detectability_weight(
         evaluator_module,
         "trace",
         lambda tip, mesh, settings: SimpleNamespace(
-            state=-1.0
+            state=("reference", None)
             if mesh == "reference_mesh"
-            else states[mesh.scenario[0]]
+            else ("loaded", mesh.scenario)
         ),
     )
     monkeypatch.setattr(
@@ -128,7 +140,11 @@ def test_evaluator_uses_minimum_pair_separability_without_detectability_weight(
             converged=True,
             reaction_force=1.0,
             deformed_mesh=SimpleNamespace(
-                scenario=(kwargs["surface_x_mm"], kwargs["indentation"], 2.0)
+                scenario=(
+                    kwargs["surface_x_mm"],
+                    kwargs["indentation"],
+                    kwargs["indenter"].radius_mm,
+                )
             ),
         ),
     )
@@ -136,7 +152,7 @@ def test_evaluator_uses_minimum_pair_separability_without_detectability_weight(
         evaluator_module,
         "evaluate_transport",
         lambda reference, loaded: {
-            "field_difference": 0.9 - loaded.state,
+            "field_difference": reference_differences[loaded.state[1]],
             "centroid_shift_mm": 0.0,
             "escaped_fraction_change": 0.0,
             "absorbed_fraction_change": 0.0,
@@ -145,18 +161,83 @@ def test_evaluator_uses_minimum_pair_separability_without_detectability_weight(
     monkeypatch.setattr(
         evaluator_module,
         "field_difference",
-        lambda first, second: abs(first.state - second.state),
+        lambda first, second: {
+            "location": 0.2,
+            "indentation": 0.35,
+            "radius": 0.5,
+        }[
+            "location"
+            if first.state[1][0] != second.state[1][0]
+            else "indentation"
+            if first.state[1][1] != second.state[1][1]
+            else "radius"
+        ],
     )
 
     result = _evaluator(grid).evaluate(FingertipParameters())
 
     assert result.status == "success"
-    assert result.score == pytest.approx(0.3)
-    assert result.minimum_separability == pytest.approx(0.3)
-    assert result.mean_separability == pytest.approx(0.35)
-    assert result.median_separability == pytest.approx(0.35)
-    assert result.minimum_detectability == pytest.approx(0.2)
-    assert result.limiting_pair == grid.adjacent_pairs[1]
+    assert not hasattr(result.scenarios[0], "detectability")
+    assert hasattr(result.scenarios[0], "reference_field_difference")
+    assert not hasattr(result, "minimum_detectability")
+    assert result.score == pytest.approx(0.2)
+    assert result.minimum_separability == pytest.approx(0.2)
+    assert result.minimum_location_separability == pytest.approx(0.2)
+    assert result.minimum_indentation_separability == pytest.approx(0.35)
+    assert result.minimum_radius_separability == pytest.approx(0.5)
+    assert result.minimum_reference_field_difference == pytest.approx(0.1)
+    assert result.limiting_pair == grid.adjacent_pairs[0]
+
+
+def test_missing_axis_separability_is_none(monkeypatch) -> None:
+    grid = ScenarioGrid((0.0, 1.0), (0.5,), (2.0,))
+    monkeypatch.setattr(
+        evaluator_module,
+        "Fingertip",
+        lambda parameters: SimpleNamespace(mesh=lambda settings: "reference_mesh"),
+    )
+    monkeypatch.setattr(
+        evaluator_module,
+        "trace",
+        lambda tip, mesh, settings: SimpleNamespace(
+            state=("reference", None)
+            if mesh == "reference_mesh"
+            else ("loaded", mesh.scenario)
+        ),
+    )
+    monkeypatch.setattr(
+        evaluator_module,
+        "solve",
+        lambda tip, mesh, **kwargs: SimpleNamespace(
+            converged=True,
+            reaction_force=None,
+            deformed_mesh=SimpleNamespace(
+                scenario=(kwargs["surface_x_mm"], kwargs["indentation"], 2.0)
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        evaluator_module,
+        "evaluate_transport",
+        lambda reference, loaded: {
+            "field_difference": 0.4,
+            "centroid_shift_mm": 0.0,
+            "escaped_fraction_change": 0.0,
+            "absorbed_fraction_change": 0.0,
+        },
+    )
+    monkeypatch.setattr(
+        evaluator_module,
+        "field_difference",
+        lambda first, second: 0.25,
+    )
+
+    result = _evaluator(grid).evaluate(FingertipParameters())
+
+    assert result.status == "success"
+    assert result.minimum_location_separability == pytest.approx(0.25)
+    assert result.minimum_indentation_separability is None
+    assert result.minimum_radius_separability is None
 
 
 def test_nonconverged_fea_is_a_failure_without_a_penalty(monkeypatch) -> None:
@@ -185,6 +266,10 @@ def test_nonconverged_fea_is_a_failure_without_a_penalty(monkeypatch) -> None:
     assert result.score is None
     assert calls["solve"] == 1
     assert result.failure_message is not None
+    assert result.minimum_location_separability is None
+    assert result.minimum_indentation_separability is None
+    assert result.minimum_radius_separability is None
+    assert result.minimum_reference_field_difference is None
 
 
 def test_expected_optics_failure_is_classified(monkeypatch) -> None:

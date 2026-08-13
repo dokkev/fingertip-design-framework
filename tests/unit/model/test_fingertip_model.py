@@ -10,7 +10,10 @@ from shapely.geometry import LineString, MultiLineString, MultiPolygon, Polygon,
 from shapely.ops import linemerge, unary_union
 
 from model.fingertip_model import FingertipModel, InvalidFingertipGeometry
-from model.fingertip_parameters import FingertipParameters
+from model.fingertip_parameters import (
+    FingertipParameters,
+    InvalidFingertipParameters,
+)
 
 
 SIDE_CLEARANCE = 1.0
@@ -257,8 +260,15 @@ def test_void_dimensions_do_not_change_outer_envelope(
 
 
 def test_cutout_exiting_completed_outer_envelope_is_rejected() -> None:
-    with pytest.raises(InvalidFingertipGeometry, match="cutout exits"):
+    with pytest.raises(InvalidFingertipParameters, match="semielliptical"):
         build_model(stem_height=20.0)
+
+
+def test_model_retains_defensive_cutout_containment_check(monkeypatch) -> None:
+    monkeypatch.setattr(FingertipParameters, "validate", lambda self: None)
+    parameters = FingertipParameters(stem_height=20.0)
+    with pytest.raises(InvalidFingertipGeometry, match="cutout exits"):
+        FingertipModel(parameters)
 
 
 def test_rigid_link_area_reflects_recesses_and_stem() -> None:
