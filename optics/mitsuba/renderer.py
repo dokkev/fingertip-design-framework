@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from typing import Any
+from typing import Any, Sequence
 
 import numpy as np
 
@@ -40,6 +40,7 @@ class MitsubaRenderer:
         depth_mm: float | None = None,
         camera: Camera | None = None,
         settings: RenderSettings | None = None,
+        source_positions_mm: Sequence[tuple[float, float, float]] | None = None,
     ) -> None:
         if not isinstance(tip, Fingertip):
             raise TypeError("tip must be a Fingertip")
@@ -62,6 +63,7 @@ class MitsubaRenderer:
             extrusion=extrusion,
             camera=camera or _default_camera(tip, reference_mesh),
             settings=selected_settings,
+            source_positions_mm=source_positions_mm,
         )
 
     def _checked_view(self, mesh: Any) -> Any:
@@ -91,6 +93,7 @@ class MitsubaRenderer:
         displacement: np.ndarray | None = None,
         spp: int | None = None,
         relative_led_power: float | None = None,
+        seed: int | None = None,
     ) -> RenderResult:
         """Render a mesh view or a displacement on the reference mesh."""
         if mesh is not None and displacement is not None:
@@ -105,6 +108,7 @@ class MitsubaRenderer:
             view,
             spp=spp,
             relative_led_power=relative_led_power,
+            seed=seed,
         )
 
 

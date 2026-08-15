@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Sequence
 
 import numpy as np
 
@@ -51,8 +51,9 @@ def build_in_memory_mitsuba_scene(
     vertices_mm: np.ndarray,
     camera: Camera,
     settings: RenderSettings,
+    source_positions_mm: Sequence[tuple[float, float, float]] | None = None,
 ) -> Any:
-    """Build one scene containing a procedural pad mesh and point emitter."""
+    """Build one scene containing a procedural pad mesh and point emitters."""
     vertices = np.asarray(vertices_mm, dtype=np.float32)
     faces = np.asarray(extrusion.faces_3d, dtype=np.uint32)
     if vertices.shape != (2 * extrusion.node_count_2d, 3):
@@ -82,29 +83,49 @@ def build_in_memory_mitsuba_scene(
     mesh_parameters["faces"] = faces.reshape(-1)
     mesh_parameters.update()
 
-    source_x, source_y = tip.led_source
-    source = np.asarray((source_x, source_y, 0.0), dtype=float)
-    source += settings.source_epsilon_mm * np.asarray([0.0, -1.0, 0.0])
+    if source_positions_mm is None:
+        source_positions = ((tip.led_source[0], tip.led_source[1], 0.0),)
+    else:
+        source_positions = tuple(source_positions_mm)
+    if not source_positions:
+        raise MitsubaSceneError("source_positions_mm must not be empty")
+    sources: list[tuple[str, dict[str, Any]]] = []
+    for index, position_mm in enumerate(source_positions):
+        position = np.asarray(position_mm, dtype=float)
+        if position.shape != (3,) or not np.all(np.isfinite(position)):
+            raise MitsubaSceneError(
+                "source_positions_mm must contain finite 3D positions"
+            )
+        position = position + settings.source_epsilon_mm * np.asarray(
+            [0.0, -1.0, 0.0]
+        )
+        name = "led" if len(source_positions) == 1 else f"led_{index}"
+        sources.append(
+            (
+                name,
+                {
+                    "type": "point",
+                    "position": position.tolist(),
+                },
+            )
+        )
     intensity = settings.point_emitter_scale * np.asarray(
         tip.led.emission_rgb,
         dtype=float,
     ) * tip.led.relative_radiant_power
-    return mi.load_dict(
-        {
-            "type": "scene",
-            "integrator": {
-                "type": "volpath",
-                "max_depth": settings.max_depth,
-            },
-            "pad": mesh,
-            "led": {
-                "type": "point",
-                "position": source.tolist(),
-                "intensity": {
-                    "type": "rgb",
-                    "value": intensity.tolist(),
-                },
-            },
-            "camera": _camera_dict(mi, camera),
+    scene: dict[str, Any] = {
+        "type": "scene",
+        "integrator": {
+            "type": "volpath",
+            "max_depth": settings.max_depth,
+        },
+        "pad": mesh,
+        "camera": _camera_dict(mi, camera),
+    }
+    for name, source in sources:
+        source["intensity"] = {
+            "type": "rgb",
+            "value": intensity.tolist(),
         }
-    )
+        scene[name] = source
+    return mi.load_dict(scene)

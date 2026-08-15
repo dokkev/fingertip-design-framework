@@ -97,12 +97,12 @@ class RenderSettings:
                 or value < minimum
             ):
                 raise ValueError(f"{name} must be an integer of at least {minimum}")
-        for name, value in (
-            ("optical_depth_mm", self.optical_depth_mm),
-            ("source_epsilon_mm", self.source_epsilon_mm),
-        ):
-            if not isfinite(value) or value <= 0.0:
-                raise ValueError(f"{name} must be finite and greater than zero")
+        if not isfinite(self.optical_depth_mm) or self.optical_depth_mm <= 0.0:
+            raise ValueError(
+                "optical_depth_mm must be finite and greater than zero"
+            )
+        if not isfinite(self.source_epsilon_mm) or self.source_epsilon_mm < 0.0:
+            raise ValueError("source_epsilon_mm must be finite and nonnegative")
         if not isfinite(self.point_emitter_scale) or self.point_emitter_scale < 0.0:
             raise ValueError(
                 "point_emitter_scale must be finite and nonnegative"
