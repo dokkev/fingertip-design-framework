@@ -17,6 +17,11 @@ mesh = ["gmsh>=4.12"]
 visualization = ["matplotlib>=3.8"]
 validation = ["scipy>=1.11"]
 optics = ["mitsuba>=3.8"]
+optix = [
+  "pyoptix",
+  "cupy-cuda13x",
+  "cuda-python",
+]
 gui = [
   "nicegui==3.14.0",
   "matplotlib>=3.8",

@@ -106,6 +106,54 @@ Kratos kernel 10.3.0
 
 See [docs/setup/kratos.md](docs/setup/kratos.md) for the runtime contract.
 
+### Optional NVIDIA OptiX validation
+
+NVIDIA OptiX is an optional higher-fidelity optical-validation dependency. It
+is not required for the normal 2D model, mesh, FEM, or optics workflow. The
+currently tested environment is an NVIDIA GPU with an OptiX-compatible driver,
+CUDA Toolkit 13.1, OptiX headers 9.1.0, PyOptiX 9.1.0, CuPy for CUDA 13.x,
+and `cuda-python`. These are the tested versions, not universal hard
+requirements for future OptiX work.
+
+The Conda-first setup used for this smoke path is:
+
+```bash
+conda activate lit
+conda install -c nvidia/label/cuda-13.1.0 cuda
+python -m pip install pyoptix
+python -m pip install cupy-cuda13x
+python -m pip install cuda-python
+```
+
+Install the OptiX 9.1 header SDK outside this repository:
+
+```bash
+git clone --branch v9.1.0 https://github.com/NVIDIA/optix-dev.git /desired/external/path/optix-dev
+export OptiX_INSTALL_DIR=/desired/external/path/optix-dev
+```
+
+Conda CUDA may place headers under
+`CONDA_PREFIX/targets/x86_64-linux/include`; the repository resolver checks
+that layout automatically. `OPTIX_ROOT` is also accepted as a secondary
+OptiX SDK environment variable. Basic environment checks are:
+
+```bash
+which nvcc
+nvcc --version
+python -c "import optix; print(optix.version())"
+python -c "import cupy as cp; print(cp.cuda.runtime.getDeviceCount()); print(cp.cuda.Device(0).compute_capability)"
+```
+
+Run the repository-only runtime smoke test with:
+
+```bash
+python -m validation.optics.optix_smoke
+```
+
+The smoke test compiles a tiny repository-owned CUDA/OptiX program with
+NVRTC, builds one triangle GAS, and validates deterministic hit and miss rays;
+it does not render an image or implement the LUMO 3D transport model.
+
 ## Main commands
 
 ```bash
