@@ -8,7 +8,7 @@ from math import isfinite
 from numbers import Real
 from typing import Literal, Mapping
 
-from model import FingertipParameters
+from model import FingertipParameters, validate_silicone_ligament
 
 
 OptimizableParameterName = Literal[
@@ -18,6 +18,7 @@ OptimizableParameterName = Literal[
     "stem_width",
     "stem_height",
     "void_width",
+    "void_height",
 ]
 
 OPTIMIZABLE_PARAMETER_NAMES: tuple[OptimizableParameterName, ...] = (
@@ -27,6 +28,7 @@ OPTIMIZABLE_PARAMETER_NAMES: tuple[OptimizableParameterName, ...] = (
     "stem_width",
     "stem_height",
     "void_width",
+    "void_height",
 )
 _OPTIMIZABLE_PARAMETER_SET = frozenset(OPTIMIZABLE_PARAMETER_NAMES)
 
@@ -67,7 +69,7 @@ class DesignVariable:
 
 @dataclass(frozen=True)
 class DesignSpace:
-    """Immutable nominal parameters plus the complete six-variable morphology
+    """Immutable nominal parameters plus the complete seven-variable morphology
     design-space contract.
     """
 
@@ -81,7 +83,7 @@ class DesignSpace:
         variables = tuple(self.variables)
         if len(variables) != len(OPTIMIZABLE_PARAMETER_NAMES):
             raise ValueError(
-                "DesignSpace must contain exactly one entry for each of the six "
+                "DesignSpace must contain exactly one entry for each of the seven "
                 "optimizable parameters"
             )
         if any(not isinstance(variable, DesignVariable) for variable in variables):
@@ -96,7 +98,7 @@ class DesignSpace:
             missing = _OPTIMIZABLE_PARAMETER_SET - set(by_name)
             unknown = set(by_name) - _OPTIMIZABLE_PARAMETER_SET
             raise ValueError(
-                "DesignSpace variables must contain exactly the six supported "
+                "DesignSpace variables must contain exactly the seven supported "
                 f"parameters; missing={sorted(missing)!r}, unknown={sorted(unknown)!r}"
             )
 
@@ -145,9 +147,11 @@ class DesignSpace:
                 )
             updates[variable.name] = value
 
-        # FingertipParameters remains the authority for all coupled physical
-        # constraints. Its exception is intentionally allowed to propagate.
-        return replace(self.nominal_parameters, **updates)
+        # FingertipParameters remains the authority for physical constraints;
+        # the optimization-only coupled ligament rule is enforced here.
+        candidate = replace(self.nominal_parameters, **updates)
+        validate_silicone_ligament(candidate)
+        return candidate
 
     def corner_values(self) -> tuple[dict[str, float], ...]:
         """Enumerate every active lower/upper corner deterministically."""

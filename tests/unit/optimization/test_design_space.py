@@ -1,4 +1,4 @@
-"""Focused tests for the algorithm-independent six-variable design space."""
+"""Focused tests for the algorithm-independent seven-variable design space."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import math
 
 import pytest
 
-from model import FingertipParameters
+from model import FingertipParameters, silicone_ligament_measures
 from optimization import (
     DesignSpace,
     DesignVariable,
@@ -41,7 +41,7 @@ def _space(
     return DesignSpace(nominal_parameters, tuple(variables))
 
 
-def test_exact_supported_set_includes_void_width_but_not_void_height() -> None:
+def test_exact_supported_set_includes_both_void_dimensions() -> None:
     assert OPTIMIZABLE_PARAMETER_NAMES == (
         "flat_pad_width",
         "flat_pad_height",
@@ -49,9 +49,10 @@ def test_exact_supported_set_includes_void_width_but_not_void_height() -> None:
         "stem_width",
         "stem_height",
         "void_width",
+        "void_height",
     )
     assert "void_width" in OPTIMIZABLE_PARAMETER_NAMES
-    assert "void_height" not in OPTIMIZABLE_PARAMETER_NAMES
+    assert "void_height" in OPTIMIZABLE_PARAMETER_NAMES
 
 
 @pytest.mark.parametrize(
@@ -73,7 +74,7 @@ def test_design_variable_rejects_reversed_nonfinite_and_unsupported_values() -> 
     with pytest.raises(ValueError, match="finite"):
         DesignVariable("stem_height", True, 6.0, math.inf)
     with pytest.raises(ValueError, match="unsupported"):
-        DesignVariable("void_height", False, 0.0, 1.0)  # type: ignore[arg-type]
+        DesignVariable("unsupported", False, 0.0, 1.0)  # type: ignore[arg-type]
     with pytest.raises(TypeError, match="bool"):
         DesignVariable("stem_height", 1, 6.0, 7.0)  # type: ignore[arg-type]
 
@@ -182,6 +183,37 @@ def test_void_width_decode_changes_only_void_width() -> None:
     assert one.void_width == 1.0
     assert one.stem_width == zero.stem_width
     assert one.void_height == zero.void_height
+
+
+def test_void_height_is_an_active_design_variable() -> None:
+    space = _space(
+        active=("void_height",),
+        lower={"void_height": 0.0},
+        upper={"void_height": 1.0},
+    )
+    decoded = space.decode({"void_height": 1.0})
+    assert decoded.void_height == 1.0
+    assert decoded.void_width == space.nominal_parameters.void_width
+
+
+def test_shared_ligament_measures_are_finite_for_nominal_parameters() -> None:
+    measures = silicone_ligament_measures(FingertipParameters())
+    assert measures.side_ligament_mm == pytest.approx(10.2)
+    assert measures.distal_ligament_mm > 2.0
+    assert measures.minimum_silicone_ligament_mm == min(
+        measures.side_ligament_mm,
+        measures.distal_ligament_mm,
+    )
+
+
+def test_decode_rejects_candidate_below_the_silicone_ligament_rule() -> None:
+    space = _space(
+        active=("stem_height",),
+        lower={"stem_height": 6.0},
+        upper={"stem_height": 11.6},
+    )
+    with pytest.raises(ValueError, match="silicone ligament"):
+        space.decode({"stem_height": 11.6})
 
 
 def test_physical_decode_failure_propagates_without_repair() -> None:

@@ -46,18 +46,17 @@ _VARIABLE_LABELS = {
     "stem_width": "Stem width (w_s)",
     "stem_height": "Stem height (h_s)",
     "void_width": "Void width (w_v)",
+    "void_height": "Void height (h_v)",
 }
 _FIXED_GEOMETRY_NAMES = (
     "link_thickness",
     "bond_extension_width",
     "bond_extension_height",
-    "void_height",
 )
 _FIXED_GEOMETRY_LABELS = {
     "link_thickness": "Link thickness (h_l)",
     "bond_extension_width": "Connector-pad width (w_cp)",
     "bond_extension_height": "Connector-pad height (h_cp)",
-    "void_height": "Void height (h_v)",
 }
 _MECHANICAL_NAMES = ("young_modulus_mpa", "poisson_ratio")
 _LED_NAMES = (
@@ -983,7 +982,7 @@ def _render_parameter_drawing(
             stem_bottom,
             void_bottom,
             _dimension_label("h_v", parameters.void_height),
-            _FIXED_DIMENSION_COLOR,
+            _dimension_color(state, "void_height"),
             text_offset=0.045 * span,
             guide_x=parameters.cutout_half_width,
         )

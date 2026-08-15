@@ -17,4 +17,5 @@ def test_initial_state_uses_fingertip_nominal_defaults() -> None:
         geometry["stem_width"],
         geometry["stem_height"],
         geometry["void_width"],
-    ) == (30.0, 5.0, 9.0, 7.6, 6.0, 1.0)
+        geometry["void_height"],
+    ) == (30.0, 5.0, 9.0, 7.6, 6.0, 1.0, 0.0)

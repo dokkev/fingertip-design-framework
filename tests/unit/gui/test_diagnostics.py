@@ -42,6 +42,21 @@ def test_ellipse_diagnostic_reports_penetration_and_correction_bounds() -> None:
     assert "semielliptical_pad_height >" in text
 
 
+def test_geometry_diagnostics_report_conservative_ligament_measures() -> None:
+    text = _text(diagnose_geometry(_geometry()))
+    assert "side=10.2 mm" in text
+    assert "distal=" in text
+    assert "minimum=" in text
+    assert "exact minimum Euclidean wall thickness" in text
+
+
+def test_geometry_diagnostics_report_ligament_rule_violation() -> None:
+    values = _geometry()
+    values["stem_height"] = 11.6
+    text = _text(diagnose_geometry(values))
+    assert "2.0 mm silicone ligament rule is violated" in text
+
+
 def test_led_fit_diagnostics_include_width_and_height_alternatives() -> None:
     values = _geometry()
     values["stem_width"] = 7.6
@@ -78,6 +93,7 @@ def test_active_bounds_must_enclose_nominal_in_the_correct_direction() -> None:
         "stem_width",
         "stem_height",
         "void_width",
+        "void_height",
     )}
     variables = {
         name: {"optimize": False, "lower": 1.0, "upper": 1.0}

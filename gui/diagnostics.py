@@ -3,11 +3,18 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, fields
-from math import isfinite, sqrt
+from math import isfinite
 from numbers import Real
 from typing import Literal, Mapping
 
-from model import Fingertip, FingertipParameters, LED, OpticalMaterial
+from model import (
+    Fingertip,
+    FingertipParameters,
+    LED,
+    MINIMUM_SILICONE_LIGAMENT_MM,
+    OpticalMaterial,
+    silicone_ligament_measures,
+)
 from optimization.design_space import OPTIMIZABLE_PARAMETER_NAMES
 
 
@@ -218,8 +225,17 @@ def _geometry_corrections(values: Mapping[str, object]) -> list[Diagnostic]:
             cutout_half_width = stem_width / 2.0 + void_width
             normalized_x = cutout_half_width / half_width
             if 0.0 <= normalized_x < 1.0:
-                shape_factor = sqrt(max(0.0, 1.0 - normalized_x**2))
-                available_depth = ellipse_height * shape_factor
+                available_depth = silicone_ligament_measures(
+                    {
+                        "flat_pad_width": flat_width,
+                        "flat_pad_height": flat_height,
+                        "semielliptical_pad_height": ellipse_height,
+                        "stem_width": stem_width,
+                        "stem_height": stem_height,
+                        "void_width": void_width,
+                        "void_height": void_height,
+                    }
+                ).ellipse_depth_at_cutout_mm
                 penetration = max(0.0, stem_height + void_height - flat_height)
                 if penetration > 0.0 and penetration >= available_depth - tolerance:
                     max_stem_height = (
@@ -229,8 +245,9 @@ def _geometry_corrections(values: Mapping[str, object]) -> list[Diagnostic]:
                         - tolerance
                     )
                     required_ellipse_height = (
-                        (penetration + tolerance) / shape_factor
-                        if shape_factor > 0.0
+                        (penetration + tolerance)
+                        / (available_depth / ellipse_height)
+                        if available_depth > 0.0 and ellipse_height > 0.0
                         else None
                     )
                     result.append(
@@ -299,6 +316,35 @@ def diagnose_geometry(
             )
         )
         return tuple(result)
+
+    ligament = silicone_ligament_measures(parameters)
+    result.append(
+        _message(
+            "INFO",
+            "LIGAMENT",
+            "Conservative silicone ligament measures: "
+            f"side={ligament.side_ligament_mm:g} mm, "
+            f"distal={ligament.distal_ligament_mm:g} mm, "
+            f"minimum={ligament.minimum_silicone_ligament_mm:g} mm. "
+            "These are design-space measures, not an exact minimum Euclidean "
+            "wall thickness.",
+        )
+    )
+    if (
+        ligament.side_ligament_mm < MINIMUM_SILICONE_LIGAMENT_MM
+        or ligament.distal_ligament_mm < MINIMUM_SILICONE_LIGAMENT_MM
+    ):
+        result.append(
+            _message(
+                "ERROR",
+                "DESIGN SPACE",
+                "The conservative 2.0 mm silicone ligament rule is violated: "
+                f"side={ligament.side_ligament_mm:g} mm, "
+                f"distal={ligament.distal_ligament_mm:g} mm. "
+                "Increase the surrounding pad dimensions or reduce the cutout; "
+                "no automatic repair was applied.",
+            )
+        )
 
     selected_led = led or LED()
     try:

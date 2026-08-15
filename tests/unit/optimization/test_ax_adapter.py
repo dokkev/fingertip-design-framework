@@ -362,6 +362,30 @@ def test_decode_failure_has_no_objective_and_does_not_call_evaluator() -> None:
     evaluator.evaluate.assert_not_called()
 
 
+def test_ligament_decode_failure_is_reported_as_failed_trial() -> None:
+    study = _study(
+        active=("stem_height",),
+        lower={"stem_height": 6.0},
+        upper={"stem_height": 11.6},
+    )
+    client = _FakeClient()
+    trial = client.attach_trial(parameters={"stem_height": 11.6})
+    evaluator = Mock()
+
+    record = ax_adapter._evaluate_trial(
+        client,
+        evaluator,
+        study.design_space,
+        trial,
+        "initialization",
+        {"stem_height": 11.6},
+    )
+
+    assert record.evaluation is None
+    assert client.failed and "InvalidFingertipParameters" in client.failed[0][1]
+    evaluator.evaluate.assert_not_called()
+
+
 def test_unexpected_exception_is_reraised_after_failure_reporting() -> None:
     study = _study()
     client = _FakeClient()

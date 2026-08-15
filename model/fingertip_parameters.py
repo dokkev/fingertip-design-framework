@@ -4,10 +4,79 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from math import isfinite, sqrt
+from typing import Mapping
 
 
 class InvalidFingertipParameters(ValueError):
     """Raised when fingertip dimensions cannot define a valid LIT pad."""
+
+
+MINIMUM_SILICONE_LIGAMENT_MM = 2.0
+
+
+@dataclass(frozen=True)
+class SiliconeLigamentMeasures:
+    """Conservative lateral and distal ligament measures in millimeters."""
+
+    side_ligament_mm: float
+    ellipse_depth_at_cutout_mm: float
+    distal_ligament_mm: float
+    minimum_silicone_ligament_mm: float
+
+
+def silicone_ligament_measures(
+    parameters: "FingertipParameters | Mapping[str, float]",
+) -> SiliconeLigamentMeasures:
+    """Return conservative design-space ligament measures.
+
+    These quantities are not an exact minimum Euclidean wall thickness.
+    """
+    if isinstance(parameters, Mapping):
+        value = parameters.__getitem__
+    else:
+        value = lambda name: getattr(parameters, name)
+    flat_pad_width = float(value("flat_pad_width"))
+    stem_width = float(value("stem_width"))
+    void_width = float(value("void_width"))
+    semielliptical_pad_height = float(value("semielliptical_pad_height"))
+    flat_pad_height = float(value("flat_pad_height"))
+    stem_height = float(value("stem_height"))
+    void_height = float(value("void_height"))
+    half_width = flat_pad_width / 2.0
+    cutout_half_width = stem_width / 2.0 + void_width
+    side_ligament = half_width - cutout_half_width
+    ellipse_depth = semielliptical_pad_height * sqrt(
+        1.0 - (cutout_half_width / half_width) ** 2
+    )
+    distal_ligament = (
+        flat_pad_height + ellipse_depth - (stem_height + void_height)
+    )
+    return SiliconeLigamentMeasures(
+        side_ligament_mm=side_ligament,
+        ellipse_depth_at_cutout_mm=ellipse_depth,
+        distal_ligament_mm=distal_ligament,
+        minimum_silicone_ligament_mm=min(side_ligament, distal_ligament),
+    )
+
+
+def validate_silicone_ligament(
+    parameters: "FingertipParameters | Mapping[str, float]",
+    *,
+    minimum_mm: float = MINIMUM_SILICONE_LIGAMENT_MM,
+) -> SiliconeLigamentMeasures:
+    """Reject a design that violates the conservative ligament rule."""
+    measures = silicone_ligament_measures(parameters)
+    if (
+        measures.side_ligament_mm < minimum_mm
+        or measures.distal_ligament_mm < minimum_mm
+    ):
+        raise InvalidFingertipParameters(
+            "silicone ligament design-space rule requires side and distal "
+            f"ligaments >= {minimum_mm:g} mm: "
+            f"side={measures.side_ligament_mm:g} mm, "
+            f"distal={measures.distal_ligament_mm:g} mm"
+        )
+    return measures
 
 
 @dataclass(frozen=True)
@@ -189,10 +258,9 @@ class FingertipParameters:
             self.cutout_height - self.flat_pad_height,
         )
         if penetration_depth > 0.0:
-            normalized_x = cutout_half_width / half_width
-            available_ellipse_depth = self.semielliptical_pad_height * sqrt(
-                1.0 - normalized_x**2
-            )
+            available_ellipse_depth = silicone_ligament_measures(
+                self
+            ).ellipse_depth_at_cutout_mm
             if penetration_depth >= available_ellipse_depth - self.geometry_tolerance:
                 raise InvalidFingertipParameters(
                     "cutout bottom must remain strictly inside the "
