@@ -14,7 +14,9 @@ from model import Fingertip, FingertipParameters
 from visualization import plot_displacement
 
 
-DIAMETERS_MM = (4.0, 8.0)
+
+
+DIAMETERS_MM = (4.0, 8.0, 12.0)
 INDENTATION_MM = 1.5
 
 

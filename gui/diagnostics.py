@@ -505,7 +505,7 @@ def diagnose_state(
 
 
 def diagnose_design_space(
-    baseline: Mapping[str, object],
+    nominal_parameters: Mapping[str, object],
     variables: Mapping[str, Mapping[str, object]],
 ) -> tuple[Diagnostic, ...]:
     """Report incomplete or out-of-range researcher-selected bounds."""
@@ -538,36 +538,36 @@ def diagnose_design_space(
                         "To fix: set Min < Max before running optimization.",
                     )
                 )
-            baseline_value = _number(baseline.get(name))
-            if baseline_value is None:
+            nominal_value = _number(nominal_parameters.get(name))
+            if nominal_value is None:
                 result.append(
                     _message(
                         "ERROR",
                         "DESIGN SPACE",
-                        f"Baseline {name} is missing or non-finite.",
+                        f"Nominal {name} is missing or non-finite.",
                     )
                 )
             else:
-                if lower > baseline_value:
+                if lower > nominal_value:
                     result.append(
                         _message(
                             "ERROR",
                             "DESIGN SPACE",
-                            f"{name} Min = {lower:g} is above baseline "
-                            f"{baseline_value:g}.\n"
-                            f"To fix: set Min <= baseline ({baseline_value:g}), "
-                            "or change the baseline.",
+                            f"{name} Min = {lower:g} is above nominal value "
+                            f"{nominal_value:g}.\n"
+                            f"To fix: set Min <= nominal value ({nominal_value:g}), "
+                            "or change the nominal value.",
                         )
                     )
-                if upper < baseline_value:
+                if upper < nominal_value:
                     result.append(
                         _message(
                             "ERROR",
                             "DESIGN SPACE",
-                            f"{name} Max = {upper:g} is below baseline "
-                            f"{baseline_value:g}.\n"
-                            f"To fix: set Max >= baseline ({baseline_value:g}), "
-                            "or change the baseline.",
+                            f"{name} Max = {upper:g} is below nominal value "
+                            f"{nominal_value:g}.\n"
+                            f"To fix: set Max >= nominal value ({nominal_value:g}), "
+                            "or change the nominal value.",
                         )
                     )
     active_count = sum(

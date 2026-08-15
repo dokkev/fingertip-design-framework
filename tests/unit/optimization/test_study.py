@@ -22,9 +22,9 @@ def _design_space(
     active: tuple[str, ...] = ("stem_width",),
     lower: dict[str, float] | None = None,
     upper: dict[str, float] | None = None,
-    baseline: FingertipParameters | None = None,
+    nominal_parameters: FingertipParameters | None = None,
 ) -> DesignSpace:
-    baseline = baseline or FingertipParameters()
+    nominal_parameters = nominal_parameters or FingertipParameters()
     lower = lower or {}
     upper = upper or {}
     variables = tuple(
@@ -33,16 +33,16 @@ def _design_space(
             name in active,
             lower.get(
                 name,
-                0.0 if name == "void_width" and name in active else getattr(baseline, name) - 0.5,
+                0.0 if name == "void_width" and name in active else getattr(nominal_parameters, name) - 0.5,
             ),
             upper.get(
                 name,
-                1.0 if name == "void_width" and name in active else getattr(baseline, name) + 0.5,
+                1.0 if name == "void_width" and name in active else getattr(nominal_parameters, name) + 0.5,
             ),
         )
         for name in OPTIMIZABLE_PARAMETER_NAMES
     )
-    return DesignSpace(baseline, variables)
+    return DesignSpace(nominal_parameters, variables)
 
 
 def _grid(*, adjacent: bool = True) -> ScenarioGrid:
@@ -114,8 +114,8 @@ def test_study_rejects_zero_width_active_variable() -> None:
         ({"stem_width": 6.0}, {"stem_width": 7.5}, "outside"),
     ),
 )
-def test_study_requires_baseline_inside_active_bounds(lower, upper, message) -> None:
-    with pytest.raises(ValueError, match=message):
+def test_study_requires_nominal_inside_active_bounds(lower, upper, message) -> None:
+    with pytest.raises(ValueError, match=f"nominal stem_width=7.6.*{message}"):
         _study(design_space=_design_space(lower=lower, upper=upper))
 
 
@@ -135,6 +135,7 @@ def test_study_allows_infeasible_box_corner_without_checking_or_repairing_it() -
         active=("flat_pad_width", "stem_width"),
         lower={"flat_pad_width": 15.0, "stem_width": 7.6},
         upper={"flat_pad_width": 20.0, "stem_width": 9.0},
+        nominal_parameters=FingertipParameters(flat_pad_width=20.0),
     )
     study = _study(design_space=design_space)
     assert study.design_space is design_space

@@ -67,14 +67,16 @@ class DesignVariable:
 
 @dataclass(frozen=True)
 class DesignSpace:
-    """Immutable baseline plus the complete six-variable morphology contract."""
+    """Immutable nominal parameters plus the complete six-variable morphology
+    design-space contract.
+    """
 
-    baseline: FingertipParameters
+    nominal_parameters: FingertipParameters
     variables: tuple[DesignVariable, ...]
 
     def __post_init__(self) -> None:
-        if not isinstance(self.baseline, FingertipParameters):
-            raise TypeError("baseline must be FingertipParameters")
+        if not isinstance(self.nominal_parameters, FingertipParameters):
+            raise TypeError("nominal_parameters must be FingertipParameters")
 
         variables = tuple(self.variables)
         if len(variables) != len(OPTIMIZABLE_PARAMETER_NAMES):
@@ -145,7 +147,7 @@ class DesignSpace:
 
         # FingertipParameters remains the authority for all coupled physical
         # constraints. Its exception is intentionally allowed to propagate.
-        return replace(self.baseline, **updates)
+        return replace(self.nominal_parameters, **updates)
 
     def corner_values(self) -> tuple[dict[str, float], ...]:
         """Enumerate every active lower/upper corner deterministically."""

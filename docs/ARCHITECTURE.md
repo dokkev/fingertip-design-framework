@@ -91,7 +91,7 @@ It does not replace mesh-based reference/loaded comparisons.
 
 - `optimization/ax_adapter.py` is the thin optional Ax 1.3.1 orchestration
   boundary. It maps active `DesignVariable` bounds into Ax, attaches the
-  baseline, configures Ax's supported high-level generation strategy, performs
+  nominal trial, configures Ax's supported high-level generation strategy, performs
   sequential ask/evaluate/tell orchestration, reports failures, and returns
   compact observed trial records. It does not own GP models, kernels,
   acquisitions, BoTorch/GPyTorch objects, geometry, scientific bounds, contact

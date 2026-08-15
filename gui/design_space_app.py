@@ -29,7 +29,6 @@ from optimization.design_space import (
 )
 from visualization import plot_fingertip
 
-from gui.baseline import current_lit_baseline
 from gui.diagnostics import (
     Diagnostic,
     build_led,
@@ -119,8 +118,7 @@ def _number(value: object) -> float | None:
 
 
 def _initial_state() -> dict[str, object]:
-    baseline = current_lit_baseline()
-    parameters = asdict(baseline)
+    parameters = asdict(FingertipParameters())
     geometry = {
         name: parameters[name]
         for name in (*OPTIMIZABLE_PARAMETER_NAMES, *_FIXED_GEOMETRY_NAMES)
@@ -260,7 +258,7 @@ def _preview(
 
 def _build_design_space(state: Mapping[str, object]) -> DesignSpace | None:
     try:
-        baseline = _parameters(state["geometry"], state["mechanical"])
+        nominal_parameters = _parameters(state["geometry"], state["mechanical"])
         variables = tuple(
             DesignVariable(
                 name=name,
@@ -270,7 +268,7 @@ def _build_design_space(state: Mapping[str, object]) -> DesignSpace | None:
             )
             for name in OPTIMIZABLE_PARAMETER_NAMES
         )
-        return DesignSpace(baseline=baseline, variables=variables)
+        return DesignSpace(nominal_parameters=nominal_parameters, variables=variables)
     except Exception:
         return None
 
@@ -288,8 +286,8 @@ def _analyze(state: Mapping[str, object]) -> Analysis:
     state_diagnostics = diagnose_state(geometry, mechanical, led, optical)
     variables = state["variables"]
     assert isinstance(variables, Mapping)
-    baseline_values = {name: geometry[name] for name in OPTIMIZABLE_PARAMETER_NAMES}
-    design_diagnostics = diagnose_design_space(baseline_values, variables)
+    nominal_values = {name: geometry[name] for name in OPTIMIZABLE_PARAMETER_NAMES}
+    design_diagnostics = diagnose_design_space(nominal_values, variables)
     active_count = sum(
         bool(variables[name]["optimize"]) for name in OPTIMIZABLE_PARAMETER_NAMES
     )
@@ -298,8 +296,8 @@ def _analyze(state: Mapping[str, object]) -> Analysis:
         for item in state_diagnostics
     )
 
-    baseline = _preview(
-        "BASELINE",
+    nominal = _preview(
+        "NOMINAL",
         state,
         {},
         optical_valid=optical_valid,
@@ -360,7 +358,7 @@ def _analyze(state: Mapping[str, object]) -> Analysis:
         corner_total = len(corner_results)
         corner_valid = sum(corner_results)
     return Analysis(
-        previews=(minimum, baseline, maximum),
+        previews=(minimum, nominal, maximum),
         state_diagnostics=tuple(state_diagnostics),
         design_diagnostics=tuple(design_diagnostics),
         corner_valid=corner_valid,
@@ -409,14 +407,14 @@ def _corner_diagnostics(state: Mapping[str, object]) -> tuple[Diagnostic, ...]:
 
 def _all_console_diagnostics(state: Mapping[str, object], analysis: Analysis) -> tuple[Diagnostic, ...]:
     physical_corner_errors = _corner_diagnostics(state)
-    baseline_valid = analysis.previews[1].valid
+    nominal_valid = analysis.previews[1].valid
     optical_valid = not any(
         item.severity == "ERROR" and item.source == "OPTICAL"
         for item in analysis.state_diagnostics
     )
     design_errors = any(item.severity == "ERROR" for item in analysis.design_diagnostics)
     if analysis.active_count == 0:
-        status = "PHYSICAL CONFIG VALID" if baseline_valid else "PHYSICAL CONFIG INVALID"
+        status = "PHYSICAL CONFIG VALID" if nominal_valid else "PHYSICAL CONFIG INVALID"
     elif design_errors:
         status = "DESIGN SPACE INCOMPLETE"
     elif analysis.corner_valid != analysis.corner_total:
@@ -424,15 +422,15 @@ def _all_console_diagnostics(state: Mapping[str, object], analysis: Analysis) ->
     else:
         status = "DESIGN SPACE READY"
     summary = Diagnostic(
-        "INFO" if baseline_valid else "ERROR",
+        "INFO" if nominal_valid else "ERROR",
         "SUMMARY",
         f"{status}; Active optimization variables: {analysis.active_count}; "
         f"Physical corners: {analysis.corner_valid} / {analysis.corner_total} valid; "
         f"Optical settings: {'VALID' if optical_valid else 'INVALID'}.",
     )
     messages: list[Diagnostic] = [summary]
-    if baseline_valid:
-        messages.append(Diagnostic("INFO", "BASELINE", "Physical fingertip is valid."))
+    if nominal_valid:
+        messages.append(Diagnostic("INFO", "NOMINAL", "Physical fingertip is valid."))
     messages.extend(analysis.design_diagnostics)
     messages.extend(
         item
@@ -456,7 +454,7 @@ def _all_console_diagnostics(state: Mapping[str, object], analysis: Analysis) ->
                 "continuous interior designs are feasible.",
             )
         )
-    if not optical_valid and baseline_valid:
+    if not optical_valid and nominal_valid:
         messages.append(
             Diagnostic(
                 "INFO",
@@ -521,11 +519,11 @@ def _render_geometry_editor(state: dict[str, object]) -> None:
     with ui.card().classes("w-full"):
         ui.label("Geometry Design Space").classes("text-h6")
         ui.label(
-            "Min/Max start at baseline. No scientific bound is invented; "
+            "Min/Max start at nominal value. No scientific bound is invented; "
             "Optimize is initially OFF for every variable."
         ).classes("text-caption")
         with ui.row().classes("items-center no-wrap"):
-            for heading in ("Parameter", "Optimize", "Baseline", "Min", "Max"):
+            for heading in ("Parameter", "Optimize", "Nominal", "Min", "Max"):
                 ui.label(heading).classes("w-28 text-weight-bold")
         geometry = state["geometry"]
         variables = state["variables"]
@@ -545,7 +543,7 @@ def _render_geometry_editor(state: dict[str, object]) -> None:
                     state,
                     "geometry",
                     name,
-                    label="Baseline",
+                    label="Nominal",
                     suffix="mm",
                     precision=_GEOMETRY_PRECISION[name],
                     step=_GEOMETRY_STEP[name],
@@ -561,12 +559,12 @@ def _bound_input(
     variables = state["variables"]
     assert isinstance(geometry, Mapping)
     assert isinstance(variables, Mapping)
-    baseline = _number(geometry.get(name))
+    nominal = _number(geometry.get(name))
     control = ui.number(
         "",
         value=variables[name][bound],
-        min=baseline if bound == "upper" else None,
-        max=baseline if bound == "lower" else None,
+        min=nominal if bound == "upper" else None,
+        max=nominal if bound == "lower" else None,
         suffix="mm",
         precision=_GEOMETRY_PRECISION[name],
         step=_GEOMETRY_STEP[name],
@@ -847,7 +845,7 @@ def _render_parameter_drawing(
     state: Mapping[str, object],
     analysis: Analysis,
 ) -> None:
-    """Show one annotated baseline cross-section with state-aware dimensions."""
+    """Show one annotated nominal cross-section with state-aware dimensions."""
     with ui.card().classes("w-full"):
         ui.label("Geometry parameter map").classes("text-h6")
         ui.label(
@@ -861,7 +859,7 @@ def _render_parameter_drawing(
             axis.text(
                 0.5,
                 0.5,
-                "BASELINE\nINVALID\nSee diagnostics below",
+                "NOMINAL\nINVALID\nSee diagnostics below",
                 ha="center",
                 va="center",
                 transform=axis.transAxes,
@@ -880,7 +878,7 @@ def _render_parameter_drawing(
             show_contact_boundaries=False,
             show_legend=False,
             show_axes=True,
-            title="Baseline cross-section",
+            title="Nominal cross-section",
         )
 
         width = parameters.flat_pad_width
@@ -1024,11 +1022,19 @@ def _shared_limits(previews: tuple[Preview, Preview, Preview], state: Mapping[st
     else:
         geometry = state["geometry"]
         assert isinstance(geometry, Mapping)
-        width = _number(geometry.get("flat_pad_width")) or 20.0
-        flat_height = _number(geometry.get("flat_pad_height")) or 3.0
-        ellipse_height = _number(geometry.get("semielliptical_pad_height")) or 7.0
-        stem_height = _number(geometry.get("stem_height")) or 6.0
-        link_thickness = _number(geometry.get("link_thickness")) or 3.5
+        defaults = FingertipParameters()
+        width = _number(geometry.get("flat_pad_width")) or defaults.flat_pad_width
+        flat_height = (
+            _number(geometry.get("flat_pad_height")) or defaults.flat_pad_height
+        )
+        ellipse_height = (
+            _number(geometry.get("semielliptical_pad_height"))
+            or defaults.semielliptical_pad_height
+        )
+        stem_height = _number(geometry.get("stem_height")) or defaults.stem_height
+        link_thickness = (
+            _number(geometry.get("link_thickness")) or defaults.link_thickness
+        )
         min_x, max_x = -width / 2.0, width / 2.0
         min_y, max_y = -(flat_height + ellipse_height + stem_height), link_thickness
     span = max(max_x - min_x, max_y - min_y, 2.0)
@@ -1112,7 +1118,7 @@ def _render_page(state: dict[str, object]) -> None:
             _render_mechanical(state)
             _render_led(state)
             _render_optical(state)
-            ui.button("Reset to LIT baseline", on_click=lambda: _reset_state(state))
+            ui.button("Reset to nominal LIT geometry", on_click=lambda: _reset_state(state))
         with ui.column().style("width: 60%; min-width: 0;"):
             _render_parameter_drawing(state, analysis)
             _render_previews(state, analysis)

@@ -15,30 +15,30 @@ from optimization import (
 
 
 def _space(
-    baseline: FingertipParameters | None = None,
+    nominal_parameters: FingertipParameters | None = None,
     *,
     active: tuple[str, ...] = (),
     lower: dict[str, float] | None = None,
     upper: dict[str, float] | None = None,
     reversed_input: bool = False,
 ) -> DesignSpace:
-    baseline = baseline or FingertipParameters()
+    nominal_parameters = nominal_parameters or FingertipParameters()
     lower = lower or {}
     upper = upper or {}
     variables = []
     for name in OPTIMIZABLE_PARAMETER_NAMES:
-        baseline_value = getattr(baseline, name)
+        nominal_value = getattr(nominal_parameters, name)
         variables.append(
             DesignVariable(
                 name=name,
                 optimize=name in active,
-                lower=lower.get(name, baseline_value),
-                upper=upper.get(name, baseline_value),
+                lower=lower.get(name, nominal_value),
+                upper=upper.get(name, nominal_value),
             )
         )
     if reversed_input:
         variables.reverse()
-    return DesignSpace(baseline, tuple(variables))
+    return DesignSpace(nominal_parameters, tuple(variables))
 
 
 def test_exact_supported_set_includes_void_width_but_not_void_height() -> None:
@@ -104,13 +104,21 @@ def test_active_variables_are_canonical_and_include_void_width() -> None:
     )
 
 
-def test_zero_active_space_has_one_empty_corner_and_decodes_baseline() -> None:
+def test_zero_active_space_has_one_empty_corner_and_decodes_nominal() -> None:
     space = _space()
     assert space.active_variables == ()
     assert space.lower_corner_values() == {}
     assert space.upper_corner_values() == {}
     assert space.corner_values() == ({},)
-    assert space.decode({}) == space.baseline
+    assert space.decode({}) == space.nominal_parameters
+
+
+def test_nominal_parameters_is_the_only_reference_field() -> None:
+    nominal_parameters = FingertipParameters()
+    space = _space(nominal_parameters)
+
+    assert space.nominal_parameters is nominal_parameters
+    assert not hasattr(space, "baseline")
 
 
 def test_decode_requires_exact_active_names_and_inclusive_bounds() -> None:
@@ -134,7 +142,7 @@ def test_decode_requires_exact_active_names_and_inclusive_bounds() -> None:
 
 
 def test_decode_preserves_fixed_geometry_and_mechanical_values() -> None:
-    baseline = FingertipParameters(
+    nominal_parameters = FingertipParameters(
         link_thickness=4.0,
         bond_extension_width=3.0,
         bond_extension_height=1.5,
@@ -144,7 +152,7 @@ def test_decode_preserves_fixed_geometry_and_mechanical_values() -> None:
         arc_resolution=64,
     )
     space = _space(
-        baseline,
+        nominal_parameters,
         active=("stem_width",),
         lower={"stem_width": 7.6},
         upper={"stem_width": 8.0},
@@ -159,7 +167,7 @@ def test_decode_preserves_fixed_geometry_and_mechanical_values() -> None:
         "poisson_ratio",
         "arc_resolution",
     ):
-        assert getattr(decoded, name) == getattr(baseline, name)
+        assert getattr(decoded, name) == getattr(nominal_parameters, name)
 
 
 def test_void_width_decode_changes_only_void_width() -> None:

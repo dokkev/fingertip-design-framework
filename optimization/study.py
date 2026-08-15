@@ -55,22 +55,25 @@ class OptimizationStudy:
             raise ValueError("OptimizationStudy requires at least one active variable")
 
         for variable in self.design_space.active_variables:
-            baseline_value = getattr(self.design_space.baseline, variable.name)
+            nominal_value = getattr(
+                self.design_space.nominal_parameters,
+                variable.name,
+            )
             if variable.lower >= variable.upper:
                 raise ValueError(
                     f"{variable.name} is active but has zero search width: "
                     f"lower={variable.lower:g}, upper={variable.upper:g}"
                 )
-            if not variable.lower <= baseline_value <= variable.upper:
+            if not variable.lower <= nominal_value <= variable.upper:
                 raise ValueError(
-                    f"baseline {variable.name}={baseline_value:g} is outside "
+                    f"nominal {variable.name}={nominal_value:g} is outside "
                     f"[{variable.lower:g}, {variable.upper:g}]"
                 )
 
-        # The public physical root validates the complete baseline, including
+        # The public physical root validates the complete nominal design, including
         # fixed LED fit, without meshing, FEM, or optical transport.
         Fingertip(
-            self.design_space.baseline,
+            self.design_space.nominal_parameters,
             led=self.led,
             optical=self.optical,
         )

@@ -4,6 +4,7 @@ The model uses millimetres, places the pad/link interface at `y = 0`, and
 uses negative `y` as the distal direction. The canonical fingertip has one
 shared full width for the flat pad, the semi-ellipse, and the rigid link.
 Compliant bond extensions occupy two lower-corner recesses in the rigid link.
+These defaults represent the current nominal LIT morphology.
 
 ## Canonical geometry parameters
 
@@ -11,12 +12,12 @@ Compliant bond extensions occupy two lower-corner recesses in the rigid link.
 
 | Component | Width | Height | Default |
 | --- | --- | --- | --- |
-| Flat pad | `flat_pad_width` (`w_fp`) | `flat_pad_height` (`h_fp`) | 20 × 3 mm |
-| Semi-ellipse | `w_ep = w_fp` | `semielliptical_pad_height` (`h_ep`) | 20 × 7 mm |
-| Rigid link plate | `w_l = w_fp` | `link_thickness` (`h_l`) | 20 × 3.5 mm |
+| Flat pad | `flat_pad_width` (`w_fp`) | `flat_pad_height` (`h_fp`) | 30 × 5 mm |
+| Semi-ellipse | `w_ep = w_fp` | `semielliptical_pad_height` (`h_ep`) | 30 × 9 mm |
+| Rigid link plate | `w_l = w_fp` | `link_thickness` (`h_l`) | 30 × 3.5 mm |
 | Bond extension | `bond_extension_width` (`w_cp`) | `bond_extension_height` (`h_cp`) | 4 × 2 mm |
 | Rigid stem | `stem_width` (`w_s`) | `stem_height` (`h_s`) | 7.6 × 6 mm |
-| Void | `void_width` (`w_v`, one side) | `void_height` (`h_v`, below the stem tip) | 0 × 0 mm |
+| Void | `void_width` (`w_v`, one side) | `void_height` (`h_v`, below the stem tip) | 1 × 0 mm |
 
 The mandatory width identity is:
 

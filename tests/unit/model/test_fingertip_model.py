@@ -295,9 +295,13 @@ def test_rigid_link_area_reflects_recesses_and_stem() -> None:
 @pytest.mark.parametrize(
     ("overrides", "classification", "geometry_type"),
     [
-        ({}, "zero_clearance_fit", type(None)),
+        ({"void_width": 0.0}, "zero_clearance_fit", type(None)),
         ({"void_width": SIDE_CLEARANCE}, "side_clearance", MultiPolygon),
-        ({"void_height": BOTTOM_CLEARANCE}, "bottom_clearance", Polygon),
+        (
+            {"void_width": 0.0, "void_height": BOTTOM_CLEARANCE},
+            "bottom_clearance",
+            Polygon,
+        ),
         (
             {"void_width": SIDE_CLEARANCE, "void_height": BOTTOM_CLEARANCE},
             "u_clearance",
@@ -361,7 +365,7 @@ def test_required_boundaries_and_contact_pairs_remain_explicit() -> None:
 
 
 def test_zero_clearance_keeps_distinct_coincident_contact_boundaries() -> None:
-    model = build_model()
+    model = build_model(void_width=0.0)
     for pair in model.contact_pairs:
         assert pair.initial_normal_gap == pytest.approx(0.0)
         assert pair.stem_boundary is not pair.pad_boundary

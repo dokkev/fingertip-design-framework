@@ -16,7 +16,7 @@ from optimization.study import OptimizationStudy
 
 
 AX_OBJECTIVE_NAME = "minimum_separability"
-AxTrialPhase = Literal["baseline", "initialization", "search"]
+AxTrialPhase = Literal["nominal", "initialization", "search"]
 
 
 @dataclass(frozen=True)
@@ -45,7 +45,7 @@ class AxSettings:
 
 @dataclass(frozen=True)
 class AxTrialRecord:
-    """One baseline, initialization, or search trial."""
+    """One nominal, initialization, or search trial."""
 
     trial_index: int
     phase: AxTrialPhase
@@ -212,7 +212,7 @@ def run_ax_optimization(
     study: OptimizationStudy,
     settings: AxSettings,
 ) -> AxRunResult:
-    """Evaluate baseline, initialization attempts, then search attempts."""
+    """Evaluate the nominal trial, initialization attempts, then search attempts."""
     if not isinstance(study, OptimizationStudy):
         raise TypeError("study must be an OptimizationStudy")
     if not isinstance(settings, AxSettings):
@@ -222,22 +222,25 @@ def run_ax_optimization(
     evaluator = study.create_evaluator()
     records: list[AxTrialRecord] = []
 
-    baseline_values = {
-        variable.name: getattr(study.design_space.baseline, variable.name)
+    nominal_values = {
+        variable.name: getattr(
+            study.design_space.nominal_parameters,
+            variable.name,
+        )
         for variable in study.design_space.active_variables
     }
-    baseline_trial = client.attach_trial(
-        parameters=baseline_values,
-        arm_name="baseline",
+    nominal_trial = client.attach_trial(
+        parameters=nominal_values,
+        arm_name="nominal",
     )
     records.append(
         _evaluate_trial(
             client,
             evaluator,
             study.design_space,
-            baseline_trial,
-            "baseline",
-            baseline_values,
+            nominal_trial,
+            "nominal",
+            nominal_values,
         )
     )
 

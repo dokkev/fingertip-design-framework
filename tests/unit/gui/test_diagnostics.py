@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import asdict
 
-from model import LED
+from model import FingertipParameters, LED
 from gui.diagnostics import (
     diagnose_design_space,
     diagnose_geometry,
@@ -12,11 +12,10 @@ from gui.diagnostics import (
     diagnose_mechanical,
     diagnose_optical,
 )
-from gui.baseline import current_lit_baseline
 
 
 def _geometry() -> dict[str, object]:
-    return asdict(current_lit_baseline())
+    return asdict(FingertipParameters())
 
 
 def _text(diagnostics) -> str:
@@ -71,8 +70,8 @@ def test_optical_diagnostics_report_nonnegative_and_anisotropy_intervals() -> No
     assert "-1 < anisotropy_g < 1" in text
 
 
-def test_active_bounds_must_enclose_baseline_in_the_correct_direction() -> None:
-    baseline = {name: 1.0 for name in (
+def test_active_bounds_must_enclose_nominal_in_the_correct_direction() -> None:
+    nominal_parameters = {name: 1.0 for name in (
         "flat_pad_width",
         "flat_pad_height",
         "semielliptical_pad_height",
@@ -82,19 +81,19 @@ def test_active_bounds_must_enclose_baseline_in_the_correct_direction() -> None:
     )}
     variables = {
         name: {"optimize": False, "lower": 1.0, "upper": 1.0}
-        for name in baseline
+        for name in nominal_parameters
     }
     variables["stem_height"] = {
         "optimize": True,
         "lower": 2.0,
         "upper": 3.0,
     }
-    text = _text(diagnose_design_space(baseline, variables))
-    assert "stem_height Min = 2 is above baseline 1" in text
+    text = _text(diagnose_design_space(nominal_parameters, variables))
+    assert "stem_height Min = 2 is above nominal value 1" in text
     variables["stem_height"] = {
         "optimize": True,
         "lower": -1.0,
         "upper": 0.0,
     }
-    text = _text(diagnose_design_space(baseline, variables))
-    assert "stem_height Max = 0 is below baseline 1" in text
+    text = _text(diagnose_design_space(nominal_parameters, variables))
+    assert "stem_height Max = 0 is below nominal value 1" in text

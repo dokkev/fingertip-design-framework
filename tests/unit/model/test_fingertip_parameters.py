@@ -17,15 +17,19 @@ def _removed_width_name(prefix: str) -> str:
 
 def test_default_parameters_use_the_canonical_geometry_api() -> None:
     parameters = FingertipParameters()
-    assert parameters.flat_pad_width == 20.0
-    assert parameters.flat_pad_height == 3.0
-    assert parameters.semielliptical_pad_height == 7.0
+    assert parameters.flat_pad_width == 30.0
+    assert parameters.flat_pad_height == 5.0
+    assert parameters.semielliptical_pad_height == 9.0
     assert parameters.link_thickness == 3.5
     assert parameters.bond_extension_width == 4.0
     assert parameters.bond_extension_height == 2.0
-    assert parameters.cutout_width == parameters.stem_width
+    assert parameters.stem_width == 7.6
+    assert parameters.stem_height == 6.0
+    assert parameters.void_width == 1.0
+    assert parameters.void_height == 0.0
+    assert parameters.cutout_width == parameters.stem_width + 2.0
     assert parameters.cutout_height == parameters.stem_height
-    assert parameters.void_area == 0.0
+    assert parameters.void_area == 12.0
     assert parameters.young_modulus_mpa == 0.55
     assert parameters.poisson_ratio == 0.49
 
@@ -92,9 +96,9 @@ def test_bond_extension_height_must_be_strictly_below_link_thickness() -> None:
 
 
 def test_extensions_and_cutout_must_fit_within_the_full_width() -> None:
-    with pytest.raises(InvalidFingertipParameters, match="2\*bond_extension_width"):
+    with pytest.raises(InvalidFingertipParameters, match=r"2\*bond_extension_width"):
         FingertipParameters(
-            bond_extension_width=6.2,
+            bond_extension_width=10.2,
             stem_width=7.6,
         )
 
@@ -111,7 +115,7 @@ def test_cutout_penetrating_semiellipse_can_remain_inside() -> None:
 
 def test_cutout_too_deep_for_semiellipse_is_rejected() -> None:
     with pytest.raises(InvalidFingertipParameters, match="semielliptical"):
-        FingertipParameters(void_height=4.0)
+        FingertipParameters(void_height=8.0)
 
 
 def test_cutout_width_and_depth_coupling_is_rejected() -> None:
@@ -120,27 +124,27 @@ def test_cutout_width_and_depth_coupling_is_rejected() -> None:
             bond_extension_width=1.0,
             stem_width=8.0,
             void_width=4.0,
-            void_height=2.6,
+            void_height=8.0,
         )
 
 
 def test_cutout_on_or_within_tolerance_of_ellipse_is_rejected() -> None:
-    half_width = 20.0 / 2.0
+    half_width = 30.0 / 2.0
     cutout_half_width = 7.6 / 2.0
-    available_depth = 7.0 * math.sqrt(
+    available_depth = 9.0 * math.sqrt(
         1.0 - (cutout_half_width / half_width) ** 2
     )
 
     with pytest.raises(InvalidFingertipParameters, match="semielliptical"):
         FingertipParameters(
-            void_height=available_depth + 3.0 - 6.0,
+            void_height=available_depth + 5.0 - 6.0,
         )
 
     tolerance = 1.0e-3
     with pytest.raises(InvalidFingertipParameters, match="semielliptical"):
         FingertipParameters(
             geometry_tolerance=tolerance,
-            void_height=available_depth - tolerance / 2.0 + 3.0 - 6.0,
+            void_height=available_depth - tolerance / 2.0 + 5.0 - 6.0,
         )
 
 

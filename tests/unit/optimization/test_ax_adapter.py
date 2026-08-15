@@ -28,8 +28,9 @@ def _design_space(
     active: tuple[str, ...] = ("stem_width",),
     lower: dict[str, float] | None = None,
     upper: dict[str, float] | None = None,
+    nominal_parameters: FingertipParameters | None = None,
 ) -> DesignSpace:
-    baseline = FingertipParameters()
+    nominal_parameters = nominal_parameters or FingertipParameters()
     lower = lower or {}
     upper = upper or {}
     variables = tuple(
@@ -40,22 +41,22 @@ def _design_space(
                 name,
                 0.0
                 if name == "void_width" and name in active
-                else getattr(baseline, name) - 0.5
+                else getattr(nominal_parameters, name) - 0.5
                 if name in active
-                else getattr(baseline, name),
+                else getattr(nominal_parameters, name),
             ),
             upper=upper.get(
                 name,
                 1.0
                 if name == "void_width" and name in active
-                else getattr(baseline, name) + 0.5
+                else getattr(nominal_parameters, name) + 0.5
                 if name in active
-                else getattr(baseline, name),
+                else getattr(nominal_parameters, name),
             ),
         )
         for name in OPTIMIZABLE_PARAMETER_NAMES
     )
-    return DesignSpace(baseline=baseline, variables=variables)
+    return DesignSpace(nominal_parameters=nominal_parameters, variables=variables)
 
 
 def _study(
@@ -63,9 +64,15 @@ def _study(
     active: tuple[str, ...] = ("stem_width",),
     lower: dict[str, float] | None = None,
     upper: dict[str, float] | None = None,
+    nominal_parameters: FingertipParameters | None = None,
 ) -> OptimizationStudy:
     return OptimizationStudy(
-        design_space=_design_space(active=active, lower=lower, upper=upper),
+        design_space=_design_space(
+            active=active,
+            lower=lower,
+            upper=upper,
+            nominal_parameters=nominal_parameters,
+        ),
         scenario_grid=ScenarioGrid(
             locations_x_mm=(0.0, 1.0),
             indentations_mm=(0.5,),
@@ -235,7 +242,7 @@ def test_create_client_maps_only_active_variables_and_configures_public_strategy
     }
 
 
-def test_runner_uses_baseline_then_exact_initialization_and_search_attempts(
+def test_runner_uses_nominal_then_exact_initialization_and_search_attempts(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     study = _study(
@@ -262,12 +269,12 @@ def test_runner_uses_baseline_then_exact_initialization_and_search_attempts(
     )
 
     assert [record.phase for record in result.records] == [
-        "baseline",
+        "nominal",
         "initialization",
         "initialization",
         "search",
     ]
-    assert evaluator.parameters[0] == study.design_space.baseline
+    assert evaluator.parameters[0] == study.design_space.nominal_parameters
     assert set(result.records[0].parameters) == {"stem_width", "void_width"}
     assert len(client.trials) == 4
     assert all(len(parameters) == 2 for parameters in client.trials.values())
@@ -278,15 +285,15 @@ def test_successful_zero_objective_reports_sem_zero() -> None:
     client.next_candidates = [{"stem_width": 7.2}]
     study = _study()
     evaluator = _SyntheticEvaluator([_success(0.0), _success(0.0)])
-    baseline = client.attach_trial(parameters={"stem_width": 7.6})
+    nominal_trial = client.attach_trial(parameters={"stem_width": 7.6})
     initialization = client.get_next_trials(max_trials=1)
 
     ax_adapter._evaluate_trial(
         client,
         evaluator,
         study.design_space,
-        baseline,
-        "baseline",
+        nominal_trial,
+        "nominal",
         {"stem_width": 7.6},
     )
     ax_adapter._evaluate_trial(
@@ -333,6 +340,7 @@ def test_decode_failure_has_no_objective_and_does_not_call_evaluator() -> None:
         active=("flat_pad_width", "stem_width"),
         lower={"flat_pad_width": 15.0, "stem_width": 7.6},
         upper={"flat_pad_width": 20.0, "stem_width": 9.0},
+        nominal_parameters=FingertipParameters(flat_pad_width=20.0),
     )
     client = _FakeClient()
     trial = client.attach_trial(
@@ -396,17 +404,17 @@ def test_failed_attempts_are_not_replaced_and_search_zero_works(
 
 
 def test_best_record_is_first_observed_success_and_none_without_success() -> None:
-    baseline = ax_adapter.AxTrialRecord(0, "baseline", {"x": 0.0}, _success(0.4), None)
+    nominal = ax_adapter.AxTrialRecord(0, "nominal", {"x": 0.0}, _success(0.4), None)
     failed = ax_adapter.AxTrialRecord(1, "initialization", {"x": 0.1}, _failure("fea_failure", "x"), "x")
     initialization = ax_adapter.AxTrialRecord(2, "initialization", {"x": 0.2}, _success(0.8), None)
     tie = ax_adapter.AxTrialRecord(3, "search", {"x": 0.3}, _success(0.8), None)
-    assert ax_adapter.AxRunResult((baseline, failed, initialization, tie)).best_record is initialization
+    assert ax_adapter.AxRunResult((nominal, failed, initialization, tie)).best_record is initialization
     assert ax_adapter.AxRunResult((failed,)).best_record is None
-    assert ax_adapter.AxRunResult((replace(baseline, evaluation=_success(0.0)),)).best_record is not None
+    assert ax_adapter.AxRunResult((replace(nominal, evaluation=_success(0.0)),)).best_record is not None
 
 
 def test_real_ax_public_client_integration() -> None:
-    """Confirm public Client setup and observable baseline/init/search behavior."""
+    """Confirm public Client setup and observable nominal/init/search behavior."""
     study = _study()
     evaluator = _SyntheticEvaluator(
         [_success(0.1), _success(0.2), _success(0.3), _success(0.4)]
@@ -422,7 +430,7 @@ def test_real_ax_public_client_integration() -> None:
         OptimizationStudy.create_evaluator = original
 
     assert [record.phase for record in result.records] == [
-        "baseline",
+        "nominal",
         "initialization",
         "initialization",
         "search",

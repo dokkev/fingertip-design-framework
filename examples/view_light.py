@@ -22,7 +22,7 @@ def main() -> int:
     tip = Fingertip(
         FingertipParameters(
             void_width=1.0,
-            void_height=2.0,
+            void_height=1.0,
             poisson_ratio=0.49,
         )
     )

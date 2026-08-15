@@ -21,15 +21,15 @@ class FingertipParameters:
     additional clearance below the stem tip.
     """
 
-    flat_pad_width: float = 20.0
-    flat_pad_height: float = 3.0
-    semielliptical_pad_height: float = 7.0
+    flat_pad_width: float = 30.0
+    flat_pad_height: float = 5.0
+    semielliptical_pad_height: float = 9.0
     link_thickness: float = 3.5
     bond_extension_width: float = 4.0
     bond_extension_height: float = 2.0
     stem_width: float = 7.6
     stem_height: float = 6.0
-    void_width: float = 0.0
+    void_width: float = 1.0
     void_height: float = 0.0
     arc_resolution: int = 128
     geometry_tolerance: float = 1e-9
