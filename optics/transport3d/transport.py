@@ -410,6 +410,7 @@ def _trace_with_runtime(
     periodic_wrap_termination_weight = 0.0
     no_event_termination_count = 0
     no_event_termination_weight = 0.0
+    interface_normal_orientation_fallback_count = 0
     segment_count = 0
     internal_context = (
         _new_internal_path_context(geometry, settings)
@@ -595,8 +596,25 @@ def _trace_with_runtime(
                 interface_primitive = physical_silicone_primitive[indices]
                 interface_bary = physical_silicone_bary[indices]
                 outward = device_arrays["silicone_normals"][interface_primitive]
-                interface_normal = cp.where(
+                medium_normal = cp.where(
                     (interface_medium == 1)[:, None], outward, -outward
+                )
+                medium_alignment = cp.sum(
+                    interface_directions * medium_normal, axis=1
+                )
+                orientation_fallback = medium_alignment <= 1.0e-7
+                if bool(cp.any(orientation_fallback)):
+                    interface_normal_orientation_fallback_count += int(
+                        cp.asnumpy(cp.sum(orientation_fallback))
+                    )
+                # The triangle winding normally determines this sign from the
+                # active medium.  A branch can nevertheless approach a
+                # shared extruded boundary from the opposite side.  The
+                # interface contract requires the normal to point into the
+                # transmitted medium, so orient the fallback from the
+                # incident direction instead of aborting a valid branch.
+                interface_normal = cp.where(
+                    orientation_fallback[:, None], -medium_normal, medium_normal
                 )
                 alignment = cp.sum(interface_directions * interface_normal, axis=1)
                 if bool(cp.any(alignment <= 1.0e-7)):
@@ -753,6 +771,9 @@ def _trace_with_runtime(
         "count": no_event_termination_count,
         "weight": no_event_termination_weight,
     }
+    geometry_metadata["interface_normal_orientation_fallback_count"] = (
+        interface_normal_orientation_fallback_count
+    )
     geometry_metadata["retained_segment_count"] = len(segment_chunks) and int(
         sum(len(chunk[0]) for chunk in segment_chunks)
     ) or 0
