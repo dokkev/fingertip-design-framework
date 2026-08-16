@@ -63,6 +63,13 @@ It does not replace mesh-based reference/loaded comparisons.
 - `optics/` owns deterministic ray transport and adapters from neutral meshes
   and displacement fields. Its public transport surface is `TraceSettings`,
   `RaySegment`, `TransportResult`, `trace()`, and `evaluate()`.
+- `optics.cross_section` is the reduced deterministic 2D optical transport
+  model used for design studies. `optics.transport3d` owns the independent,
+  deterministic, camera-independent 3D dimensional validator. It consumes
+  neutral reference/deformed pad meshes, reuses the shared extrusion topology,
+  and calls the optional OptiX backend. Its public surface is
+  `Transport3DSettings`, `Transport3DResult`, and `trace_3d()`; CUDA, CuPy,
+  OptiX, and Kratos objects do not cross that neutral result boundary.
 - `optics.mitsuba` owns the optional camera validator. Its public surface is
   `Camera`, `RenderSettings`, `RenderResult`, and `MitsubaRenderer`; extrusion,
   scene construction, and persistent renderer state are implementation details.
@@ -179,6 +186,22 @@ effective area, entropy, and other research-dependent metrics remain undefined
 until their scientific conventions are accepted.
 
 ## Optional camera validation
+
+The three optical paths have intentionally different purposes:
+
+```text
+optics.cross_section  -> reduced deterministic 2D transport for design studies
+optics.transport3d    -> deterministic camera-independent 3D dimensional validation
+optics.mitsuba        -> optional camera/rendering validation
+```
+
+The 3D path uses one 11 mm periodic longitudinal representative cell and a
+single deterministic source at `z = 0`. Its outgoing field is indexed by
+reference material coordinate `u` along the exposed compliant boundary and
+periodic-cell `z`; it is not a camera image or an irradiance prediction. The
+numerical z planes are periodic transport boundaries, not physical escape
+surfaces. `optics.mitsuba` remains independent and retains the camera role
+described below.
 
 `MitsubaRenderer` represents one design, one fixed reference topology, one
 fixed extrusion depth, and one fixed camera. `render()` accepts the reference

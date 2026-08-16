@@ -154,6 +154,18 @@ The smoke test compiles a tiny repository-owned CUDA/OptiX program with
 NVRTC, builds one triangle GAS, and validates deterministic hit and miss rays;
 it does not render an image or implement the LUMO 3D transport model.
 
+The first dimensional validation experiment is camera-independent and uses
+one point LED at `z=0` in an 11 mm periodic representative cell. It compares
+the nominal and candidate49 morphologies after the planar consistency gate:
+
+```bash
+python -m validation.optics.transport3d_validation \
+  --output output/validation/optics/transport3d
+```
+
+This is a focused validator, not an optimization or camera-rendering path;
+Mitsuba remains an independent optional rendering check.
+
 ## Main commands
 
 ```bash

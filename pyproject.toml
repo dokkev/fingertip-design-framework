@@ -43,6 +43,9 @@ include = [
   "gui*",
 ]
 
+[tool.setuptools.package-data]
+"optics.transport3d" = ["kernels/*.cu"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests/unit", "tests/smoke"]
 markers = [

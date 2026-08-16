@@ -150,3 +150,57 @@ class _ExtrudedMesh:
                 "mesh node count does not match the extrusion"
             )
         return self.vertices_for_coordinates(mesh.coordinates)
+
+    def side_faces_for_edges(
+        self,
+        edges: np.ndarray,
+    ) -> np.ndarray:
+        """Return the two longitudinal side triangles for each 2D edge.
+
+        The face convention is the same one used by :meth:`from_pad_mesh`.
+        Keeping this small selector here lets periodic transport reuse the
+        established extrusion vertex layout without treating the numerical
+        z-caps as physical surfaces.
+        """
+        raw_edges = np.asarray(edges)
+        if raw_edges.ndim != 2 or raw_edges.shape[1:] != (2,):
+            raise InvalidExtrudedOpticalMesh(
+                "edges must have shape (K, 2)"
+            )
+        if len(raw_edges) == 0:
+            raise InvalidExtrudedOpticalMesh("edges must be nonempty")
+        if not np.issubdtype(raw_edges.dtype, np.integer):
+            try:
+                numeric = np.asarray(raw_edges, dtype=float)
+            except (TypeError, ValueError) as exc:
+                raise InvalidExtrudedOpticalMesh(
+                    "edges must contain integer-valued indices"
+                ) from exc
+            if (
+                not np.all(np.isfinite(numeric))
+                or not np.all(numeric == np.floor(numeric))
+            ):
+                raise InvalidExtrudedOpticalMesh(
+                    "edges must contain integer-valued indices"
+                )
+        selected = np.asarray(raw_edges, dtype=np.int64)
+        if np.any(selected < 0) or np.any(selected >= self.node_count_2d):
+            raise InvalidExtrudedOpticalMesh(
+                "edges must reference the 2D extrusion node range"
+            )
+        if np.any(selected[:, 0] == selected[:, 1]):
+            raise InvalidExtrudedOpticalMesh("edges must not repeat a node")
+        offset = self.node_count_2d
+        faces = np.asarray(
+            [
+                face
+                for first, second in selected
+                for face in (
+                    (first, second, second + offset),
+                    (first, second + offset, first + offset),
+                )
+            ],
+            dtype=np.int64,
+        )
+        faces.setflags(write=False)
+        return faces

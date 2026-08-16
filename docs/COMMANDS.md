@@ -117,4 +117,31 @@ The optional Mitsuba camera validator is demonstrated by:
 python /path/to/lit_ws/examples/camera_render.py
 ```
 
+The focused NVIDIA OptiX transport validator uses the externally managed
+CUDA/OptiX environment documented in `README.md`:
+
+```bash
+OptiX_INSTALL_DIR=/external/optix-dev \
+python -m validation.optics.optix_smoke
+
+OptiX_INSTALL_DIR=/external/optix-dev \
+python -m validation.optics.transport3d_validation \
+  --output output/validation/optics/transport3d
+```
+
+The validation command runs the 11 mm single-source cell, the planar
+consistency gate, the four authorized medium-mesh 48-step contact states, and
+the deterministic 4,096/16,384/65,536-ray convergence check. It writes only
+machine-readable generated artifacts below
+`output/validation/optics/transport3d/`.
+
+The dependency-light focused contracts can be run without the optional GPU
+runtime (the environment here disables unrelated auto-loaded ROS pytest
+plugins):
+
+```bash
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
+python -m pytest tests/unit/test_transport3d_contracts.py -q
+```
+
 All generated validation artifacts and figures are written below `output/`.
