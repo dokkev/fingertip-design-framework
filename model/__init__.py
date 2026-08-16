@@ -10,6 +10,12 @@ from model.fingertip_parameters import (
     validate_silicone_ligament,
 )
 from model.optical import LED, OpticalMaterial
+from model.solid import (
+    DEFAULT_EXTRUSION_DEPTH_MM,
+    FingertipSolid,
+    SolidSurfaceDefinition,
+    build_fingertip_solid,
+)
 
 __all__ = [
     "Fingertip",
@@ -22,4 +28,8 @@ __all__ = [
     "SiliconeLigamentMeasures",
     "silicone_ligament_measures",
     "validate_silicone_ligament",
+    "DEFAULT_EXTRUSION_DEPTH_MM",
+    "FingertipSolid",
+    "SolidSurfaceDefinition",
+    "build_fingertip_solid",
 ]

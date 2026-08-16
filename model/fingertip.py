@@ -73,3 +73,8 @@ class Fingertip:
         ).mesh_settings_for_level
         selected = settings or settings_for_level("medium")
         return generator(self.geometry, selected)
+
+    def solid(self, extrusion_depth_mm: float = 11.0) -> Any:
+        """Build the independent semantic 3D representative cell."""
+        builder = import_module("model.solid").build_fingertip_solid
+        return builder(self.geometry, extrusion_depth_mm=extrusion_depth_mm)

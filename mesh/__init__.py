@@ -7,6 +7,21 @@ from mesh.types import (
     MeshSettings,
     mesh_settings_for_level,
 )
+from mesh.volume3d import (
+    VolumeMeshDependencyError,
+    VolumeMeshingError,
+    generate_volume_mesh,
+)
+from mesh.volume_types import (
+    FingertipVolumeMesh,
+    SurfaceTriangle,
+    Tetrahedron,
+    VolumeMeshQuality,
+    VolumeMeshSettings,
+    VolumeMeshValidation,
+    VolumeNode,
+    volume_mesh_settings_for_tier,
+)
 
 __all__ = [
     "FingertipMesh",
@@ -15,4 +30,15 @@ __all__ = [
     "MeshSettings",
     "PadMesh",
     "mesh_settings_for_level",
+    "FingertipVolumeMesh",
+    "SurfaceTriangle",
+    "Tetrahedron",
+    "VolumeMeshDependencyError",
+    "VolumeMeshQuality",
+    "VolumeMeshSettings",
+    "VolumeMeshValidation",
+    "VolumeMeshingError",
+    "VolumeNode",
+    "generate_volume_mesh",
+    "volume_mesh_settings_for_tier",
 ]
