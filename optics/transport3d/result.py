@@ -21,6 +21,21 @@ def _owned_array(value: Any, *, dtype: Any, name: str) -> np.ndarray:
     return array
 
 
+def _freeze_metadata(value: Any) -> Any:
+    """Recursively freeze the small metadata trees carried by a result."""
+    if isinstance(value, Mapping):
+        return MappingProxyType(
+            {key: _freeze_metadata(item) for key, item in value.items()}
+        )
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze_metadata(item) for item in value)
+    if isinstance(value, np.ndarray):
+        array = np.array(value, copy=True)
+        array.setflags(write=False)
+        return array
+    return value
+
+
 @dataclass(frozen=True)
 class Transport3DResult:
     """Camera-free outgoing field and complete energy bookkeeping."""
@@ -52,6 +67,14 @@ class Transport3DResult:
     projected_x_edges_mm: np.ndarray | None = None
     projected_y_edges_mm: np.ndarray | None = None
     projected_weighted_path_density: np.ndarray | None = None
+    internal_path_x_edges_mm: np.ndarray | None = None
+    internal_path_y_edges_mm: np.ndarray | None = None
+    internal_path_z_edges_mm: np.ndarray | None = None
+    internal_weighted_path_density_3d: np.ndarray | None = None
+    internal_z_integrated_path_density: np.ndarray | None = None
+    retained_segment_lengths_mm: np.ndarray | None = None
+    retained_segment_primary_ray_indices: np.ndarray | None = None
+    retained_segment_interaction_counts: np.ndarray | None = None
     geometry_metadata: Mapping[str, Any] = field(default_factory=dict)
     timings_seconds: Mapping[str, float] = field(default_factory=dict)
 
@@ -156,6 +179,120 @@ class Transport3DResult:
                 raise Transport3DResultError("projected diagnostic shape is invalid")
             projected = [projected_x, projected_y, projected_density]
 
+        internal = []
+        internal_values = (
+            self.internal_path_x_edges_mm,
+            self.internal_path_y_edges_mm,
+            self.internal_path_z_edges_mm,
+            self.internal_weighted_path_density_3d,
+            self.internal_z_integrated_path_density,
+        )
+        if any(value is not None for value in internal_values):
+            if any(value is None for value in internal_values):
+                raise Transport3DResultError(
+                    "internal path arrays must be supplied together"
+                )
+            internal_x = _owned_array(
+                self.internal_path_x_edges_mm,
+                dtype=float,
+                name="internal_path_x_edges_mm",
+            )
+            internal_y = _owned_array(
+                self.internal_path_y_edges_mm,
+                dtype=float,
+                name="internal_path_y_edges_mm",
+            )
+            internal_z = _owned_array(
+                self.internal_path_z_edges_mm,
+                dtype=float,
+                name="internal_path_z_edges_mm",
+            )
+            internal_density = _owned_array(
+                self.internal_weighted_path_density_3d,
+                dtype=float,
+                name="internal_weighted_path_density_3d",
+            )
+            integrated_density = _owned_array(
+                self.internal_z_integrated_path_density,
+                dtype=float,
+                name="internal_z_integrated_path_density",
+            )
+            if (
+                len(internal_x) < 2
+                or len(internal_y) < 2
+                or len(internal_z) < 2
+                or np.any(np.diff(internal_x) <= 0.0)
+                or np.any(np.diff(internal_y) <= 0.0)
+                or np.any(np.diff(internal_z) <= 0.0)
+                or internal_density.shape
+                != (len(internal_z) - 1, len(internal_y) - 1, len(internal_x) - 1)
+                or integrated_density.shape != (len(internal_y) - 1, len(internal_x) - 1)
+                or np.any(internal_density < 0.0)
+                or np.any(integrated_density < 0.0)
+            ):
+                raise Transport3DResultError("internal path field shape is invalid")
+            if not np.allclose(
+                integrated_density,
+                np.sum(internal_density, axis=0),
+                rtol=1.0e-12,
+                atol=1.0e-12,
+            ):
+                raise Transport3DResultError(
+                    "z-integrated internal path field does not match P3"
+                )
+            internal = [
+                internal_x,
+                internal_y,
+                internal_z,
+                internal_density,
+                integrated_density,
+            ]
+
+        retained_segments = []
+        retained_values = (
+            self.retained_segment_lengths_mm,
+            self.retained_segment_primary_ray_indices,
+            self.retained_segment_interaction_counts,
+        )
+        if any(value is not None for value in retained_values):
+            if any(value is None for value in retained_values):
+                raise Transport3DResultError(
+                    "retained segment metadata must be supplied together"
+                )
+            retained_lengths = _owned_array(
+                self.retained_segment_lengths_mm,
+                dtype=float,
+                name="retained_segment_lengths_mm",
+            )
+            retained_primary = np.array(
+                self.retained_segment_primary_ray_indices,
+                dtype=np.int64,
+                copy=True,
+            )
+            retained_interactions = np.array(
+                self.retained_segment_interaction_counts,
+                dtype=np.int64,
+                copy=True,
+            )
+            if (
+                retained_lengths.ndim != 1
+                or retained_primary.ndim != 1
+                or retained_interactions.ndim != 1
+                or len(retained_primary) != len(retained_lengths)
+                or len(retained_interactions) != len(retained_lengths)
+                or np.any(retained_lengths < 0.0)
+                or np.any(retained_primary < 0)
+                or np.any(retained_interactions < 0)
+            ):
+                raise Transport3DResultError("retained segment metadata is invalid")
+            retained_primary.setflags(write=False)
+            retained_interactions.setflags(write=False)
+            retained_segments = [
+                retained_lengths,
+                retained_primary,
+                retained_interactions,
+            ]
+
         for name, array in (
             ("u_edges", u_edges),
             ("z_edges", z_edges),
@@ -187,7 +324,17 @@ class Transport3DResult:
             object.__setattr__(self, "projected_x_edges_mm", projected[0])
             object.__setattr__(self, "projected_y_edges_mm", projected[1])
             object.__setattr__(self, "projected_weighted_path_density", projected[2])
-        object.__setattr__(self, "geometry_metadata", MappingProxyType(dict(self.geometry_metadata)))
+        if internal:
+            object.__setattr__(self, "internal_path_x_edges_mm", internal[0])
+            object.__setattr__(self, "internal_path_y_edges_mm", internal[1])
+            object.__setattr__(self, "internal_path_z_edges_mm", internal[2])
+            object.__setattr__(self, "internal_weighted_path_density_3d", internal[3])
+            object.__setattr__(self, "internal_z_integrated_path_density", internal[4])
+        if retained_segments:
+            object.__setattr__(self, "retained_segment_lengths_mm", retained_segments[0])
+            object.__setattr__(self, "retained_segment_primary_ray_indices", retained_segments[1])
+            object.__setattr__(self, "retained_segment_interaction_counts", retained_segments[2])
+        object.__setattr__(self, "geometry_metadata", _freeze_metadata(self.geometry_metadata))
         object.__setattr__(self, "timings_seconds", MappingProxyType({key: float(value) for key, value in self.timings_seconds.items()}))
 
 

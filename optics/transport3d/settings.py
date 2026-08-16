@@ -30,10 +30,16 @@ class Transport3DSettings:
     surface_z_bins: int = 64
     projected_grid_width: int = 240
     projected_grid_height: int = 240
+    internal_grid_width: int = 240
+    internal_grid_height: int = 240
+    internal_z_bins: int = 32
     source_epsilon_mm: float = 1.0e-5
     intersection_epsilon_mm: float = 1.0e-6
     energy_balance_tolerance: float = 1.0e-5
     retain_projected_segments: bool = False
+    retain_internal_path_field: bool = False
+    terminate_on_periodic_wrap_limit: bool = False
+    terminate_on_no_event: bool = False
 
     def __post_init__(self) -> None:
         self.validate()
@@ -50,6 +56,9 @@ class Transport3DSettings:
             "surface_z_bins": (self.surface_z_bins, 1),
             "projected_grid_width": (self.projected_grid_width, 16),
             "projected_grid_height": (self.projected_grid_height, 16),
+            "internal_grid_width": (self.internal_grid_width, 16),
+            "internal_grid_height": (self.internal_grid_height, 16),
+            "internal_z_bins": (self.internal_z_bins, 1),
         }
         for name, (value, minimum) in integer_minimums.items():
             if (

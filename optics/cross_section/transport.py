@@ -457,7 +457,15 @@ def _trace_transport(
             terminated_weight += state.weight + sum(ray.weight for ray in active)
             active.clear()
             break
-        if state.weight < branch_weight_threshold:
+        # Keep the primary launch and its first-generation interface children
+        # active even when a high ray-count sweep makes one primary share
+        # smaller than the secondary-branch cutoff.  This is the shared
+        # convention used by the 3D transport; the default historical ray
+        # count is numerically unaffected.
+        if (
+            state.weight < branch_weight_threshold
+            and state.interaction_count > 1
+        ):
             terminated_weight += state.weight
             continue
         if state.interaction_count >= trace_settings.max_interactions:
@@ -520,7 +528,7 @@ def _trace_transport(
             escaped_weight += transmitted_weight
             next_interaction = state.interaction_count + 1
 
-            if reflected_weight >= branch_weight_threshold:
+            if reflected_weight >= branch_weight_threshold or next_interaction <= 1:
                 active.append(
                     _RayState(
                         origin=(
@@ -580,7 +588,7 @@ def _trace_transport(
         transmitted_weight = end_weight * (1.0 - reflectance)
         next_interaction = state.interaction_count + 1
 
-        if reflected_weight >= branch_weight_threshold:
+        if reflected_weight >= branch_weight_threshold or next_interaction <= 1:
             active.append(
                 _RayState(
                     origin=(
@@ -600,7 +608,10 @@ def _trace_transport(
 
         if (
             transmitted_direction is not None
-            and transmitted_weight >= branch_weight_threshold
+            and (
+                transmitted_weight >= branch_weight_threshold
+                or next_interaction <= 1
+            )
         ):
             active.append(
                 _RayState(

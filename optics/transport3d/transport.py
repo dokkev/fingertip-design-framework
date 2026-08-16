@@ -6,6 +6,7 @@ import time
 from typing import Any
 
 import numpy as np
+from shapely import contains_xy
 
 from model.fingertip import Fingertip
 from optics.cross_section.result import _RawRaySegment
@@ -33,13 +34,46 @@ from optics.transport3d.sampling import sample_directions
 from optics.transport3d.settings import Transport3DSettings
 
 
-def _field_edges(geometry: ExtrudedTransportGeometry, settings: Transport3DSettings) -> tuple[np.ndarray, np.ndarray]:
+def _xy_edges(
+    geometry: ExtrudedTransportGeometry,
+    *,
+    width: int,
+    height: int,
+) -> tuple[np.ndarray, np.ndarray]:
     domain = geometry.optical_domain
     min_x, min_y, max_x, max_y = domain.outer_envelope.bounds
     margin = 0.04 * max(max_x - min_x, max_y - min_y)
-    x_edges = np.linspace(min_x - margin, max_x + margin, 241)
-    y_edges = np.linspace(min_y - margin, max_y + margin, 241)
+    x_edges = np.linspace(min_x - margin, max_x + margin, width + 1)
+    y_edges = np.linspace(min_y - margin, max_y + margin, height + 1)
     return x_edges, y_edges
+
+
+def _field_edges(
+    geometry: ExtrudedTransportGeometry,
+    settings: Transport3DSettings,
+) -> tuple[np.ndarray, np.ndarray]:
+    return _xy_edges(
+        geometry,
+        width=settings.projected_grid_width,
+        height=settings.projected_grid_height,
+    )
+
+
+def _internal_field_edges(
+    geometry: ExtrudedTransportGeometry,
+    settings: Transport3DSettings,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    x_edges, y_edges = _xy_edges(
+        geometry,
+        width=settings.internal_grid_width,
+        height=settings.internal_grid_height,
+    )
+    z_edges = np.linspace(
+        geometry.z_min_mm,
+        geometry.z_max_mm,
+        settings.internal_z_bins + 1,
+    )
+    return x_edges, y_edges, z_edges
 
 
 def _concatenate(cp: Any, arrays: list[Any], *, dtype: Any, width: int | None = None) -> Any:
@@ -120,6 +154,201 @@ def _projected_density(
     )
 
 
+def _accumulate_segment_path_3d(
+    density: np.ndarray,
+    x_edges: np.ndarray,
+    y_edges: np.ndarray,
+    z_edges: np.ndarray,
+    optical_mask: np.ndarray,
+    start: np.ndarray,
+    end: np.ndarray,
+    start_weight: float,
+    end_weight: float,
+    *,
+    maximum_spacing: float,
+) -> None:
+    """Accumulate one weighted straight path into a regular 3D grid.
+
+    The stored value is weighted path length per voxel.  Midpoint sampling
+    uses the same deterministic representative-weight convention as the
+    reduced tracer; summing the z bins therefore performs the required
+    discrete z integral without an extra width factor.
+    """
+    displacement = np.asarray(end, dtype=float) - np.asarray(start, dtype=float)
+    length = float(np.linalg.norm(displacement))
+    if length <= 0.0:
+        return
+    sample_count = max(1, int(np.ceil(length / maximum_spacing)))
+    fractions = (np.arange(sample_count, dtype=float) + 0.5) / sample_count
+    samples = np.asarray(start, dtype=float)[None, :] + fractions[:, None] * displacement[None, :]
+    x_indices = np.searchsorted(x_edges, samples[:, 0], side="right") - 1
+    y_indices = np.searchsorted(y_edges, samples[:, 1], side="right") - 1
+    z_indices = np.searchsorted(z_edges, samples[:, 2], side="right") - 1
+    valid = (
+        (x_indices >= 0)
+        & (x_indices < len(x_edges) - 1)
+        & (y_indices >= 0)
+        & (y_indices < len(y_edges) - 1)
+        & (z_indices >= 0)
+        & (z_indices < len(z_edges) - 1)
+    )
+    if not np.any(valid):
+        return
+    x_indices = x_indices[valid]
+    y_indices = y_indices[valid]
+    z_indices = z_indices[valid]
+    inside = optical_mask[y_indices, x_indices]
+    if not np.any(inside):
+        return
+    representative_weight = 0.5 * (float(start_weight) + float(end_weight))
+    np.add.at(
+        density,
+        (z_indices[inside], y_indices[inside], x_indices[inside]),
+        representative_weight * length / sample_count,
+    )
+
+
+def _new_internal_path_context(
+    geometry: ExtrudedTransportGeometry,
+    settings: Transport3DSettings,
+ ) -> dict[str, Any]:
+    x_edges, y_edges, z_edges = _internal_field_edges(geometry, settings)
+    prepared = _prepare_geometry(geometry.optical_domain)
+    x_centers = 0.5 * (x_edges[:-1] + x_edges[1:])
+    y_centers = 0.5 * (y_edges[:-1] + y_edges[1:])
+    center_x, center_y = np.meshgrid(x_centers, y_centers)
+    optical_mask = np.asarray(
+        contains_xy(prepared.accessible_region, center_x, center_y),
+        dtype=bool,
+    )
+    density = np.zeros(
+        (settings.internal_z_bins, settings.internal_grid_height, settings.internal_grid_width),
+        dtype=float,
+    )
+    maximum_spacing = 0.5 * min(
+        float(x_edges[1] - x_edges[0]),
+        float(y_edges[1] - y_edges[0]),
+        float(z_edges[1] - z_edges[0]),
+    )
+    return {
+        "x_edges": x_edges,
+        "y_edges": y_edges,
+        "z_edges": z_edges,
+        "optical_mask": optical_mask,
+        "density": density,
+        "maximum_spacing": maximum_spacing,
+        "maximum_samples_per_segment": 32,
+        "processed_segments": 0,
+    }
+
+
+def _accumulate_internal_chunk(
+    context: dict[str, Any],
+    chunk: tuple[Any, Any, Any, Any, Any],
+    cp: Any,
+) -> None:
+    starts, ends, _media, start_weights, end_weights = chunk
+    starts_np = cp.asnumpy(starts)
+    ends_np = cp.asnumpy(ends)
+    start_np = cp.asnumpy(start_weights)
+    end_np = cp.asnumpy(end_weights)
+    if not len(starts_np):
+        return
+    displacement = ends_np - starts_np
+    lengths = np.linalg.norm(displacement, axis=1)
+    counts = np.maximum(
+        1,
+        np.ceil(lengths / context["maximum_spacing"]).astype(np.int64),
+    )
+    counts = np.minimum(counts, context["maximum_samples_per_segment"])
+    sample_count = int(np.max(counts))
+    sample_indices = np.arange(sample_count, dtype=float)[None, :]
+    fractions = (sample_indices + 0.5) / counts[:, None]
+    samples = starts_np[:, None, :] + fractions[:, :, None] * displacement[:, None, :]
+    x_indices = np.searchsorted(context["x_edges"], samples[:, :, 0], side="right") - 1
+    y_indices = np.searchsorted(context["y_edges"], samples[:, :, 1], side="right") - 1
+    z_indices = np.searchsorted(context["z_edges"], samples[:, :, 2], side="right") - 1
+    valid = sample_indices < counts[:, None]
+    valid &= (
+        (x_indices >= 0)
+        & (x_indices < len(context["x_edges"]) - 1)
+        & (y_indices >= 0)
+        & (y_indices < len(context["y_edges"]) - 1)
+        & (z_indices >= 0)
+        & (z_indices < len(context["z_edges"]) - 1)
+    )
+    if np.any(valid):
+        valid_x = x_indices[valid]
+        valid_y = y_indices[valid]
+        valid_z = z_indices[valid]
+        inside = context["optical_mask"][valid_y, valid_x]
+        if np.any(inside):
+            representative_weight = 0.5 * (start_np + end_np)
+            represented = representative_weight * lengths / counts
+            contributions = np.broadcast_to(
+                represented[:, None],
+                valid.shape,
+            )
+            np.add.at(
+                context["density"],
+                (valid_z[inside], valid_y[inside], valid_x[inside]),
+                contributions[valid][inside],
+            )
+    context["processed_segments"] += len(starts_np)
+
+
+def _internal_path_density(
+    geometry: ExtrudedTransportGeometry,
+    settings: Transport3DSettings,
+    chunks: list[tuple[Any, Any, Any, Any, Any]],
+    cp: Any,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, dict[str, Any]]:
+    """Build the raw P3 field and its z-integrated bridge field."""
+    context = _new_internal_path_context(geometry, settings)
+    for starts, ends, _media, start_weights, end_weights in chunks:
+        _accumulate_internal_chunk(context, (starts, ends, _media, start_weights, end_weights), cp)
+    return _finalize_internal_path_context(context, settings)
+
+
+def _finalize_internal_path_context(
+    context: dict[str, Any],
+    settings: Transport3DSettings,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, dict[str, Any]]:
+    x_edges = context["x_edges"]
+    y_edges = context["y_edges"]
+    z_edges = context["z_edges"]
+    density = context["density"]
+    if not np.all(np.isfinite(density)) or np.any(density < 0.0):
+        raise Transport3DTraceError("3D internal path field is non-finite or negative")
+    integrated = np.sum(density, axis=0)
+    metadata = {
+        "domain": {
+            "x_min_mm": float(x_edges[0]),
+            "x_max_mm": float(x_edges[-1]),
+            "y_min_mm": float(y_edges[0]),
+            "y_max_mm": float(y_edges[-1]),
+            "z_min_mm": float(z_edges[0]),
+            "z_max_mm": float(z_edges[-1]),
+        },
+        "resolution": {
+            "x_bins": settings.internal_grid_width,
+            "y_bins": settings.internal_grid_height,
+            "z_bins": settings.internal_z_bins,
+        },
+        "normalization": "raw weighted path length per voxel; no TV normalization",
+        "z_integration": "sum of raw z-bin path masses; no extra width factor",
+        "segment_medium_scope": "air and silicone segments in the accessible optical domain, matching P2",
+        "line_sampling": {
+            "method": "deterministic segment midpoint sampling",
+            "maximum_spacing_fraction_of_smallest_bin": 0.5,
+            "maximum_samples_per_segment": context["maximum_samples_per_segment"],
+        },
+        "total_accumulated_weighted_path_length_mm": float(np.sum(density)),
+        "processed_segment_count": context["processed_segments"],
+    }
+    return x_edges, y_edges, z_edges, density, integrated, metadata
+
+
 def _trace_with_runtime(
     tip: Fingertip,
     geometry: ExtrudedTransportGeometry,
@@ -177,8 +406,19 @@ def _trace_with_runtime(
     escaped_weight = 0.0
     absorbed_weight = 0.0
     terminated_weight = 0.0
+    periodic_wrap_termination_count = 0
+    periodic_wrap_termination_weight = 0.0
+    no_event_termination_count = 0
+    no_event_termination_weight = 0.0
     segment_count = 0
+    internal_context = (
+        _new_internal_path_context(geometry, settings)
+        if settings.retain_internal_path_field
+        else None
+    )
+    retain_segments = settings.retain_projected_segments
     segment_chunks: list[tuple[Any, Any, Any, Any, Any]] = []
+    segment_metadata_chunks: list[tuple[Any, Any, Any]] = []
     escape_chunks: list[tuple[Any, ...]] = []
     surface_field = cp.zeros((settings.surface_z_bins, settings.surface_u_bins), dtype=cp.float64)
     surface_u_edges = cp.linspace(0.0, 1.0, settings.surface_u_bins + 1, dtype=cp.float64)
@@ -252,8 +492,23 @@ def _trace_with_runtime(
         periodic_selected = periodic_distance < best_distance - settings.intersection_epsilon_mm
         event = cp.where(periodic_selected, 3, event)
         best_distance = cp.where(periodic_selected, periodic_distance, best_distance)
-        if bool(cp.any(~cp.isfinite(best_distance))):
-            raise Transport3DTraceError("an active branch has no physical hit or periodic event")
+        no_event = ~cp.isfinite(best_distance)
+        if bool(cp.any(no_event)):
+            if not settings.terminate_on_no_event:
+                raise Transport3DTraceError("an active branch has no physical hit or periodic event")
+            no_event_weights = weights[no_event]
+            no_event_termination_count += int(cp.asnumpy(cp.sum(no_event)))
+            no_event_termination_weight += float(cp.asnumpy(cp.sum(no_event_weights)))
+            terminated_weight += float(cp.asnumpy(cp.sum(no_event_weights)))
+            keep = ~no_event
+            origins, directions, weights, medium = origins[keep], directions[keep], weights[keep], medium[keep]
+            primary, interactions, path_lengths, wraps = primary[keep], interactions[keep], path_lengths[keep], wraps[keep]
+            best_distance = best_distance[keep]
+            event = event[keep]
+            silicone_primitive = silicone_primitive[keep]
+            silicone_bary = silicone_bary[keep]
+            if not int(weights.size):
+                continue
         hit_positions = origins + best_distance[:, None] * directions
         end_weights = weights * cp.exp(
             cp.where(medium == 1, -tip.optical.absorption_per_mm * best_distance, 0.0)
@@ -262,8 +517,22 @@ def _trace_with_runtime(
         if bool(cp.any(removed < -1.0e-12)):
             raise Transport3DPhysicsError("segment attenuation increased branch weight")
         absorbed_weight += float(cp.asnumpy(cp.sum(removed)))
-        if settings.retain_projected_segments:
+        if retain_segments:
             segment_chunks.append((origins.copy(), hit_positions.copy(), medium.copy(), weights.copy(), end_weights.copy()))
+        if settings.retain_projected_segments:
+            segment_metadata_chunks.append(
+                (
+                    cp.linalg.norm(hit_positions - origins, axis=1).copy(),
+                    primary.copy(),
+                    interactions.copy(),
+                )
+            )
+        if internal_context is not None:
+            _accumulate_internal_chunk(
+                internal_context,
+                (origins, hit_positions, medium, weights, end_weights),
+                cp,
+            )
         new_states: list[tuple[Any, Any, Any, Any, Any, Any, Any, Any]] = []
 
         periodic = event == 3
@@ -272,9 +541,14 @@ def _trace_with_runtime(
             periodic_wrapped = wraps[periodic] + 1
             pathological = periodic_wrapped > settings.maximum_periodic_wraps
             if bool(cp.any(pathological)):
-                raise Transport3DTraceError(
-                    "periodic-wrap limit reached unexpectedly for an active branch"
-                )
+                if not settings.terminate_on_periodic_wrap_limit:
+                    raise Transport3DTraceError(
+                        "periodic-wrap limit reached unexpectedly for an active branch"
+                    )
+                pathological_weight = periodic_weight[pathological]
+                periodic_wrap_termination_count += int(cp.asnumpy(cp.sum(pathological)))
+                periodic_wrap_termination_weight += float(cp.asnumpy(cp.sum(pathological_weight)))
+                terminated_weight += float(cp.asnumpy(cp.sum(pathological_weight)))
             keep_periodic = ~pathological
             if bool(cp.any(keep_periodic)):
                 selected_origins = hit_positions[periodic][keep_periodic]
@@ -449,6 +723,57 @@ def _trace_with_runtime(
     projected = (None, None, None)
     if settings.retain_projected_segments:
         projected = _projected_density(geometry, settings, segment_chunks, cp)[0:3]
+    internal = (None, None, None, None, None, None)
+    if internal_context is not None:
+        internal = _finalize_internal_path_context(internal_context, settings)
+    retained_segments = (None, None, None)
+    if settings.retain_projected_segments:
+        retained_segments = (
+            _concatenate(cp, [chunk[0] for chunk in segment_metadata_chunks], dtype=cp.float64),
+            _concatenate(cp, [chunk[1] for chunk in segment_metadata_chunks], dtype=cp.int64),
+            _concatenate(cp, [chunk[2] for chunk in segment_metadata_chunks], dtype=cp.int64),
+        )
+    geometry_metadata = dict(geometry.metadata)
+    geometry_metadata["branch_cutoff"] = {
+        "minimum_ray_weight_fraction": settings.minimum_ray_weight,
+        "absolute_weight_threshold": threshold,
+        "maximum_interactions": settings.max_interactions,
+        "primary_and_first_generation_exempt": True,
+        "convention": "cutoff applies to branches with interaction_count > 1",
+    }
+    geometry_metadata["processed_segment_count"] = segment_count
+    geometry_metadata["periodic_wrap_termination"] = {
+        "enabled": settings.terminate_on_periodic_wrap_limit,
+        "count": periodic_wrap_termination_count,
+        "weight": periodic_wrap_termination_weight,
+        "maximum_periodic_wraps": settings.maximum_periodic_wraps,
+    }
+    geometry_metadata["no_event_termination"] = {
+        "enabled": settings.terminate_on_no_event,
+        "count": no_event_termination_count,
+        "weight": no_event_termination_weight,
+    }
+    geometry_metadata["retained_segment_count"] = len(segment_chunks) and int(
+        sum(len(chunk[0]) for chunk in segment_chunks)
+    ) or 0
+    geometry_metadata["transport_material"] = {
+        "refractive_index_air": float(tip.optical.refractive_index_air),
+        "refractive_index_silicone": float(tip.optical.refractive_index_silicone),
+        "absorption_per_mm": float(tip.optical.absorption_per_mm),
+        "scattering_per_mm": float(tip.optical.scattering_per_mm),
+    }
+    if internal[5] is not None:
+        internal_metadata = dict(internal[5])
+        internal_metadata.update(
+            {
+                "source_position_mm": list(geometry.source_position_mm),
+                "source_mode": settings.mode,
+                "ray_count": settings.ray_count,
+                "branch_cutoff": dict(geometry_metadata["branch_cutoff"]),
+                "material": dict(geometry_metadata["transport_material"]),
+            }
+        )
+        geometry_metadata["internal_path_field"] = internal_metadata
     escaped_weight += 0.0
     energy_balance_error = abs(launched_weight - escaped_weight - absorbed_weight - terminated_weight) / max(launched_weight, 1.0e-30)
     if not np.isfinite(energy_balance_error) or energy_balance_error > settings.energy_balance_tolerance:
@@ -483,7 +808,15 @@ def _trace_with_runtime(
         projected_x_edges_mm=None if projected[0] is None else projected[0],
         projected_y_edges_mm=None if projected[1] is None else projected[1],
         projected_weighted_path_density=None if projected[2] is None else projected[2],
-        geometry_metadata=geometry.metadata,
+        internal_path_x_edges_mm=None if internal[0] is None else internal[0],
+        internal_path_y_edges_mm=None if internal[1] is None else internal[1],
+        internal_path_z_edges_mm=None if internal[2] is None else internal[2],
+        internal_weighted_path_density_3d=None if internal[3] is None else internal[3],
+        internal_z_integrated_path_density=None if internal[4] is None else internal[4],
+        retained_segment_lengths_mm=None if retained_segments[0] is None else cp.asnumpy(retained_segments[0]),
+        retained_segment_primary_ray_indices=None if retained_segments[1] is None else cp.asnumpy(retained_segments[1]),
+        retained_segment_interaction_counts=None if retained_segments[2] is None else cp.asnumpy(retained_segments[2]),
+        geometry_metadata=geometry_metadata,
         timings_seconds={
             "gas_build": scene.gas_build_seconds,
             "transport": postprocessing_started - transport_started,

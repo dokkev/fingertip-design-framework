@@ -1,400 +1,646 @@
-Repository guide
-Preserve dependency direction: model -> mesh -> fem; visualization consumes
-neutral model/mesh/FEM/optics results; validation is the top-level scientific
-consumer.
-Production packages must not import validation or tests.
-model, mesh, and fem must not import Matplotlib.
-Kratos is an external environment dependency and must not be added to
-pyproject.toml.
-Generated files belong under output/ and remain untracked.
-Keep implementations scoped to the requested task. Do not introduce new
-abstractions, compatibility layers, registries, frameworks, or generalized
-infrastructure unless the current task clearly requires them.
-Prefer task-local functions and explicit data structures for one-off
-benchmark, validation, and migration work. Promote such code into production
-abstractions only when the production pipeline itself requires that behavior.
-Backward compatibility with legacy internal APIs is not required unless the
-user explicitly requests it. Prefer migrating repository-owned callers and
-deleting obsolete code over preserving old and new interfaces together.
-Do not add or run unit, smoke, integration, FEM, or validation tests unless
-the user explicitly requests testing or INSTRUCTION.md explicitly requires
-them.
-Do not automatically chain implementation into broad testing or validation.
-When testing is explicitly requested, run only the focused checks needed for
-the stated contract unless broader regression testing is specifically
-requested.
-Do not continue into adjacent cleanup, refactoring, validation, optimization,
-or feature work after completing the requested scope.
-A negative benchmark or validation result is a valid task outcome. Do not
-continue modifying the implementation merely to turn a negative result into
-a positive one.
+# Current iteration: OptiX sensor-facing design verification
 
-See docs/ARCHITECTURE.md for package ownership and dependency rules.
-See docs/COMMANDS.md for supported commands.
+## Task execution controls
 
-Current iteration
-
-If INSTRUCTION.md exists and is non-empty, read it before making changes.
-
-INSTRUCTION.md contains the task-specific scope, implementation requirements,
-non-goals, checklist, completion criteria, and optional task execution controls
-for the current iteration.
-
-AGENTS.md contains stable repository-wide rules and default execution behavior.
-
-Follow the user's current explicit request together with INSTRUCTION.md.
-Treat INSTRUCTION.md as the baseline for the current iteration, not as
-permission to ignore a later explicit user request.
-Inspect the current implementation before editing rather than assuming the
-repository still matches an earlier architecture.
-Do not restore deleted or legacy architecture merely to satisfy stale callers,
-tests, examples, or documentation.
-Do not edit, rewrite, clear, or delete INSTRUCTION.md unless the user
-explicitly asks you to.
-If INSTRUCTION.md is missing or empty, do not infer a pending implementation
-task from previous work. Follow only the user's current prompt and the stable
-repository rules in AGENTS.md.
-Instruction precedence
-
-Within repository-controlled instructions, use this order:
-
-The user's current explicit request.
-INSTRUCTION.md for the current iteration.
-AGENTS.md stable repository rules and defaults.
-
-A specific task instruction may override a general AGENTS.md execution default
-when the override is explicit.
-
-Do not infer an override from ambiguity, omission, stale artifacts, previous
-iterations, or old tests.
-
-Stable package ownership, dependency direction, generated-file rules, and other
-repository invariants remain in force unless the user explicitly requests a
-change to them.
-
-If instructions appear to conflict and the intended override is not explicit,
-do not guess. Preserve the narrower current scope and report the ambiguity.
-
-Task execution controls
-
-INSTRUCTION.md may define the following controls:
-
-Reviewer subagent: YES | NO
-Complete checklist: YES | NO
-Fix reviewer findings: YES | NO
-Expensive reruns: INVALIDATED_ONLY | ALLOWED
-
-If a control is not explicitly specified, use these defaults:
-
-Reviewer subagent: NO
+Reviewer subagent: YES
 Complete checklist: YES
-Fix reviewer findings: NO
+Fix reviewer findings: YES
 Expensive reruns: INVALIDATED_ONLY
 
-These controls define how far the agent should autonomously continue.
+---
 
-They do not expand task scope and do not override repository dependency rules.
+# Goal
 
-Reviewer subagent
+Implement and benchmark a bounded first-pass **sensor-facing 3D OptiX design-verification pipeline** for the LIT/LUMO fingertip.
 
-If Reviewer subagent is NO:
+The purpose of this iteration is not to redesign the 2D optimizer and not to turn OptiX into a general-purpose tactile renderer.
 
-The implementation agent performs the final checklist review itself.
-Do not create or invoke a reviewer subagent solely for final verification.
-Report requested checklist items as PASS, FAIL, or UNCLEAR when applicable.
+The decision question is:
 
-If Reviewer subagent is YES:
+> Does the morphology selected by the existing 2D design process preserve its optical-transport advantage under 3D propagation and produce more distinguishable camera-space contact-state observations than the nominal morphology?
 
-Use the designated reviewer subagent or reviewer role for this iteration.
-If an appropriate reviewer subagent already exists, reuse it.
-If the environment requires creation of a reviewer and none exists, create at
-most one reviewer for the iteration.
-Do not create a sequence of fresh reviewers.
-Invoke the reviewer only after the implementation and pre-review checklist
-phase is complete.
-The reviewer is read-only and must not modify implementation files,
-generated artifacts, or INSTRUCTION.md.
-The reviewer must inspect the current repository state and implementation
-diff directly rather than trusting the implementation agent's summary.
-If reviewer-subagent support is unavailable, state that clearly. Do not
-silently substitute another multi-agent workflow.
-Complete checklist
+For this first iteration, compare the existing **nominal** morphology against **candidate49**.
 
-If Complete checklist is YES:
+A negative or ambiguous result is a valid scientific outcome.
 
-Make a good-faith effort to complete every in-scope implementation checklist
-item before final review.
-Fix implementation defects discovered during the implementation phase when
-they prevent an in-scope checklist item from being completed.
-Recheck affected items after such fixes.
-Do not interpret checklist completion as a requirement that every item must
-ultimately be PASS.
-An item may remain FAIL or UNCLEAR when:
-evidence shows the proposed approach does not work,
-the result is legitimately negative,
-an external dependency or environment limitation blocks completion,
-the required evidence cannot be obtained with the permitted checks,
-completing the item would exceed the requested scope.
-Report such items rather than expanding the task indefinitely.
+Do not modify the implementation merely to force candidate49 to outperform nominal.
 
-If Complete checklist is NO:
+---
 
-Perform one bounded implementation pass over the requested work.
-Do not continue working solely to convert incomplete, failed, or unclear
-checklist items into PASS.
-Report the current state and stop.
-Fix reviewer findings
+# Scientific framing
 
-If Fix reviewer findings is NO:
+Keep the following quantities conceptually separate.
 
-After the reviewer returns its report, STOP.
-Do not modify code or generated artifacts in response to reviewer findings.
-Do not rerun benchmarks or tests solely to satisfy reviewer findings.
-Do not invoke another reviewer.
-Report PASS, FAIL, and UNCLEAR findings to the user as the final task status.
+## Reduced-model bridge
 
-This rule applies even when Complete checklist is YES. Complete checklist governs
-the implementation phase before review; it does not authorize a post-review
-repair loop.
+`P3_xy` / `J3D-path` are model-reduction verification quantities.
 
-If Fix reviewer findings is YES:
+Their role is only to test whether morphology-dependent internal optical-transport trends identified in the 2D reduced model persist under 3D propagation.
 
-Address only reviewer FAIL findings that are within the original task scope.
-Do not treat UNCLEAR as automatic authorization for speculative
-implementation, additional experiments, or broader validation.
+They are not sensor observability metrics.
+
+Do not change the existing 2D optimization objective in this task.
+
+## Intrinsic 3D transport
+
+The outgoing boundary transport should conceptually be represented by a phase-space quantity such as
+
+`Q(surface_position, outgoing_direction[, source_id])`.
+
+Any direction-marginalized surface quantity such as `M(u,z)` is an intrinsic optical-transport descriptor, not camera observability.
+
+Preserve total outgoing energy separately from normalized spatial redistribution metrics.
+
+Do not call surface exit flux itself "sensor observability."
+
+## Sensor-facing response
+
+Sensor-facing quantities must be computed only after applying a camera observation model/operator to the available outgoing transport data.
+
+Conceptually:
+
+`outgoing transport -> camera observation operator -> expected linear sensor response mu`
+
+Fisher information and contact-state distinguishability in this task must operate on this camera-space response, not directly on `M`, `P3`, or normalized surface-flux fields.
+
+---
+
+# Scope
+
+Implement the smallest repository-consistent pipeline required to:
+
+1. obtain or construct a camera-space expected linear response for each requested contact state;
+2. compute pairwise contact-state distinguishability;
+3. compute local finite-difference image Jacobians with respect to contact state;
+4. compute Fisher-information-derived metrics;
+5. optionally marginalize a global photometric gain nuisance parameter;
+6. benchmark nominal versus candidate49;
+7. preserve machine-readable results and concise visual summaries under `output/`;
+8. have an independent reviewer subagent inspect the implementation, benchmark evidence, and scientific claims.
+
+Inspect the current repository before editing.
+
+Reuse existing OptiX outputs, escape-event data, camera geometry, state definitions, benchmark infrastructure, and validation utilities when they already provide the required behavior.
+
+Do not recreate functionality that already exists.
+
+---
+
+# Explicit non-goals
+
+Do not modify or re-optimize the 2D morphology optimizer.
+
+Do not change the existing 2D TV objective.
+
+Do not perform a new multi-morphology optimization or broad morphology sweep.
+
+Do not implement a fully coupled 3D mechanics model.
+
+Do not describe the existing extruded 2D mechanical deformation as fully 3D optomechanics.
+
+Do not add a general renderer, scene graph, material framework, plugin registry, generalized metrics framework, or compatibility layer unless the current production pipeline already requires one.
+
+Do not implement full microfacet roughness, realistic LED package geometry, calibrated scattering, finite five-LED full-finger validation, or broad optical-parameter sensitivity studies in this iteration.
+
+Those remain follow-up verification tasks unless existing infrastructure makes a limited comparison essentially free.
+
+Do not rewrite unrelated production architecture.
+
+Do not clean up unrelated code.
+
+---
+
+# Camera-space response
+
+## Preferred path
+
+If the repository already contains sufficient outgoing ray/escape-event information, construct the camera-space response downstream from those events rather than rerunning optical transport separately for every camera-space metric.
+
+Reuse stored information such as, where available:
+
+* exit position;
+* outgoing direction;
+* ray weight or power;
+* source ID;
+* wavelength/channel information;
+* geometry state identifier.
+
+Apply the smallest physically meaningful camera observation operator supported by the repository.
+
+At minimum, camera acceptance should account for available geometry such as:
+
+* camera pose;
+* field of view;
+* outgoing direction;
+* sensor/lens acceptance or aperture when available;
+* visibility/occlusion when already represented.
+
+Do not silently integrate all outgoing flux and label the result a camera image.
+
+## Missing physical camera parameters
+
+If required physical camera parameters are not currently available in the repository, do not invent a calibrated real-camera model.
+
+Implement the smallest explicit, configurable idealized observation model needed to exercise the analysis pipeline.
+
+Clearly label results from such a model as an idealized camera-space or camera-projected response rather than experimentally validated sensor observability.
+
+Report unavailable physical calibration as a limitation or UNCLEAR item where appropriate.
+
+Do not block the entire implementation solely because calibration data are absent.
+
+---
+
+# Sensor response domain
+
+Use an expected **linear sensor-domain response** for the analysis.
+
+Prefer linear RAW-like intensity or the closest existing linear response representation in the repository.
+
+Do not introduce nonlinear display processing, gamma correction, tone mapping, arbitrary contrast normalization, or image-by-image normalization before computing Fisher information.
+
+Any global normalization that removes physically meaningful total-energy differences must be explicit and must not silently replace the unnormalized analysis.
+
+---
+
+# Contact state
+
+For the first implementation, use the smallest mechanically justified local contact state supported by the existing extruded plane-strain model.
+
+Preferred parameterization:
+
+`theta = [x_c, delta]`
+
+where:
+
+* `x_c` is contact position in the modeled cross-sectional sensing direction;
+* `delta` is indentation/deformation state already supported by the FEM/OptiX pipeline.
+
+Use existing repository state coordinates and FEM states where possible.
+
+Do not introduce unsupported 3D contact DOFs merely because Fisher information can mathematically accept them.
+
+If the repository uses an equivalent physical state variable instead of `delta`, reuse that state variable and document the mapping.
+
+---
+
+# Pairwise camera-space distinguishability
+
+Implement a direct pairwise response-separation metric alongside Fisher information.
+
+For two expected sensor responses `mu_a` and `mu_b`, support a noise-normalized squared separation of the form
+
+`d2 = (mu_a - mu_b)^T Sigma^-1 (mu_a - mu_b)`
+
+or its diagonal-noise equivalent.
+
+At minimum evaluate, where the available state grid permits:
+
+* contact versus no-contact separation;
+* neighboring indentation-state separation at fixed contact position;
+* neighboring contact-position separation at fixed indentation.
+
+Preserve these results separately.
+
+Do not collapse all state comparisons into one scalar before the underlying distributions have been inspected.
+
+---
+
+# Noise model
+
+Implement a simple explicit first-pass sensor noise model.
+
+Prefer a diagonal covariance model compatible with a linear sensor response, for example:
+
+`variance_p = alpha * mu_p + sigma_read^2`
+
+when supported by the current response representation.
+
+Keep noise-model parameters explicit and recorded in benchmark metadata.
+
+If real camera noise calibration is unavailable, use clearly labeled nominal parameters for computational comparison only.
+
+Do not claim calibrated absolute detectability from uncalibrated noise parameters.
+
+Where useful, also preserve a noise-free response-difference result so that optical response differences can be separated from assumptions about camera noise.
+
+---
+
+# Finite-difference Jacobian
+
+For local contact state `theta = [x_c, delta]`, compute the image Jacobian
+
+`J = d mu / d theta`
+
+using centered finite differences wherever neighboring states are available.
+
+Conceptually:
+
+`dmu/dx ~= [mu(x + dx, delta) - mu(x - dx, delta)] / (2 dx)`
+
+`dmu/ddelta ~= [mu(x, delta + ddelta) - mu(x, delta - ddelta)] / (2 ddelta)`
+
+Use one-sided differences only at unavoidable state-grid boundaries and label them accordingly.
+
+Prefer derivatives from already-computed physical states rather than synthesizing interpolated states unless interpolation already exists and is scientifically justified.
+
+Do not silently mix incompatible meshes, camera grids, exposure scales, or state definitions when forming derivatives.
+
+---
+
+# Fisher information
+
+Compute the local Fisher information matrix from the camera-space response:
+
+`F = J^T Sigma^-1 J`
+
+For the two-state case this should be a 2 x 2 matrix.
+
+The implementation must preserve the raw matrix or sufficient values to reconstruct it.
+
+For every valid evaluated state, report at least:
+
+* minimum eigenvalue;
+* maximum eigenvalue;
+* condition number;
+* log determinant where numerically defined;
+* CRLB covariance or equivalent inverse/pseudoinverse result;
+* contact-position CRLB standard deviation in physical units;
+* indentation/state CRLB standard deviation in physical units.
+
+Do not silently regularize a singular or nearly singular Fisher matrix simply to obtain attractive finite numbers.
+
+If regularization or a pseudoinverse is required for reporting, make that choice explicit and preserve a validity/rank indicator.
+
+A singular or poorly conditioned state is scientifically meaningful.
+
+---
+
+# State scaling
+
+Eigenvalue-, determinant-, and conditioning-based Fisher summaries are sensitive to parameter units and scaling.
+
+Therefore maintain both:
+
+1. physical-state coordinates for interpretable CRLB values; and
+2. an explicitly documented dimensionless state scaling for cross-parameter conditioning/eigenvalue summaries.
+
+For example, normalize position and indentation by fixed physical reference scales shared across nominal and candidate49.
+
+Do not choose separate normalization factors per morphology.
+
+Do not choose scaling after observing which choice makes candidate49 look better.
+
+Record all reference scales in output metadata.
+
+---
+
+# Global photometric-gain nuisance
+
+Implement an optional global photometric gain nuisance parameter if it can be supported without broad architecture changes.
+
+Use a model equivalent to:
+
+`mu(theta, g) = g * mu0(theta)`
+
+or the closest appropriate linear form.
+
+Construct the joint Fisher matrix for contact state and gain.
+
+Partition it into contact and nuisance blocks and compute the effective contact information using the Schur complement:
+
+`F_contact_eff = F_tt - F_tg * inv(F_gg) * F_gt`
+
+or the numerically appropriate scalar/block equivalent.
+
+Compare:
+
+* contact Fisher information without the gain nuisance;
+* effective contact Fisher information after marginalizing gain.
+
+This is intended to distinguish genuine spatial/structural contact information from improvements caused primarily by global brightness changes.
+
+Verify numerically that nuisance marginalization does not spuriously increase contact information beyond numerical tolerance.
+
+If the nuisance block is singular or invalid, report the affected state rather than hiding it.
+
+---
+
+# Numerical sanity checks
+
+Focused checks are explicitly authorized for this iteration.
+
+Do not create a broad new test suite.
+
+At minimum verify:
+
+1. Fisher matrices are symmetric within numerical tolerance.
+2. Fisher eigenvalues are nonnegative within expected floating-point tolerance.
+3. noise variances are finite and positive where required.
+4. camera responses being differenced use identical sensor grids and scaling.
+5. nominal and candidate49 use identical benchmark settings.
+6. dimensionless state scaling is identical across morphologies.
+7. Schur-complement nuisance marginalization does not increase contact information except for negligible numerical error.
+8. singular/near-singular states are surfaced explicitly.
+9. no per-state image normalization accidentally removes total-energy information.
+10. finite-difference derivatives are not dominated by an obvious implementation or state-ordering error.
+
+Perform a bounded finite-difference step sanity check at representative interior states if the available state sampling allows it.
+
+The purpose is to detect gross derivative instability, not to launch an open-ended convergence study.
+
+---
+
+# Benchmark
+
+Run a focused design-verification benchmark for:
+
+* nominal morphology;
+* candidate49.
+
+Use identical:
+
+* FEM/contact states;
+* OptiX settings;
+* ray counts where new tracing is required;
+* camera geometry;
+* observation model;
+* noise assumptions;
+* state scaling;
+* metric implementation.
+
+Prefer reusing already-valid expensive OptiX/FEM artifacts.
+
+Do not rerun expensive simulations merely to obtain prettier logs or reviewer evidence.
+
+Rerun an expensive stage only if an implementation defect invalidates the corresponding scientific result, consistent with `Expensive reruns: INVALIDATED_ONLY`.
+
+Use deterministic seeds/settings where stochastic sampling is involved and where the current infrastructure supports them.
+
+---
+
+# Benchmark outputs
+
+Place generated files under an appropriate untracked directory such as:
+
+`output/optix_design_verification/`
+
+Preserve enough machine-readable information to inspect results without rerunning expensive simulation.
+
+Prefer simple explicit formats already used by the repository.
+
+The result set should contain, as applicable:
+
+* benchmark configuration/metadata;
+* morphology identifier;
+* contact-state coordinates;
+* camera/noise parameters;
+* dimensionless state scales;
+* pairwise detectability values;
+* raw Fisher matrix entries;
+* Fisher eigenvalues;
+* minimum eigenvalue;
+* condition number;
+* log determinant;
+* rank/validity status;
+* physical-unit CRLB quantities;
+* gain-marginalized Fisher quantities;
+* total camera-space signal/power where useful;
+* paths or identifiers of source simulation artifacts.
+
+Generate concise plots only when useful for scientific interpretation.
+
+Useful first-pass visualizations include:
+
+* contact-position x indentation heatmap of minimum Fisher eigenvalue;
+* contact-position CRLB heatmap;
+* indentation CRLB heatmap;
+* gain-marginalized equivalents;
+* candidate49 / nominal information ratios where mathematically meaningful;
+* pairwise state-separation heatmaps or distributions.
+
+Visualization code belongs in the validation/analysis layer and must respect repository dependency rules.
+
+---
+
+# Primary benchmark comparisons
+
+Do not judge the outcome from one scalar alone.
+
+Compare nominal and candidate49 using at least the following perspectives:
+
+## Camera-space state separation
+
+Does candidate49 increase separation between physically neighboring contact states?
+
+Inspect both typical and weak regions.
+
+## Local information
+
+Compare the local Fisher matrices across the supported contact-state domain.
+
+Pay particular attention to minimum eigenvalue and CRLB rather than only trace or determinant.
+
+## Conditioning
+
+Determine whether either morphology creates contact-state directions that are poorly observable relative to others.
+
+## Spatial/state coverage
+
+Inspect the distribution over the contact-state domain.
+
+Where enough states exist, report summary statistics such as median and a lower percentile in addition to the mean.
+
+Do not claim broad uniform improvement from a small number of favorable states.
+
+## Gain robustness
+
+Determine whether any candidate49 advantage survives marginalization of global photometric gain.
+
+A reduction or disappearance of the advantage is a valid and important result.
+
+---
+
+# Interpretation rules
+
+The benchmark is intended to answer a design-verification question, not to prove calibrated real-sensor accuracy.
+
+Allowed conclusions depend on the evidence.
+
+If candidate49 preserves the expected transport trend and improves camera-space contact information under the implemented observation/noise assumptions, report that result.
+
+If the advantage exists only in intrinsic transport but disappears after camera projection, report that result.
+
+If the advantage is mostly explained by global brightness and disappears after gain marginalization, report that result.
+
+If Fisher information is highly state-dependent or singular in parts of the sensing domain, report that result.
+
+If candidate49 performs worse than nominal under the sensor-facing metrics, report the negative result and stop rather than modifying the benchmark to make candidate49 win.
+
+Do not use the terms "observability," "detectability," "information," or "CRLB" beyond what the implemented observation and noise model actually supports.
+
+Do not claim experimental sensor fidelity from an uncalibrated camera/noise model.
+
+---
+
+# Implementation checklist
+
+Complete and report every item as PASS, FAIL, or UNCLEAR.
+
+* [ ] Existing implementation and architecture inspected before editing.
+* [ ] Existing 2D optimization path remains unchanged.
+* [ ] Existing `J3D-path` role remains reduced-model/3D-transport verification only.
+* [ ] Camera-space linear response is defined explicitly.
+* [ ] Camera-space response is not silently replaced by total outgoing surface flux.
+* [ ] Camera/noise assumptions are explicit and preserved in output metadata.
+* [ ] Contact state uses mechanically supported variables.
+* [ ] Pairwise camera-space contact-state separation is implemented.
+* [ ] Finite-difference image Jacobian is implemented.
+* [ ] Physical and dimensionless state parameterizations are distinguished.
+* [ ] Fisher matrix is computed from camera-space response.
+* [ ] Fisher symmetry/PSD sanity checks are performed.
+* [ ] Minimum eigenvalue is reported.
+* [ ] Condition number is reported.
+* [ ] Log determinant is reported where valid.
+* [ ] Physical-unit CRLB quantities are reported.
+* [ ] Singular/near-singular states are explicitly identified.
+* [ ] Global gain nuisance marginalization is implemented or a concrete blocker is reported.
+* [ ] Gain-marginalized information passes basic consistency checks.
+* [ ] Nominal and candidate49 are benchmarked using identical settings.
+* [ ] Benchmark artifacts are saved under `output/` and remain untracked.
+* [ ] Results include enough machine-readable data to inspect without repeating expensive simulations.
+* [ ] Result interpretation distinguishes transport, camera-space response, and sensor information.
+* [ ] Negative or ambiguous findings are preserved rather than optimized away.
+* [ ] No unrelated architecture/refactor/compatibility work was introduced.
+* [ ] Reviewer subagent independently inspected the final implementation and evidence.
+
+---
+
+# Reviewer subagent instructions
+
+After implementation and the pre-review checklist are complete, invoke one reviewer subagent.
+
+The reviewer is read-only.
+
+The reviewer must inspect:
+
+* `AGENTS.md`;
+* this `INSTRUCTION.md`;
+* relevant architecture documentation;
+* the actual current implementation;
+* the implementation diff;
+* generated benchmark artifacts and metadata;
+* focused test/check results;
+* benchmark interpretation.
+
+The reviewer must not rely solely on the implementation agent's summary.
+
+The reviewer should behave as a skeptical scientific/software reviewer, with special attention to whether the implementation could produce a numerically plausible but scientifically invalid positive result.
+
+The reviewer must explicitly evaluate the following.
+
+## Scientific validity
+
+* Is Fisher information computed from a legitimate camera-space response rather than intrinsic exit flux?
+* Does the observation model actually use available outgoing-direction/camera geometry information?
+* Are camera calibration limitations stated correctly?
+* Are total-energy changes preserved rather than accidentally normalized away?
+* Are contact-state variables compatible with the current extruded plane-strain mechanics?
+* Are CRLB claims restricted to local model-based bounds rather than estimator performance claims?
+
+## Fisher implementation
+
+* Are finite differences formed between physically comparable states?
+* Are state units and dimensionless scaling handled correctly?
+* Is the Fisher matrix mathematically consistent with the implemented noise model?
+* Are singular and poorly conditioned matrices handled honestly?
+* Are eigenvalue, determinant, condition-number, and CRLB calculations numerically defensible?
+* Is any pseudoinverse or regularization explicit rather than hidden?
+
+## Nuisance treatment
+
+* Is global gain represented consistently?
+* Is the Schur complement implemented correctly?
+* Does nuisance marginalization avoid artificially increasing available contact information?
+* Is the result interpreted as robustness to gain uncertainty rather than proof of general nuisance robustness?
+
+## Benchmark fairness
+
+* Are nominal and candidate49 evaluated using identical settings?
+* Are stochastic settings controlled or at least recorded?
+* Are pre-existing expensive artifacts reused safely?
+* Are invalidated artifacts clearly distinguished from valid ones?
+* Were thresholds, scaling factors, state subsets, or noise assumptions chosen after seeing the results in a way that favors candidate49?
+
+## Scientific conclusion
+
+The reviewer must determine whether the evidence supports any of the following, without forcing one to be true:
+
+1. candidate49 improves sensor-facing contact information;
+2. candidate49 improves only intrinsic transport, not camera-space information;
+3. candidate49's apparent improvement is primarily global photometric gain;
+4. performance is mixed or strongly state-dependent;
+5. nominal is equal or superior;
+6. current evidence is insufficient.
+
+A negative conclusion is fully acceptable.
+
+## Scope review
+
+Also identify:
+
+* unintended scope expansion;
+* unnecessary abstractions;
+* duplicated metrics or observation implementations;
+* repository dependency violations;
+* changes to the 2D optimizer;
+* hidden compatibility layers;
+* unrelated cleanup;
+* benchmark modifications whose purpose appears to be making the candidate pass.
+
+Report all required checklist items as PASS, FAIL, or UNCLEAR with concrete evidence.
+
+---
+
+# Reviewer repair loop
+
+Because `Fix reviewer findings: YES`, address reviewer FAIL findings only when they are:
+
+* within the original scope;
+* genuine implementation or benchmark correctness defects;
+* resolvable without broadening the task.
+
+Do not treat UNCLEAR findings as authorization for speculative new features or experiments.
+
+If a reviewer finding invalidates an expensive result, rerun only the affected stage.
+
 Reuse the same reviewer subagent for follow-up verification when possible.
-Do not create fresh reviewer agents for each review cycle.
-Stop when the in-scope findings are resolved or a concrete blocker remains.
-Do not broaden the task merely to obtain an all-PASS review.
-Expensive reruns
 
-If Expensive reruns is INVALIDATED_ONLY:
+Do not create a chain of new reviewer agents.
 
-Do not rerun a completed expensive computation unless a discovered
-implementation defect invalidates the scientific or functional result.
-Rerun only the affected stage when possible, not the entire study.
+Stop when in-scope FAIL findings are resolved or a concrete blocker remains.
 
-Examples that can justify an expensive rerun include:
+---
 
-wrong geometry,
-wrong load case,
-wrong boundary condition,
-incorrect solver input,
-incorrect physical state,
-incorrect algorithm affecting the measured quantity,
-corrupted or unusable result data,
-a benchmark-harness bug that changes the scientific result.
+# Completion criteria
 
-The following do not justify an expensive rerun by themselves:
+This iteration is complete when enough trustworthy evidence exists to answer the stated decision question for nominal versus candidate49 under the implemented first-pass sensor observation model.
 
-missing metadata,
-missing preserved console output,
-missing reviewer evidence,
-documentation defects,
-formatting defects,
-incomplete timing labels,
-reporting-only errors,
-reviewer preference,
-absence of a saved test log when the underlying result remains valid.
+Completion does not require candidate49 to win.
 
-Fix reporting, metadata, documentation, or evidence gaps without repeating
-expensive scientific computation whenever possible.
+The final report must clearly separate:
 
-If Expensive reruns is ALLOWED:
+1. implementation changes;
+2. checks performed;
+3. benchmark configuration;
+4. measured results;
+5. nominal versus candidate49 comparison;
+6. gain-nuisance result;
+7. implementation-agent checklist status;
+8. independent reviewer findings;
+9. reviewer findings that were fixed;
+10. remaining FAIL or UNCLEAR items;
+11. scientific limitations;
+12. intentionally deferred follow-up work.
 
-Expensive stages may be rerun when required to complete the explicitly
-requested task.
-Still avoid redundant recomputation and open-ended exploration.
-Prefer rerunning only affected stages.
-Checklist review semantics
-
-When a checklist review is required, evaluate each requested checklist item as:
-
-PASS
-FAIL
-UNCLEAR
-
-Use PASS when the item is implemented and supported by direct evidence.
-
-Use FAIL when the item is missing, incorrect, contradicted by the implementation,
-or demonstrably does not satisfy the requested contract.
-
-Use UNCLEAR when the item cannot be verified from the current implementation,
-artifacts, and permitted checks.
-
-A FAIL does not automatically mean more implementation work is required.
-For exploratory, benchmark, and validation tasks, FAIL may be the scientifically
-correct outcome.
-
-For PASS and FAIL, cite the relevant file, symbol, behavior, artifact, or other
-concrete evidence when practical.
-
-The review should also identify:
-
-unintended scope expansion,
-unnecessary new abstractions or generalized infrastructure,
-unrequested legacy compatibility code,
-duplicated implementations,
-repository dependency-rule violations,
-checklist items that were only partially implemented.
-
-Do not mark or rewrite checklist items inside INSTRUCTION.md unless the user
-explicitly requests that file to be updated.
-
-Do not run tests merely because a checklist exists. Testing remains governed by
-the repository testing rules and explicit task authorization.
-
-Benchmark and validation tasks
-
-A benchmark or validation task is complete when it provides sufficient
-trustworthy evidence to answer the decision question stated in the task.
-
-Do not continue exploring configurations merely because additional
-configurations, solvers, fidelities, parameters, or optimizations are available.
-
-Negative results are valid benchmark outcomes.
-
-Examples:
-
-an alternative solver being slower is a completed result, not a reason to
-tune that solver until it wins;
-a coarse mesh failing fidelity is a completed rejection, not a reason to
-redesign the entire meshing system;
-lack of correlation between two models may be the scientific conclusion,
-not an implementation defect.
-
-Use staged pruning when experiments are expensive.
-
-Reject clearly unsuitable configurations early and do not continue running the
-full benchmark matrix for them unless the task explicitly requires it.
-
-Do not optimize the benchmark harness itself beyond what is necessary to obtain
-trustworthy measurements.
-
-If a benchmark-harness defect invalidates previously measured results, rerun
-only the affected stages whenever possible.
-
-Do not rerun valid expensive results merely to improve presentation,
-documentation, metadata completeness, or reviewer confidence.
-
-Once enough evidence exists to answer the task's decision question, stop.
-
-Scientific fidelity versus implementation correctness
-
-Keep these concepts separate:
-
-implementation correctness,
-scientific or functional result validity,
-fidelity relative to a reference model,
-preserved evidence that a command was executed.
-
-A missing log or incomplete report does not automatically invalidate a valid
-scientific result.
-
-A lower-fidelity method does not need to reproduce every quantity from a
-higher-fidelity method if the task explicitly defines which downstream
-quantities must be preserved.
-
-For optimization and reduced-order studies, evaluate fidelity using the
-task-defined scientific outputs rather than silently promoting unrelated
-quantities into acceptance criteria.
-
-Do not loosen acceptance thresholds merely to make a configuration pass.
-
-If the evidence indicates a proposed approximation is unsuitable, report the
-negative result and stop pursuing it unless the user explicitly requests
-further investigation.
-
-Evidence and artifacts
-
-Generated benchmark, validation, and analysis artifacts belong under output/
-unless the task explicitly specifies another generated location.
-
-Keep generated output untracked.
-
-Distinguish between:
-
-the actual result,
-the summary of the result,
-preserved execution evidence.
-
-If preserved evidence is incomplete, report the evidence gap.
-
-Do not repeat expensive computation solely to manufacture reviewer evidence
-unless the task explicitly requires preserved execution evidence.
-
-Do not silently reconstruct missing scientific values from unrelated artifacts.
-
-Do not overwrite valid historical artifacts merely to make a new result appear
-cleaner.
-
-When a discovered bug invalidates generated artifacts, clearly separate or
-replace the invalid artifacts so they cannot be mistaken for valid results.
-
-Existing repository changes
-
-Treat pre-existing user-owned modifications as outside the current task unless
-the user explicitly includes them.
-
-Do not revert, overwrite, rewrite, clean up, or absorb unrelated existing
-changes merely to produce a clean working tree.
-
-Pre-existing unrelated modifications are not checklist failures.
-
-Report them separately when relevant.
-
-Do not claim unrelated pre-existing changes were introduced by the current
-task.
-
-Scope and stopping rule
-
-Checklist completion does not authorize scope expansion.
-
-Do not turn a bounded implementation task into an open-ended:
-
-refactor,
-cleanup campaign,
-performance-engineering project,
-benchmark campaign,
-validation campaign,
-architecture redesign,
-compatibility effort,
-test-expansion effort.
-
-Do not pursue adjacent improvements merely because they become apparent during
-the task.
-
-Record useful follow-up opportunities in the final report rather than
-implementing them unless they are required by the current task.
-
-Stop when:
-
-the requested implementation is complete to the degree required by the task,
-the requested evidence has been collected,
-the decision question can be answered,
-or a concrete blocker prevents further in-scope progress.
-
-Do not keep working merely to improve the number of PASS items.
-
-Final completion report
-
-The final report must clearly distinguish:
-
-what was changed,
-what was verified,
-what was measured or observed,
-what remains FAIL or UNCLEAR,
-what was blocked,
-what was intentionally not pursued because it was outside scope.
-
-If Reviewer subagent is YES, distinguish the implementation agent's work from
-the reviewer subagent's findings.
-
-If Reviewer subagent is NO, identify the checklist result as implementation-agent
-self-review rather than independent review.
-
-Do not claim an iteration is fully complete when a required checklist item
-remains FAIL or UNCLEAR without explicitly reporting that status.
-
-Do not hide negative results, rejected approaches, failed benchmark
-configurations, or known evidence gaps.
+Do not continue into roughness studies, LED-profile studies, finite five-LED geometry validation, full 3D mechanics, prototype calibration, multi-morphology sweeps, or optimization changes unless the user explicitly starts a later iteration for those tasks.

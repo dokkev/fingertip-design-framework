@@ -14,6 +14,7 @@ from optics.transport3d.physics import (
     periodic_plane_distance,
     wrapped_periodic_z,
 )
+from optics.transport3d.transport import _accumulate_segment_path_3d
 from optics.transport3d.result import Transport3DResult
 from optics.transport3d.sampling import sample_directions, sample_planar_directions
 from optics.transport3d.settings import Transport3DSettings
@@ -151,6 +152,148 @@ def test_attenuation_and_result_validation() -> None:
     assert not result.outgoing_surface_field.flags.writeable
     with pytest.raises(ValueError):
         Transport3DSettings(mode="invalid")  # type: ignore[arg-type]
+
+
+def test_simple_internal_path_accumulation_and_z_integration() -> None:
+    density = np.zeros((2, 2, 2), dtype=float)
+    repeated_density = np.zeros((2, 2, 2), dtype=float)
+    x_edges = np.asarray([0.0, 1.0, 2.0])
+    y_edges = np.asarray([0.0, 1.0, 2.0])
+    z_edges = np.asarray([-1.0, 0.0, 1.0])
+    optical_mask = np.ones((2, 2), dtype=bool)
+    _accumulate_segment_path_3d(
+        density,
+        x_edges,
+        y_edges,
+        z_edges,
+        optical_mask,
+        np.asarray([0.25, 0.25, -0.5]),
+        np.asarray([0.25, 0.25, 0.5]),
+        1.0,
+        0.5,
+        maximum_spacing=0.25,
+    )
+    _accumulate_segment_path_3d(
+        repeated_density,
+        x_edges,
+        y_edges,
+        z_edges,
+        optical_mask,
+        np.asarray([0.25, 0.25, -0.5]),
+        np.asarray([0.25, 0.25, 0.5]),
+        1.0,
+        0.5,
+        maximum_spacing=0.25,
+    )
+
+    assert np.sum(density) == pytest.approx(0.75)
+    assert density[0, 0, 0] > 0.0
+    assert density[1, 0, 0] > 0.0
+    np.testing.assert_array_equal(density, repeated_density)
+    np.testing.assert_allclose(np.sum(density, axis=0)[0, 0], np.sum(density[:, 0, 0]))
+
+
+def test_periodic_segments_accumulate_path_and_attenuation() -> None:
+    density = np.zeros((2, 1, 1), dtype=float)
+    edges = np.asarray([0.0, 1.0])
+    z_edges = np.asarray([-1.0, 0.0, 1.0])
+    mask = np.ones((1, 1), dtype=bool)
+    first_end, first_removed = attenuated_weight(
+        1.0,
+        1.0,
+        medium="silicone",
+        absorption_per_mm=0.2,
+    )
+    second_end, second_removed = attenuated_weight(
+        first_end,
+        1.0,
+        medium="silicone",
+        absorption_per_mm=0.2,
+    )
+    _accumulate_segment_path_3d(
+        density,
+        edges,
+        edges,
+        z_edges,
+        mask,
+        np.asarray([0.5, 0.5, -0.5]),
+        np.asarray([0.5, 0.5, 0.5]),
+        1.0,
+        first_end,
+        maximum_spacing=0.25,
+    )
+    _accumulate_segment_path_3d(
+        density,
+        edges,
+        edges,
+        z_edges,
+        mask,
+        np.asarray([0.5, 0.5, -0.5]),
+        np.asarray([0.5, 0.5, 0.5]),
+        first_end,
+        second_end,
+        maximum_spacing=0.25,
+    )
+
+    assert np.sum(density) == pytest.approx(0.5 * (1.0 + first_end) + 0.5 * (first_end + second_end))
+    assert first_end + first_removed == pytest.approx(1.0)
+    assert second_end + second_removed == pytest.approx(first_end)
+
+
+def test_rigid_blocker_mask_prevents_internal_path_accumulation() -> None:
+    density = np.zeros((1, 1, 2), dtype=float)
+    x_edges = np.asarray([0.0, 1.0, 2.0])
+    y_edges = np.asarray([0.0, 1.0])
+    z_edges = np.asarray([-1.0, 1.0])
+    optical_mask = np.asarray([[True, False]])
+    _accumulate_segment_path_3d(
+        density,
+        x_edges,
+        y_edges,
+        z_edges,
+        optical_mask,
+        np.asarray([0.25, 0.5, 0.0]),
+        np.asarray([1.75, 0.5, 0.0]),
+        1.0,
+        1.0,
+        maximum_spacing=0.1,
+    )
+
+    assert density[0, 0, 0] > 0.0
+    assert density[0, 0, 1] == 0.0
+
+
+def test_nested_result_metadata_is_immutable() -> None:
+    result = Transport3DResult(
+        source_position_mm=(0.0, -6.0, 0.0),
+        source_mode="planar",
+        extrusion_depth_mm=11.0,
+        launched_ray_count=3,
+        launched_weight=1.0,
+        escaped_weight=1.0,
+        absorbed_weight=0.0,
+        terminated_weight=0.0,
+        outgoing_surface_weight=1.0,
+        surface_u_edges=np.linspace(0.0, 1.0, 3),
+        surface_z_edges=np.linspace(-5.5, 5.5, 3),
+        outgoing_surface_field=np.ones((2, 2)),
+        escape_positions_mm=np.asarray([[0.0, 0.0, 0.0]]),
+        escape_directions=np.asarray([[0.0, -1.0, 0.0]]),
+        escape_surface_normals=np.asarray([[0.0, 1.0, 0.0]]),
+        escape_surface_u=np.asarray([0.5]),
+        escape_surface_z=np.asarray([0.0]),
+        escape_surface_tags=("pad_outer_arc",),
+        escape_weights=np.asarray([1.0]),
+        escape_primary_ray_indices=np.asarray([0]),
+        escape_path_lengths_mm=np.asarray([1.0]),
+        escape_interaction_counts=np.asarray([0]),
+        energy_balance_error=0.0,
+        energy_balance_tolerance=1.0e-5,
+        geometry_metadata={"nested": {"values": [1, 2]}},
+    )
+
+    with pytest.raises(TypeError):
+        result.geometry_metadata["nested"]["values"] = (3,)  # type: ignore[index]
 
 
 def test_normal_optics_import_does_not_load_optional_optix() -> None:
