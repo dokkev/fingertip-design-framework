@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
+import math
 from typing import Any, Literal
 
 MIXED_PAD_ELEMENT = "TotalLagrangianMixedVolumetricStrainElement2D3N"
@@ -19,6 +21,44 @@ THICKNESS_MM = 1.0
 RELATIVE_TOLERANCE = 1.0e-6
 ABSOLUTE_TOLERANCE = 1.0e-9
 MAXIMUM_NEWTON_ITERATIONS = 35
+
+
+@dataclass(frozen=True)
+class IndentationSolverSettings:
+    """Explicit Phase 4I solver knobs used by benchmark A/B studies.
+
+    The default instance preserves the trusted production configuration.  The
+    settings are passed only to a requested indentation run; importing this
+    module or calling the existing APIs does not change the defaults.
+    """
+
+    relative_tolerance: float = RELATIVE_TOLERANCE
+    absolute_tolerance: float = ABSOLUTE_TOLERANCE
+    maximum_newton_iterations: int = MAXIMUM_NEWTON_ITERATIONS
+    linear_solver_type: str = "skyline_lu_factorization"
+    reform_dofs_at_each_step: bool = True
+    compute_reactions: bool = True
+    clear_storage: bool = True
+
+    def __post_init__(self) -> None:
+        if (
+            not math.isfinite(self.relative_tolerance)
+            or not math.isfinite(self.absolute_tolerance)
+            or self.relative_tolerance <= 0.0
+            or self.absolute_tolerance <= 0.0
+        ):
+            raise ValueError("solver tolerances must be positive")
+        if (
+            not isinstance(self.maximum_newton_iterations, int)
+            or isinstance(self.maximum_newton_iterations, bool)
+            or self.maximum_newton_iterations <= 0
+        ):
+            raise ValueError("maximum_newton_iterations must be positive")
+        if not self.linear_solver_type:
+            raise ValueError("linear_solver_type must be non-empty")
+
+
+DEFAULT_INDENTATION_SOLVER_SETTINGS = IndentationSolverSettings()
 
 CONTACT_GROUPS = (
     ("PadCutoutLeft", "StemLeft"),
@@ -194,6 +234,7 @@ def build_project_parameters_json() -> str:
 def build_indentation_project_parameters_data(
     number_of_steps: int,
     internal_contact_configuration: str = "three_pairs",
+    solver_settings: IndentationSolverSettings | None = None,
 ) -> dict[str, Any]:
     """Build the common Phase 4I nonlinear solve and four-pair ALM settings."""
     if (
@@ -203,6 +244,13 @@ def build_indentation_project_parameters_data(
     ):
         raise ValueError("number_of_steps must be a positive integer")
     data = build_project_parameters_data()
+    selected_solver_settings = (
+        DEFAULT_INDENTATION_SOLVER_SETTINGS
+        if solver_settings is None
+        else solver_settings
+    )
+    if not isinstance(selected_solver_settings, IndentationSolverSettings):
+        raise TypeError("solver_settings must be IndentationSolverSettings or None")
     data["problem_data"].update(
         {
             "problem_name": "phase4i_central_indentation",
@@ -212,8 +260,20 @@ def build_indentation_project_parameters_data(
     data["solver_settings"]["time_stepping"] = {"time_step": 1.0}
     # Preserve the direct solver used by the validated Phase 3R/4M stack.
     data["solver_settings"]["linear_solver_settings"] = {
-        "solver_type": "skyline_lu_factorization"
+        "solver_type": selected_solver_settings.linear_solver_type
     }
+    data["solver_settings"].update(
+        {
+            "clear_storage": selected_solver_settings.clear_storage,
+            "reform_dofs_at_each_step": selected_solver_settings.reform_dofs_at_each_step,
+            "compute_reactions": selected_solver_settings.compute_reactions,
+            "displacement_relative_tolerance": selected_solver_settings.relative_tolerance,
+            "displacement_absolute_tolerance": selected_solver_settings.absolute_tolerance,
+            "residual_relative_tolerance": selected_solver_settings.relative_tolerance,
+            "residual_absolute_tolerance": selected_solver_settings.absolute_tolerance,
+            "max_iteration": selected_solver_settings.maximum_newton_iterations,
+        }
+    )
     groups = indentation_contact_groups(internal_contact_configuration)
     contact_process = data["processes"]["contact_process_list"][0]["Parameters"]
     contact_process["assume_master_slave"] = {
@@ -230,10 +290,11 @@ def build_indentation_project_parameters_data(
 def build_indentation_project_parameters_json(
     number_of_steps: int,
     internal_contact_configuration: str = "three_pairs",
+    solver_settings: IndentationSolverSettings | None = None,
 ) -> str:
     """Serialize the common Phase 4I settings for ``KM.Parameters``."""
     return json.dumps(
         build_indentation_project_parameters_data(
-            number_of_steps, internal_contact_configuration
+            number_of_steps, internal_contact_configuration, solver_settings
         )
     )

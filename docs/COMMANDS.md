@@ -60,6 +60,20 @@ python -m validation.fingertip.indentation.no_void
 python -m validation.fingertip.transfer_map \
   --output-dir output/validation/fingertip/transfer_map \
   --reference-dir output/validation/fingertip/indentation/no_void
+
+# Staged Kratos FEA throughput/fidelity study.  These commands write only to
+# output/validation/fem/throughput/ and leave production defaults unchanged.
+OMP_NUM_THREADS=1 python -m validation.fem.throughput --stage profile
+OMP_NUM_THREADS=1 python -m validation.fem.throughput --stage diagnostics
+OMP_NUM_THREADS=1 python -m validation.fem.throughput --stage mesh
+OMP_NUM_THREADS=1 python -m validation.fem.throughput --stage full
+OMP_NUM_THREADS=1 python -m validation.fem.throughput --stage steps
+OMP_NUM_THREADS=1 python -m validation.fem.throughput --stage continuation
+OMP_NUM_THREADS=1 python -m validation.fem.throughput --stage symmetry
+OMP_NUM_THREADS=1 python -m validation.fem.throughput --stage solver
+OMP_NUM_THREADS=1 python -m validation.fem.throughput --stage parallel
+# Recompute the report from completed staged artifacts without rerunning FEA.
+python -m validation.fem.throughput --stage finalize
 ```
 
 ## Figures

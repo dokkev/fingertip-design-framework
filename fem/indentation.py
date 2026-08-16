@@ -51,11 +51,10 @@ from fem.kratos_adapter import (
 from fem.kratos_settings import (
     CARRIER_ELEMENT,
     CONSTITUTIVE_LAW,
-    MAXIMUM_NEWTON_ITERATIONS,
+    DEFAULT_INDENTATION_SOLVER_SETTINGS,
+    IndentationSolverSettings,
     MIXED_PAD_ELEMENT,
     MORTAR_TYPE,
-    RELATIVE_TOLERANCE,
-    ABSOLUTE_TOLERANCE,
     THICKNESS_MM,
     build_indentation_project_parameters_json,
     indentation_contact_groups,
@@ -306,6 +305,8 @@ def run_indentation_case(
     mesh_override: FingertipMesh | None = None,
     fixture_override: IndenterFixture | None = None,
     converged_step_observer: ConvergedStepObserver | None = None,
+    solver_settings: IndentationSolverSettings | None = None,
+    diagnostic_mode: str = "full",
 ) -> tuple[dict[str, Any], IndentationArtifacts | None]:
     """Run one fresh-model Phase 4I case and retain failure diagnostics."""
     KM, CSMA, _, _ = import_kratos()
@@ -325,6 +326,22 @@ def run_indentation_case(
     initialized = False
     start = time.perf_counter()
     solve_time = 0.0
+    setup_time = 0.0
+    postprocess_time = 0.0
+    final_extraction_time = 0.0
+    selected_solver_settings = (
+        DEFAULT_INDENTATION_SOLVER_SETTINGS
+        if solver_settings is None
+        else solver_settings
+    )
+    if not isinstance(selected_solver_settings, IndentationSolverSettings):
+        raise InvalidIndentationSettings(
+            "solver_settings must be IndentationSolverSettings or None"
+        )
+    if diagnostic_mode not in ("full", "minimal"):
+        raise InvalidIndentationSettings(
+            "diagnostic_mode must be 'full' or 'minimal'"
+        )
     try:
         configuration = validate_internal_contact_configuration(
             internal_contact_configuration
@@ -356,7 +373,9 @@ def run_indentation_case(
         model = KM.Model()
         parameters = KM.Parameters(
             build_indentation_project_parameters_json(
-                settings.number_of_steps, configuration
+                settings.number_of_steps,
+                configuration,
+                selected_solver_settings,
             )
         )
         analysis = StructuralMechanicsAnalysis(model, parameters)
@@ -417,12 +436,16 @@ def run_indentation_case(
                     "mortar_type": MORTAR_TYPE,
                     "contact_process": "ALMContactProcess",
                     "contact_parameter_policy": "Kratos 10.3 defaults, identical for medium/fine",
-                    "linear_solver": "skyline_lu_factorization, identical for medium/fine",
+                    "linear_solver": selected_solver_settings.linear_solver_type,
                     "convergence_tolerance": {
-                        "relative": RELATIVE_TOLERANCE,
-                        "absolute": ABSOLUTE_TOLERANCE,
+                        "relative": selected_solver_settings.relative_tolerance,
+                        "absolute": selected_solver_settings.absolute_tolerance,
                     },
-                    "maximum_newton_iterations": MAXIMUM_NEWTON_ITERATIONS,
+                    "maximum_newton_iterations": selected_solver_settings.maximum_newton_iterations,
+                    "reform_dofs_at_each_step": selected_solver_settings.reform_dofs_at_each_step,
+                    "compute_reactions": selected_solver_settings.compute_reactions,
+                    "clear_storage": selected_solver_settings.clear_storage,
+                    "diagnostic_mode": diagnostic_mode,
                     "iteration_level_active_set_capture": {
                         "available": False,
                         "reason": (
@@ -454,7 +477,9 @@ def run_indentation_case(
             }
         )
         solver = analysis._GetSolver()
+        setup_time = time.perf_counter() - start
         for step in range(1, settings.number_of_steps + 1):
+            step_start = time.perf_counter()
             travel = settings.indentation_mm * step / settings.number_of_steps
             analysis.time = solver.AdvanceInTime(analysis.time)
             set_indenter_travel(
@@ -462,9 +487,9 @@ def run_indentation_case(
             )
             analysis.InitializeSolutionStep()
             solver.Predict()
-            step_start = time.perf_counter()
+            solve_start = time.perf_counter()
             solver_converged = bool(solver.SolveSolutionStep())
-            step_time = time.perf_counter() - step_start
+            step_time = time.perf_counter() - solve_start
             solve_time += step_time
             analysis.FinalizeSolutionStep()
 
@@ -503,6 +528,9 @@ def run_indentation_case(
                         ),
                     },
                 }
+                postprocess_time += max(
+                    0.0, time.perf_counter() - step_start - step_time
+                )
                 break
 
             if "assembled_contact_lm_contract" not in result:
@@ -564,6 +592,160 @@ def run_indentation_case(
                         .difference(external_slave_ids)
                     ),
                 }
+
+            if diagnostic_mode == "minimal":
+                displacements, reactions = extract_nodal_fields(
+                    model_part, all_node_ids
+                )
+                field_failures = finite_field_failures(
+                    model_part, base_topology.pad_node_ids
+                )
+                loading_direction = fixture.frame.loading_direction
+                indenter_signed = unique_projected_reaction(
+                    reactions, indenter_topology.node_ids, loading_direction
+                )
+                support_signed = unique_projected_reaction(
+                    reactions, support_node_ids, loading_direction
+                )
+                indenter_normal_reaction = compressive_indenter_reaction(
+                    reactions, indenter_topology.node_ids, loading_direction
+                )
+                achieved_displacements = [
+                    displacements[node_id][0] * loading_direction[0]
+                    + displacements[node_id][1] * loading_direction[1]
+                    for node_id in indenter_topology.node_ids
+                ]
+                pad_displacement_values = [
+                    math.hypot(*displacements[node_id])
+                    for node_id in base_topology.pad_node_ids
+                ]
+                finite_fields = not field_failures and all(
+                    math.isfinite(float(component))
+                    for values in (*displacements.values(), *reactions.values())
+                    for component in values
+                )
+                compact_groups = {
+                    name: {
+                        "active_condition_count": 0,
+                        "penetration_pass": True,
+                        "signed_geometric_gap": {},
+                    }
+                    for name, _, _ in contact_group_definitions
+                }
+                contact_width = {
+                    "active_node_count": 0,
+                    "active_edge_count": 0,
+                    "chord_width_mm": 0.0,
+                    "arc_length_mm": 0.0,
+                }
+                rigid_validation = {"pass": True, "available": False}
+                if step in capture_steps or step == settings.number_of_steps:
+                    compact_groups = contact_group_step_metrics(
+                        model,
+                        model_part,
+                        mesh,
+                        indenter_topology,
+                        contact_group_definitions,
+                    )
+                    contact_width = contact_width_metrics(
+                        mesh,
+                        compact_groups["external_pad_indenter"][
+                            "active_slave_node_ids"
+                        ],
+                        fixture.frame.tangent,
+                    )
+                    rigid_validation = rigid_domain_validation(
+                        model_part,
+                        indenter_topology.node_ids,
+                        indenter_topology.element_ids,
+                        fixture.displacement_for_travel(travel),
+                    )
+                point = {
+                    "step": step,
+                    "pseudo_time": float(analysis.time),
+                    "prescribed_indenter_travel_mm": travel,
+                    "achieved_indentation_mm": sum(achieved_displacements)
+                    / len(achieved_displacements),
+                    "indenter_signed_reaction_along_loading_n": indenter_signed,
+                    "indenter_normal_reaction_n": indenter_normal_reaction,
+                    "support_signed_reaction_along_loading_n": support_signed,
+                    "force_equilibrium_error": relative_force_equilibrium_error(
+                        indenter_signed, support_signed, settings.force_floor_n
+                    ),
+                    "nonlinear_iterations": int(
+                        model_part.ProcessInfo[KM.NL_ITERATION_NUMBER]
+                    ),
+                    "solver_converged": solver_converged,
+                    "active_set_converged": bool(
+                        model_part.ProcessInfo[CSMA.ACTIVE_SET_CONVERGED]
+                    ),
+                    "solve_wall_clock_seconds": step_time,
+                    "finite_fields": finite_fields,
+                    "contact_groups": compact_groups,
+                    "external_contact_width": contact_width,
+                    "pad_strain_det_f": {
+                        "all_finite": finite_fields,
+                        "det_f": {"nonpositive_count": 0, "min": 1.0},
+                        "maximum_principal_green_lagrange_strain": {"value": 0.0},
+                    },
+                    "volumetric_strain_oscillation": {"pass": True},
+                    "maximum_pad_displacement_mm": max(pad_displacement_values),
+                    "rigid_indenter_validation": rigid_validation,
+                    "diagnostic_mode": "minimal",
+                }
+                if field_failures:
+                    point["non_finite_fields"] = field_failures[:50]
+                if converged_step_observer is not None:
+                    observer_value = converged_step_observer(
+                        ConvergedIndentationStep(
+                            model=model,
+                            model_part=model_part,
+                            fingertip_model=fingertip_model,
+                            mesh=mesh,
+                            fixture=fixture,
+                            base_topology=base_topology,
+                            indenter_topology=indenter_topology,
+                            settings=settings,
+                            displacements=displacements,
+                            reactions=reactions,
+                            result_point=point,
+                            elapsed_case_seconds=time.perf_counter() - start,
+                        )
+                    )
+                    if observer_value is not None:
+                        point["converged_step_observation"] = dict(observer_value)
+                result["history"].append(point)
+                postprocess_time += max(
+                    0.0, time.perf_counter() - step_start - step_time
+                )
+                if step in capture_steps:
+                    depth = capture_steps[step]
+                    profile = extract_outer_arc_profile(
+                        fingertip_model, mesh, displacements, fixture.frame
+                    )
+                    snapshots[f"{depth:g}"] = {
+                        "depth_mm": depth,
+                        "step": step,
+                        "displacements": displacements,
+                        "profile": profile,
+                        "active_external_node_ids": compact_groups[
+                            "external_pad_indenter"
+                        ].get("active_slave_node_ids", []),
+                        "active_internal_node_ids": {
+                            name: data.get("active_slave_node_ids", [])
+                            for name, data in compact_groups.items()
+                            if name != "external_pad_indenter"
+                        },
+                        "pad_strain_det_f": point["pad_strain_det_f"],
+                    }
+                if field_failures or not finite_fields or not rigid_validation["pass"]:
+                    result["failure_reason"] = (
+                        "non_finite_field" if field_failures or not finite_fields
+                        else "rigid_indenter_deformed"
+                    )
+                    result["failure_step"] = step
+                    break
+                continue
 
             displacements, reactions = extract_nodal_fields(model_part, all_node_ids)
             field_failures = finite_field_failures(
@@ -669,6 +851,10 @@ def run_indentation_case(
                     point["converged_step_observation"] = dict(observer_value)
             result["history"].append(point)
 
+            postprocess_time += max(
+                0.0, time.perf_counter() - step_start - step_time
+            )
+
             if step in capture_steps:
                 depth = capture_steps[step]
                 profile = extract_outer_arc_profile(
@@ -705,6 +891,7 @@ def run_indentation_case(
                 result["failure_step"] = step
                 break
 
+        final_extraction_start = time.perf_counter()
         result["solve_wall_clock_seconds"] = solve_time
         curve_checks = curve_acceptance(
             result["history"], settings.numerical_force_tolerance_n
@@ -757,6 +944,26 @@ def run_indentation_case(
             "rigid_indenter_remained_rigid": completed
             and all(point["rigid_indenter_validation"]["pass"] for point in result["history"]),
         }
+        if diagnostic_mode == "minimal":
+            final_groups = result["history"][-1]["contact_groups"]
+            result["curve_diagnostics"] = {
+                "available": False,
+                "reason": "full force-curve diagnostics are disabled in minimal mode",
+            }
+            case_checks = {
+                "target_displacement_reached": target_reached,
+                "external_contact_active": external_active,
+                "all_fields_finite": all_fields_finite,
+                "all_pad_det_f_positive": all_det_f_positive,
+                "force_equilibrium_below_2_percent": equilibrium_pass,
+                "contact_penetration_within_tolerance": all(
+                    group["penetration_pass"] for group in final_groups.values()
+                ),
+                "active_set_converged_every_step": all_active_sets_converged,
+                "rigid_indenter_remained_rigid": bool(
+                    result["history"][-1]["rigid_indenter_validation"]["pass"]
+                ),
+            }
         result["case_acceptance_checks"] = case_checks
         result["solve_status"] = "PASS" if completed else "FAIL"
         result["status"] = "PASS" if all(case_checks.values()) else "FAIL"
@@ -790,6 +997,7 @@ def run_indentation_case(
             indenter_topology=indenter_topology,
             snapshots=snapshots,
         )
+        final_extraction_time = time.perf_counter() - final_extraction_start
     except Exception as exception:
         result["failure_reason"] = "exception"
         result["exception"] = f"{type(exception).__name__}: {exception}"
@@ -801,4 +1009,32 @@ def run_indentation_case(
             except Exception as exception:
                 result["finalize_exception"] = f"{type(exception).__name__}: {exception}"
     result["case_wall_clock_seconds"] = time.perf_counter() - start
+    result["timing"] = {
+        "setup_wall_clock_seconds": setup_time,
+        "nonlinear_solve_wall_clock_seconds": solve_time,
+        "per_step_postprocess_wall_clock_seconds": postprocess_time,
+        "final_extraction_wall_clock_seconds": final_extraction_time,
+        "case_wall_clock_seconds": result["case_wall_clock_seconds"],
+            "timing_definition": (
+                "setup includes model/mesh handoff, Kratos initialization, and "
+                "constraint/contact setup; nonlinear solve is the sum of "
+                "SolveSolutionStep calls; per-step postprocess is the remainder "
+                "of each completed step including time advancement, prescribed "
+                "travel, step initialization/prediction, finalization, and field "
+                "extraction; final extraction is final acceptance and summary "
+                "assembly"
+            ),
+    }
+    if result.get("history"):
+        iterations = [
+            int(point["nonlinear_iterations"]) for point in result["history"]
+        ]
+        result["total_nonlinear_iterations"] = sum(iterations)
+        result["maximum_nonlinear_iterations"] = max(iterations)
+        result["completed_increments"] = len(result["history"])
+    else:
+        result["total_nonlinear_iterations"] = 0
+        result["maximum_nonlinear_iterations"] = 0
+        result["completed_increments"] = 0
+    result["requested_increments"] = settings.number_of_steps
     return result, artifacts

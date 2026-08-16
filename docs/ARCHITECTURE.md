@@ -82,6 +82,10 @@ It does not replace mesh-based reference/loaded comparisons.
   owns the geometry used to produce the field.
 - `validation/` owns scientific baselines, Phase acceptance, provenance,
   checkpointing, reports, and generated artifact schemas.
+- `validation/fem/throughput.py` owns the staged Kratos FEA throughput/fidelity
+  study. It may request explicit benchmark-local mesh and solver settings, but
+  it does not alter production defaults, constitutive/contact formulation, or
+  downstream optical physics; generated reports remain under `output/`.
 - `optimization/design_space.py` owns algorithm-independent study geometry
   variable and bound definitions. It does not import NiceGUI or an optimizer.
 - `gui/` is a top-level interactive consumer. It owns parameter editing,
