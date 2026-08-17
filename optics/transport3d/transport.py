@@ -714,7 +714,6 @@ def _trace_with_runtime(
                 outward = device_arrays["silicone_normals"][interface_primitive]
                 tagged_contact = silicone_surface.object_contact[interface_primitive]
                 silicone_object_contact = tagged_contact & (interface_medium == 1)
-                air_object_contact = tagged_contact & (interface_medium == 0)
                 medium_normal = cp.where(
                     (interface_medium == 1)[:, None], outward, -outward
                 )
@@ -814,14 +813,6 @@ def _trace_with_runtime(
                                 cp.sum(object_incident * (1.0 - object_reflectance))
                             )
                         )
-                if bool(cp.any(air_object_contact)):
-                    terminated_weight += float(
-                        cp.asnumpy(cp.sum(interface_end_weights[air_object_contact]))
-                    )
-                    reflected[air_object_contact] = 0.0
-                    transmitted[air_object_contact] = 0.0
-                    reflectance[air_object_contact] = 0.0
-                    tir[air_object_contact] = False
                 reflected_weight = interface_end_weights * reflectance
                 transmitted_weight = interface_end_weights * (1.0 - reflectance)
                 if settings.mode == "planar":
@@ -870,7 +861,11 @@ def _trace_with_runtime(
                     & silicone_surface.external_surface[interface_primitive]
                     & ~tagged_contact
                 )
-                ordinary_transmission = ~external_escape & ~tagged_contact
+                # Contact-only optics is defined for silicone rays reaching
+                # the mechanically contacted boundary.  A ray already in air
+                # sees the ordinary air/silicone interface; the exposed
+                # indenter body is deliberately absent from the scene.
+                ordinary_transmission = ~external_escape & ~silicone_object_contact
                 if bool(cp.any(external_escape)):
                     outgoing_weight = transmitted_weight[external_escape] * (~tir[external_escape])
                     escaped_weight += float(cp.asnumpy(cp.sum(outgoing_weight)))

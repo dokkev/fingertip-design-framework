@@ -137,9 +137,11 @@ The optional Mitsuba camera validator is demonstrated by:
 python /path/to/lit_ws/examples/camera_render.py
 ```
 
-The production 2D optical transport does not require CUDA or OptiX. The
-optional environment doctor reports import, header, and GPU-runtime status
-without compiling a kernel:
+The dependency-light reduced 2D reference transport does not require CUDA or
+OptiX. The production `case.run_case()` PLANAR_2D path does require the
+externally managed CUDA/OptiX environment described above. The optional
+environment doctor reports import, header, and GPU-runtime status without
+compiling a kernel:
 
 ```bash
 python -m optics.optix.doctor

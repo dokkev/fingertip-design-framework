@@ -12,6 +12,7 @@ from mesh.indenter import (
     build_normal_indenter_fixture_at_x,
     pose_from_fixture,
 )
+from mesh import mesh_settings_for_level
 from model import Fingertip, FingertipParameters, LED
 from model.optical import OpticalMaterial
 from optics import IndenterOptics, TraceSettings
@@ -27,6 +28,15 @@ from optics.transport3d.physics import (
     Transport3DPhysicsError,
     object_interface_split,
 )
+from optics.transport3d.geometry import (
+    AIR_INTERFACE,
+    OBJECT_CONTACT_INTERFACE,
+    build_transport_geometry,
+)
+
+
+# Synthetic unit-test value only; this is not a measured indenter property.
+DEMONSTRATION_OBJECT_REFRACTIVE_INDEX = 2.0
 
 
 def _object_domain() -> _OpticalDomain:
@@ -104,7 +114,10 @@ def test_dielectric_object_matches_fresnel_and_closes_interface_weight() -> None
     domain = _object_domain()
     domain = replace(
         domain,
-        indenter_optics=IndenterOptics("dielectric", 2.0),
+        indenter_optics=IndenterOptics(
+            "dielectric",
+            DEMONSTRATION_OBJECT_REFRACTIVE_INDEX,
+        ),
     )
     result = _trace_transport(
         domain,
@@ -112,7 +125,10 @@ def test_dielectric_object_matches_fresnel_and_closes_interface_weight() -> None
         material=OpticalMaterial(absorption_per_mm=0.0),
         settings=_object_settings(),
     )
-    expected_r = ((1.41 - 2.0) / (1.41 + 2.0)) ** 2
+    expected_r = (
+        (1.41 - DEMONSTRATION_OBJECT_REFRACTIVE_INDEX)
+        / (1.41 + DEMONSTRATION_OBJECT_REFRACTIVE_INDEX)
+    ) ** 2
     assert result.object_interface_incident_weight == pytest.approx(
         result.object_reflected_weight + result.object_transmitted_weight
     )
@@ -152,11 +168,29 @@ def test_planar_object_interface_directions_have_zero_longitudinal_component() -
         np.asarray([[0.0, -1.0, 0.0]]),
         np.asarray([[0.0, -1.0, 0.0]]),
         1.41,
-        2.0,
+        DEMONSTRATION_OBJECT_REFRACTIVE_INDEX,
     )
     assert not bool(tir[0])
     assert reflected[0, 2] == pytest.approx(0.0)
     assert transmitted[0, 2] == pytest.approx(0.0)
+
+
+def test_object_total_internal_reflection_has_no_transmitted_terminal_weight() -> None:
+    angle = np.deg2rad(50.0)
+    incident = np.asarray([[np.cos(angle), np.sin(angle), 0.0]])
+    normal = np.asarray([[1.0, 0.0, 0.0]])
+    reflected, transmitted, reflectance, tir = object_interface_split(
+        np,
+        incident,
+        normal,
+        1.41,
+        1.0,
+    )
+    assert bool(tir[0])
+    assert reflectance[0] == pytest.approx(1.0)
+    assert np.allclose(transmitted[0], 0.0)
+    assert np.all(np.isfinite(reflected))
+    assert reflected[0, 2] == pytest.approx(0.0)
 
 
 def test_reversed_object_normal_is_corrected_before_fresnel_split() -> None:
@@ -168,7 +202,7 @@ def test_reversed_object_normal_is_corrected_before_fresnel_split() -> None:
             incident,
             reversed_normal,
             1.41,
-            2.0,
+            DEMONSTRATION_OBJECT_REFRACTIVE_INDEX,
         )
 
     corrected_normal = -reversed_normal
@@ -177,7 +211,7 @@ def test_reversed_object_normal_is_corrected_before_fresnel_split() -> None:
         incident,
         corrected_normal,
         1.41,
-        2.0,
+        DEMONSTRATION_OBJECT_REFRACTIVE_INDEX,
     )
     assert not bool(tir[0])
     assert np.all(np.isfinite(reflected))
@@ -245,6 +279,88 @@ def test_indenter_optics_requires_mechanical_contact_patch() -> None:
     with pytest.raises(CrossSectionOpticsError, match="BLOCKED_CONTACT_INTERFACE_MAPPING"):
         _build_no_load_domain(
             tip,
+            indenter_pose=pose,
+            indenter_optics=IndenterOptics("absorber"),
+        )
+
+
+def test_production_geometry_tags_only_the_mechanical_contact_edge() -> None:
+    tip = Fingertip(FingertipParameters())
+    mesh = tip.mesh(mesh_settings_for_level("medium"))
+    arc_edges = mesh.pad.boundary_edges_for("pad_outer_arc")
+    selected_edge = arc_edges[0]
+    selected_key = tuple(sorted(int(value) for value in selected_edge))
+    selected_index = next(
+        index
+        for index, edge in enumerate(mesh.pad.boundary_edges)
+        if tuple(sorted(int(value) for value in edge)) == selected_key
+    )
+    active_node_ids = tuple(int(mesh.pad.node_ids[index]) for index in selected_edge)
+    external_keys = {
+        tuple(sorted(int(value) for value in edge))
+        for tag in ("pad_outer_arc", "pad_outer_left", "pad_outer_right")
+        for edge in mesh.pad.boundary_edges_for(tag)
+    }
+    arc_keys = {
+        tuple(sorted(int(value) for value in edge))
+        for edge in mesh.pad.boundary_edges_for("pad_outer_arc")
+    }
+    fixture = build_normal_indenter_fixture_at_x(
+        tip.geometry,
+        0.0,
+        IndenterSettings(initial_gap_mm=0.0),
+    )
+    pose = pose_from_fixture(
+        fixture,
+        0.5,
+        contact_patch=LineString(mesh.pad.coordinates[selected_edge]),
+        active_contact_node_ids=active_node_ids,
+    )
+
+    control = build_transport_geometry(tip, mesh.pad, mesh)
+    loaded = build_transport_geometry(
+        tip,
+        mesh.pad,
+        mesh,
+        indenter_pose=pose,
+        indenter_optics=IndenterOptics("absorber"),
+    )
+
+    assert all(
+        control.silicone.interface_tags[2 * index] == AIR_INTERFACE
+        for index, edge in enumerate(mesh.pad.boundary_edges)
+        if tuple(sorted(int(value) for value in edge)) in external_keys
+    )
+    assert loaded.silicone.interface_tags[2 * selected_index] == OBJECT_CONTACT_INTERFACE
+    assert loaded.silicone.interface_tags[2 * selected_index + 1] == OBJECT_CONTACT_INTERFACE
+    for index, edge in enumerate(mesh.pad.boundary_edges):
+        edge_key = tuple(sorted(int(value) for value in edge))
+        if edge_key in arc_keys and index != selected_index:
+            assert loaded.silicone.interface_tags[2 * index] == AIR_INTERFACE
+            assert loaded.silicone.interface_tags[2 * index + 1] == AIR_INTERFACE
+
+
+def test_production_geometry_rejects_missing_active_contact_provenance() -> None:
+    tip = Fingertip(FingertipParameters())
+    mesh = tip.mesh(mesh_settings_for_level("medium"))
+    fixture = build_normal_indenter_fixture_at_x(
+        tip.geometry,
+        0.0,
+        IndenterSettings(initial_gap_mm=0.0),
+    )
+    pose = pose_from_fixture(
+        fixture,
+        0.5,
+        contact_patch=LineString([(0.0, 0.0), (1.0, 0.0)]),
+    )
+    with pytest.raises(
+        ValueError,
+        match="BLOCKED_CONTACT_INTERFACE_MAPPING",
+    ):
+        build_transport_geometry(
+            tip,
+            mesh.pad,
+            mesh,
             indenter_pose=pose,
             indenter_optics=IndenterOptics("absorber"),
         )

@@ -1,4 +1,4 @@
-"""View one nominal explicit-contact FEA -> PLANAR_2D OptiX case."""
+"""View one nominal FEA -> PLANAR_2D OptiX case with an indenter."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from optics.transport3d import Transport3DSettings
 from visualization import plot_case
 
 
-INDENTATION_MM = 0.5
+
 
 # Demonstration optical parameter, not a measured indenter material value.
 DEMO_INDENTER_OPTICS = IndenterOptics(
@@ -32,9 +32,10 @@ def main() -> int:
         fingertip=tip,
         fea=FEA2D(
             indenter=indenter,
+            steps=24,
             contact=ContactState(
                 location_x_mm=0.0,
-                indentation_mm=INDENTATION_MM,
+                indentation_mm=1,
                 indenter_radius_mm=indenter.radius_mm,
             ),
         ),
@@ -67,6 +68,8 @@ def main() -> int:
     print(f"  active_contact_nodes: {len(pose.active_contact_node_ids)}")
     print(f"  contact_patch_length_mm: {patch_width:.6g}")
     print(f"  launched_weight: {raw.launched_weight:.6g}")
+    print(f"  object_interface_incident_weight: {raw.object_interface_incident_weight:.6g}")
+    print(f"  object_reflected_weight: {raw.object_reflected_weight:.6g}")
     print(f"  escaped_weight: {raw.escaped_weight:.6g}")
     print(f"  object_absorbed_weight: {raw.object_absorbed_weight:.6g}")
     print(f"  object_transmitted_weight: {raw.object_transmitted_weight:.6g}")
