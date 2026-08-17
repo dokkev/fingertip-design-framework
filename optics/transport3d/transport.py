@@ -947,6 +947,7 @@ def _trace_with_runtime(
         escape_surface_u=cp.asnumpy(escaped_u),
         escape_surface_z=cp.asnumpy(escaped_z),
         escape_surface_tags=escaped_tags,
+        escape_surface_primitive_indices=cp.asnumpy(escaped_primitives),
         escape_weights=cp.asnumpy(escaped_weights),
         escape_primary_ray_indices=cp.asnumpy(escaped_primary),
         escape_path_lengths_mm=cp.asnumpy(escaped_paths),

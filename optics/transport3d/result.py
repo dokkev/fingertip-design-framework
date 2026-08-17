@@ -58,6 +58,7 @@ class Transport3DResult:
     escape_surface_u: np.ndarray
     escape_surface_z: np.ndarray
     escape_surface_tags: tuple[str, ...]
+    escape_surface_primitive_indices: np.ndarray
     escape_weights: np.ndarray
     escape_primary_ray_indices: np.ndarray
     escape_path_lengths_mm: np.ndarray
@@ -128,6 +129,11 @@ class Transport3DResult:
         surface_u = _owned_array(self.escape_surface_u, dtype=float, name="escape_surface_u")
         surface_z = _owned_array(self.escape_surface_z, dtype=float, name="escape_surface_z")
         surface_tags = tuple(str(tag) for tag in self.escape_surface_tags)
+        primitive_indices = np.array(
+            self.escape_surface_primitive_indices,
+            dtype=np.int64,
+            copy=True,
+        )
         weights = _owned_array(self.escape_weights, dtype=float, name="escape_weights")
         primary = np.array(self.escape_primary_ray_indices, dtype=np.int64, copy=True)
         paths = _owned_array(self.escape_path_lengths_mm, dtype=float, name="escape_path_lengths_mm")
@@ -143,7 +149,15 @@ class Transport3DResult:
             )
         if any(
             array.ndim != 1 or len(array) != len(positions)
-            for array in (surface_u, surface_z, weights, primary, paths, interactions)
+            for array in (
+                surface_u,
+                surface_z,
+                primitive_indices,
+                weights,
+                primary,
+                paths,
+                interactions,
+            )
         ):
             raise Transport3DResultError("escape metadata lengths do not match positions")
         if len(surface_tags) != len(positions):
@@ -153,6 +167,7 @@ class Transport3DResult:
             or np.any(surface_u > u_edges[-1])
             or np.any(surface_z < z_edges[0])
             or np.any(surface_z > z_edges[-1])
+            or np.any(primitive_indices < 0)
             or np.any(weights < 0.0)
             or np.any(paths < 0.0)
             or np.any(primary < 0)
@@ -316,6 +331,8 @@ class Transport3DResult:
         object.__setattr__(self, "escape_surface_u", surface_u)
         object.__setattr__(self, "escape_surface_z", surface_z)
         object.__setattr__(self, "escape_surface_tags", surface_tags)
+        primitive_indices.setflags(write=False)
+        object.__setattr__(self, "escape_surface_primitive_indices", primitive_indices)
         object.__setattr__(self, "escape_weights", weights)
         object.__setattr__(self, "escape_primary_ray_indices", primary)
         object.__setattr__(self, "escape_path_lengths_mm", paths)
