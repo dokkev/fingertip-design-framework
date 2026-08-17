@@ -1,20 +1,20 @@
-"""Direct 3D Kratos mechanics on the neutral tetrahedral fingertip mesh."""
+"""3D Kratos adapter for the authoritative compliant-pad volume mesh."""
 
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from collections import defaultdict
 import json
 import math
-from typing import Any, Literal
+from typing import Any, Iterable, Literal, Mapping, Sequence
 
 import numpy as np
 
 from mesh.indenter import IndenterFixture
-from mesh.volume_types import FingertipVolumeMesh
+from mesh.volume_types import FingertipVolumeMesh, SurfaceTriangle
 
 
 SolidFEAMode = Literal["3d_equivalent_reference", "production"]
-SolidFEAContact = Literal["none", "three_pairs"]
 
 
 class SolidFEAError(RuntimeError):
@@ -30,7 +30,6 @@ class SolidFEASettings:
     indentation_mm: float = 0.5
     reference_longitudinal_constraint: bool = False
     maximum_newton_iterations: int = 35
-    internal_contact: SolidFEAContact = "three_pairs"
     external_contact: bool = True
 
     def __post_init__(self) -> None:
@@ -44,8 +43,6 @@ class SolidFEASettings:
             raise TypeError("reference_longitudinal_constraint must be bool")
         if not isinstance(self.maximum_newton_iterations, int) or self.maximum_newton_iterations <= 0:
             raise ValueError("maximum_newton_iterations must be positive")
-        if self.internal_contact not in ("none", "three_pairs"):
-            raise ValueError("internal_contact must be 'none' or 'three_pairs'")
         if not isinstance(self.external_contact, bool):
             raise TypeError("external_contact must be bool")
 
@@ -81,22 +78,152 @@ class SolidFEAResult:
             raise ValueError("3D FEA fields must have shape (N, 3)")
         if not np.all(np.isfinite(deformed)) or not np.all(np.isfinite(displacement)):
             raise ValueError("3D FEA fields must be finite")
-        if not np.allclose(deformed - reference, displacement, rtol=0.0, atol=1.0e-10):
+        if not np.allclose(deformed - reference, displacement, rtol=1.0e-10, atol=1.0e-12):
             raise ValueError("deformed coordinates and displacement disagree")
         deformed.setflags(write=False)
         displacement.setflags(write=False)
         object.__setattr__(self, "deformed_coordinates_mm", deformed)
         object.__setattr__(self, "displacement_mm", displacement)
-        if self.reaction_force_n is not None and not math.isfinite(float(self.reaction_force_n)):
-            raise ValueError("reaction_force_n must be finite")
-
-    @property
-    def morphology_fingerprint(self) -> str:
-        """Return the source morphology fingerprint."""
-        return self.volume_mesh.morphology_fingerprint
 
 
-def _import_kratos() -> tuple[Any, Any, Any, Any]:
+@dataclass(frozen=True)
+class ContactSurfaceValidation:
+    """Fail-closed geometry evidence for one mortar contact surface."""
+
+    passed: bool
+    triangle_count: int
+    area_mm2: float
+    normal_min_norm: float
+    normal_max_norm: float
+    connected_component_count: int
+    boundary_edge_count: int
+    orientation_conflict_count: int
+    duplicate_triangle_count: int
+    duplicate_condition_id_count: int
+    checks: dict[str, bool]
+    errors: tuple[str, ...]
+
+
+def validate_contact_triangles(
+    triangles: Sequence[tuple[int, tuple[int, int, int]] | SurfaceTriangle],
+    coordinates: Mapping[int, Sequence[float]],
+    *,
+    expected_normal: Sequence[float] | None = None,
+    contact_assignment: tuple[str, str] | None = None,
+) -> ContactSurfaceValidation:
+    """Validate every triangle before contact process initialization."""
+    rows: list[tuple[int, tuple[int, int, int]]] = []
+    for value in triangles:
+        if isinstance(value, SurfaceTriangle):
+            rows.append((value.id, value.node_ids))
+        else:
+            rows.append(value)
+    duplicate_keys = [key for key, count in _counts(tuple(sorted(node_ids)) for _, node_ids in rows).items() if count > 1]
+    duplicate_condition_ids = [key for key, count in _counts_1d(condition_id for condition_id, _ in rows).items() if count > 1]
+    normals: list[np.ndarray] = []
+    areas: list[float] = []
+    invalid = 0
+    finite_edges = True
+    for _, node_ids in rows:
+        if len(node_ids) != 3 or len(set(node_ids)) != 3 or any(node_id not in coordinates for node_id in node_ids):
+            invalid += 1
+            continue
+        points = np.asarray([coordinates[node_id] for node_id in node_ids], dtype=float)
+        if points.shape != (3, 3) or not np.all(np.isfinite(points)):
+            invalid += 1
+            continue
+        normal = np.cross(points[1] - points[0], points[2] - points[0])
+        norm = float(np.linalg.norm(normal))
+        finite_edges &= bool(np.all(np.isfinite(points[1:] - points[0])))
+        if not np.all(np.isfinite(normal)) or norm <= 1.0e-12:
+            invalid += 1
+            continue
+        normals.append(normal)
+        areas.append(0.5 * norm)
+    edge_use: dict[tuple[int, int], list[tuple[int, int]]] = defaultdict(list)
+    adjacency: dict[int, set[int]] = {index: set() for index in range(len(rows))}
+    for index, (_, node_ids) in enumerate(rows):
+        if len(node_ids) != 3 or len(set(node_ids)) != 3:
+            continue
+        directed = tuple((node_ids[i], node_ids[(i + 1) % 3]) for i in range(3))
+        for first, second in directed:
+            edge_use[tuple(sorted((first, second)))].append((index, 1 if first < second else -1))
+    boundary_edges = 0
+    orientation_conflicts = 0
+    for uses in edge_use.values():
+        if len(uses) == 1:
+            boundary_edges += 1
+        elif len(uses) == 2:
+            if uses[0][1] == uses[1][1]:
+                orientation_conflicts += 1
+            adjacency[uses[0][0]].add(uses[1][0])
+            adjacency[uses[1][0]].add(uses[0][0])
+    components = 0
+    unseen = set(adjacency)
+    while unseen:
+        components += 1
+        stack = [unseen.pop()]
+        while stack:
+            for neighbor in adjacency[stack.pop()] & unseen:
+                unseen.remove(neighbor)
+                stack.append(neighbor)
+    normal_norms = [float(np.linalg.norm(normal)) for normal in normals]
+    normal_direction_ok = True
+    if expected_normal is not None and normals:
+        direction = np.asarray(expected_normal, dtype=float)
+        direction_norm = float(np.linalg.norm(direction))
+        normal_direction_ok = direction_norm > 0.0 and all(
+            float(np.dot(normal, direction)) > 0.0 for normal in normals
+        )
+    assignment_ok = (
+        contact_assignment is not None
+        and len(contact_assignment) == 2
+        and all(bool(name) for name in contact_assignment)
+        and contact_assignment[0] != contact_assignment[1]
+    )
+    checks = {
+        "finite_coordinates": invalid == 0,
+        "finite_edge_vectors": finite_edges,
+        "three_distinct_node_ids": invalid == 0,
+        "nonzero_area": bool(areas) and min(areas) > 1.0e-12,
+        "finite_nonzero_normals": bool(normals) and bool(np.isfinite(np.asarray(normals)).all()),
+        "consistent_orientation": orientation_conflicts == 0 and normal_direction_ok,
+        "no_duplicate_triangles": not duplicate_keys,
+        "no_duplicate_conditions": not duplicate_condition_ids,
+        "explicit_master_slave_assignment": assignment_ok,
+    }
+    errors = tuple(name for name, passed in checks.items() if not passed)
+    return ContactSurfaceValidation(
+        passed=not errors,
+        triangle_count=len(rows),
+        area_mm2=float(sum(areas)),
+        normal_min_norm=min(normal_norms, default=0.0),
+        normal_max_norm=max(normal_norms, default=0.0),
+        connected_component_count=components,
+        boundary_edge_count=boundary_edges,
+        orientation_conflict_count=orientation_conflicts,
+        duplicate_triangle_count=len(duplicate_keys),
+        duplicate_condition_id_count=len(duplicate_condition_ids),
+        checks=checks,
+        errors=errors,
+    )
+
+
+def _counts(values: Iterable[tuple[int, int, int]]) -> dict[tuple[int, int, int], int]:
+    counts: dict[tuple[int, int, int], int] = defaultdict(int)
+    for value in values:
+        counts[value] += 1
+    return counts
+
+
+def _counts_1d(values: Iterable[int]) -> dict[int, int]:
+    counts: dict[int, int] = defaultdict(int)
+    for value in values:
+        counts[value] += 1
+    return counts
+
+
+def import_kratos() -> tuple[Any, Any, Any, Any]:
     try:
         import KratosMultiphysics as KM
         import KratosMultiphysics.ContactStructuralMechanicsApplication as CSMA
@@ -107,19 +234,11 @@ def _import_kratos() -> tuple[Any, Any, Any, Any]:
     return KM, CSMA, CLA, SMA
 
 
-def _properties(model_part: Any, identifier: int) -> Any:
-    if model_part.HasProperties(identifier):
-        return model_part.Properties[identifier]
-    return model_part.CreateNewProperties(identifier)
+def properties_for_model_part(model_part: Any, identifier: int) -> Any:
+    return model_part.Properties[identifier] if model_part.HasProperties(identifier) else model_part.CreateNewProperties(identifier)
 
 
-def _add_part(
-    model_part: Any,
-    name: str,
-    node_ids: set[int] | tuple[int, ...],
-    condition_ids: set[int] | tuple[int, ...] = (),
-    element_ids: set[int] | tuple[int, ...] = (),
-) -> Any:
+def _add_part(model_part: Any, name: str, node_ids: Sequence[int], condition_ids: Sequence[int] = (), element_ids: Sequence[int] = ()) -> Any:
     part = model_part.CreateSubModelPart(name)
     if node_ids:
         part.AddNodes(sorted(node_ids))
@@ -130,60 +249,98 @@ def _add_part(
     return part
 
 
+def _signed_tetra_volume(points: np.ndarray) -> float:
+    return float(np.linalg.det(np.vstack((points[1:] - points[0]))) / 6.0)
+
+
 def _master_surface(
     fixture: IndenterFixture,
     *,
     first_node_id: int,
     first_condition_id: int,
+    first_element_id: int,
     z_min_mm: float,
     z_max_mm: float,
     z_bands: int = 8,
-) -> tuple[list[tuple[int, float, float, float]], list[tuple[int, tuple[int, int, int]]]]:
-    """Extrude the existing circular contact arc into one 3D master surface."""
+) -> tuple[
+    list[tuple[int, float, float, float]],
+    list[tuple[int, tuple[int, int, int]]],
+    list[tuple[int, tuple[int, int, int, int]]],
+]:
     arc = list(fixture.contact_arc.coords)
     if len(arc) < 3:
         raise SolidFEAError("indenter contact arc has too few points")
     node_rows: list[list[int]] = []
+    back_rows: list[list[int]] = []
     nodes: list[tuple[int, float, float, float]] = []
     node_id = first_node_id
+    back_node_id = first_node_id + (z_bands + 1) * len(arc)
+    thickness = fixture.settings.thickness_mm
     for z_index in range(z_bands + 1):
         z = z_min_mm + (z_max_mm - z_min_mm) * z_index / z_bands
         row: list[int] = []
+        back_row: list[int] = []
         for x, y in arc:
             row.append(node_id)
             nodes.append((node_id, float(x), float(y), float(z)))
             node_id += 1
+            radial_x = float(x - fixture.center_mm[0])
+            radial_y = float(y - fixture.center_mm[1])
+            radial_norm = math.hypot(radial_x, radial_y)
+            if radial_norm <= 1.0e-12:
+                raise SolidFEAError("indenter contact arc contains its carrier center")
+            back_row.append(back_node_id)
+            nodes.append(
+                (
+                    back_node_id,
+                    float(x - thickness * radial_x / radial_norm),
+                    float(y - thickness * radial_y / radial_norm),
+                    float(z),
+                )
+            )
+            back_node_id += 1
         node_rows.append(row)
+        back_rows.append(back_row)
     conditions: list[tuple[int, tuple[int, int, int]]] = []
+    elements: list[tuple[int, tuple[int, int, int, int]]] = []
     condition_id = first_condition_id
+    element_id = first_element_id
+    coordinates = {node_id: np.asarray((x, y, z), dtype=float) for node_id, x, y, z in nodes}
     for z_index in range(z_bands):
         for arc_index in range(len(arc) - 1):
             a = node_rows[z_index][arc_index]
             b = node_rows[z_index][arc_index + 1]
             c = node_rows[z_index + 1][arc_index + 1]
             d = node_rows[z_index + 1][arc_index]
+            back_a = back_rows[z_index][arc_index]
+            back_b = back_rows[z_index][arc_index + 1]
+            back_c = back_rows[z_index + 1][arc_index + 1]
+            back_d = back_rows[z_index + 1][arc_index]
             conditions.extend(((condition_id, (a, b, c)), (condition_id + 1, (a, c, d))))
+            for raw_nodes in (
+                (a, b, c, back_a),
+                (b, c, back_c, back_a),
+                (b, back_c, back_b, back_a),
+                (c, d, back_d, back_a),
+                (c, back_d, back_c, back_a),
+            ):
+                points = np.asarray([coordinates[node] for node in raw_nodes])
+                if _signed_tetra_volume(points) < 0.0:
+                    raw_nodes = (raw_nodes[0], raw_nodes[2], raw_nodes[1], raw_nodes[3])
+                if _signed_tetra_volume(np.asarray([coordinates[node] for node in raw_nodes])) <= 0.0:
+                    raise SolidFEAError("indenter carrier extrusion created a zero-volume tetrahedron")
+                elements.append((element_id, raw_nodes))
+                element_id += 1
             condition_id += 2
-    return nodes, conditions
+    return nodes, conditions, elements
 
 
-def _parameters(settings: SolidFEASettings) -> Any:
-    KM, _, _, _ = _import_kratos()
-    pairs: list[tuple[str, str]] = []
-    if settings.external_contact:
-        pairs.append(("PadOuterArc", "IndenterContactArc"))
-    if settings.internal_contact == "three_pairs":
-        pairs.extend(
-            (
-                ("PadVoidLeft", "StemContactLeft"),
-                ("PadVoidRight", "StemContactRight"),
-                ("PadVoidBottom", "StemContactBottom"),
-            )
-        )
-    contact_model_part = {str(i): list(pair) for i, pair in enumerate(pairs)}
+def parameters_for_settings(settings: SolidFEASettings, *, use_mpc: bool = False) -> Any:
+    KM, _, _, _ = import_kratos()
+    pairs = [("PadOuterArc", "IndenterContactArc")] if settings.external_contact else []
     data = {
         "problem_data": {
-            "problem_name": "fingertip_3d_contact",
+            "problem_name": "fingertip_pad_3d_contact",
             "parallel_type": "OpenMP",
             "start_time": 0.0,
             "end_time": float(settings.number_of_steps),
@@ -211,13 +368,16 @@ def _parameters(settings: SolidFEASettings) -> Any:
             "reform_dofs_at_each_step": True,
             "compute_reactions": True,
             "move_mesh_flag": True,
-            "convergence_criterion": "contact_residual_criterion",
+            "convergence_criterion": "contact_residual_criterion" if pairs else "residual_criterion",
             "displacement_relative_tolerance": 1.0e-6,
             "displacement_absolute_tolerance": 1.0e-9,
             "residual_relative_tolerance": 1.0e-6,
             "residual_absolute_tolerance": 1.0e-9,
             "max_iteration": settings.maximum_newton_iterations,
-            "builder_and_solver_settings": {"type": "block", "advanced_settings": {}},
+            "builder_and_solver_settings": {
+                "type": "elimination" if use_mpc else "block",
+                "advanced_settings": {},
+            },
             "solving_strategy_settings": {"type": "newton_raphson", "advanced_settings": {}},
             "linear_solver_settings": {"solver_type": "skyline_lu_factorization"},
         },
@@ -228,8 +388,8 @@ def _parameters(settings: SolidFEASettings) -> Any:
                 "process_name": "ALMContactProcess",
                 "Parameters": {
                     "model_part_name": "Structure",
-                    "assume_master_slave": {str(i): [pair[0]] for i, pair in enumerate(pairs)},
-                    "contact_model_part": contact_model_part,
+                    "assume_master_slave": {str(index): [pair[0]] for index, pair in enumerate(pairs)},
+                    "contact_model_part": {str(index): list(pair) for index, pair in enumerate(pairs)},
                     "contact_type": "Frictionless",
                 },
             }] if pairs else []
@@ -237,8 +397,15 @@ def _parameters(settings: SolidFEASettings) -> Any:
     }
     if not pairs:
         data["solver_settings"].pop("contact_settings")
-        data["solver_settings"]["convergence_criterion"] = "residual_criterion"
+    if use_mpc:
+        data["solver_settings"]["multi_point_constraints_used"] = True
     return KM.Parameters(json.dumps(data))
+
+
+def create_surface_condition(model_part: Any, properties: Any, condition_id: int, node_ids: Sequence[int]) -> None:
+    if len(node_ids) != 3 or len(set(node_ids)) != 3:
+        raise SolidFEAError(f"refusing invalid SurfaceCondition3D3N node list: {node_ids!r}")
+    model_part.CreateNewCondition("SurfaceCondition3D3N", condition_id, list(node_ids), properties)
 
 
 def _populate(
@@ -246,198 +413,192 @@ def _populate(
     volume_mesh: FingertipVolumeMesh,
     fixture: IndenterFixture,
     *,
-    internal_contact: SolidFEAContact,
     external_contact: bool,
-) -> tuple[dict[str, tuple[int, ...]], tuple[int, ...], tuple[int, ...], tuple[int, ...]]:
-    KM, _, CLA, _ = _import_kratos()
+) -> tuple[dict[str, tuple[int, ...]], tuple[int, ...], tuple[int, ...]]:
+    KM, _, CLA, _ = import_kratos()
     model_part.ProcessInfo[KM.DOMAIN_SIZE] = 3
-    pad_properties = _properties(model_part, 1)
-    rigid_properties = _properties(model_part, 2)
-    for properties, young_modulus in (
-        (pad_properties, volume_mesh.parameters.young_modulus_mpa),
-        (rigid_properties, 1.0),
-    ):
-        properties[KM.YOUNG_MODULUS] = young_modulus
-        properties[KM.POISSON_RATIO] = volume_mesh.parameters.poisson_ratio
-        properties[KM.DENSITY] = 1.0
-        properties[KM.VOLUME_ACCELERATION] = [0.0, 0.0, 0.0]
-        properties[KM.CONSTITUTIVE_LAW] = CLA.HyperElastic3DLaw()
+    pad_properties = properties_for_model_part(model_part, 1)
+    pad_properties[KM.YOUNG_MODULUS] = volume_mesh.parameters.young_modulus_mpa
+    pad_properties[KM.POISSON_RATIO] = volume_mesh.parameters.poisson_ratio
+    pad_properties[KM.DENSITY] = 1.0
+    pad_properties[KM.VOLUME_ACCELERATION] = [0.0, 0.0, 0.0]
+    pad_properties[KM.CONSTITUTIVE_LAW] = CLA.HyperElastic3DLaw()
     for node in sorted(volume_mesh.nodes.values(), key=lambda value: value.id):
         model_part.CreateNewNode(node.id, node.x_mm, node.y_mm, node.z_mm)
     for tetrahedron in volume_mesh.tetrahedra:
-        properties = pad_properties if tetrahedron.domain == "pad" else rigid_properties
-        element_name = (
-            "TotalLagrangianMixedVolumetricStrainElement3D4N"
-            if tetrahedron.domain == "pad"
-            else "TotalLagrangianElement3D4N"
+        model_part.CreateNewElement(
+            "TotalLagrangianMixedVolumetricStrainElement3D4N",
+            tetrahedron.id,
+            list(tetrahedron.node_ids),
+            pad_properties,
         )
-        model_part.CreateNewElement(element_name, tetrahedron.id, list(tetrahedron.node_ids), properties)
 
-    surface_tags = {"PadOuterArc": "outer_compliant_arc"}
-    if internal_contact == "three_pairs":
-        surface_tags.update(
+    condition_ids: dict[str, list[int]] = {"PadOuterArc": [], "IndenterContactArc": []}
+    next_condition_id = max((triangle.id for values in volume_mesh.surface_triangles.values() for triangle in values), default=0) + 1
+    if external_contact:
+        pad_triangles = volume_mesh.surface_triangles["outer_compliant_arc"]
+        coordinates = {node.id: (node.x_mm, node.y_mm, node.z_mm) for node in volume_mesh.nodes.values()}
+        pad_report = validate_contact_triangles(
+            pad_triangles,
+            coordinates,
+            contact_assignment=("PadOuterArc", "IndenterContactArc"),
+        )
+        if not pad_report.passed:
+            raise SolidFEAError("pad contact surface failed preflight: " + ", ".join(pad_report.errors))
+        for triangle in pad_triangles:
+            create_surface_condition(model_part, pad_properties, triangle.id, triangle.node_ids)
+            condition_ids["PadOuterArc"].append(triangle.id)
+
+        master_nodes, master_conditions, master_elements = _master_surface(
+            fixture,
+            first_node_id=max(volume_mesh.nodes) + 1,
+            first_condition_id=next_condition_id,
+            first_element_id=max((tetrahedron.id for tetrahedron in volume_mesh.tetrahedra), default=0) + 1,
+            z_min_mm=volume_mesh.solid.z_min_mm,
+            z_max_mm=volume_mesh.solid.z_max_mm,
+        )
+        master_properties = properties_for_model_part(model_part, 2)
+        master_properties[KM.YOUNG_MODULUS] = 1.0
+        master_properties[KM.POISSON_RATIO] = 0.49
+        master_properties[KM.DENSITY] = 1.0
+        master_properties[KM.VOLUME_ACCELERATION] = [0.0, 0.0, 0.0]
+        master_properties[KM.CONSTITUTIVE_LAW] = CLA.HyperElastic3DLaw()
+        master_coordinates: dict[int, tuple[float, float, float]] = {}
+        for node_id, x, y, z in master_nodes:
+            model_part.CreateNewNode(node_id, x, y, z)
+            master_coordinates[node_id] = (x, y, z)
+        master_report = validate_contact_triangles(
+            master_conditions,
+            master_coordinates,
+            contact_assignment=("IndenterContactArc", "PadOuterArc"),
+        )
+        if not master_report.passed:
+            raise SolidFEAError("master contact surface failed preflight: " + ", ".join(master_report.errors))
+        for condition_id, node_ids in master_conditions:
+            create_surface_condition(model_part, master_properties, condition_id, node_ids)
+            condition_ids["IndenterContactArc"].append(condition_id)
+        for element_id, node_ids in master_elements:
+            model_part.CreateNewElement(
+                "TotalLagrangianElement3D4N", element_id, list(node_ids), master_properties
+            )
+        _add_part(
+            model_part,
+            "IndenterContactArc",
+            tuple(sorted({node_id for _, node_ids in master_conditions for node_id in node_ids})),
+            condition_ids["IndenterContactArc"],
+        )
+        master_node_ids = tuple(sorted(master_coordinates))
+        _add_part(
+            model_part,
+            "IndenterRigidCarrier",
+            tuple(master_coordinates),
+            element_ids=tuple(element_id for element_id, _ in master_elements),
+        )
+    else:
+        master_node_ids = ()
+
+    pad_contact_nodes = tuple(sorted({node_id for triangle in volume_mesh.surface_triangles["outer_compliant_arc"] for node_id in triangle.node_ids})) if external_contact else ()
+    if external_contact:
+        _add_part(model_part, "PadOuterArc", pad_contact_nodes, condition_ids=condition_ids["PadOuterArc"])
+    bonded_tags = tuple(
+        definition.name
+        for definition in volume_mesh.solid.surfaces
+        if definition.kind == "support" and definition.source_geometry is not None
+    )
+    support_node_ids = tuple(
+        sorted(
             {
-                "PadVoidLeft": "void_left",
-                "PadVoidRight": "void_right",
-                "PadVoidBottom": "void_bottom",
-                "StemContactLeft": "contact_left",
-                "StemContactRight": "contact_right",
-                "StemContactBottom": "contact_bottom",
+                node_id
+                for tag in bonded_tags
+                for triangle in volume_mesh.surface_triangles[tag]
+                for node_id in triangle.node_ids
             }
         )
-    condition_ids: dict[str, list[int]] = {name: [] for name in (*surface_tags, "IndenterContactArc")}
-    max_condition = max(
-        (triangle.id for values in volume_mesh.surface_triangles.values() for triangle in values),
-        default=0,
     )
-    for part_name, tag in surface_tags.items():
-        properties = rigid_properties if part_name.startswith("Stem") else pad_properties
-        for triangle in volume_mesh.surface_triangles[tag]:
-            model_part.CreateNewCondition(
-                "SurfaceCondition3D3N", triangle.id, list(triangle.node_ids), properties
-            )
-            condition_ids[part_name].append(triangle.id)
-
-    master_nodes, master_conditions = _master_surface(
-        fixture,
-        first_node_id=max(volume_mesh.nodes) + 1,
-        first_condition_id=max_condition + 1,
-        z_min_mm=volume_mesh.solid.z_min_mm,
-        z_max_mm=volume_mesh.solid.z_max_mm,
-    )
-    master_node_ids: set[int] = set()
-    master_properties = _properties(model_part, 3)
-    master_properties[KM.YOUNG_MODULUS] = 1.0
-    master_properties[KM.POISSON_RATIO] = 0.49
-    master_properties[KM.DENSITY] = 1.0
-    master_properties[KM.VOLUME_ACCELERATION] = [0.0, 0.0, 0.0]
-    for node_id, x, y, z in master_nodes:
-        model_part.CreateNewNode(node_id, x, y, z)
-        master_node_ids.add(node_id)
-    for condition_id, node_ids in master_conditions:
-        model_part.CreateNewCondition(
-            "SurfaceCondition3D3N", condition_id, list(node_ids), master_properties
-        )
-        condition_ids["IndenterContactArc"].append(condition_id)
-
-    for part_name, tag in surface_tags.items():
-        nodes = {
-            node_id
-            for triangle in volume_mesh.surface_triangles[tag]
-            for node_id in triangle.node_ids
-        }
-        _add_part(model_part, part_name, nodes, condition_ids[part_name])
-    _add_part(model_part, "IndenterContactArc", master_node_ids, condition_ids["IndenterContactArc"])
-
-    carrier_element_ids = set(volume_mesh.volume_element_ids["rigid_carrier"])
-    carrier_node_ids = {
-        node.Id
-        for element_id in carrier_element_ids
-        for node in model_part.Elements[element_id].GetGeometry()
-    }
-    _add_part(model_part, "RigidCarrier", carrier_node_ids, element_ids=carrier_element_ids)
-    _add_part(model_part, "RigidMotion", carrier_node_ids)
-    support_node_ids = {
-        node_id
-        for tag in ("support_bond_left", "support_bond_right")
-        for triangle in volume_mesh.surface_triangles[tag]
-        for node_id in triangle.node_ids
-    }
-    return (
-        {name: tuple(sorted(values)) for name, values in condition_ids.items()},
-        tuple(sorted(carrier_node_ids)),
-        tuple(sorted(master_node_ids)),
-        tuple(sorted(support_node_ids)),
-    )
+    _add_part(model_part, "BondedSupport", support_node_ids)
+    return {name: tuple(values) for name, values in condition_ids.items()}, master_node_ids, support_node_ids
 
 
-def _support_tie_pairs(volume_mesh: FingertipVolumeMesh) -> tuple[tuple[int, int], ...]:
-    """Return exact pad-to-rigid support pairs, or fail closed.
-
-    Contact facets intentionally remain disconnected for zero-clearance
-    contact.  The bonded pad/link interface therefore needs an explicit tie;
-    silently omitting it would leave the compliant pad mechanically floating.
-    """
-    pairs: list[tuple[int, int]] = []
-    for tag in ("support_bond_left", "support_bond_right"):
-        pad_ids = {
-            node_id
-            for triangle in volume_mesh.surface_triangles[tag]
-            if triangle.domain == "pad"
-            for node_id in triangle.node_ids
-        }
-        rigid_ids = {
-            node_id
-            for triangle in volume_mesh.surface_triangles[tag]
-            if triangle.domain == "rigid_carrier"
-            for node_id in triangle.node_ids
-        }
-        key = lambda node_id: tuple(
-            round(float(value), 8)
-            for value in (
-                volume_mesh.nodes[node_id].x_mm,
-                volume_mesh.nodes[node_id].y_mm,
-                volume_mesh.nodes[node_id].z_mm,
-            )
-        )
-        rigid_by_key = {key(node_id): node_id for node_id in rigid_ids}
-        for pad_id in sorted(pad_ids):
-            rigid_id = rigid_by_key.get(key(pad_id))
-            if rigid_id is None:
-                raise SolidFEAError(
-                    f"bonded interface {tag!r} is nonconforming: no exact rigid node for pad node {pad_id}"
+def _apply_plane_strain_constraints(
+    model_part: Any,
+    node_columns: Sequence[Sequence[int]],
+    reference_layer_index: int,
+    fixed_node_ids: Sequence[int] = (),
+) -> int:
+    """Add exact in-plane equality constraints for a deterministic node map."""
+    KM, _, _, _ = import_kratos()
+    if not node_columns:
+        raise SolidFEAError("plane-strain reference requires nonempty node columns")
+    if any(
+        len(column) <= reference_layer_index
+        or len(set(column)) != len(column)
+        for column in node_columns
+    ):
+        raise SolidFEAError("plane-strain node columns are not valid layered mappings")
+    constraint_id = max((constraint.Id for constraint in model_part.MasterSlaveConstraints), default=0) + 1
+    fixed_nodes = {int(node_id) for node_id in fixed_node_ids}
+    count = 0
+    for column in node_columns:
+        # Every node in an authoritative bonded support column is already
+        # prescribed to zero.  Avoid redundant fixed-DOF/MPC cycles, which
+        # are not part of the plane-strain contract and are rejected by some
+        # Kratos contact builders.
+        if all(int(node_id) in fixed_nodes for node_id in column):
+            continue
+        master = model_part.Nodes[int(column[reference_layer_index])]
+        for node_id in column:
+            if int(node_id) == master.Id:
+                continue
+            slave = model_part.Nodes[int(node_id)]
+            for variable in (KM.DISPLACEMENT_X, KM.DISPLACEMENT_Y):
+                model_part.CreateNewMasterSlaveConstraint(
+                    "LinearMasterSlaveConstraint",
+                    constraint_id,
+                    master,
+                    variable,
+                    slave,
+                    variable,
+                    1.0,
+                    0.0,
                 )
-            pairs.append((rigid_id, pad_id))
-    return tuple(sorted(set(pairs)))
-
-
-def _create_tie_constraints(model_part: Any, pairs: tuple[tuple[int, int], ...]) -> tuple[int, ...]:
-    """Create explicit X/Y/Z linear ties at the bonded support interface."""
-    KM, _, _, _ = _import_kratos()
-    constraint_ids: list[int] = []
-    next_id = max((constraint.Id for constraint in model_part.MasterSlaveConstraints), default=0) + 1
-    for master_id, slave_id in pairs:
-        master = model_part.Nodes[master_id]
-        slave = model_part.Nodes[slave_id]
-        for variable in (KM.DISPLACEMENT_X, KM.DISPLACEMENT_Y, KM.DISPLACEMENT_Z):
-            model_part.CreateNewMasterSlaveConstraint(
-                "LinearMasterSlaveConstraint",
-                next_id,
-                master,
-                variable,
-                slave,
-                variable,
-                1.0,
-                0.0,
-            )
-            constraint_ids.append(next_id)
-            next_id += 1
-    return tuple(constraint_ids)
+                constraint_id += 1
+                count += 1
+    return count
 
 
 def _apply_constraints(
     model_part: Any,
-    carrier_node_ids: tuple[int, ...],
-    master_node_ids: tuple[int, ...],
-    support_node_ids: tuple[int, ...],
+    support_node_ids: Sequence[int],
+    master_node_ids: Sequence[int],
     *,
     constrain_z: bool,
-) -> None:
-    KM, _, _, _ = _import_kratos()
-    for node_id in (*carrier_node_ids, *master_node_ids, *support_node_ids):
+    reference_node_columns: Sequence[Sequence[int]] | None = None,
+    reference_layer_index: int = 0,
+) -> int:
+    KM, _, _, _ = import_kratos()
+    mpc_count = 0
+    if reference_node_columns is not None:
+        mpc_count = _apply_plane_strain_constraints(
+            model_part,
+            reference_node_columns,
+            reference_layer_index,
+            fixed_node_ids=support_node_ids,
+        )
+    for node_id in (*support_node_ids, *master_node_ids):
         node = model_part.Nodes[node_id]
         for variable in (KM.DISPLACEMENT_X, KM.DISPLACEMENT_Y, KM.DISPLACEMENT_Z):
             node.Fix(variable)
             node.SetSolutionStepValue(variable, 0.0)
     if constrain_z:
         for node in model_part.Nodes:
-            if node.Id not in carrier_node_ids and node.Id not in master_node_ids:
+            if node.Id not in support_node_ids and node.Id not in master_node_ids:
                 node.Fix(KM.DISPLACEMENT_Z)
                 node.SetSolutionStepValue(KM.DISPLACEMENT_Z, 0.0)
+    return mpc_count
 
 
-def _move_master(model_part: Any, node_ids: tuple[int, ...], fixture: IndenterFixture, travel_mm: float) -> None:
-    KM, _, _, _ = _import_kratos()
+def _move_master(model_part: Any, node_ids: Sequence[int], fixture: IndenterFixture, travel_mm: float) -> None:
+    KM, _, _, _ = import_kratos()
     dx, dy = fixture.displacement_for_travel(travel_mm)
     for node_id in node_ids:
         node = model_part.Nodes[node_id]
@@ -449,15 +610,110 @@ def _move_master(model_part: Any, node_ids: tuple[int, ...], fixture: IndenterFi
         node.SetSolutionStepValue(KM.DISPLACEMENT_Z, 0.0)
 
 
+def _active_contact_diagnostics(
+    model_part: Any,
+    volume_mesh: FingertipVolumeMesh,
+    fixture: IndenterFixture,
+    pad_condition_ids: Sequence[int],
+    active_condition_count: int,
+    travel_mm: float,
+) -> dict[str, Any]:
+    """Check the final deformed contact state without changing the solve."""
+    pad_triangles = volume_mesh.surface_triangles["outer_compliant_arc"]
+    normal_norms: list[float] = []
+    finite_normals = True
+    for triangle in pad_triangles:
+        points = np.asarray(
+            [
+                [
+                    model_part.Nodes[node_id].X,
+                    model_part.Nodes[node_id].Y,
+                    model_part.Nodes[node_id].Z,
+                ]
+                for node_id in triangle.node_ids
+            ],
+            dtype=float,
+        )
+        if points.shape != (3, 3) or not np.all(np.isfinite(points)):
+            finite_normals = False
+            continue
+        normal = np.cross(points[1] - points[0], points[2] - points[0])
+        norm = float(np.linalg.norm(normal))
+        if not math.isfinite(norm) or norm <= 1.0e-12:
+            finite_normals = False
+        else:
+            normal_norms.append(norm)
+
+    dx, dy = fixture.displacement_for_travel(travel_mm)
+    center = np.asarray(
+        [fixture.center_mm[0] + dx, fixture.center_mm[1] + dy], dtype=float
+    )
+    contact_node_ids = sorted(
+        {
+            node_id
+            for triangle in pad_triangles
+            for node_id in triangle.node_ids
+        }
+    )
+    clearances = np.asarray(
+        [
+            math.hypot(
+                float(model_part.Nodes[node_id].X) - center[0],
+                float(model_part.Nodes[node_id].Y) - center[1],
+            )
+            - fixture.settings.radius_mm
+            for node_id in contact_node_ids
+        ],
+        dtype=float,
+    )
+    finite_clearance = bool(clearances.size) and bool(np.isfinite(clearances).all())
+    max_penetration = float(max(0.0, -float(clearances.min()))) if finite_clearance else math.inf
+    # ALM contact permits a finite penalty overlap.  For this focused active
+    # state gate, require only that it remains finite and below the prescribed
+    # travel; M4 owns the stricter, precommitted fidelity tolerance.
+    penetration_tolerance_mm = max(float(travel_mm), 1.0e-12)
+    generated_active = int(active_condition_count)
+    checks = {
+        "active_contact_conditions": generated_active > 0,
+        "finite_nonzero_contact_normals": finite_normals and bool(normal_norms),
+        "finite_contact_clearance": finite_clearance,
+        "bounded_penetration": finite_clearance and max_penetration <= penetration_tolerance_mm,
+        "source_contact_conditions_present": len(pad_condition_ids) > 0,
+    }
+    return {
+        "passed": all(checks.values()),
+        "checks": checks,
+        "active_condition_count": generated_active,
+        "source_condition_count": len(pad_condition_ids),
+        "normal_min_norm": min(normal_norms, default=0.0),
+        "normal_max_norm": max(normal_norms, default=0.0),
+        "min_clearance_mm": float(clearances.min()) if finite_clearance else None,
+        "max_penetration_mm": max_penetration if finite_clearance else None,
+        "penetration_tolerance_mm": penetration_tolerance_mm,
+        "contact_node_count": len(contact_node_ids),
+        "travel_mm": float(travel_mm),
+    }
+
+
 def solve_solid_3d(
     volume_mesh: FingertipVolumeMesh,
     fixture: IndenterFixture,
     settings: SolidFEASettings,
+    *,
+    reference_node_columns: Sequence[Sequence[int]] | None = None,
+    reference_layer_index: int = 0,
+    step_history: list[dict[str, Any]] | None = None,
 ) -> SolidFEAResult:
-    """Solve nonlinear 3D ALM contact on TET4 volume elements."""
+    """Solve the single compliant-pad 3D model with optional external ALM contact."""
+    if settings.mode == "3d_equivalent_reference" and reference_node_columns is None:
+        raise SolidFEAError(
+            "3d_equivalent_reference requires an explicit layered node-column map"
+        )
+    if settings.mode == "production" and reference_node_columns is not None:
+        raise SolidFEAError("layered plane-strain constraints are validation-only")
     if not volume_mesh.validation.passed:
         raise SolidFEAError("refusing invalid volume mesh: " + ", ".join(volume_mesh.validation.errors))
-    KM, _, _, _ = _import_kratos()
+    KM, _, _, _ = import_kratos()
     from KratosMultiphysics.StructuralMechanicsApplication.structural_mechanics_analysis import StructuralMechanicsAnalysis
 
     node_order = tuple(sorted(volume_mesh.nodes))
@@ -466,46 +722,92 @@ def solve_solid_3d(
         dtype=float,
     )
     model = KM.Model()
-    analysis = StructuralMechanicsAnalysis(model, _parameters(settings))
+    analysis = StructuralMechanicsAnalysis(
+        model,
+        parameters_for_settings(settings, use_mpc=reference_node_columns is not None),
+    )
     model_part = model["Structure"]
+    initialized = False
     try:
-        condition_ids, carrier_node_ids, master_node_ids, support_node_ids = _populate(
-            model_part,
-            volume_mesh,
-            fixture,
-            internal_contact=settings.internal_contact,
-            external_contact=settings.external_contact,
+        condition_ids, master_node_ids, support_node_ids = _populate(
+            model_part, volume_mesh, fixture, external_contact=settings.external_contact
         )
-        support_tie_pairs = _support_tie_pairs(volume_mesh)
-        tie_constraint_ids = _create_tie_constraints(model_part, support_tie_pairs)
         analysis.Initialize()
-        _apply_constraints(
+        initialized = True
+        # The public AnalysisStage owns DOF creation.  Add exact layered MPCs
+        # after that initialization, then explicitly ask Kratos' supported
+        # elimination strategy to rebuild its constraint-aware builder before
+        # the first solution step.
+        mpc_count = _apply_constraints(
             model_part,
-            carrier_node_ids,
-            master_node_ids,
             support_node_ids,
+            master_node_ids,
             constrain_z=(settings.mode == "3d_equivalent_reference" or settings.reference_longitudinal_constraint),
+            reference_node_columns=reference_node_columns,
+            reference_layer_index=reference_layer_index,
         )
         solver = analysis._GetSolver()
-        failed_step: int | None = None
+        if reference_node_columns is not None:
+            solver._GetSolutionStrategy()
         for step in range(1, settings.number_of_steps + 1):
             analysis.time = solver.AdvanceInTime(analysis.time)
-            _move_master(model_part, master_node_ids, fixture, settings.indentation_mm * step / settings.number_of_steps)
+            if settings.external_contact:
+                _move_master(model_part, master_node_ids, fixture, settings.indentation_mm * step / settings.number_of_steps)
             analysis.InitializeSolutionStep()
             solver.Predict()
-            converged = bool(solver.SolveSolutionStep())
+            converged_step = bool(solver.SolveSolutionStep())
             analysis.FinalizeSolutionStep()
-            if not converged:
-                failed_step = step
-                break
-        if failed_step is not None:
-            return SolidFEAResult(
-                volume_mesh, reference, None, None, None,
-                {name: {"condition_count": len(ids)} for name, ids in condition_ids.items()},
-                {"mode": settings.mode, "settings": asdict(settings), "failed_step": failed_step},
-                False,
-                f"3D nonlinear solver did not converge at step {failed_step}",
-            )
+            if not converged_step:
+                return SolidFEAResult(
+                    volume_mesh, reference, None, None, None,
+                    {name: {"condition_count": len(ids)} for name, ids in condition_ids.items()},
+                    {
+                        "mode": settings.mode,
+                        "settings": asdict(settings),
+                        "failed_step": step,
+                        "plane_strain_mpc_count": mpc_count,
+                    },
+                    False,
+                    f"3D nonlinear solver did not converge at step {step}",
+                )
+            if step_history is not None:
+                generated_active = 0
+                if model_part.HasSubModelPart("ComputingContact"):
+                    generated = model_part.GetSubModelPart("ComputingContact")
+                    generated_active = sum(
+                        bool(condition.Is(KM.ACTIVE)) for condition in generated.Conditions
+                    )
+                reaction_vector_sum = np.zeros(3, dtype=float)
+                for node_id in support_node_ids:
+                    reaction_vector = np.asarray(
+                        model_part.Nodes[node_id].GetSolutionStepValue(KM.REACTION),
+                        dtype=float,
+                    )
+                    if not np.all(np.isfinite(reaction_vector)):
+                        raise SolidFEAError("non-finite step-history support reaction")
+                    reaction_vector_sum += reaction_vector
+                loading_direction = np.asarray(
+                    [fixture.frame.loading_direction[0], fixture.frame.loading_direction[1], 0.0],
+                    dtype=float,
+                )
+                step_diagnostics = _active_contact_diagnostics(
+                    model_part,
+                    volume_mesh,
+                    fixture,
+                    condition_ids["PadOuterArc"],
+                    generated_active,
+                    settings.indentation_mm * step / settings.number_of_steps,
+                )
+                step_history.append(
+                    {
+                        "step": step,
+                        "prescribed_travel_mm": settings.indentation_mm * step / settings.number_of_steps,
+                        "active_mortar_count": generated_active,
+                        "reaction_force_n": float(abs(np.dot(reaction_vector_sum, loading_direction))),
+                        "minimum_gap_or_contact_clearance_mm": step_diagnostics["min_clearance_mm"],
+                        "max_penetration_mm": step_diagnostics["max_penetration_mm"],
+                    }
+                )
         displacement = np.asarray(
             [[
                 float(model_part.Nodes[node_id].GetSolutionStepValue(KM.DISPLACEMENT_X)),
@@ -515,39 +817,112 @@ def solve_solid_3d(
             dtype=float,
         )
         deformed = reference + displacement
-        loading = np.asarray((*fixture.frame.loading_direction, 0.0), dtype=float)
-        reaction = 0.0
-        for node_id in carrier_node_ids:
-            reaction += float(np.dot(np.asarray(model_part.Nodes[node_id].GetSolutionStepValue(KM.REACTION), dtype=float), loading))
+        reaction_vector_sum = np.zeros(3, dtype=float)
+        for node_id in support_node_ids:
+            reaction_vector = np.asarray(model_part.Nodes[node_id].GetSolutionStepValue(KM.REACTION), dtype=float)
+            if not np.all(np.isfinite(reaction_vector)):
+                raise SolidFEAError("non-finite bonded-support reaction")
+            reaction_vector_sum += reaction_vector
+        actuator_reaction_vector_sum = np.zeros(3, dtype=float)
+        for node_id in master_node_ids:
+            reaction_vector = np.asarray(model_part.Nodes[node_id].GetSolutionStepValue(KM.REACTION), dtype=float)
+            if not np.all(np.isfinite(reaction_vector)):
+                raise SolidFEAError("non-finite indenter reaction")
+            actuator_reaction_vector_sum += reaction_vector
+        loading_direction = np.asarray(
+            [fixture.frame.loading_direction[0], fixture.frame.loading_direction[1], 0.0],
+            dtype=float,
+        )
+        reaction = float(abs(np.dot(reaction_vector_sum, loading_direction)))
+        actuator_reaction = float(abs(np.dot(actuator_reaction_vector_sum, loading_direction)))
+        force_equilibrium_error = (
+            abs(actuator_reaction - reaction) / max(actuator_reaction, 1.0e-12)
+            if master_node_ids
+            else None
+        )
         contact_state = {
-            name: {
-                "condition_count": len(ids),
-                "active_condition_count": sum(
-                    bool(condition.Is(KM.ACTIVE))
-                    for condition in model_part.GetSubModelPart(name).Conditions
-                ) if model_part.HasSubModelPart(name) else 0,
-            }
+            name: {"condition_count": len(ids), "active_condition_count": sum(bool(condition.Is(KM.ACTIVE)) for condition in model_part.GetSubModelPart(name).Conditions) if model_part.HasSubModelPart(name) else 0}
             for name, ids in condition_ids.items()
         }
+        if model_part.HasSubModelPart("ComputingContact"):
+            generated = model_part.GetSubModelPart("ComputingContact")
+            contact_state["generated_mortar"] = {
+                "condition_count": generated.NumberOfConditions(),
+                "active_condition_count": sum(bool(condition.Is(KM.ACTIVE)) for condition in generated.Conditions),
+            }
+        if settings.external_contact:
+            generated_active = int(contact_state.get("generated_mortar", {}).get("active_condition_count", 0))
+            contact_state["active_contact_diagnostics"] = _active_contact_diagnostics(
+                model_part,
+                volume_mesh,
+                fixture,
+                condition_ids["PadOuterArc"],
+                generated_active,
+                settings.indentation_mm,
+            )
+        contact_state["reaction_diagnostics"] = {
+            "support_reaction_vector_sum_n": reaction_vector_sum.tolist(),
+            "actuator_reaction_vector_sum_n": actuator_reaction_vector_sum.tolist(),
+            "loading_direction_projection_n": reaction,
+            "actuator_loading_direction_projection_n": actuator_reaction,
+            "force_equilibrium_error": force_equilibrium_error,
+            "finite": bool(np.isfinite(reaction_vector_sum).all()),
+            "nonzero": reaction > 1.0e-12 if settings.external_contact else reaction >= 0.0,
+        }
+        if reference_node_columns is not None:
+            displacement_by_node = {
+                node_id: displacement[index]
+                for index, node_id in enumerate(node_order)
+            }
+            ux_residuals: list[float] = []
+            uy_residuals: list[float] = []
+            uz_values: list[float] = []
+            for column in reference_node_columns:
+                reference_node = displacement_by_node[int(column[reference_layer_index])]
+                for node_id in column:
+                    value = displacement_by_node[int(node_id)]
+                    ux_residuals.append(float(value[0] - reference_node[0]))
+                    uy_residuals.append(float(value[1] - reference_node[1]))
+                    uz_values.append(float(value[2]))
+            contact_state["plane_strain_residuals"] = {
+                "mpc_count": mpc_count,
+                "reference_layer_index": reference_layer_index,
+                "column_count": len(reference_node_columns),
+                "max_abs_ux_mm": max(map(abs, ux_residuals), default=0.0),
+                "max_abs_uy_mm": max(map(abs, uy_residuals), default=0.0),
+                "max_abs_uz_mm": max(map(abs, uz_values), default=0.0),
+                "rms_ux_mm": float(np.sqrt(np.mean(np.square(ux_residuals)))) if ux_residuals else 0.0,
+                "rms_uy_mm": float(np.sqrt(np.mean(np.square(uy_residuals)))) if uy_residuals else 0.0,
+                "rms_uz_mm": float(np.sqrt(np.mean(np.square(uz_values)))) if uz_values else 0.0,
+            }
         return SolidFEAResult(
             volume_mesh,
             reference,
             deformed,
             displacement,
-            abs(reaction),
+            reaction,
             contact_state,
             {
                 "mode": settings.mode,
                 "settings": asdict(settings),
-                "element_pad": "TotalLagrangianMixedVolumetricStrainElement3D4N",
-                "element_rigid": "TotalLagrangianElement3D4N",
+                "element": "TotalLagrangianMixedVolumetricStrainElement3D4N",
                 "constitutive_law": "HyperElastic3DLaw",
                 "contact_condition": "SurfaceCondition3D3N",
-                "morphology_fingerprint": volume_mesh.morphology_fingerprint,
-                "bonded_interface": {
-                    "constraint_count": len(tie_constraint_ids),
-                    "pair_count": len(support_tie_pairs),
-                    "contract": "explicit LinearMasterSlaveConstraint on exact support coordinates",
+                "bonded_support": {
+                    "surface_tags": [
+                        definition.name
+                        for definition in volume_mesh.solid.surfaces
+                        if definition.kind == "support" and definition.source_geometry is not None
+                    ],
+                    "constraint": "prescribed_zero_displacement_on_authoritative_surface_nodes",
+                    "support_node_count": len(support_node_ids),
+                },
+                "plane_strain_reference": {
+                    "enabled": reference_node_columns is not None,
+                    "constraint": "LinearMasterSlaveConstraint ux/uy to reference z layer; uz fixed",
+                    "mpc_count": mpc_count,
+                    "reference_layer_index": reference_layer_index,
+                    "column_count": len(reference_node_columns) if reference_node_columns is not None else 0,
                 },
             },
             True,
@@ -562,7 +937,19 @@ def solve_solid_3d(
             f"3D FEA setup/solve error: {type(exception).__name__}: {exception}",
         )
     finally:
-        analysis.Finalize()
+        if initialized:
+            analysis.Finalize()
 
 
-__all__ = ["SolidFEAError", "SolidFEAResult", "SolidFEASettings", "solve_solid_3d"]
+__all__ = [
+    "ContactSurfaceValidation",
+    "SolidFEAError",
+    "SolidFEAResult",
+    "SolidFEASettings",
+    "create_surface_condition",
+    "import_kratos",
+    "parameters_for_settings",
+    "properties_for_model_part",
+    "solve_solid_3d",
+    "validate_contact_triangles",
+]

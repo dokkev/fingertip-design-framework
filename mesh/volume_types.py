@@ -13,7 +13,7 @@ from model.solid import FingertipSolid
 
 
 VolumeMeshTier = Literal["search", "reference"]
-VolumeDomain = Literal["pad", "rigid_carrier"]
+VolumeDomain = Literal["pad"]
 
 
 @dataclass(frozen=True)
@@ -77,20 +77,21 @@ class VolumeMeshQuality:
 
     node_count: int
     tetrahedron_count: int
-    pad_tetrahedron_count: int
-    rigid_tetrahedron_count: int
     surface_triangle_count: int
     minimum_scaled_jacobian: float
     maximum_edge_length_mm: float
     mesh_volume_mm3: float
     geometry_volume_mm3: float
     volume_relative_error: float
-    pad_mesh_volume_mm3: float
-    pad_geometry_volume_mm3: float
-    rigid_mesh_volume_mm3: float
-    rigid_geometry_volume_mm3: float
     inverted_tetrahedron_count: int
     semantic_surface_tags: tuple[str, ...]
+    surface_triangle_degenerate_count: int
+    surface_orientation_failure_count: int
+    closed_surface_edge_failure_count: int
+    bonded_surface_triangle_count: int
+    bonded_surface_area_mm2: float
+    bonded_surface_expected_area_mm2: float
+    bonded_surface_area_relative_error: float
 
 
 @dataclass(frozen=True)

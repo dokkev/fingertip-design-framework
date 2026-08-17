@@ -8,7 +8,7 @@ import json
 import math
 from typing import Literal
 
-from shapely.geometry import MultiLineString
+from shapely.geometry import MultiLineString, Polygon
 from shapely.geometry.base import BaseGeometry
 
 from model.fingertip_model import FingertipModel, PolygonalGeometry
@@ -39,7 +39,7 @@ class SolidSurfaceDefinition:
 
 @dataclass(frozen=True)
 class FingertipSolid:
-    """Watertight constant-depth solid with explicit semantic surfaces.
+    """Watertight constant-depth compliant-pad solid with semantic surfaces.
 
     This object contains geometry and provenance only.  It deliberately does
     not contain FEA mesh nodes or solver state; volume meshing is a separate
@@ -83,9 +83,9 @@ class FingertipSolid:
         if self.pad_geometry.intersection(self.rigid_geometry).area > self.parameters.geometry_tolerance:
             raise ValueError("pad and rigid solid regions overlap")
         if self.material_geometry.symmetric_difference(
-            self.pad_geometry.union(self.rigid_geometry)
+            self.pad_geometry
         ).area > self.parameters.geometry_tolerance:
-            raise ValueError("material geometry is not the pad/rigid union")
+            raise ValueError("material geometry is not the compliant-pad solid")
         names = tuple(surface.name for surface in self.surfaces)
         if len(names) != len(set(names)):
             raise ValueError("solid surface names must be unique")
@@ -116,8 +116,8 @@ class FingertipSolid:
 
     @property
     def rigid_volume_mm3(self) -> float:
-        """Return the analytical rigid-carrier volume."""
-        return float(self.rigid_geometry.area * self.extrusion_depth_mm)
+        """Return zero: the rigid link is support metadata, not a 3D solid."""
+        return 0.0
 
     @property
     def surface_names(self) -> tuple[str, ...]:
@@ -126,8 +126,46 @@ class FingertipSolid:
 
     @property
     def watertight(self) -> bool:
-        """Return the analytical extrusion topology acceptance result."""
-        return self.volume_mm3 > 0.0 and self.material_geometry.is_valid
+        """Return the analytical closed-volume gate result."""
+        return bool(self.closed_volume_gate["passed"])
+
+    @property
+    def closed_volume_gate(self) -> dict[str, bool]:
+        """Return fail-closed evidence for the semantic extrusion shell.
+
+        The semantic solid is a constant-depth extrusion of a valid polygonal
+        material region.  Every exterior or hole ring therefore contributes a
+        bottom cap, a top cap, and a two-sided lateral shell.  This gate keeps
+        that closure claim explicit; the generated tetrahedral mesh performs
+        the corresponding triangle-edge incidence check independently.
+        """
+        polygonal = True
+        finite_boundary = True
+        nonzero_area = True
+        ring_count = 0
+        for geometry in getattr(self.material_geometry, "geoms", (self.material_geometry,)):
+            if geometry.is_empty or not geometry.is_valid or not isinstance(geometry, Polygon):
+                polygonal = False
+                continue
+            ring_count += 1 + len(geometry.interiors)
+            for ring in (geometry.exterior, *geometry.interiors):
+                coordinates = tuple(ring.coords)
+                finite_boundary &= all(
+                    math.isfinite(float(value))
+                    for point in coordinates
+                    for value in point[:2]
+                )
+                nonzero_area &= len(coordinates) >= 4 and abs(float(ring.length)) > 0.0
+        checks = {
+            "polygonal_material": polygonal,
+            "finite_boundary": finite_boundary,
+            "nonzero_area": nonzero_area,
+            "positive_extrusion_depth": self.extrusion_depth_mm > 0.0,
+            "valid_material_geometry": bool(self.material_geometry.is_valid),
+            "closed_extrusion_shell": polygonal and finite_boundary and nonzero_area,
+        }
+        checks["passed"] = all(checks.values()) and ring_count > 0 and self.volume_mm3 > 0.0
+        return checks
 
     def cross_section_at(self, z_mm: float) -> PolygonalGeometry:
         """Return the authoritative section at one longitudinal coordinate."""
@@ -159,12 +197,22 @@ class FingertipSolid:
 
 def _surface_definitions(model: FingertipModel) -> tuple[SolidSurfaceDefinition, ...]:
     boundaries = model.boundaries.segments
+    interface_segments = tuple(
+        geometry
+        for geometry in model.interface_definition.geometry.geoms
+        if geometry.geom_type == "LineString"
+    )
+    if len(interface_segments) != 2:
+        raise ValueError("authoritative bonded interface must contain two line segments")
+    left_interface, right_interface = sorted(
+        interface_segments, key=lambda geometry: geometry.centroid.x
+    )
     return (
         SolidSurfaceDefinition(
-            "support_bond_left", "support", "pad", boundaries["pad_bond_left"].geometry
+            "support_bond_left", "support", "pad", left_interface
         ),
         SolidSurfaceDefinition(
-            "support_bond_right", "support", "pad", boundaries["pad_bond_right"].geometry
+            "support_bond_right", "support", "pad", right_interface
         ),
         SolidSurfaceDefinition(
             "outer_compliant_left", "outer_compliant", "pad", boundaries["pad_outer_left"].geometry
@@ -186,18 +234,6 @@ def _surface_definitions(model: FingertipModel) -> tuple[SolidSurfaceDefinition,
         ),
         SolidSurfaceDefinition(
             "void_bottom", "void", "pad", boundaries["pad_cutout_bottom"].geometry
-        ),
-        SolidSurfaceDefinition(
-            "contact_left", "contact", "rigid_carrier", boundaries["stem_left"].geometry
-        ),
-        SolidSurfaceDefinition(
-            "contact_right", "contact", "rigid_carrier", boundaries["stem_right"].geometry
-        ),
-        SolidSurfaceDefinition(
-            "contact_bottom", "contact", "rigid_carrier", boundaries["stem_bottom"].geometry
-        ),
-        SolidSurfaceDefinition(
-            "rigid_outer", "rigid_outer", "rigid_carrier", None
         ),
         SolidSurfaceDefinition(
             "longitudinal_end_minus", "longitudinal_end", "both", None
@@ -230,12 +266,12 @@ def build_fingertip_solid(
         parameters=model.parameters,
         pad_geometry=pad,
         rigid_geometry=rigid,
-        material_geometry=material,
+        material_geometry=pad,
         z_min_mm=z_min,
         z_max_mm=z_max,
         surfaces=_surface_definitions(model),
         morphology_fingerprint=FingertipSolid._fingerprint(
-            model.parameters, pad, rigid, material, z_min, z_max
+            model.parameters, pad, rigid, pad, z_min, z_max
         ),
     )
 

@@ -1,14 +1,14 @@
-"""Independent Gmsh tetrahedral meshing for the semantic fingertip solid."""
+"""Gmsh TET4 meshing of the authoritative compliant-pad solid."""
 
 from __future__ import annotations
 
+from collections import defaultdict
 from dataclasses import dataclass
 import math
 from typing import Any, Iterable
 
 import numpy as np
-from shapely.geometry import LineString, Point, Polygon
-from shapely.geometry.base import BaseGeometry
+from shapely.geometry import LineString, Polygon
 
 from mesh.volume_types import (
     FingertipVolumeMesh,
@@ -19,7 +19,7 @@ from mesh.volume_types import (
     VolumeMeshValidation,
     VolumeNode,
 )
-from model.solid import FingertipSolid, SolidSurfaceDefinition
+from model.solid import FingertipSolid
 
 
 class VolumeMeshDependencyError(RuntimeError):
@@ -27,7 +27,7 @@ class VolumeMeshDependencyError(RuntimeError):
 
 
 class VolumeMeshingError(RuntimeError):
-    """Raised when a semantic solid cannot be meshed safely."""
+    """Raised when the authoritative solid cannot be meshed safely."""
 
 
 @dataclass(frozen=True)
@@ -57,7 +57,7 @@ def _iter_polygons(geometry: Any) -> Iterable[Polygon]:
 
 def _add_ring(gmsh: Any, coordinates: Iterable[tuple[float, float]], z_mm: float) -> int:
     points = [(float(x), float(y)) for x, y in coordinates]
-    if len(points) > 1 and points[0] == points[-1]:
+    if points and points[0] == points[-1]:
         points.pop()
     if len(points) < 3:
         raise VolumeMeshingError("a solid ring needs at least three points")
@@ -84,13 +84,13 @@ def _signed_tetra_volume(points: np.ndarray) -> float:
 
 
 def _tetra_quality(points: np.ndarray, volume: float) -> float:
-    edge_sum = 0.0
-    for i in range(4):
-        for j in range(i + 1, 4):
-            edge_sum += float(np.sum((points[i] - points[j]) ** 2))
+    edge_sum = sum(
+        float(np.sum((points[i] - points[j]) ** 2))
+        for i in range(4)
+        for j in range(i + 1, 4)
+    )
     if edge_sum <= 0.0 or volume <= 0.0:
         return 0.0
-    # This scaled volume is one for a regular unit tetrahedron.
     return float(12.0 * (3.0 * volume) ** (2.0 / 3.0) / edge_sum)
 
 
@@ -105,8 +105,6 @@ def _projected_line(points: np.ndarray) -> LineString | None:
     if len(unique) < 2:
         return None
     if len(unique) > 2:
-        # A vertical triangular surface has one repeated projected vertex and
-        # one straight boundary segment.  The farthest pair is unambiguous.
         pair = max(
             ((unique[i], unique[j]) for i in range(len(unique)) for j in range(i + 1, len(unique))),
             key=lambda value: math.dist(*value),
@@ -115,32 +113,16 @@ def _projected_line(points: np.ndarray) -> LineString | None:
     return LineString(unique)
 
 
-def _surface_tag(
-    solid: FingertipSolid,
-    volume_domain: str,
-    points: np.ndarray,
-    *,
-    z_tolerance: float,
-) -> str:
-    z_values = points[:, 2]
-    if np.all(np.abs(z_values - solid.z_min_mm) <= z_tolerance):
+def _surface_tag(solid: FingertipSolid, points: np.ndarray, *, z_tolerance: float) -> str:
+    if np.all(np.abs(points[:, 2] - solid.z_min_mm) <= z_tolerance):
         return "longitudinal_end_minus"
-    if np.all(np.abs(z_values - solid.z_max_mm) <= z_tolerance):
+    if np.all(np.abs(points[:, 2] - solid.z_max_mm) <= z_tolerance):
         return "longitudinal_end_plus"
     line = _projected_line(points)
     if line is None:
         raise VolumeMeshingError("could not project a lateral surface triangle")
     tolerance = max(1.0e-7, 100.0 * solid.parameters.geometry_tolerance)
-    definitions = [
-        definition
-        for definition in solid.surfaces
-        if definition.source_geometry is not None
-        and definition.name not in ("rigid_outer",)
-        and (
-            definition.material_region in ("both", volume_domain)
-            or definition.name.startswith("support_bond")
-        )
-    ]
+    definitions = [definition for definition in solid.surfaces if definition.source_geometry is not None]
     matches = [
         definition.name
         for definition in definitions
@@ -149,24 +131,85 @@ def _surface_tag(
     if len(matches) == 1:
         return matches[0]
     if len(matches) > 1:
-        # The only allowed semantic overlap is at a shared endpoint; classify
-        # with the midpoint so a triangle cannot silently receive two labels.
         midpoint = line.interpolate(0.5, normalized=True)
-        matches = [
-            name
-            for name in matches
-            if next(
-                definition.source_geometry
-                for definition in definitions
-                if definition.name == name
-            ).distance(midpoint)
-            <= tolerance
+        narrowed = [
+            definition.name
+            for definition in definitions
+            if definition.name in matches
+            and definition.source_geometry.distance(midpoint) <= tolerance
         ]
-        if len(matches) == 1:
-            return matches[0]
-    if volume_domain == "rigid_carrier":
-        return "rigid_outer"
+        if len(narrowed) == 1:
+            return narrowed[0]
+        raise VolumeMeshingError(f"ambiguous semantic surface provenance: {matches!r}")
     return "outer_compliant_other"
+
+
+def _surface_quality(
+    nodes: dict[int, VolumeNode],
+    surface_triangles: dict[str, list[SurfaceTriangle]],
+    volume_records: Iterable[_VolumeRecord],
+) -> tuple[int, int, int]:
+    centers = {record.domain: np.asarray(record.center, dtype=float) for record in volume_records}
+    edge_counts: dict[tuple[str, tuple[int, int]], int] = defaultdict(int)
+    degenerate = 0
+    orientation_failures = 0
+    for triangles in surface_triangles.values():
+        for triangle in triangles:
+            points = np.asarray(
+                [[nodes[node_id].x_mm, nodes[node_id].y_mm, nodes[node_id].z_mm]
+                for node_id in triangle.node_ids
+            ])
+            normal = np.cross(points[1] - points[0], points[2] - points[0])
+            if (
+                len(set(triangle.node_ids)) != 3
+                or not np.all(np.isfinite(points))
+                or not np.all(np.isfinite(normal))
+                or float(np.linalg.norm(normal)) <= 1.0e-12
+            ):
+                degenerate += 1
+                continue
+            centroid = np.mean(points, axis=0)
+            if float(np.dot(normal, centroid - centers[triangle.domain])) <= 0.0:
+                orientation_failures += 1
+            for first, second in (
+                (triangle.node_ids[0], triangle.node_ids[1]),
+                (triangle.node_ids[1], triangle.node_ids[2]),
+                (triangle.node_ids[2], triangle.node_ids[0]),
+            ):
+                edge_counts[(triangle.domain, tuple(sorted((first, second))))] += 1
+    return degenerate, orientation_failures, sum(count != 2 for count in edge_counts.values())
+
+
+def _bonded_interface_quality(
+    solid: FingertipSolid,
+    nodes: dict[int, VolumeNode],
+    surface_triangles: dict[str, list[SurfaceTriangle]],
+) -> tuple[int, float, float, float]:
+    """Check authoritative bonded boundaries after the exact z extrusion."""
+    bonded_tags = tuple(
+        definition.name
+        for definition in solid.surfaces
+        if definition.kind == "support" and definition.source_geometry is not None
+    )
+    expected = sum(
+        float(definition.source_geometry.length * solid.extrusion_depth_mm)
+        for definition in solid.surfaces
+        if definition.name in bonded_tags and definition.source_geometry is not None
+    )
+    actual = 0.0
+    triangle_count = 0
+    for tag in bonded_tags:
+        for triangle in surface_triangles.get(tag, ()):
+            points = np.asarray(
+                [[nodes[node_id].x_mm, nodes[node_id].y_mm, nodes[node_id].z_mm]
+                for node_id in triangle.node_ids
+            ])
+            actual += 0.5 * float(
+                np.linalg.norm(np.cross(points[1] - points[0], points[2] - points[0]))
+            )
+            triangle_count += 1
+    relative_error = abs(actual - expected) / expected if expected > 0.0 else math.inf
+    return triangle_count, actual, expected, relative_error
 
 
 def _configure(gmsh: Any, settings: VolumeMeshSettings) -> None:
@@ -186,60 +229,34 @@ def _configure(gmsh: Any, settings: VolumeMeshSettings) -> None:
     gmsh.option.setNumber("Mesh.Algorithm3D", 1)
 
 
-def generate_volume_mesh(
-    solid: FingertipSolid,
-    settings: VolumeMeshSettings,
-) -> FingertipVolumeMesh:
-    """Generate a true 3D tetrahedral mesh from ``FingertipSolid``."""
+def generate_volume_mesh(solid: FingertipSolid, settings: VolumeMeshSettings) -> FingertipVolumeMesh:
+    """Generate a true 3D tetrahedral mesh from the compliant pad solid."""
     if not isinstance(solid, FingertipSolid):
         raise TypeError("solid must be FingertipSolid")
     if not isinstance(settings, VolumeMeshSettings):
         raise TypeError("settings must be VolumeMeshSettings")
+    if not solid.watertight:
+        raise VolumeMeshingError("refusing a semantic solid that failed its closed-volume gate")
     gmsh = _import_gmsh()
     gmsh.initialize()
     try:
-        gmsh.model.add("fingertip_3d")
+        gmsh.model.add("fingertip_pad_3d")
         _configure(gmsh, settings)
-        pad_surfaces = _add_planar_domain(gmsh, solid.pad_geometry, solid.z_min_mm)
-        rigid_surfaces = _add_planar_domain(gmsh, solid.rigid_geometry, solid.z_min_mm)
+        planar_surfaces = _add_planar_domain(gmsh, solid.pad_geometry, solid.z_min_mm)
         gmsh.model.occ.synchronize()
-        pad_extrusion = gmsh.model.occ.extrude(
-            [(2, tag) for tag in pad_surfaces], 0.0, 0.0, solid.extrusion_depth_mm
-        )
-        rigid_extrusion = gmsh.model.occ.extrude(
-            [(2, tag) for tag in rigid_surfaces], 0.0, 0.0, solid.extrusion_depth_mm
+        extrusion = gmsh.model.occ.extrude(
+            [(2, tag) for tag in planar_surfaces], 0.0, 0.0, solid.extrusion_depth_mm
         )
         gmsh.model.occ.synchronize()
-        pad_source_volume = next(
-            (entity for entity in pad_extrusion if entity[0] == 3), None
-        )
-        rigid_source_volume = next(
-            (entity for entity in rigid_extrusion if entity[0] == 3), None
-        )
-        if pad_source_volume is None or rigid_source_volume is None:
-            raise VolumeMeshingError("OCC extrusion did not create two source volumes")
-        source_volumes = (pad_source_volume, rigid_source_volume)
+        volume_entity = next((entity for entity in extrusion if entity[0] == 3), None)
+        if volume_entity is None:
+            raise VolumeMeshingError("OCC extrusion did not create the compliant-pad volume")
         volumes = gmsh.model.getEntities(3)
-        if len(volumes) != 2:
-            raise VolumeMeshingError(f"expected two material volumes, got {volumes!r}")
-        # Keep the two material/contact topologies independent.  Coincident
-        # zero-clearance contact facets must not share nodes: Kratos' contact
-        # normal calculation otherwise sees equal and opposite normals at the
-        # same node.  The semantic solid remains watertight geometrically; the
-        # FEA interface is carried by named boundary surfaces.
-        volumes = gmsh.model.getEntities(3)
-        if len(volumes) != 2:
-            raise VolumeMeshingError(f"expected two independent material volumes, got {volumes!r}")
-        domain_by_tag = {
-            int(pad_source_volume[1]): "pad",
-            int(rigid_source_volume[1]): "rigid_carrier",
-        }
-        volume_records = []
-        for _, tag in volumes:
-            center = tuple(float(value) for value in gmsh.model.occ.getCenterOfMass(3, tag))
-            volume_records.append(_VolumeRecord(tag, domain_by_tag[int(tag)], center))
-        if {record.domain for record in volume_records} != {"pad", "rigid_carrier"}:
-            raise VolumeMeshingError("the pad and rigid material volumes were not preserved")
+        if len(volumes) != 1 or volumes[0][1] != volume_entity[1]:
+            raise VolumeMeshingError(f"expected one compliant-pad volume, got {volumes!r}")
+        volume_tag = int(volume_entity[1])
+        center = tuple(float(value) for value in gmsh.model.occ.getCenterOfMass(3, volume_tag))
+        volume_records = (_VolumeRecord(volume_tag, "pad", center),)
         gmsh.model.mesh.generate(3)
 
         node_tags, flat_coordinates, _ = gmsh.model.mesh.getNodes()
@@ -254,162 +271,127 @@ def generate_volume_mesh(
         }
         if not nodes:
             raise VolumeMeshingError("Gmsh returned no volume nodes")
-        coordinates = np.asarray(
-            [[node.x_mm, node.y_mm, node.z_mm] for node in nodes.values()], dtype=float
-        )
-        node_lookup = {node_id: index for index, node_id in enumerate(nodes)}
         tetrahedra: list[Tetrahedron] = []
-        volume_element_ids: dict[str, list[int]] = {"pad": [], "rigid_carrier": []}
+        volume_element_ids = {"pad": []}
         quality_values: list[float] = []
-        tetra_volumes: dict[str, float] = {"pad": 0.0, "rigid_carrier": 0.0}
+        mesh_volume = 0.0
         max_edge = 0.0
         inverted = 0
-        for record in volume_records:
-            element_types, element_groups, connectivity_groups = gmsh.model.mesh.getElements(
-                3, record.tag
-            )
-            for element_type, element_tags, connectivity in zip(
-                element_types, element_groups, connectivity_groups
-            ):
-                name, dimension, order, number_of_nodes, _, _ = gmsh.model.mesh.getElementProperties(
-                    element_type
+        element_types, element_groups, connectivity_groups = gmsh.model.mesh.getElements(3, volume_tag)
+        for element_type, element_tags, connectivity in zip(element_types, element_groups, connectivity_groups):
+            name, dimension, order, number_of_nodes, _, _ = gmsh.model.mesh.getElementProperties(element_type)
+            if dimension != 3 or order != 1 or number_of_nodes != 4:
+                raise VolumeMeshingError(f"3D volume mesh must contain only Tetrahedron4; got {name}")
+            for index, element_tag in enumerate(element_tags):
+                raw_ids = tuple(int(value) for value in connectivity[index * 4 : index * 4 + 4])
+                points = np.asarray(
+                    [[nodes[node_id].x_mm, nodes[node_id].y_mm, nodes[node_id].z_mm] for node_id in raw_ids]
                 )
-                if dimension != 3 or order != 1 or number_of_nodes != 4:
-                    raise VolumeMeshingError(
-                        f"3D volume mesh must contain only Tetrahedron4; got {name}"
-                    )
-                for index, element_tag in enumerate(element_tags):
-                    offset = index * 4
-                    raw_ids = tuple(int(value) for value in connectivity[offset : offset + 4])
-                    points = np.asarray(
-                        [[nodes[node_id].x_mm, nodes[node_id].y_mm, nodes[node_id].z_mm] for node_id in raw_ids],
-                        dtype=float,
-                    )
-                    signed_volume = _signed_tetra_volume(points)
-                    if signed_volume < 0.0:
-                        raw_ids = (raw_ids[0], raw_ids[2], raw_ids[1], raw_ids[3])
-                        points = points[[0, 2, 1, 3]]
-                        signed_volume = -signed_volume
-                        inverted += 1
-                    if signed_volume <= 0.0:
-                        raise VolumeMeshingError("Gmsh returned a zero-volume tetrahedron")
-                    quality_values.append(_tetra_quality(points, signed_volume))
-                    tetra_volumes[record.domain] += signed_volume
-                    for i in range(4):
-                        for j in range(i + 1, 4):
-                            max_edge = max(max_edge, float(np.linalg.norm(points[i] - points[j])))
-                    tetrahedron = Tetrahedron(int(element_tag), raw_ids, record.domain)  # type: ignore[arg-type]
-                    tetrahedra.append(tetrahedron)
-                    volume_element_ids[record.domain].append(int(element_tag))
-
+                signed_volume = _signed_tetra_volume(points)
+                if signed_volume < 0.0:
+                    raw_ids = (raw_ids[0], raw_ids[2], raw_ids[1], raw_ids[3])
+                    points = points[[0, 2, 1, 3]]
+                    signed_volume = -signed_volume
+                    inverted += 1
+                if signed_volume <= 0.0:
+                    raise VolumeMeshingError("Gmsh returned a zero-volume tetrahedron")
+                mesh_volume += signed_volume
+                quality_values.append(_tetra_quality(points, signed_volume))
+                for i in range(4):
+                    for j in range(i + 1, 4):
+                        max_edge = max(max_edge, float(np.linalg.norm(points[i] - points[j])))
+                tetrahedra.append(Tetrahedron(int(element_tag), raw_ids, "pad"))
+                volume_element_ids["pad"].append(int(element_tag))
         if not tetrahedra:
             raise VolumeMeshingError("Gmsh returned no tetrahedral elements")
+
         surface_triangles: dict[str, list[SurfaceTriangle]] = {}
         surface_id = 1
-        volume_lookup = {record.tag: record for record in volume_records}
-        for _, volume_tag in volumes:
-            record = volume_lookup[volume_tag]
-            boundary_surfaces = gmsh.model.getBoundary(
-                [(3, volume_tag)], oriented=False, recursive=False
-            )
-            for _, surface_tag in boundary_surfaces:
-                element_types, element_groups, connectivity_groups = gmsh.model.mesh.getElements(
-                    2, surface_tag
-                )
-                for element_type, _, connectivity in zip(
-                    element_types, element_groups, connectivity_groups
-                ):
-                    name, dimension, order, number_of_nodes, _, _ = gmsh.model.mesh.getElementProperties(
-                        element_type
+        for _, surface_tag in gmsh.model.getBoundary([(3, volume_tag)], oriented=False, recursive=False):
+            element_types, element_groups, connectivity_groups = gmsh.model.mesh.getElements(2, surface_tag)
+            for element_type, _, connectivity in zip(element_types, element_groups, connectivity_groups):
+                name, dimension, order, number_of_nodes, _, _ = gmsh.model.mesh.getElementProperties(element_type)
+                if dimension != 2 or order != 1 or number_of_nodes != 3:
+                    raise VolumeMeshingError(f"surface mesh must contain only Triangle3; got {name}")
+                for offset in range(0, len(connectivity), 3):
+                    ids = tuple(int(value) for value in connectivity[offset : offset + 3])
+                    points = np.asarray(
+                        [[nodes[node_id].x_mm, nodes[node_id].y_mm, nodes[node_id].z_mm] for node_id in ids]
                     )
-                    if dimension != 2 or order != 1 or number_of_nodes != 3:
-                        raise VolumeMeshingError(
-                            f"surface mesh must contain only Triangle3; got {name}"
-                        )
-                    for offset in range(0, len(connectivity), 3):
-                        ids = tuple(int(value) for value in connectivity[offset : offset + 3])
-                        points = np.asarray(
-                            [[nodes[node_id].x_mm, nodes[node_id].y_mm, nodes[node_id].z_mm] for node_id in ids],
-                            dtype=float,
-                        )
-                        normal = np.cross(points[1] - points[0], points[2] - points[0])
-                        centroid = np.mean(points, axis=0)
-                        if float(np.dot(normal, centroid - np.asarray(record.center))) < 0.0:
-                            ids = (ids[0], ids[2], ids[1])
-                        tag = _surface_tag(
-                            solid,
-                            record.domain,
-                            points,
-                            z_tolerance=max(1.0e-7, solid.parameters.geometry_tolerance * 100.0),
-                        )
-                        surface_triangles.setdefault(tag, []).append(
-                            SurfaceTriangle(surface_id, ids, tag, record.domain)  # type: ignore[arg-type]
-                        )
-                        surface_id += 1
+                    normal = np.cross(points[1] - points[0], points[2] - points[0])
+                    if float(np.dot(normal, np.mean(points, axis=0) - np.asarray(center))) < 0.0:
+                        ids = (ids[0], ids[2], ids[1])
+                    tag = _surface_tag(
+                        solid,
+                        points,
+                        z_tolerance=max(1.0e-7, solid.parameters.geometry_tolerance * 100.0),
+                    )
+                    surface_triangles.setdefault(tag, []).append(SurfaceTriangle(surface_id, ids, tag, "pad"))
+                    surface_id += 1
 
         expected_surface_names = set(solid.surface_names)
         missing = expected_surface_names - set(surface_triangles)
         if missing:
-            raise VolumeMeshingError(
-                "semantic surface families disappeared during meshing: "
-                f"{sorted(missing)!r}"
-            )
-        mesh_volume = sum(tetra_volumes.values())
+            raise VolumeMeshingError(f"semantic surface families disappeared: {sorted(missing)!r}")
+        degenerate, orientation_failures, closed_edge_failures = _surface_quality(
+            nodes, surface_triangles, volume_records
+        )
+        bonded_count, bonded_area, expected_bonded_area, bonded_area_error = _bonded_interface_quality(
+            solid, nodes, surface_triangles
+        )
         geometry_volume = solid.volume_mm3
         relative_error = abs(mesh_volume - geometry_volume) / geometry_volume
         quality = VolumeMeshQuality(
             node_count=len(nodes),
             tetrahedron_count=len(tetrahedra),
-            pad_tetrahedron_count=len(volume_element_ids["pad"]),
-            rigid_tetrahedron_count=len(volume_element_ids["rigid_carrier"]),
             surface_triangle_count=sum(len(values) for values in surface_triangles.values()),
             minimum_scaled_jacobian=float(min(quality_values)),
             maximum_edge_length_mm=max_edge,
             mesh_volume_mm3=mesh_volume,
             geometry_volume_mm3=geometry_volume,
             volume_relative_error=relative_error,
-            pad_mesh_volume_mm3=tetra_volumes["pad"],
-            pad_geometry_volume_mm3=solid.pad_volume_mm3,
-            rigid_mesh_volume_mm3=tetra_volumes["rigid_carrier"],
-            rigid_geometry_volume_mm3=solid.rigid_volume_mm3,
             inverted_tetrahedron_count=inverted,
             semantic_surface_tags=tuple(sorted(surface_triangles)),
+            surface_triangle_degenerate_count=degenerate,
+            surface_orientation_failure_count=orientation_failures,
+            closed_surface_edge_failure_count=closed_edge_failures,
+            bonded_surface_triangle_count=bonded_count,
+            bonded_surface_area_mm2=bonded_area,
+            bonded_surface_expected_area_mm2=expected_bonded_area,
+            bonded_surface_area_relative_error=bonded_area_error,
         )
+        all_tetra_node_ids = {node_id for tetra in tetrahedra for node_id in tetra.node_ids}
         checks = {
             "positive_volume": quality.mesh_volume_mm3 > 0.0,
             "all_tetrahedra_positive": quality.inverted_tetrahedron_count == 0,
             "minimum_quality": quality.minimum_scaled_jacobian >= settings.minimum_quality,
             "volume_consistency": quality.volume_relative_error <= 5.0e-3,
-            "pad_volume_consistency": abs(
-                quality.pad_mesh_volume_mm3 - quality.pad_geometry_volume_mm3
-            ) / quality.pad_geometry_volume_mm3 <= 5.0e-3,
-            "rigid_volume_consistency": abs(
-                quality.rigid_mesh_volume_mm3 - quality.rigid_geometry_volume_mm3
-            ) / quality.rigid_geometry_volume_mm3 <= 5.0e-3,
             "semantic_surface_coverage": expected_surface_names.issubset(surface_triangles),
+            "surface_triangles_nondegenerate": quality.surface_triangle_degenerate_count == 0,
+            "surface_orientation_consistent": quality.surface_orientation_failure_count == 0,
+            "closed_volume_surface": quality.closed_surface_edge_failure_count == 0,
+            "no_orphan_elements": all_tetra_node_ids.issubset(nodes) and bool(all_tetra_node_ids),
+            "bonded_surface_present": quality.bonded_surface_triangle_count > 0,
+            "bonded_surface_area_consistency": (
+                math.isfinite(quality.bonded_surface_area_relative_error)
+                and quality.bonded_surface_area_relative_error <= 5.0e-3
+            ),
             "morphology_fingerprint_preserved": bool(solid.morphology_fingerprint),
         }
         errors = tuple(name for name, passed in checks.items() if not passed)
-        validation = VolumeMeshValidation(not errors, checks, errors)
         return FingertipVolumeMesh(
             solid=solid,
             nodes=nodes,
             tetrahedra=tuple(sorted(tetrahedra, key=lambda value: value.id)),
-            surface_triangles={
-                tag: tuple(values) for tag, values in sorted(surface_triangles.items())
-            },
+            surface_triangles={tag: tuple(values) for tag, values in sorted(surface_triangles.items())},
             volume_element_ids={tag: tuple(sorted(values)) for tag, values in volume_element_ids.items()},
             settings=settings,
             quality=quality,
-            validation=validation,
+            validation=VolumeMeshValidation(not errors, checks, errors),
             gmsh_version=str(gmsh.option.getString("General.Version")),
         )
     finally:
         gmsh.finalize()
 
 
-__all__ = [
-    "VolumeMeshDependencyError",
-    "VolumeMeshingError",
-    "generate_volume_mesh",
-]
+__all__ = ["VolumeMeshDependencyError", "VolumeMeshingError", "generate_volume_mesh"]

@@ -34,14 +34,61 @@ from optics.transport3d.sampling import sample_directions
 from optics.transport3d.settings import Transport3DSettings
 
 
+PLANAR_DIRECTION_TOLERANCE = 1.0e-6
+
+
+def _enforce_planar_directions(
+    cp: Any,
+    directions: Any,
+    *,
+    valid: Any | None = None,
+    context: str,
+) -> Any:
+    """Validate and reproject planar directions without permitting 3D drift."""
+    if valid is None:
+        valid = cp.ones(directions.shape[0], dtype=cp.bool_)
+    if bool(cp.any(valid)):
+        selected = directions[valid]
+        max_abs_dz = float(cp.asnumpy(cp.max(cp.abs(selected[:, 2]))))
+        if not np.isfinite(max_abs_dz) or max_abs_dz > PLANAR_DIRECTION_TOLERANCE:
+            raise Transport3DPhysicsError(
+                f"{context} introduced non-planar propagation: max |dz|={max_abs_dz:g}"
+            )
+        selected = selected.copy()
+        selected[:, 2] = 0.0
+        norms = cp.linalg.norm(selected[:, :2], axis=1)
+        if bool(cp.any(~cp.isfinite(norms) | (norms <= 1.0e-12))):
+            raise Transport3DPhysicsError(
+                f"{context} produced a degenerate planar direction"
+            )
+        selected[:, :2] /= norms[:, None]
+        result = directions.copy()
+        result[valid] = selected
+        return result
+    return directions
+
+
 def _xy_edges(
     geometry: ExtrudedTransportGeometry,
     *,
     width: int,
     height: int,
 ) -> tuple[np.ndarray, np.ndarray]:
-    domain = geometry.optical_domain
-    min_x, min_y, max_x, max_y = domain.outer_envelope.bounds
+    if geometry.optical_domain is None:
+        vertices = np.vstack(
+            (
+                geometry.silicone.vertices,
+                geometry.rigid.vertices,
+                geometry.envelope.vertices,
+            )
+        )
+        min_x = float(np.min(vertices[:, 0]))
+        min_y = float(np.min(vertices[:, 1]))
+        max_x = float(np.max(vertices[:, 0]))
+        max_y = float(np.max(vertices[:, 1]))
+    else:
+        domain = geometry.optical_domain
+        min_x, min_y, max_x, max_y = domain.outer_envelope.bounds
     margin = 0.04 * max(max_x - min_x, max_y - min_y)
     x_edges = np.linspace(min_x - margin, max_x + margin, width + 1)
     y_edges = np.linspace(min_y - margin, max_y + margin, height + 1)
@@ -52,6 +99,11 @@ def _field_edges(
     geometry: ExtrudedTransportGeometry,
     settings: Transport3DSettings,
 ) -> tuple[np.ndarray, np.ndarray]:
+    if settings.x_bounds_mm is not None and settings.y_bounds_mm is not None:
+        return (
+            np.linspace(*settings.x_bounds_mm, settings.projected_grid_width + 1),
+            np.linspace(*settings.y_bounds_mm, settings.projected_grid_height + 1),
+        )
     return _xy_edges(
         geometry,
         width=settings.projected_grid_width,
@@ -63,11 +115,15 @@ def _internal_field_edges(
     geometry: ExtrudedTransportGeometry,
     settings: Transport3DSettings,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    x_edges, y_edges = _xy_edges(
-        geometry,
-        width=settings.internal_grid_width,
-        height=settings.internal_grid_height,
-    )
+    if settings.x_bounds_mm is not None and settings.y_bounds_mm is not None:
+        x_edges = np.linspace(*settings.x_bounds_mm, settings.internal_grid_width + 1)
+        y_edges = np.linspace(*settings.y_bounds_mm, settings.internal_grid_height + 1)
+    else:
+        x_edges, y_edges = _xy_edges(
+            geometry,
+            width=settings.internal_grid_width,
+            height=settings.internal_grid_height,
+        )
     z_edges = np.linspace(
         geometry.z_min_mm,
         geometry.z_max_mm,
@@ -151,6 +207,8 @@ def _projected_density(
         prepared,
         trace_settings,
         tuple(raw_segments),
+        x_bounds_mm=settings.x_bounds_mm,
+        y_bounds_mm=settings.y_bounds_mm,
     )
 
 
@@ -213,14 +271,24 @@ def _new_internal_path_context(
     settings: Transport3DSettings,
  ) -> dict[str, Any]:
     x_edges, y_edges, z_edges = _internal_field_edges(geometry, settings)
-    prepared = _prepare_geometry(geometry.optical_domain)
-    x_centers = 0.5 * (x_edges[:-1] + x_edges[1:])
-    y_centers = 0.5 * (y_edges[:-1] + y_edges[1:])
-    center_x, center_y = np.meshgrid(x_centers, y_centers)
-    optical_mask = np.asarray(
-        contains_xy(prepared.accessible_region, center_x, center_y),
-        dtype=bool,
-    )
+    if geometry.optical_domain is None:
+        # A true 3D surface artifact has no authoritative 2D projection to
+        # use as an accessibility classifier.  The native P3 accumulator
+        # therefore books every sampled transport segment; no collapsed 2D
+        # geometry is invented for the FULL_3D path.
+        optical_mask = np.ones(
+            (settings.internal_grid_height, settings.internal_grid_width),
+            dtype=bool,
+        )
+    else:
+        prepared = _prepare_geometry(geometry.optical_domain)
+        x_centers = 0.5 * (x_edges[:-1] + x_edges[1:])
+        y_centers = 0.5 * (y_edges[:-1] + y_edges[1:])
+        center_x, center_y = np.meshgrid(x_centers, y_centers)
+        optical_mask = np.asarray(
+            contains_xy(prepared.accessible_region, center_x, center_y),
+            dtype=bool,
+        )
     density = np.zeros(
         (settings.internal_z_bins, settings.internal_grid_height, settings.internal_grid_width),
         dtype=float,
@@ -356,6 +424,14 @@ def _trace_with_runtime(
     runtime: _Runtime,
 ) -> Transport3DResult:
     cp = runtime.cp
+    if settings.mode == "planar" and geometry.geometry_mode != "planar_extruded":
+        raise Transport3DGeometryError(
+            "PLANAR_2D requires the explicit 2D-to-z-wall geometry representation"
+        )
+    if settings.retain_projected_segments and geometry.optical_domain is None:
+        raise Transport3DGeometryError(
+            "projected path accumulation requires a validated 2D optical domain"
+        )
     scene = OptixScene(runtime, geometry.silicone, geometry.rigid, geometry.envelope)
     # OptiX traverses float32 geometry.  Derive the self-hit offset from the
     # existing geometric epsilon and the float32 spacing at this cell scale.
@@ -392,6 +468,12 @@ def _trace_with_runtime(
         ray_count=settings.ray_count,
     )
     directions = cp.asarray(directions_np, dtype=cp.float32)
+    if settings.mode == "planar":
+        directions = _enforce_planar_directions(
+            cp,
+            directions,
+            context="deterministic planar source sampling",
+        )
     origins = source[None, :] + settings.source_epsilon_mm * axis[None, :]
     origins = cp.repeat(origins, settings.ray_count, axis=0)
     launched_weight = float(tip.led.relative_radiant_power)
@@ -469,6 +551,13 @@ def _trace_with_runtime(
         envelope_distance = cp.where(envelope_found != 0, envelope_distance, infinity)
 
         dz = directions[:, 2]
+        if settings.mode == "planar":
+            directions = _enforce_planar_directions(
+                cp,
+                directions,
+                context="planar propagation before intersection",
+            )
+            dz = directions[:, 2]
         periodic_distance = periodic_plane_distance(
             cp,
             origins[:, 2],
@@ -538,6 +627,10 @@ def _trace_with_runtime(
 
         periodic = event == 3
         if bool(cp.any(periodic)):
+            if settings.mode == "planar":
+                raise Transport3DPhysicsError(
+                    "PLANAR_2D reached a longitudinal periodic boundary"
+                )
             periodic_weight = end_weights[periodic]
             periodic_wrapped = wraps[periodic] + 1
             pathological = periodic_wrapped > settings.maximum_periodic_wraps
@@ -637,6 +730,18 @@ def _trace_with_runtime(
                     tip.optical.refractive_index_air,
                     tip.optical.refractive_index_silicone,
                 )
+                if settings.mode == "planar":
+                    reflected = _enforce_planar_directions(
+                        cp,
+                        reflected,
+                        context="planar reflected branch",
+                    )
+                    transmitted = _enforce_planar_directions(
+                        cp,
+                        transmitted,
+                        valid=~tir,
+                        context="planar transmitted branch",
+                    )
                 reflected_weight = interface_end_weights * reflectance
                 transmitted_weight = interface_end_weights * (1.0 - reflectance)
                 next_interaction = interface_interactions + 1
@@ -710,6 +815,12 @@ def _trace_with_runtime(
         if new_states:
             origins = _concatenate(cp, [state[0] for state in new_states], dtype=cp.float32, width=3)
             directions = _concatenate(cp, [state[1] for state in new_states], dtype=cp.float32, width=3)
+            if settings.mode == "planar":
+                directions = _enforce_planar_directions(
+                    cp,
+                    directions,
+                    context="planar branch state update",
+                )
             weights = _concatenate(cp, [state[2] for state in new_states], dtype=cp.float64)
             medium = _concatenate(cp, [state[3] for state in new_states], dtype=cp.uint8)
             primary = _concatenate(cp, [state[4] for state in new_states], dtype=cp.int64)
@@ -738,6 +849,15 @@ def _trace_with_runtime(
         geometry.silicone.semantic_tags[int(primitive)]
         for primitive in cp.asnumpy(escaped_primitives)
     )
+    planar_direction_z_max = 0.0
+    if settings.mode == "planar" and int(escaped_directions.size):
+        planar_direction_z_max = float(
+            cp.asnumpy(cp.max(cp.abs(escaped_directions[:, 2])))
+        )
+        if planar_direction_z_max > PLANAR_DIRECTION_TOLERANCE:
+            raise Transport3DPhysicsError(
+                "PLANAR_2D escape history contains a nonzero longitudinal direction"
+            )
     projected = (None, None, None)
     if settings.retain_projected_segments:
         projected = _projected_density(geometry, settings, segment_chunks, cp)[0:3]
@@ -774,6 +894,13 @@ def _trace_with_runtime(
     geometry_metadata["interface_normal_orientation_fallback_count"] = (
         interface_normal_orientation_fallback_count
     )
+    geometry_metadata["planar_direction_invariant"] = {
+        "required": settings.mode == "planar",
+        "max_abs_direction_z": planar_direction_z_max,
+        "tolerance": PLANAR_DIRECTION_TOLERANCE,
+        "passed": settings.mode != "planar"
+        or planar_direction_z_max <= PLANAR_DIRECTION_TOLERANCE,
+    }
     geometry_metadata["retained_segment_count"] = len(segment_chunks) and int(
         sum(len(chunk[0]) for chunk in segment_chunks)
     ) or 0
@@ -880,6 +1007,22 @@ def trace_3d(
         depth_mm=trace_settings.extrusion_depth_mm,
         source_epsilon_mm=trace_settings.source_epsilon_mm,
     )
+    return trace_geometry(tip, geometry, settings=trace_settings, runtime=runtime)
+
+
+def trace_geometry(
+    tip: Fingertip,
+    geometry: ExtrudedTransportGeometry,
+    *,
+    settings: Transport3DSettings | None = None,
+    runtime: Any | None = None,
+) -> Transport3DResult:
+    """Trace a prevalidated neutral geometry through the shared OptiX core."""
+    if not isinstance(tip, Fingertip):
+        raise TypeError("tip must be a Fingertip")
+    if not isinstance(geometry, ExtrudedTransportGeometry):
+        raise TypeError("geometry must be an ExtrudedTransportGeometry")
+    trace_settings = settings or Transport3DSettings()
     actual_runtime = runtime or _Runtime.create()
     if not isinstance(actual_runtime, _Runtime):
         raise TypeError("runtime must be an internal OptiX runtime")
@@ -893,5 +1036,6 @@ __all__ = [
     "Transport3DResult",
     "Transport3DSettings",
     "Transport3DTraceError",
+    "trace_geometry",
     "trace_3d",
 ]

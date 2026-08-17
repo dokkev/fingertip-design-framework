@@ -33,6 +33,8 @@ class Transport3DSettings:
     internal_grid_width: int = 240
     internal_grid_height: int = 240
     internal_z_bins: int = 32
+    x_bounds_mm: tuple[float, float] | None = None
+    y_bounds_mm: tuple[float, float] | None = None
     source_epsilon_mm: float = 1.0e-5
     intersection_epsilon_mm: float = 1.0e-6
     energy_balance_tolerance: float = 1.0e-5
@@ -76,3 +78,10 @@ class Transport3DSettings:
         }
         if any(not isfinite(value) or value <= 0.0 for value in positive.values()):
             raise ValueError("3D transport positive settings must be finite and positive")
+        for name, bounds in (("x_bounds_mm", self.x_bounds_mm), ("y_bounds_mm", self.y_bounds_mm)):
+            if bounds is None:
+                continue
+            if len(bounds) != 2 or any(not isfinite(float(value)) for value in bounds):
+                raise ValueError(f"{name} must contain two finite values")
+            if not float(bounds[1]) > float(bounds[0]):
+                raise ValueError(f"{name} must be strictly increasing")

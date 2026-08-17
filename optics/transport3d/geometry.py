@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import math
 from types import MappingProxyType
-from typing import Any, Mapping
+from typing import Any, Literal, Mapping
 
 import numpy as np
 from shapely.geometry import Point
@@ -134,7 +134,13 @@ class TriangleSurface:
 
 @dataclass(frozen=True)
 class ExtrudedTransportGeometry:
-    """All neutral surfaces and material-coordinate metadata for one state."""
+    """All neutral surfaces and material-coordinate metadata for one state.
+
+    ``planar_extruded`` is the OptiX representation of a deformed 2D
+    cross-section.  ``full3d_surface`` is reserved for an actual deformed 3D
+    FEA surface artifact; it must never be produced by the 2D extrusion
+    helper.
+    """
 
     silicone: TriangleSurface
     rigid: TriangleSurface
@@ -146,6 +152,7 @@ class ExtrudedTransportGeometry:
     source_medium: int
     optical_domain: Any
     metadata: Mapping[str, Any]
+    geometry_mode: Literal["planar_extruded", "full3d_surface"] = "planar_extruded"
 
     def __post_init__(self) -> None:
         if not math.isfinite(self.depth_mm) or self.depth_mm != 11.0:
@@ -157,6 +164,10 @@ class ExtrudedTransportGeometry:
             raise Transport3DGeometryError("the single source must be at z=0")
         if self.source_medium not in (0, 1):
             raise Transport3DGeometryError("source_medium must be air=0 or silicone=1")
+        if self.geometry_mode not in ("planar_extruded", "full3d_surface"):
+            raise Transport3DGeometryError(
+                "geometry_mode must be 'planar_extruded' or 'full3d_surface'"
+            )
         object.__setattr__(self, "source_position_mm", source)
         object.__setattr__(self, "metadata", MappingProxyType(dict(self.metadata)))
 
@@ -428,6 +439,78 @@ def build_transport_geometry(
         source_medium=source_medium,
         optical_domain=domain,
         metadata=metadata,
+        geometry_mode="planar_extruded",
+    )
+
+
+def build_full3d_transport_geometry(
+    tip: Fingertip,
+    *,
+    silicone: TriangleSurface,
+    rigid: TriangleSurface,
+    envelope: TriangleSurface,
+    source_position_mm: tuple[float, float, float],
+    source_medium: int,
+    metadata: Mapping[str, Any],
+    depth_mm: float = 11.0,
+) -> ExtrudedTransportGeometry:
+    """Build transport geometry from an actual deformed 3D surface artifact.
+
+    This constructor intentionally accepts triangles directly and does not
+    accept a ``PadMesh``.  The distinction is the provenance guard against
+    accidentally labelling an extrusion of 2D deformation as FULL_3D.
+    ``optical_domain`` is absent because full 3D field accumulation is
+    performed from retained native path segments; callers requesting the
+    legacy projected diagnostic must provide a separate validated domain.
+    """
+    if not isinstance(tip, Fingertip):
+        raise TypeError("tip must be a Fingertip")
+    if not isinstance(metadata, Mapping):
+        raise TypeError("metadata must be a mapping")
+    source = tuple(float(value) for value in source_position_mm)
+    if len(source) != 3 or not np.all(np.isfinite(source)):
+        raise Transport3DGeometryError("full 3D source position must be finite")
+    if abs(source[2]) > 1.0e-9:
+        raise Transport3DGeometryError("the representative full 3D source must be at z=0")
+    if source_medium not in (0, 1):
+        raise Transport3DGeometryError("source_medium must be air=0 or silicone=1")
+    for name, surface in (
+        ("silicone", silicone),
+        ("rigid", rigid),
+        ("envelope", envelope),
+    ):
+        if not isinstance(surface, TriangleSurface):
+            raise TypeError(f"{name} must be a TriangleSurface")
+        if name == "silicone" and surface.semantic_tags is None:
+            raise Transport3DGeometryError(
+                "full 3D silicone surface must preserve semantic surface tags"
+            )
+        if not np.all(np.isfinite(surface.vertices[:, 2])):
+            raise Transport3DGeometryError(f"{name} surface has a non-finite longitudinal coordinate")
+    enriched_metadata = dict(metadata)
+    enriched_metadata["geometry_mode"] = "full3d_surface"
+    enriched_metadata["full3d_surface_provenance"] = "actual_deformed_3d_fea_surface"
+    enriched_metadata["reference_periodic_z_planes_mm"] = [-depth_mm / 2.0, depth_mm / 2.0]
+    enriched_metadata["deformed_surface_z_extent_mm"] = [
+        float(np.min(silicone.vertices[:, 2])),
+        float(np.max(silicone.vertices[:, 2])),
+    ]
+    enriched_metadata["deformed_surface_exceeds_reference_z_planes"] = bool(
+        np.min(silicone.vertices[:, 2]) < -depth_mm / 2.0 - 1.0e-9
+        or np.max(silicone.vertices[:, 2]) > depth_mm / 2.0 + 1.0e-9
+    )
+    return ExtrudedTransportGeometry(
+        silicone=silicone,
+        rigid=rigid,
+        envelope=envelope,
+        depth_mm=depth_mm,
+        z_min_mm=-depth_mm / 2.0,
+        z_max_mm=depth_mm / 2.0,
+        source_position_mm=source,
+        source_medium=source_medium,
+        optical_domain=None,
+        metadata=enriched_metadata,
+        geometry_mode="full3d_surface",
     )
 
 
@@ -436,5 +519,6 @@ __all__ = [
     "ExtrudedTransportGeometry",
     "TriangleSurface",
     "Transport3DGeometryError",
+    "build_full3d_transport_geometry",
     "build_transport_geometry",
 ]

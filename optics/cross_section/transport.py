@@ -329,17 +329,24 @@ def _build_path_density_grid(
     prepared: _PreparedGeometry,
     settings: TraceSettings,
     segments: tuple[_RawRaySegment, ...],
+    *,
+    x_bounds_mm: tuple[float, float] | None = None,
+    y_bounds_mm: tuple[float, float] | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     min_x, min_y, max_x, max_y = domain.outer_envelope.bounds
     margin = 0.04 * max(max_x - min_x, max_y - min_y)
+    if x_bounds_mm is None:
+        x_bounds_mm = (min_x - margin, max_x + margin)
+    if y_bounds_mm is None:
+        y_bounds_mm = (min_y - margin, max_y + margin)
     x_edges = np.linspace(
-        min_x - margin,
-        max_x + margin,
+        float(x_bounds_mm[0]),
+        float(x_bounds_mm[1]),
         settings.grid_width + 1,
     )
     y_edges = np.linspace(
-        min_y - margin,
-        max_y + margin,
+        float(y_bounds_mm[0]),
+        float(y_bounds_mm[1]),
         settings.grid_height + 1,
     )
     x_centers = 0.5 * (x_edges[:-1] + x_edges[1:])
