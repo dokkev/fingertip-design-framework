@@ -7,6 +7,8 @@ import math
 from numbers import Real
 from typing import Literal
 
+from case.state import ContactState
+
 
 ScenarioAxis = Literal["location", "indentation", "radius"]
 
@@ -20,25 +22,8 @@ def _finite_value(name: str, value: object) -> float:
     return resolved
 
 
-@dataclass(frozen=True, order=True)
-class ContactScenario:
-    """One prescribed contact location, indentation, and indenter radius."""
-
-    location_x_mm: float
-    indentation_mm: float
-    indenter_radius_mm: float
-
-    def __post_init__(self) -> None:
-        location = _finite_value("location_x_mm", self.location_x_mm)
-        indentation = _finite_value("indentation_mm", self.indentation_mm)
-        radius = _finite_value("indenter_radius_mm", self.indenter_radius_mm)
-        if indentation <= 0.0:
-            raise ValueError("indentation_mm must be positive")
-        if radius <= 0.0:
-            raise ValueError("indenter_radius_mm must be positive")
-        object.__setattr__(self, "location_x_mm", location)
-        object.__setattr__(self, "indentation_mm", indentation)
-        object.__setattr__(self, "indenter_radius_mm", radius)
+class ContactScenario(ContactState):
+    """Optimization-facing specialization of the neutral contact state."""
 
 
 def _validated_levels(

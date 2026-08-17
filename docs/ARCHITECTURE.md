@@ -63,15 +63,22 @@ It does not replace mesh-based reference/loaded comparisons.
   Kratos objects do not cross into optics or visualization.
 - `case/` is the thin top-level research-case aggregate. `FingertipCase`
   connects one `FingertipParameters`, `IndenterSettings`, existing explicit
-  contact `FEAResult`, and the current neutral `PLANAR_2D` OptiX result. It
+  contact `FEAResult`, the raw `PLANAR_2D` OptiX result, and its unified optical
+  summary. It
   owns no solver or ray-tracing algorithm; `case.run_case()` delegates to the
   existing public subsystem APIs and `case.save_case()`/`load_case()` connect
-  their separate arrays through one checked manifest.
+  their separate arrays through one checked manifest. The mechanics result
+  keeps its `PadMesh` contract in `FEAResult.mesh`; the complete
+  `FingertipMesh` used for persistence is carried separately as
+  `FEAResult.reference_mesh`. The indenter fixture and posed geometry are
+  stored as exact artifact geometry rather than rebuilt on load.
 - `optics/` owns deterministic ray transport and adapters from neutral meshes
   and displacement fields. Its public transport surface is `TraceSettings`,
   `RaySegment`, `ExitEvent`, `TransportResult`, `trace()`, and `evaluate()`.
-  The normal 2D path is NumPy-only and does not require CUDA, CuPy, PyOptiX,
-  or OptiX headers.
+  `optics.cross_section.trace()` remains a dependency-light NumPy-only reduced
+  2D path. The production `case.run_case()` path uses PLANAR_2D OptiX and
+  therefore requires the optional CUDA, CuPy, PyOptiX, and OptiX-header
+  environment.
 - `mesh.indenter.IndenterPose2D` is the neutral mechanical-to-optical pose
   contract. A converged explicit-contact 2D solve carries the exact fixture,
   final prescribed travel, and mechanically identified active contact patch;
@@ -117,9 +124,10 @@ It does not replace mesh-based reference/loaded comparisons.
   transport, camera rendering, GUI code, optimizer algorithms, or
   Ax/BoTorch models.
 
-- `optimization.scenarios.ContactScenario` is reused as the neutral
-  `case.ContactState` contract. It is a physical location/indentation/radius
-  state, not a generalized load description.
+- `case.ContactState` is the neutral physical location/indentation/radius
+  contract. `optimization.scenarios.ContactScenario` specializes that state
+  for scenario-grid generation; it is not a dependency of `case` and is not a
+  generalized load description.
 
 - `optimization/ax_adapter.py` is the thin optional Ax 1.3.1 orchestration
   boundary. It maps active `DesignVariable` bounds into Ax, attaches the
@@ -175,9 +183,10 @@ state-container class.
 `FEAResult.displacement` follows the pad mesh's node order. On a converged
 solve, `FEAResult.deformed_mesh` delegates directly to
 `mesh.deformed(displacement)`; it neither rebuilds nor copies topology.
-The result retains the full `FingertipMesh` used by the solve, so a
+The result carries the `PadMesh` used by existing callers and may carry the
+full `FingertipMesh` used by the solve in `reference_mesh`, so a
 `FingertipCase` or artifact loader can verify morphology parameters and
-rigid/contact topology without reconstructing them from a pad-only view.
+rigid/contact topology without changing the pad-only result contract.
 
 Strong validation remains at user, Gmsh/Kratos, and artifact boundaries.
 `PadMesh.deformed()` still rejects non-finite fields and degenerate or inverted

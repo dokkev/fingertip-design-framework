@@ -7,23 +7,31 @@ import math
 from types import MappingProxyType
 from typing import Any, Mapping
 
+import numpy as np
+
 from fem import FEAResult, solve
+from case.state import ContactState
 from mesh import MeshSettings, mesh_settings_for_level
 from mesh.indenter import IndenterPose2D, IndenterSettings
-from model import Fingertip, FingertipParameters, LED, OpticalMaterial
-from optimization.scenarios import ContactScenario
+from model import (
+    Fingertip,
+    FingertipParameters,
+    LED,
+    OpticalMaterial,
+    fingertip_parameters_fingerprint,
+)
 from optics.transport3d import (
-    OptiXTransport,
+    Transport3DResult,
     Transport3DSettings,
     UnifiedTransportResult,
     transport_configuration,
     fingerprint_mapping,
+    trace_geometry,
 )
 from optics.transport3d.geometry import build_transport_geometry
 
 
-CASE_SCHEMA = "fingertip-case-v1"
-ContactState = ContactScenario
+CASE_SCHEMA = "fingertip-case-v2"
 
 
 class CaseConstructionError(RuntimeError):
@@ -39,8 +47,8 @@ def contact_state_contract(
     indenter_parameters: IndenterSettings,
 ) -> dict[str, Any]:
     """Return the canonical state identity shared by mechanics and optics."""
-    if not isinstance(contact_state, ContactScenario):
-        raise TypeError("contact_state must be a ContactScenario")
+    if not isinstance(contact_state, ContactState):
+        raise TypeError("contact_state must be a ContactState")
     if not isinstance(indenter_parameters, IndenterSettings):
         raise TypeError("indenter_parameters must be IndenterSettings")
     if not math.isclose(
@@ -63,9 +71,7 @@ def contact_state_contract(
 
 
 def _expected_morphology_fingerprint(parameters: FingertipParameters) -> str:
-    from model.solid import build_fingertip_solid
-
-    return build_fingertip_solid(Fingertip(parameters).geometry).morphology_fingerprint
+    return fingertip_parameters_fingerprint(parameters)
 
 
 def _case_identity_payload(case: "FingertipCase") -> dict[str, Any]:
@@ -79,28 +85,26 @@ def _case_identity_payload(case: "FingertipCase") -> dict[str, Any]:
         ),
         "contact_state": asdict(case.contact_state),
         "mechanics": {
-            "mesh_level": case.fea.mesh.settings.level,
+            "mesh_level": case.fea.reference_mesh.settings.level,
             "morphology_fingerprint": _expected_morphology_fingerprint(
                 case.fingertip_parameters
             ),
-            "indenter_pose": case.indenter_pose.to_dict(),
         },
-        "raytrace": {
-            "morphology_fingerprint": case.raytrace.morphology_fingerprint,
-            "mechanics_source": case.raytrace.mechanics_source,
-            "mechanics_dimension": case.raytrace.mechanics_dimension,
-            "optical_mode": case.raytrace.optical_mode,
-            "ray_count": case.raytrace.ray_count,
+        "optics": {
+            "morphology_fingerprint": case.optics.morphology_fingerprint,
+            "mechanics_source": case.optics.mechanics_source,
+            "mechanics_dimension": case.optics.mechanics_dimension,
+            "optical_mode": case.optics.optical_mode,
+            "ray_count": case.optics.ray_count,
             "transport_configuration_fingerprint": (
-                case.raytrace.transport_configuration_fingerprint
+                case.optics.transport_configuration_fingerprint
             ),
         },
-        "provenance": dict(case.provenance),
     }
 
 
 def case_id_for(case: "FingertipCase") -> str:
-    """Return a deterministic ID from physical inputs and result provenance."""
+    """Return a deterministic ID from physical and numerical inputs."""
     if not isinstance(case, FingertipCase):
         raise TypeError("case must be a FingertipCase")
     return f"case-{fingerprint_mapping(_case_identity_payload(case))[:24]}"
@@ -114,7 +118,8 @@ class FingertipCase:
     indenter_parameters: IndenterSettings | None
     contact_state: ContactState
     fea: FEAResult
-    raytrace: UnifiedTransportResult
+    raytrace: Transport3DResult
+    optics: UnifiedTransportResult
     case_id: str = ""
     provenance: Mapping[str, Any] = field(default_factory=dict)
 
@@ -127,31 +132,68 @@ class FingertipCase:
             raise TypeError("indenter_parameters must be IndenterSettings or None")
         if self.indenter_parameters is None:
             raise ValueError("a contact case requires indenter_parameters")
-        if not isinstance(self.contact_state, ContactScenario):
-            raise TypeError("contact_state must be a ContactScenario")
+        if not isinstance(self.contact_state, ContactState):
+            raise TypeError("contact_state must be a ContactState")
         if not isinstance(self.fea, FEAResult):
             raise TypeError("fea must be an FEAResult")
-        if not isinstance(self.raytrace, UnifiedTransportResult):
-            raise TypeError("raytrace must be a UnifiedTransportResult")
+        if not isinstance(self.raytrace, Transport3DResult):
+            raise TypeError("raytrace must be a Transport3DResult")
+        if not isinstance(self.optics, UnifiedTransportResult):
+            raise TypeError("optics must be a UnifiedTransportResult")
         if not self.fea.converged or self.fea.indenter_pose is None:
             raise ValueError("a FingertipCase requires converged FEA with indenter_pose")
-        fea_parameters = getattr(self.fea.mesh, "parameters", None)
-        if fea_parameters != self.fingertip_parameters:
-            raise ValueError("FEA mesh parameters do not match fingertip_parameters")
+        if self.fea.reference_mesh is None:
+            raise ValueError("FingertipCase requires FEAResult.reference_mesh")
+        if self.fea.reference_mesh.parameters != self.fingertip_parameters:
+            raise ValueError("FEA reference_mesh parameters do not match fingertip_parameters")
 
         expected_morphology = _expected_morphology_fingerprint(
             self.fingertip_parameters
         )
-        if self.raytrace.morphology_fingerprint != expected_morphology:
-            raise ValueError("raytrace morphology fingerprint does not match the case")
-        if self.raytrace.optical_mode != "PLANAR_2D":
+        if self.optics.morphology_fingerprint != expected_morphology:
+            raise ValueError("optics morphology fingerprint does not match the case")
+        if self.raytrace.source_mode != "planar":
+            raise ValueError("a FingertipCase requires raw PLANAR_2D ray tracing")
+        if (
+            self.raytrace.projected_x_edges_mm is None
+            or self.raytrace.projected_y_edges_mm is None
+            or self.raytrace.projected_weighted_path_density is None
+        ):
+            raise ValueError("raw PLANAR_2D ray tracing must retain its native P2 field")
+        if self.optics.optical_mode != "PLANAR_2D":
             raise ValueError("a FingertipCase requires a PLANAR_2D optical result")
-        if self.raytrace.mechanics_dimension != "2D":
+        if self.optics.mechanics_dimension != "2D":
             raise ValueError("PLANAR_2D case optics must be paired with 2D mechanics")
-        if self.raytrace.mechanics_source != "explicit_contact_fea":
+        if self.optics.mechanics_source != "explicit_contact_fea":
             raise ValueError(
                 "FingertipCase requires the explicit-contact mechanics provenance"
             )
+        for name in (
+            "launched_weight",
+            "escaped_weight",
+            "absorbed_weight",
+            "terminated_weight",
+            "energy_balance_error",
+        ):
+            if not math.isclose(
+                float(getattr(self.raytrace, name)),
+                float(getattr(self.optics, name)),
+                rel_tol=0.0,
+                abs_tol=1.0e-12,
+            ):
+                raise ValueError(f"raw raytrace and optics summary mismatch: {name}")
+        if self.raytrace.launched_ray_count != self.optics.ray_count:
+            raise ValueError("raw raytrace and optics summary mismatch: ray_count")
+        if not np.array_equal(
+            self.raytrace.projected_weighted_path_density,
+            self.optics.field,
+        ):
+            raise ValueError("raw P2 field and optics summary field mismatch")
+        expected_contact = contact_state_contract(
+            self.contact_state,
+            self.indenter_parameters,
+        )
+        observed_contact = dict(self.optics.contact_state)
 
         pose = self.fea.indenter_pose
         assert pose is not None
@@ -171,11 +213,6 @@ class FingertipCase:
             abs_tol=1.0e-12,
         ):
             raise ValueError("indenter pose travel does not match contact_state")
-        expected_contact = contact_state_contract(
-            self.contact_state,
-            self.indenter_parameters,
-        )
-        observed_contact = dict(self.raytrace.contact_state)
         for key, expected in expected_contact.items():
             observed = observed_contact.get(key)
             if isinstance(expected, float):
@@ -233,7 +270,7 @@ class FingertipCase:
 
     @property
     def optical_field(self):
-        return self.raytrace.field
+        return self.optics.field
 
     @property
     def escaped_weight(self) -> float:
@@ -269,8 +306,8 @@ def run_case(
         raise TypeError("fingertip_parameters must be FingertipParameters")
     if not isinstance(indenter_parameters, IndenterSettings):
         raise TypeError("indenter_parameters must be IndenterSettings")
-    if not isinstance(contact_state, ContactScenario):
-        raise TypeError("contact_state must be a ContactScenario")
+    if not isinstance(contact_state, ContactState):
+        raise TypeError("contact_state must be a ContactState")
     if mesh_settings is None:
         mesh_settings = mesh_settings_for_level("medium")
     if not isinstance(mesh_settings, MeshSettings):
@@ -325,10 +362,14 @@ def run_case(
         **state,
         "contact_state_fingerprint": fingerprint_mapping(state),
     }
-    raytrace = OptiXTransport().trace(
+    raytrace = trace_geometry(
         tip,
         geometry,
         settings=trace_settings,
+        runtime=optix_runtime,
+    )
+    optics = UnifiedTransportResult.from_transport_result(
+        raytrace,
         morphology_id="custom",
         morphology_fingerprint=_expected_morphology_fingerprint(
             fingertip_parameters
@@ -336,8 +377,7 @@ def run_case(
         mechanics_source="explicit_contact_fea",
         mechanics_dimension="2D",
         contact_state=contact_provenance,
-        transport_configuration=configuration,
-        runtime=optix_runtime,
+        transport_configuration_fingerprint=fingerprint_mapping(configuration),
     )
     case_provenance = {
         "mechanics_path": "fem.solve.solve -> fem.indentation.run_indentation_case",
@@ -346,7 +386,7 @@ def run_case(
         "mesh_level": mesh_settings.level,
         "fem_steps": fem_steps,
         "internal_contact": internal_contact,
-        "optical_backend": "OptiXTransport",
+        "optical_backend": "trace_geometry (shared OptiX backend)",
         "optical_mode": "PLANAR_2D",
         "indenter_optically_active": False,
         **dict(provenance or {}),
@@ -357,6 +397,7 @@ def run_case(
         contact_state=contact_state,
         fea=fea,
         raytrace=raytrace,
+        optics=optics,
         provenance=case_provenance,
     )
 

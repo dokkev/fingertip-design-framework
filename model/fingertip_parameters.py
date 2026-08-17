@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+import hashlib
+import json
 from math import isfinite, sqrt
 from typing import Mapping
 
@@ -269,3 +271,20 @@ class FingertipParameters:
                     f"available_depth={available_ellipse_depth:g}, "
                     f"geometry_tolerance={self.geometry_tolerance:g}"
                 )
+
+
+def fingertip_parameters_fingerprint(parameters: FingertipParameters) -> str:
+    """Return a dimension-neutral fingerprint for physical model parameters.
+
+    This deliberately fingerprints only the validated parameter object.  It
+    does not construct a 2D or 3D geometry representation, so the identity is
+    stable across mechanics and optical dimensional adapters.
+    """
+    if not isinstance(parameters, FingertipParameters):
+        raise TypeError("parameters must be FingertipParameters")
+    payload = json.dumps(
+        asdict(parameters),
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()

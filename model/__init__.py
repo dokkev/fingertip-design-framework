@@ -8,6 +8,7 @@ from model.fingertip_parameters import (
     SiliconeLigamentMeasures,
     silicone_ligament_measures,
     validate_silicone_ligament,
+    fingertip_parameters_fingerprint,
 )
 from model.optical import LED, OpticalMaterial
 from model.solid import (
@@ -28,6 +29,7 @@ __all__ = [
     "SiliconeLigamentMeasures",
     "silicone_ligament_measures",
     "validate_silicone_ligament",
+    "fingertip_parameters_fingerprint",
     "DEFAULT_EXTRUSION_DEPTH_MM",
     "FingertipSolid",
     "SolidSurfaceDefinition",

@@ -3,13 +3,13 @@
 from case.core import (
     CASE_SCHEMA,
     CaseConstructionError,
-    ContactState,
     FingertipCase,
     case_id_for,
     contact_state_contract,
     run_case,
 )
 from case.artifact import load_case, save_case
+from case.state import ContactState
 
 __all__ = [
     "CASE_SCHEMA",

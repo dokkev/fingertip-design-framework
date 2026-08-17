@@ -22,9 +22,8 @@ from mesh.types import (
     T3Element,
     mesh_settings_for_level,
 )
-from model import Fingertip, FingertipParameters
-from model.solid import build_fingertip_solid
-from optics.transport3d import UnifiedTransportResult
+from model import Fingertip, FingertipParameters, fingertip_parameters_fingerprint
+from optics.transport3d import Transport3DResult, UnifiedTransportResult
 
 
 def _mesh(parameters: FingertipParameters) -> FingertipMesh:
@@ -95,15 +94,16 @@ def _case_parts(parameters: FingertipParameters | None = None):
     )
     pose = pose_from_fixture(fixture, contact.indentation_mm)
     fea = FEAResult(
-        mesh=mesh,
+        mesh=mesh.pad,
         displacement=displacement,
         reaction_force=0.5,
         contact={"external_pad_indenter": {"active": True}},
         converged=True,
         details={"solver": "synthetic", "contact_state": asdict(contact)},
         indenter_pose=pose,
+        reference_mesh=mesh,
     )
-    morphology = build_fingertip_solid(tip.geometry).morphology_fingerprint
+    morphology = fingertip_parameters_fingerprint(parameters)
     contact_payload = {
         "contact_mode": "explicit_contact_2d",
         "location_x_mm": contact.location_x_mm,
@@ -111,7 +111,39 @@ def _case_parts(parameters: FingertipParameters | None = None):
         "indenter_radius_mm": contact.indenter_radius_mm,
         "initial_gap_mm": indenter.initial_gap_mm,
     }
-    raytrace = UnifiedTransportResult(
+    raytrace = Transport3DResult(
+        source_position_mm=(0.0, -6.0, 0.0),
+        source_mode="planar",
+        extrusion_depth_mm=11.0,
+        launched_ray_count=3,
+        launched_weight=1.0,
+        escaped_weight=0.5,
+        absorbed_weight=0.5,
+        terminated_weight=0.0,
+        outgoing_surface_weight=0.5,
+        surface_u_edges=np.asarray([0.0, 1.0, 2.0]),
+        surface_z_edges=np.asarray([-1.0, 1.0]),
+        outgoing_surface_field=np.ones((1, 2), dtype=float),
+        escape_positions_mm=np.asarray([[0.5, 0.0, 0.0]]),
+        escape_directions=np.asarray([[0.0, 1.0, 0.0]]),
+        escape_surface_normals=np.asarray([[0.0, -1.0, 0.0]]),
+        escape_surface_u=np.asarray([0.5]),
+        escape_surface_z=np.asarray([0.0]),
+        escape_surface_tags=("pad_outer_arc",),
+        escape_surface_primitive_indices=np.asarray([0]),
+        escape_weights=np.asarray([0.5]),
+        escape_primary_ray_indices=np.asarray([0]),
+        escape_path_lengths_mm=np.asarray([1.0]),
+        escape_interaction_counts=np.asarray([1]),
+        energy_balance_error=0.0,
+        energy_balance_tolerance=1.0e-6,
+        projected_x_edges_mm=np.asarray([0.0, 1.0, 2.0]),
+        projected_y_edges_mm=np.asarray([0.0, 1.0, 2.0]),
+        projected_weighted_path_density=np.ones((2, 2), dtype=float),
+        geometry_metadata={"source": "synthetic"},
+    )
+    optics = UnifiedTransportResult.from_transport_result(
+        raytrace,
         morphology_id="synthetic",
         morphology_fingerprint=morphology,
         mechanics_source="explicit_contact_fea",
@@ -122,26 +154,13 @@ def _case_parts(parameters: FingertipParameters | None = None):
                 contact_payload
             ),
         },
-        optical_mode="PLANAR_2D",
-        ray_count=3,
         transport_configuration_fingerprint="synthetic-config",
-        field=np.ones((2, 2), dtype=float),
-        field_axes=(np.asarray([0.0, 1.0, 2.0]), np.asarray([0.0, 1.0, 2.0])),
-        total_transport=1.0,
-        launched_weight=1.0,
-        escaped_weight=0.5,
-        absorbed_weight=0.5,
-        terminated_weight=0.0,
-        valid_ray_count=1,
-        terminated_ray_count=2,
-        energy_balance_error=0.0,
-        path_diagnostics={"source": "synthetic"},
     )
-    return parameters, indenter, contact, fea, raytrace
+    return parameters, indenter, contact, fea, raytrace, optics
 
 
 def _case(**kwargs) -> FingertipCase:
-    parameters, indenter, contact, fea, raytrace = _case_parts(
+    parameters, indenter, contact, fea, raytrace, optics = _case_parts(
         kwargs.pop("parameters", None)
     )
     return FingertipCase(
@@ -150,76 +169,87 @@ def _case(**kwargs) -> FingertipCase:
         contact_state=kwargs.pop("contact_state", contact),
         fea=kwargs.pop("fea", fea),
         raytrace=kwargs.pop("raytrace", raytrace),
+        optics=kwargs.pop("optics", optics),
         provenance=kwargs.pop("provenance", {"test": "synthetic"}),
         **kwargs,
     )
 
 
 def test_case_stores_neutral_inputs_and_delegates_results() -> None:
-    parameters, indenter, contact, fea, raytrace = _case_parts()
+    parameters, indenter, contact, fea, raytrace, optics = _case_parts()
     case = FingertipCase(
         fingertip_parameters=parameters,
         indenter_parameters=indenter,
         contact_state=contact,
         fea=fea,
         raytrace=raytrace,
+        optics=optics,
         provenance={"test": "synthetic"},
     )
     assert case.fingertip_parameters is parameters
     assert case.indenter_parameters is indenter
     assert case.fea is fea
     assert case.raytrace is raytrace
+    assert case.optics is optics
     assert case.displacement is fea.displacement
-    assert case.optical_field is raytrace.field
+    assert case.optical_field is optics.field
     assert case.reaction_force == fea.reaction_force
     assert case.escaped_weight == raytrace.escaped_weight
     assert case.indenter_pose is fea.indenter_pose
 
 
 def test_case_rejects_mismatched_fea_parameters() -> None:
-    parameters, _, _, fea, raytrace = _case_parts()
+    parameters, _, _, fea, raytrace, optics = _case_parts()
     mismatched_mesh = _mesh(FingertipParameters(void_width=1.2))
     mismatched_fea = FEAResult(
-        mesh=mismatched_mesh,
+        mesh=mismatched_mesh.pad,
         displacement=fea.displacement,
         reaction_force=fea.reaction_force,
         contact=fea.contact,
         converged=True,
         details=fea.details,
         indenter_pose=fea.indenter_pose,
+        reference_mesh=mismatched_mesh,
     )
-    with pytest.raises(ValueError, match="FEA mesh parameters"):
-        FingertipCase(parameters, IndenterSettings(), ContactState(0.0, 0.5, 4.0), mismatched_fea, raytrace)
+    with pytest.raises(ValueError, match="FEA reference_mesh parameters"):
+        FingertipCase(
+            parameters,
+            IndenterSettings(),
+            ContactState(0.0, 0.5, 4.0),
+            mismatched_fea,
+            raytrace,
+            optics,
+        )
 
 
 def test_case_rejects_mismatched_raytrace_morphology() -> None:
-    parameters, indenter, contact, fea, raytrace = _case_parts()
+    parameters, indenter, contact, fea, raytrace, optics = _case_parts()
     bad = UnifiedTransportResult(
         **{
-            name: getattr(raytrace, name)
-            for name in raytrace.__dataclass_fields__
+            name: getattr(optics, name)
+            for name in optics.__dataclass_fields__
             if name != "morphology_fingerprint"
         },
         morphology_fingerprint="wrong",
     )
     with pytest.raises(ValueError, match="morphology fingerprint"):
-        FingertipCase(parameters, indenter, contact, fea, bad)
+        FingertipCase(parameters, indenter, contact, fea, raytrace, bad)
 
 
 def test_case_rejects_mismatched_contact_provenance() -> None:
-    parameters, indenter, contact, fea, raytrace = _case_parts()
-    payload = dict(raytrace.contact_state)
+    parameters, indenter, contact, fea, raytrace, optics = _case_parts()
+    payload = dict(optics.contact_state)
     payload["indentation_mm"] = 0.75
     bad = UnifiedTransportResult(
         **{
-            name: getattr(raytrace, name)
-            for name in raytrace.__dataclass_fields__
+            name: getattr(optics, name)
+            for name in optics.__dataclass_fields__
             if name != "contact_state"
         },
         contact_state=payload,
     )
     with pytest.raises(ValueError, match="contact provenance"):
-        FingertipCase(parameters, indenter, contact, fea, bad)
+        FingertipCase(parameters, indenter, contact, fea, raytrace, bad)
 
 
 def test_case_id_is_deterministic() -> None:
@@ -239,7 +269,27 @@ def test_case_manifest_round_trip_and_references(tmp_path) -> None:
     assert loaded.contact_state == original.contact_state
     np.testing.assert_allclose(loaded.displacement, original.displacement)
     np.testing.assert_allclose(loaded.optical_field, original.optical_field)
+    np.testing.assert_allclose(
+        loaded.raytrace.escape_positions_mm,
+        original.raytrace.escape_positions_mm,
+    )
+    np.testing.assert_allclose(
+        loaded.raytrace.escape_directions,
+        original.raytrace.escape_directions,
+    )
+    np.testing.assert_allclose(
+        loaded.raytrace.escape_weights,
+        original.raytrace.escape_weights,
+    )
+    assert loaded.fea.reference_mesh == original.fea.reference_mesh
+    assert loaded.fea.mesh is loaded.fea.reference_mesh.pad
     assert dict(loaded.provenance) == dict(original.provenance)
+
+
+def test_case_id_excludes_provenance_notes() -> None:
+    first = _case(provenance={"test": "synthetic", "note": "first"})
+    second = _case(provenance={"test": "synthetic", "note": "second"})
+    assert first.case_id == second.case_id
 
 
 def test_case_manifest_rejects_mismatched_optics_artifact(tmp_path) -> None:
@@ -273,9 +323,9 @@ def test_pose_tracks_surface_location_and_radius() -> None:
 
 
 def test_run_case_routes_to_existing_explicit_contact_solver(monkeypatch) -> None:
-    parameters, indenter, contact, fea, raytrace = _case_parts()
+    parameters, indenter, contact, fea, raytrace, _ = _case_parts()
     real_tip = Fingertip(parameters)
-    synthetic_mesh = fea.mesh
+    synthetic_mesh = fea.reference_mesh
     calls = {}
 
     fake_tip = SimpleNamespace(
@@ -291,15 +341,15 @@ def test_run_case_routes_to_existing_explicit_contact_solver(monkeypatch) -> Non
         calls["kwargs"] = kwargs
         return fea
 
-    class FakeOptiX:
-        def trace(self, tip, geometry, **kwargs):
-            calls["trace"] = kwargs
-            return raytrace
-
     monkeypatch.setattr(case_module, "Fingertip", lambda *args, **kwargs: fake_tip)
     monkeypatch.setattr(case_module, "solve", fake_solve)
     monkeypatch.setattr(case_module, "build_transport_geometry", lambda *args, **kwargs: object())
-    monkeypatch.setattr(case_module, "OptiXTransport", FakeOptiX)
+
+    def fake_trace_geometry(tip, geometry, **kwargs):
+        calls["trace"] = kwargs
+        return raytrace
+
+    monkeypatch.setattr(case_module, "trace_geometry", fake_trace_geometry)
 
     result = run_case(
         fingertip_parameters=parameters,

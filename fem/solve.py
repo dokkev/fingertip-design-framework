@@ -30,19 +30,32 @@ from model import Fingertip
 class FEAResult:
     """Neutral final state of one displacement-controlled indentation solve."""
 
-    mesh: PadMesh | FingertipMesh
+    mesh: PadMesh
     displacement: np.ndarray | None
     reaction_force: float | None
     contact: Mapping[str, Any]
     converged: bool
     details: Mapping[str, Any]
     indenter_pose: IndenterPose2D | None = None
+    reference_mesh: FingertipMesh | None = None
 
     def __post_init__(self) -> None:
         if self.reaction_force is not None and not math.isfinite(
             self.reaction_force
         ):
             raise ValueError("reaction_force must be finite when available")
+        if not isinstance(self.mesh, PadMesh):
+            raise TypeError("FEAResult.mesh must be a PadMesh")
+        if self.reference_mesh is not None:
+            if not isinstance(self.reference_mesh, FingertipMesh):
+                raise TypeError("reference_mesh must be a FingertipMesh when supplied")
+            if not np.array_equal(self.reference_mesh.pad.node_ids, self.mesh.node_ids):
+                raise ValueError("reference_mesh pad topology does not match mesh")
+            if not np.array_equal(
+                self.reference_mesh.pad.triangles,
+                self.mesh.triangles,
+            ):
+                raise ValueError("reference_mesh pad elements do not match mesh")
         if self.displacement is None:
             if self.converged:
                 raise ValueError("a converged FEAResult requires displacement")
@@ -161,17 +174,14 @@ def solve(
             active_contact_node_ids=active_node_ids,
         )
     return FEAResult(
-        # Retain the full neutral mesh so downstream case/artifact contracts
-        # can validate morphology parameters and rigid/contact topology.  The
-        # displacement remains in the pad view's node order and
-        # ``deformed_mesh`` still delegates to the same pad topology.
-        mesh=mesh,
+        mesh=pad_mesh,
         displacement=displacement,
         reaction_force=None if reaction is None else float(reaction),
         contact=dict(final.get("contact_groups", {})),
         converged=converged,
         details=details,
         indenter_pose=indenter_pose,
+        reference_mesh=mesh,
     )
 
 

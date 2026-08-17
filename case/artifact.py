@@ -9,14 +9,12 @@ from pathlib import Path
 from typing import Any, Mapping
 
 import numpy as np
+from shapely import affinity
+from shapely.geometry import LineString, MultiLineString, Polygon
 from shapely.wkt import loads as load_wkt
 
 from fem import FEAResult
-from mesh.indenter import (
-    IndenterSettings,
-    pose_from_fixture,
-    build_normal_indenter_fixture_at_x,
-)
+from mesh.indenter import CrownFrame, IndenterFixture, IndenterPose2D, IndenterSettings
 from mesh.types import (
     BoundaryEdge,
     FingertipMesh,
@@ -27,14 +25,16 @@ from mesh.types import (
     MeshNode,
     T3Element,
 )
-from model import Fingertip, FingertipParameters
+from model import FingertipParameters
+from optics.transport3d.result import Transport3DResult
 from optics.transport3d.unified import UnifiedTransportResult, fingerprint_mapping
 
-from case.core import CASE_SCHEMA, ContactState, FingertipCase
+from case.core import CASE_SCHEMA, FingertipCase
+from case.state import ContactState
 
 
-MECHANICS_SCHEMA = "fingertip-case-mechanics-v1"
-OPTICAL_SCHEMA = "fingertip-case-optics-v1"
+MECHANICS_SCHEMA = "fingertip-case-mechanics-v2"
+OPTICAL_SCHEMA = "fingertip-case-optics-v2"
 
 
 def _sha256(path: Path) -> str:
@@ -162,6 +162,33 @@ def _mesh_from_dict(payload: Mapping[str, Any]) -> FingertipMesh:
 def _pose_payload(case: FingertipCase) -> dict[str, Any]:
     pose = case.indenter_pose
     payload = pose.to_dict()
+    payload.update(
+        {
+            "carrier_geometry_wkt": pose.carrier_geometry.wkt,
+            "contact_arc_wkt": pose.contact_arc.wkt,
+            "outer_remainder_wkt": pose.outer_remainder.wkt,
+        }
+    )
+    fixture = pose.fixture
+    fixture_payload = payload["fixture"]
+    fixture_payload.update(
+        {
+            "carrier_geometry_wkt": fixture.carrier_geometry.wkt,
+            "contact_arc_wkt": fixture.contact_arc.wkt,
+            "outer_remainder_wkt": fixture.outer_remainder.wkt,
+            "frame": {
+                "point_mm": list(fixture.frame.point_mm),
+                "tangent": list(fixture.frame.tangent),
+                "pad_outward_normal": list(fixture.frame.pad_outward_normal),
+                "loading_direction": list(fixture.frame.loading_direction),
+                "arc_distance_mm": fixture.frame.arc_distance_mm,
+            },
+        }
+    )
+    # The old convenience distance is derived from geometry and can vary in
+    # its final floating-point bit after WKT round-trip.  Exact WKT is the
+    # persisted geometry contract, so do not use that derived scalar as an ID.
+    fixture_payload.pop("pad_contact_arc_minimum_distance_mm", None)
     payload["contact_patch_wkt"] = (
         None if pose.contact_patch is None else pose.contact_patch.wkt
     )
@@ -172,7 +199,9 @@ def _save_mechanics(case: FingertipCase, directory: Path) -> Path:
     mesh_path = directory / "mesh.json"
     arrays_path = directory / "fea.npz"
     manifest_path = directory / "fea.json"
-    _write_json(mesh_path, case.fea.mesh.to_dict())
+    if case.fea.reference_mesh is None:
+        raise ValueError("a persisted FingertipCase requires reference_mesh")
+    _write_json(mesh_path, case.fea.reference_mesh.to_dict())
     if case.fea.displacement is None:
         raise ValueError("a persisted FingertipCase requires displacement")
     _write_npz(arrays_path, displacement=case.fea.displacement)
@@ -196,20 +225,71 @@ def _save_mechanics(case: FingertipCase, directory: Path) -> Path:
 def _save_optics(case: FingertipCase, directory: Path) -> Path:
     arrays_path = directory / "raytrace.npz"
     manifest_path = directory / "raytrace.json"
-    _write_npz(
-        arrays_path,
-        field=case.raytrace.field,
-        **{
+    raw = case.raytrace
+    result = case.optics
+    arrays: dict[str, Any] = {
+        "source_position_mm": raw.source_position_mm,
+        "surface_u_edges": raw.surface_u_edges,
+        "surface_z_edges": raw.surface_z_edges,
+        "outgoing_surface_field": raw.outgoing_surface_field,
+        "escape_positions_mm": raw.escape_positions_mm,
+        "escape_directions": raw.escape_directions,
+        "escape_surface_normals": raw.escape_surface_normals,
+        "escape_surface_u": raw.escape_surface_u,
+        "escape_surface_z": raw.escape_surface_z,
+        "escape_surface_primitive_indices": raw.escape_surface_primitive_indices,
+        "escape_weights": raw.escape_weights,
+        "escape_primary_ray_indices": raw.escape_primary_ray_indices,
+        "escape_path_lengths_mm": raw.escape_path_lengths_mm,
+        "escape_interaction_counts": raw.escape_interaction_counts,
+        "field": result.field,
+    }
+    arrays.update(
+        {
             f"axis_{index}": axis
-            for index, axis in enumerate(case.raytrace.field_axes)
-        },
+            for index, axis in enumerate(result.field_axes)
+        }
     )
-    result = case.raytrace
+    optional_arrays = (
+        "projected_x_edges_mm",
+        "projected_y_edges_mm",
+        "projected_weighted_path_density",
+        "internal_path_x_edges_mm",
+        "internal_path_y_edges_mm",
+        "internal_path_z_edges_mm",
+        "internal_weighted_path_density_3d",
+        "internal_z_integrated_path_density",
+        "retained_segment_lengths_mm",
+        "retained_segment_primary_ray_indices",
+        "retained_segment_interaction_counts",
+    )
+    arrays.update(
+        {
+            name: value
+            for name in optional_arrays
+            if (value := getattr(raw, name)) is not None
+        }
+    )
+    _write_npz(arrays_path, **arrays)
     metadata = {
         "schema": OPTICAL_SCHEMA,
         "arrays_artifact": arrays_path.name,
         "arrays_sha256": _sha256(arrays_path),
-        "field_dimension": result.field.ndim,
+        "raw": {
+            "source_mode": raw.source_mode,
+            "extrusion_depth_mm": raw.extrusion_depth_mm,
+            "launched_ray_count": raw.launched_ray_count,
+            "launched_weight": raw.launched_weight,
+            "escaped_weight": raw.escaped_weight,
+            "absorbed_weight": raw.absorbed_weight,
+            "terminated_weight": raw.terminated_weight,
+            "outgoing_surface_weight": raw.outgoing_surface_weight,
+            "escape_surface_tags": list(raw.escape_surface_tags),
+            "energy_balance_error": raw.energy_balance_error,
+            "energy_balance_tolerance": raw.energy_balance_tolerance,
+            "geometry_metadata": _jsonable(raw.geometry_metadata),
+            "timings_seconds": _jsonable(raw.timings_seconds),
+        },
         "result": {
             "morphology_id": result.morphology_id,
             "morphology_fingerprint": result.morphology_fingerprint,
@@ -254,7 +334,7 @@ def save_case(case: FingertipCase, root: str | Path) -> Path:
     optics_directory.mkdir(parents=True, exist_ok=True)
     mechanics_path = _save_mechanics(case, mechanics_directory)
     optical_path = _save_optics(case, optics_directory)
-    morphology_fingerprint = case.raytrace.morphology_fingerprint
+    morphology_fingerprint = case.optics.morphology_fingerprint
     top_level = {
         "schema": CASE_SCHEMA,
         "case_id": case.case_id,
@@ -262,12 +342,12 @@ def save_case(case: FingertipCase, root: str | Path) -> Path:
         "fingertip_parameters_fingerprint": morphology_fingerprint,
         "indenter_parameters": asdict(case.indenter),
         "indenter_pose_fingerprint": fingerprint_mapping(
-            case.indenter_pose.to_dict()
+            _pose_payload(case)
         ),
         "contact_state": asdict(case.contact_state),
         "provenance": dict(case.provenance),
-        "optical_mode": case.raytrace.optical_mode,
-        "configuration_fingerprint": case.raytrace.transport_configuration_fingerprint,
+        "optical_mode": case.optics.optical_mode,
+        "configuration_fingerprint": case.optics.transport_configuration_fingerprint,
         "mechanics": {
             "artifact": str(mechanics_path.relative_to(case_directory)),
             "artifact_sha256": _sha256(mechanics_path),
@@ -290,6 +370,143 @@ def _checked_child(root: Path, record: Mapping[str, Any], key: str) -> Path:
     if _sha256(path) != record.get(f"{key}_sha256"):
         raise ValueError(f"case {key} artifact checksum mismatch: {path}")
     return path
+
+
+def _load_pose(
+    payload: Mapping[str, Any],
+    *,
+    indenter: IndenterSettings,
+) -> IndenterPose2D:
+    fixture_payload = payload.get("fixture")
+    if not isinstance(fixture_payload, Mapping):
+        raise ValueError("case mechanics fixture geometry is missing")
+    settings = IndenterSettings(**fixture_payload["settings"])
+    if settings != indenter:
+        raise ValueError("case mechanics fixture settings mismatch")
+    frame_payload = fixture_payload.get("frame")
+    if not isinstance(frame_payload, Mapping):
+        raise ValueError("case mechanics fixture frame is missing")
+
+    def _vector(value: Any, *, length: int, name: str) -> tuple[float, ...]:
+        values = tuple(float(item) for item in value)
+        if len(values) != length or not np.all(np.isfinite(values)):
+            raise ValueError(f"case mechanics {name} is invalid")
+        return values
+
+    def _geometry(value: Any, *, name: str, expected_type: type | tuple[type, ...] | None = None):
+        if not isinstance(value, str):
+            raise ValueError(f"case mechanics {name} geometry is missing")
+        geometry = load_wkt(value)
+        if geometry.is_empty or not geometry.is_valid:
+            raise ValueError(f"case mechanics {name} geometry is invalid")
+        if expected_type is not None and not isinstance(geometry, expected_type):
+            raise ValueError(f"case mechanics {name} geometry type is invalid")
+        return geometry
+
+    frame = CrownFrame(
+        point_mm=_vector(frame_payload["point_mm"], length=2, name="frame point"),
+        tangent=_vector(frame_payload["tangent"], length=2, name="frame tangent"),
+        pad_outward_normal=_vector(
+            frame_payload["pad_outward_normal"],
+            length=2,
+            name="frame normal",
+        ),
+        loading_direction=_vector(
+            frame_payload["loading_direction"],
+            length=2,
+            name="frame loading direction",
+        ),
+        arc_distance_mm=float(frame_payload["arc_distance_mm"]),
+    )
+    fixture = IndenterFixture(
+        settings=settings,
+        frame=frame,
+        center_mm=_vector(fixture_payload["center_mm"], length=2, name="fixture center"),
+        contact_direction=_vector(
+            fixture_payload["contact_direction"],
+            length=2,
+            name="contact direction",
+        ),
+        carrier_geometry=_geometry(
+            fixture_payload["carrier_geometry_wkt"],
+            name="fixture carrier",
+            expected_type=Polygon,
+        ),
+        contact_arc=_geometry(
+            fixture_payload["contact_arc_wkt"],
+            name="fixture contact arc",
+            expected_type=LineString,
+        ),
+        outer_remainder=_geometry(
+            fixture_payload["outer_remainder_wkt"],
+            name="fixture outer remainder",
+            expected_type=MultiLineString,
+        ),
+    )
+    travel = float(payload["prescribed_travel_mm"])
+    translation = _vector(payload["translation_mm"], length=2, name="translation")
+    expected_translation = fixture.displacement_for_travel(travel)
+    if not np.allclose(translation, expected_translation, rtol=0.0, atol=1.0e-12):
+        raise ValueError("case mechanics pose translation is inconsistent with fixture")
+    center = _vector(payload["center_mm"], length=2, name="pose center")
+    expected_center = tuple(
+        fixture.center_mm[index] + translation[index] for index in range(2)
+    )
+    if not np.allclose(center, expected_center, rtol=0.0, atol=1.0e-12):
+        raise ValueError("case mechanics pose center is inconsistent with fixture")
+    carrier = _geometry(
+        payload["carrier_geometry_wkt"],
+        name="posed carrier",
+        expected_type=Polygon,
+    )
+    contact_arc = _geometry(
+        payload["contact_arc_wkt"],
+        name="posed contact arc",
+        expected_type=LineString,
+    )
+    outer_remainder = _geometry(
+        payload["outer_remainder_wkt"],
+        name="posed outer remainder",
+        expected_type=MultiLineString,
+    )
+    if not carrier.equals_exact(
+        affinity.translate(fixture.carrier_geometry, xoff=translation[0], yoff=translation[1]),
+        1.0e-9,
+    ):
+        raise ValueError("case mechanics carrier geometry is inconsistent with pose")
+    if not contact_arc.equals_exact(
+        affinity.translate(fixture.contact_arc, xoff=translation[0], yoff=translation[1]),
+        1.0e-9,
+    ):
+        raise ValueError("case mechanics contact arc is inconsistent with pose")
+    if not outer_remainder.equals_exact(
+        affinity.translate(fixture.outer_remainder, xoff=translation[0], yoff=translation[1]),
+        1.0e-9,
+    ):
+        raise ValueError("case mechanics outer remainder is inconsistent with pose")
+    patch_wkt = payload.get("contact_patch_wkt")
+    contact_patch = (
+        None
+        if patch_wkt is None
+        else _geometry(
+            patch_wkt,
+            name="contact patch",
+            expected_type=(LineString, MultiLineString),
+        )
+    )
+    return IndenterPose2D(
+        fixture=fixture,
+        prescribed_travel_mm=travel,
+        translation_mm=translation,
+        center_mm=center,
+        carrier_geometry=carrier,
+        contact_arc=contact_arc,
+        outer_remainder=outer_remainder,
+        contact_patch=contact_patch,
+        active_contact_node_ids=tuple(
+            int(value) for value in payload.get("active_contact_node_ids", ())
+        ),
+    )
 
 
 def _load_mechanics(
@@ -316,27 +533,12 @@ def _load_mechanics(
         if key not in archive:
             raise ValueError("case mechanics displacement is missing")
         displacement = np.asarray(archive[key], dtype=float)
-    tip = Fingertip(parameters)
-    fixture = build_normal_indenter_fixture_at_x(
-        tip.geometry,
-        contact_state.location_x_mm,
-        indenter,
-    )
     pose_metadata = metadata.get("indenter_pose")
     if not isinstance(pose_metadata, Mapping):
         raise ValueError("case mechanics indenter pose is missing")
-    patch_wkt = pose_metadata.get("contact_patch_wkt")
-    contact_patch = None if patch_wkt is None else load_wkt(str(patch_wkt))
-    pose = pose_from_fixture(
-        fixture,
-        float(pose_metadata["prescribed_travel_mm"]),
-        contact_patch=contact_patch,
-        active_contact_node_ids=tuple(
-            int(value) for value in pose_metadata.get("active_contact_node_ids", ())
-        ),
-    )
+    pose = _load_pose(pose_metadata, indenter=indenter)
     return FEAResult(
-        mesh=mesh,
+        mesh=mesh.pad,
         displacement=displacement,
         reaction_force=(
             None
@@ -347,10 +549,11 @@ def _load_mechanics(
         converged=bool(metadata["converged"]),
         details=metadata.get("details", {}),
         indenter_pose=pose,
+        reference_mesh=mesh,
     )
 
 
-def _load_optics(path: Path) -> UnifiedTransportResult:
+def _load_optics(path: Path) -> tuple[Transport3DResult, UnifiedTransportResult]:
     metadata = json.loads(path.read_text(encoding="utf-8"))
     if metadata.get("schema") != OPTICAL_SCHEMA:
         raise ValueError("unsupported case optical schema")
@@ -358,15 +561,72 @@ def _load_optics(path: Path) -> UnifiedTransportResult:
     if not arrays_path.exists() or _sha256(arrays_path) != metadata.get("arrays_sha256"):
         raise ValueError("case optical array checksum mismatch")
     with np.load(arrays_path, allow_pickle=False) as archive:
-        field = np.asarray(archive["field"], dtype=float)
-        axes = tuple(
-            np.asarray(archive[f"axis_{index}"], dtype=float)
-            for index in range(field.ndim)
-        )
+        loaded_arrays = {
+            name: np.asarray(archive[name]) for name in archive.files
+        }
+
+    def required(name: str) -> np.ndarray:
+        if name not in loaded_arrays:
+            raise ValueError(f"case optical array is missing: {name}")
+        return loaded_arrays[name]
+
+    def optional(name: str) -> np.ndarray | None:
+        return loaded_arrays.get(name)
+
+    field = np.asarray(required("field"), dtype=float)
+    axes = tuple(
+        np.asarray(required(f"axis_{index}"), dtype=float)
+        for index in range(field.ndim)
+    )
     record = metadata.get("result")
     if not isinstance(record, Mapping):
         raise ValueError("case optical result metadata is missing")
-    return UnifiedTransportResult(
+    raw_record = metadata.get("raw")
+    if not isinstance(raw_record, Mapping):
+        raise ValueError("case raw optical result metadata is missing")
+    raw = Transport3DResult(
+        source_position_mm=tuple(
+            float(value) for value in required("source_position_mm")
+        ),
+        source_mode=str(raw_record["source_mode"]),
+        extrusion_depth_mm=float(raw_record["extrusion_depth_mm"]),
+        launched_ray_count=int(raw_record["launched_ray_count"]),
+        launched_weight=float(raw_record["launched_weight"]),
+        escaped_weight=float(raw_record["escaped_weight"]),
+        absorbed_weight=float(raw_record["absorbed_weight"]),
+        terminated_weight=float(raw_record["terminated_weight"]),
+        outgoing_surface_weight=float(raw_record["outgoing_surface_weight"]),
+        surface_u_edges=required("surface_u_edges"),
+        surface_z_edges=required("surface_z_edges"),
+        outgoing_surface_field=required("outgoing_surface_field"),
+        escape_positions_mm=required("escape_positions_mm"),
+        escape_directions=required("escape_directions"),
+        escape_surface_normals=required("escape_surface_normals"),
+        escape_surface_u=required("escape_surface_u"),
+        escape_surface_z=required("escape_surface_z"),
+        escape_surface_tags=tuple(str(value) for value in raw_record["escape_surface_tags"]),
+        escape_surface_primitive_indices=required("escape_surface_primitive_indices"),
+        escape_weights=required("escape_weights"),
+        escape_primary_ray_indices=required("escape_primary_ray_indices"),
+        escape_path_lengths_mm=required("escape_path_lengths_mm"),
+        escape_interaction_counts=required("escape_interaction_counts"),
+        energy_balance_error=float(raw_record["energy_balance_error"]),
+        energy_balance_tolerance=float(raw_record["energy_balance_tolerance"]),
+        projected_x_edges_mm=optional("projected_x_edges_mm"),
+        projected_y_edges_mm=optional("projected_y_edges_mm"),
+        projected_weighted_path_density=optional("projected_weighted_path_density"),
+        internal_path_x_edges_mm=optional("internal_path_x_edges_mm"),
+        internal_path_y_edges_mm=optional("internal_path_y_edges_mm"),
+        internal_path_z_edges_mm=optional("internal_path_z_edges_mm"),
+        internal_weighted_path_density_3d=optional("internal_weighted_path_density_3d"),
+        internal_z_integrated_path_density=optional("internal_z_integrated_path_density"),
+        retained_segment_lengths_mm=optional("retained_segment_lengths_mm"),
+        retained_segment_primary_ray_indices=optional("retained_segment_primary_ray_indices"),
+        retained_segment_interaction_counts=optional("retained_segment_interaction_counts"),
+        geometry_metadata=raw_record.get("geometry_metadata", {}),
+        timings_seconds=raw_record.get("timings_seconds", {}),
+    )
+    summary = UnifiedTransportResult(
         morphology_id=str(record["morphology_id"]),
         morphology_fingerprint=str(record["morphology_fingerprint"]),
         mechanics_source=str(record["mechanics_source"]),
@@ -389,6 +649,7 @@ def _load_optics(path: Path) -> UnifiedTransportResult:
         energy_balance_error=float(record["energy_balance_error"]),
         path_diagnostics=record.get("path_diagnostics", {}),
     )
+    return raw, summary
 
 
 def load_case(path: str | Path) -> FingertipCase:
@@ -412,8 +673,8 @@ def load_case(path: str | Path) -> FingertipCase:
         indenter=indenter,
         contact_state=contact_state,
     )
-    raytrace = _load_optics(optical_path)
-    if manifest.get("fingertip_parameters_fingerprint") != raytrace.morphology_fingerprint:
+    raytrace, optics = _load_optics(optical_path)
+    if manifest.get("fingertip_parameters_fingerprint") != optics.morphology_fingerprint:
         raise ValueError("case morphology fingerprint mismatch")
     case = FingertipCase(
         fingertip_parameters=parameters,
@@ -421,17 +682,18 @@ def load_case(path: str | Path) -> FingertipCase:
         contact_state=contact_state,
         fea=fea,
         raytrace=raytrace,
+        optics=optics,
         case_id=str(manifest["case_id"]),
         provenance=manifest.get("provenance", {}),
     )
     if manifest.get("indenter_pose_fingerprint") != fingerprint_mapping(
-        case.indenter_pose.to_dict()
+        _pose_payload(case)
     ):
         raise ValueError("case indenter-pose fingerprint mismatch")
-    if manifest.get("optical_mode") != case.raytrace.optical_mode:
+    if manifest.get("optical_mode") != case.optics.optical_mode:
         raise ValueError("case optical mode mismatch")
     if manifest.get("configuration_fingerprint") != (
-        case.raytrace.transport_configuration_fingerprint
+        case.optics.transport_configuration_fingerprint
     ):
         raise ValueError("case optical configuration fingerprint mismatch")
     return case
