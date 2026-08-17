@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass
 from collections import defaultdict
 import json
 import math
+import time
 from typing import Any, Iterable, Literal, Mapping, Sequence
 
 import numpy as np
@@ -610,6 +611,122 @@ def _move_master(model_part: Any, node_ids: Sequence[int], fixture: IndenterFixt
         node.SetSolutionStepValue(KM.DISPLACEMENT_Z, 0.0)
 
 
+def localized_profile(distance_mm: float, radius_mm: float) -> float:
+    """Return the fixed compact cosine profile used by the load-only path."""
+    if distance_mm < 0.0 or distance_mm > radius_mm:
+        return 0.0
+    return 0.5 * (1.0 + math.cos(math.pi * distance_mm / radius_mm))
+
+
+def _create_localized_surface_load_conditions(
+    model_part: Any,
+    volume_mesh: FingertipVolumeMesh,
+    properties: Any,
+    load_definition: Mapping[str, Any],
+) -> tuple[tuple[Any, ...], dict[str, Any]]:
+    """Create deterministic pressure conditions on the outer pad surface.
+
+    This helper is deliberately separate from the mortar/contact population:
+    it creates only prescribed Neumann conditions and never creates a contact
+    pair or contact-search model part.
+    """
+    _, _, _, SMA = import_kratos()
+    center_x = float(load_definition["center_x_mm"])
+    center_z = float(load_definition["center_z_mm"])
+    radius = float(load_definition["radius_mm"])
+    if not all(math.isfinite(value) for value in (center_x, center_z, radius)) or radius <= 0.0:
+        raise SolidFEAError("localized load center/radius must be finite and positive where required")
+    outer_tags = tuple(
+        definition.name
+        for definition in volume_mesh.solid.surfaces
+        if definition.kind == "outer_compliant" and definition.material_region == "pad"
+    )
+    source_triangles = tuple(
+        triangle
+        for tag in outer_tags
+        for triangle in volume_mesh.surface_triangles.get(tag, ())
+    )
+    if not source_triangles:
+        raise SolidFEAError("localized load requires semantic outer compliant surface triangles")
+    coordinates = {
+        node.id: np.asarray((node.x_mm, node.y_mm, node.z_mm), dtype=float)
+        for node in volume_mesh.nodes.values()
+    }
+    next_condition_id = max((condition.Id for condition in model_part.Conditions), default=0) + 1
+    conditions: list[Any] = []
+    records: list[dict[str, Any]] = []
+    for triangle in source_triangles:
+        points = np.asarray([coordinates[node_id] for node_id in triangle.node_ids], dtype=float)
+        centroid = np.mean(points, axis=0)
+        distance = math.hypot(float(centroid[0]) - center_x, float(centroid[2]) - center_z)
+        profile = localized_profile(distance, radius)
+        if profile <= 0.0:
+            continue
+        normal = np.cross(points[1] - points[0], points[2] - points[0])
+        norm = float(np.linalg.norm(normal))
+        if not np.all(np.isfinite(normal)) or not math.isfinite(norm) or norm <= 1.0e-12:
+            raise SolidFEAError(f"localized load triangle {triangle.id} has an invalid normal")
+        inward = -normal / norm
+        condition = model_part.CreateNewCondition(
+            "SurfaceLoadCondition3D3N",
+            next_condition_id,
+            list(triangle.node_ids),
+            properties,
+        )
+        condition.SetValue(SMA.SURFACE_LOAD, [0.0, 0.0, 0.0])
+        conditions.append(condition)
+        records.append(
+            {
+                "condition_id": int(next_condition_id),
+                "surface_triangle_id": int(triangle.id),
+                "node_ids": list(triangle.node_ids),
+                "centroid_mm": centroid.tolist(),
+                "distance_mm": float(distance),
+                "profile_weight": float(profile),
+                "inward_normal": inward.tolist(),
+                "reference_area_mm2": 0.5 * norm,
+            }
+        )
+        next_condition_id += 1
+    if not conditions:
+        raise SolidFEAError("localized load footprint selected no outer surface triangles")
+    load_part = model_part.CreateSubModelPart("LocalizedLoad")
+    # Add the exact condition/node topology. The conditions own the selected
+    # footprint membership.
+    load_node_ids = sorted({node.Id for condition in conditions for node in condition.GetGeometry()})
+    if load_node_ids:
+        load_part.AddNodes(load_node_ids)
+    load_part.AddConditions([condition.Id for condition in conditions])
+    return tuple(conditions), {
+        "center_x_mm": center_x,
+        "center_z_mm": center_z,
+        "radius_mm": radius,
+        "profile": str(load_definition.get("profile", "compact_cosine_radial")),
+        "normalization": str(load_definition.get("normalization", "peak_pressure")),
+        "surface_tags": list(outer_tags),
+        "selected_triangle_count": len(records),
+        "selected_condition_count": len(conditions),
+        "selected_triangles": records,
+    }
+
+
+def _set_localized_surface_load(
+    conditions: Sequence[Any],
+    records: Sequence[Mapping[str, Any]],
+    pressure_mpa: float,
+    scale: float,
+) -> np.ndarray:
+    """Set one load-ramp value and return its reference resultant vector."""
+    _, _, _, SMA = import_kratos()
+    resultant = np.zeros(3, dtype=float)
+    for condition, record in zip(conditions, records):
+        magnitude = float(pressure_mpa) * float(scale) * float(record["profile_weight"])
+        vector = magnitude * np.asarray(record["inward_normal"], dtype=float)
+        condition.SetValue(SMA.SURFACE_LOAD, vector.tolist())
+        resultant += float(record["reference_area_mm2"]) * vector
+    return resultant
+
+
 def _active_contact_diagnostics(
     model_part: Any,
     volume_mesh: FingertipVolumeMesh,
@@ -697,23 +814,33 @@ def _active_contact_diagnostics(
 
 def solve_solid_3d(
     volume_mesh: FingertipVolumeMesh,
-    fixture: IndenterFixture,
+    fixture: IndenterFixture | None,
     settings: SolidFEASettings,
     *,
     reference_node_columns: Sequence[Sequence[int]] | None = None,
     reference_layer_index: int = 0,
     step_history: list[dict[str, Any]] | None = None,
+    localized_load: Mapping[str, Any] | None = None,
 ) -> SolidFEAResult:
-    """Solve the single compliant-pad 3D model with optional external ALM contact."""
+    """Solve the compliant-pad 3D model with contact or prescribed load.
+
+    ``localized_load`` is a validation-only Neumann path.  It is mutually
+    exclusive with external contact and does not alter the default production
+    contact behavior.
+    """
     if settings.mode == "3d_equivalent_reference" and reference_node_columns is None:
         raise SolidFEAError(
             "3d_equivalent_reference requires an explicit layered node-column map"
         )
     if settings.mode == "production" and reference_node_columns is not None:
         raise SolidFEAError("layered plane-strain constraints are validation-only")
+    if localized_load is not None and settings.external_contact:
+        raise SolidFEAError("localized load and external contact are mutually exclusive")
+    if settings.external_contact and fixture is None:
+        raise SolidFEAError("external contact requires an indenter fixture")
     if not volume_mesh.validation.passed:
         raise SolidFEAError("refusing invalid volume mesh: " + ", ".join(volume_mesh.validation.errors))
-    KM, _, _, _ = import_kratos()
+    KM, _, _, SMA = import_kratos()
     from KratosMultiphysics.StructuralMechanicsApplication.structural_mechanics_analysis import StructuralMechanicsAnalysis
 
     node_order = tuple(sorted(volume_mesh.nodes))
@@ -732,6 +859,15 @@ def solve_solid_3d(
         condition_ids, master_node_ids, support_node_ids = _populate(
             model_part, volume_mesh, fixture, external_contact=settings.external_contact
         )
+        localized_conditions: tuple[Any, ...] = ()
+        localized_metadata: dict[str, Any] | None = None
+        localized_records: tuple[Mapping[str, Any], ...] = ()
+        if localized_load is not None:
+            pad_properties = properties_for_model_part(model_part, 1)
+            localized_conditions, localized_metadata = _create_localized_surface_load_conditions(
+                model_part, volume_mesh, pad_properties, localized_load
+            )
+            localized_records = tuple(localized_metadata["selected_triangles"])
         analysis.Initialize()
         initialized = True
         # The public AnalysisStage owns DOF creation.  Add exact layered MPCs
@@ -750,14 +886,32 @@ def solve_solid_3d(
         if reference_node_columns is not None:
             solver._GetSolutionStrategy()
         for step in range(1, settings.number_of_steps + 1):
+            step_started = time.perf_counter()
             analysis.time = solver.AdvanceInTime(analysis.time)
-            if settings.external_contact:
+            applied_resultant = np.zeros(3, dtype=float)
+            if localized_load is not None:
+                applied_resultant = _set_localized_surface_load(
+                    localized_conditions,
+                    localized_records,
+                    float(localized_load["pressure_mpa"]),
+                    step / settings.number_of_steps,
+                )
+            elif settings.external_contact:
                 _move_master(model_part, master_node_ids, fixture, settings.indentation_mm * step / settings.number_of_steps)
             analysis.InitializeSolutionStep()
             solver.Predict()
             converged_step = bool(solver.SolveSolutionStep())
             analysis.FinalizeSolutionStep()
             if not converged_step:
+                if step_history is not None:
+                    step_history.append(
+                        {
+                            "step": step,
+                            "load_ramp_fraction": step / settings.number_of_steps,
+                            "converged": False,
+                            "step_wall_seconds": time.perf_counter() - step_started,
+                        }
+                    )
                 return SolidFEAResult(
                     volume_mesh, reference, None, None, None,
                     {name: {"condition_count": len(ids)} for name, ids in condition_ids.items()},
@@ -786,28 +940,47 @@ def solve_solid_3d(
                     if not np.all(np.isfinite(reaction_vector)):
                         raise SolidFEAError("non-finite step-history support reaction")
                     reaction_vector_sum += reaction_vector
-                loading_direction = np.asarray(
-                    [fixture.frame.loading_direction[0], fixture.frame.loading_direction[1], 0.0],
-                    dtype=float,
-                )
-                step_diagnostics = _active_contact_diagnostics(
-                    model_part,
-                    volume_mesh,
-                    fixture,
-                    condition_ids["PadOuterArc"],
-                    generated_active,
-                    settings.indentation_mm * step / settings.number_of_steps,
-                )
-                step_history.append(
-                    {
-                        "step": step,
-                        "prescribed_travel_mm": settings.indentation_mm * step / settings.number_of_steps,
-                        "active_mortar_count": generated_active,
-                        "reaction_force_n": float(abs(np.dot(reaction_vector_sum, loading_direction))),
-                        "minimum_gap_or_contact_clearance_mm": step_diagnostics["min_clearance_mm"],
-                        "max_penetration_mm": step_diagnostics["max_penetration_mm"],
-                    }
-                )
+                if localized_load is not None:
+                    load_scale = float(np.linalg.norm(applied_resultant))
+                    step_history.append(
+                        {
+                            "step": step,
+                            "load_ramp_fraction": step / settings.number_of_steps,
+                            "pressure_mpa": float(localized_load["pressure_mpa"]),
+                            "applied_resultant_n": applied_resultant.tolist(),
+                            "applied_resultant_magnitude_n": load_scale,
+                            "active_mortar_count": 0,
+                            "reaction_force_n": float(np.linalg.norm(reaction_vector_sum)),
+                            "load_balance_error_n": float(np.linalg.norm(reaction_vector_sum + applied_resultant)),
+                            "converged": True,
+                            "step_wall_seconds": time.perf_counter() - step_started,
+                        }
+                    )
+                else:
+                    loading_direction = np.asarray(
+                        [fixture.frame.loading_direction[0], fixture.frame.loading_direction[1], 0.0],
+                        dtype=float,
+                    )
+                    step_diagnostics = _active_contact_diagnostics(
+                        model_part,
+                        volume_mesh,
+                        fixture,
+                        condition_ids["PadOuterArc"],
+                        generated_active,
+                        settings.indentation_mm * step / settings.number_of_steps,
+                    )
+                    step_history.append(
+                        {
+                            "step": step,
+                            "prescribed_travel_mm": settings.indentation_mm * step / settings.number_of_steps,
+                            "active_mortar_count": generated_active,
+                            "reaction_force_n": float(abs(np.dot(reaction_vector_sum, loading_direction))),
+                            "minimum_gap_or_contact_clearance_mm": step_diagnostics["min_clearance_mm"],
+                            "max_penetration_mm": step_diagnostics["max_penetration_mm"],
+                            "converged": True,
+                            "step_wall_seconds": time.perf_counter() - step_started,
+                        }
+                    )
         displacement = np.asarray(
             [[
                 float(model_part.Nodes[node_id].GetSolutionStepValue(KM.DISPLACEMENT_X)),
@@ -829,10 +1002,22 @@ def solve_solid_3d(
             if not np.all(np.isfinite(reaction_vector)):
                 raise SolidFEAError("non-finite indenter reaction")
             actuator_reaction_vector_sum += reaction_vector
-        loading_direction = np.asarray(
-            [fixture.frame.loading_direction[0], fixture.frame.loading_direction[1], 0.0],
-            dtype=float,
-        )
+        if localized_load is not None:
+            final_applied_resultant = _set_localized_surface_load(
+                localized_conditions,
+                localized_records,
+                float(localized_load["pressure_mpa"]),
+                1.0,
+            )
+            loading_direction = final_applied_resultant / max(
+                float(np.linalg.norm(final_applied_resultant)), 1.0e-30
+            )
+        else:
+            loading_direction = np.asarray(
+                [fixture.frame.loading_direction[0], fixture.frame.loading_direction[1], 0.0],
+                dtype=float,
+            )
+            final_applied_resultant = np.zeros(3, dtype=float)
         reaction = float(abs(np.dot(reaction_vector_sum, loading_direction)))
         actuator_reaction = float(abs(np.dot(actuator_reaction_vector_sum, loading_direction)))
         force_equilibrium_error = (
@@ -844,6 +1029,14 @@ def solve_solid_3d(
             name: {"condition_count": len(ids), "active_condition_count": sum(bool(condition.Is(KM.ACTIVE)) for condition in model_part.GetSubModelPart(name).Conditions) if model_part.HasSubModelPart(name) else 0}
             for name, ids in condition_ids.items()
         }
+        if localized_load is not None:
+            contact_state["localized_load"] = {
+                **(localized_metadata or {}),
+                "pressure_mpa": float(localized_load["pressure_mpa"]),
+                "final_applied_resultant_n": final_applied_resultant.tolist(),
+                "final_applied_resultant_magnitude_n": float(np.linalg.norm(final_applied_resultant)),
+                "selected_condition_count": len(localized_conditions),
+            }
         if model_part.HasSubModelPart("ComputingContact"):
             generated = model_part.GetSubModelPart("ComputingContact")
             contact_state["generated_mortar"] = {
@@ -948,6 +1141,7 @@ __all__ = [
     "SolidFEASettings",
     "create_surface_condition",
     "import_kratos",
+    "localized_profile",
     "parameters_for_settings",
     "properties_for_model_part",
     "solve_solid_3d",

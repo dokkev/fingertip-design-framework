@@ -444,7 +444,14 @@ def _run_child(case: Mapping[str, Any]) -> int:
             )
             return 1
 
-        displacement = np.asarray(artifacts.snapshots[str(INDENTATION_MM)]["displacements"], dtype=float)
+        raw_displacements = artifacts.snapshots[f"{INDENTATION_MM:g}"]["displacements"]
+        if isinstance(raw_displacements, Mapping):
+            displacement = np.asarray(
+                [raw_displacements[int(node_id)] for node_id in mesh.pad.node_ids],
+                dtype=float,
+            )
+        else:
+            displacement = np.asarray(raw_displacements, dtype=float)
         if displacement.shape != mesh.pad.coordinates.shape:
             _failure(case, "NUMERICAL_FAIL", "2D displacement artifact has the wrong shape", result=result)
             return 1
@@ -516,7 +523,7 @@ def _run_child(case: Mapping[str, Any]) -> int:
     except Exception as exc:
         _failure(
             case,
-            "NUMERICAL_FAIL",
+            "IMPLEMENTATION_FAIL",
             f"{type(exc).__name__}: {exc}",
             runtime_seconds=time.perf_counter() - started,
         )
@@ -537,12 +544,57 @@ def _read_case(case: Mapping[str, Any]) -> dict[str, Any] | None:
         return None
     try:
         payload = strict_read_json(path)
-        if payload.get("case_fingerprint") != _case_contract(case):
-            return None
         if payload.get("case_id") != case["case_id"]:
             return None
-        if payload.get("outcome") not in {"PASS", "NUMERICAL_FAIL", "RUNTIME_LIMIT", "ENVIRONMENT_FAIL"}:
+        if payload.get("morphology_fingerprint") != case["morphology_fingerprint"]:
             return None
+        if payload.get("parameters") != case["parameters"]:
+            return None
+        result = payload.get("result", {})
+        configuration = payload.get("configuration", result.get("configuration", {}))
+        indentation = configuration.get("indentation", {})
+        indenter = configuration.get("indenter", {}).get("settings", {})
+        expected_mesh_settings = asdict(
+            next(item for item in _mesh_policies() if item.name == MESH_POLICY).settings
+        )
+        stable_contract = (
+            indentation.get("indentation_mm") == INDENTATION_MM
+            and indentation.get("number_of_steps") == STEPS
+            and indenter.get("initial_gap_mm") == INITIAL_GAP_MM
+            and indenter.get("radius_mm") == RADIUS_MM
+            and configuration.get("mesh_settings") == expected_mesh_settings
+            and payload.get("status") == payload.get("outcome")
+        )
+        if payload.get("outcome") == "PASS":
+            stable_contract = stable_contract and (
+                payload.get("mesh_policy") == MESH_POLICY
+                and payload.get("steps") == STEPS
+                and payload.get("indentation_mm") == INDENTATION_MM
+                and payload.get("initial_gap_mm") == INITIAL_GAP_MM
+            )
+        if payload.get("case_fingerprint") != _case_contract(case) and not stable_contract:
+            return None
+        if payload.get("outcome") not in {
+            "PASS",
+            "NUMERICAL_FAIL",
+            "RUNTIME_LIMIT",
+            "ENVIRONMENT_FAIL",
+            "IMPLEMENTATION_FAIL",
+        }:
+            return None
+        exception = str(result.get("exception") or payload.get("failure_reason") or "")
+        if payload.get("outcome") == "NUMERICAL_FAIL" and (
+            result.get("exception")
+            or exception.startswith(("IndexError:", "TypeError:"))
+        ):
+            payload["outcome"] = "IMPLEMENTATION_FAIL"
+            payload["status"] = "IMPLEMENTATION_FAIL"
+            payload["classification_repaired_from"] = "NUMERICAL_FAIL"
+        if payload.get("case_fingerprint") != _case_contract(case):
+            payload["case_fingerprint"] = _case_contract(case)
+            payload["artifact_rebound_without_solver_rerun"] = True
+        if payload.get("classification_repaired_from") or payload.get("artifact_rebound_without_solver_rerun"):
+            atomic_write_json(path, _jsonable(payload))
         if payload.get("outcome") == "PASS":
             state = Path(str(payload.get("state_artifact", "")))
             if not state.is_file() or payload.get("state_sha256") != _sha256_file(state):
@@ -552,8 +604,8 @@ def _read_case(case: Mapping[str, Any]) -> dict[str, Any] | None:
         return None
 
 
-def _run_case(case: Mapping[str, Any]) -> dict[str, Any]:
-    existing = _read_case(case)
+def _run_case(case: Mapping[str, Any], *, force: bool = False) -> dict[str, Any]:
+    existing = None if force else _read_case(case)
     if existing is not None:
         existing["reused"] = True
         return existing
@@ -587,6 +639,7 @@ def _run_case(case: Mapping[str, Any]) -> dict[str, Any]:
                 payload["orchestration_wall_time_seconds"] = max(
                     0.0, float(payload["parent_wall_time_seconds"]) - float(child_wall)
                 )
+            atomic_write_json(_case_path(case), _jsonable(payload))
             return payload
     except subprocess.TimeoutExpired:
         _failure(
@@ -615,11 +668,18 @@ def _write_summary(name: str, records: list[Mapping[str, Any]], *, status: str, 
         outcome: sum(record.get("outcome") == outcome for record in records)
         for outcome in ("PASS", "NUMERICAL_FAIL", "RUNTIME_LIMIT", "ENVIRONMENT_FAIL", "IMPLEMENTATION_FAIL")
     }
-    runtimes = [
-        float(record["parent_wall_time_seconds"])
-        for record in records
-        if record.get("parent_wall_time_seconds") is not None
-    ]
+    runtimes = []
+    runtime_sources: dict[str, int] = {}
+    for record in records:
+        if record.get("parent_wall_time_seconds") is not None:
+            runtimes.append(float(record["parent_wall_time_seconds"]))
+            source = "parent_process"
+        elif record.get("timing_profile", {}).get("child_wall_clock_seconds") is not None:
+            runtimes.append(float(record["timing_profile"]["child_wall_clock_seconds"]))
+            source = "persisted_child_only_reused_artifact"
+        else:
+            continue
+        runtime_sources[source] = runtime_sources.get(source, 0) + 1
     summary: dict[str, Any] = {
         "schema": f"overnight-gap0-travel2-{name}-v1",
         "experiment_fingerprint": _load_experiment()["experiment_fingerprint"],
@@ -634,6 +694,7 @@ def _write_summary(name: str, records: list[Mapping[str, Any]], *, status: str, 
             "minimum": float(np.min(runtimes)) if runtimes else None,
             "maximum": float(np.max(runtimes)) if runtimes else None,
         },
+        "runtime_sources": runtime_sources,
         "created_at": _now(),
     }
     if extra:
@@ -692,13 +753,13 @@ def _check_left_right(records: list[Mapping[str, Any]]) -> dict[str, Any]:
     }
 
 
-def _run_profile() -> dict[str, Any]:
+def _run_profile(*, force: bool = False) -> dict[str, Any]:
     experiment = _load_experiment()
     case = next(
         case for case in _case_list(experiment)
         if case["base_id"] == "base_00_nominal" and case["arm"] == "FIXED" and case["side"] == "left"
     )
-    record = _run_case(case)
+    record = _run_case(case, force=force)
     profile = {
         "schema": "overnight-gap0-travel2-profile-v1",
         "experiment_fingerprint": experiment["experiment_fingerprint"],
@@ -717,18 +778,22 @@ def _run_profile() -> dict[str, Any]:
         "created_at": _now(),
     }
     atomic_write_json(OUTPUT / "nominal_timing_profile.json", _jsonable(profile))
-    _stage_update(profile_status=record.get("outcome"), profile_case_id=case["case_id"])
+    _stage_update(stage="profile", profile_status=record.get("outcome"), profile_case_id=case["case_id"])
     return profile
 
 
-def _run_smoke() -> dict[str, Any]:
+def _run_smoke(*, rerun_implementation_failures: bool = False) -> dict[str, Any]:
     experiment = _load_experiment()
     cases = _select_smoke_cases(experiment)
     records = []
     for index, case in enumerate(cases, start=1):
-        record = _run_case(case)
+        existing = _read_case(case)
+        force = rerun_implementation_failures and bool(
+            existing and existing.get("outcome") == "IMPLEMENTATION_FAIL"
+        )
+        record = _run_case(case, force=force)
         records.append(record)
-        _stage_update(smoke_completed_case_count=index, smoke_case_outcomes={row["case_id"]: row.get("outcome") for row in records})
+        _stage_update(stage="smoke", smoke_completed_case_count=index, smoke_case_outcomes={row["case_id"]: row.get("outcome") for row in records})
     left_right = _check_left_right(records)
     status = "PASS" if all(record.get("outcome") == "PASS" for record in records) and all(
         row["both_pass"] for row in left_right["rows"]
@@ -758,7 +823,7 @@ def _run_full_2d() -> dict[str, Any]:
     for index, case in enumerate(cases, start=1):
         record = _run_case(case)
         records.append(record)
-        _stage_update(full_2d_completed_case_count=index, full_2d_case_outcomes={row["case_id"]: row.get("outcome") for row in records})
+        _stage_update(stage="fea2d", full_2d_completed_case_count=index, full_2d_case_outcomes={row["case_id"]: row.get("outcome") for row in records})
     left_right = _check_left_right(records)
     status = "PASS" if len(records) == 96 else "INCOMPLETE"
     return _write_summary("fea2d", records, status=status, extra={"left_right_convergence": left_right})
@@ -777,6 +842,8 @@ def _assemble() -> dict[str, Any]:
     for case in cases:
         record = _read_case(case)
         result["cases"][case["case_id"]] = record.get("outcome") if record else "NOT_RUN"
+    result["stages_invoked"] = ["assemble"]
+    _stage_update(stage="assemble", assembly_status="PASS")
     atomic_write_json(OUTPUT / "artifact_only_assembly.json", _jsonable(result))
     return result
 
@@ -786,6 +853,8 @@ def main() -> int:
     parser.add_argument("--stage", choices=("precommit", "profile", "smoke", "fea2d", "assemble"), default="precommit")
     parser.add_argument("--child-stage", choices=("fea2d",))
     parser.add_argument("--case-id")
+    parser.add_argument("--fresh-profile", action="store_true")
+    parser.add_argument("--rerun-implementation-failures", action="store_true")
     args = parser.parse_args()
     if args.child_stage:
         if not args.case_id:
@@ -794,18 +863,23 @@ def main() -> int:
     OUTPUT.mkdir(parents=True, exist_ok=True)
     if args.stage == "precommit":
         parent = _load_parent_manifest()
+        experiment = _experiment_payload(parent)
         if MANIFEST.is_file():
-            experiment = _load_experiment()
-        else:
-            experiment = _experiment_payload(parent)
+            previous = strict_read_json(MANIFEST)
+            _verify_experiment(previous)
+            if previous.get("experiment_fingerprint") == experiment["experiment_fingerprint"]:
+                experiment = previous
+        if not MANIFEST.is_file() or experiment.get("experiment_fingerprint") != strict_read_json(MANIFEST).get("experiment_fingerprint"):
             atomic_write_json(MANIFEST, _jsonable(experiment))
         _stage_update(experiment_fingerprint=experiment["experiment_fingerprint"], stage="precommit", planned_2d_cases=96)
         print(json.dumps({"stage": "precommit", "status": "PASS", "experiment_fingerprint": experiment["experiment_fingerprint"]}, sort_keys=True))
         return 0
     if args.stage == "profile":
-        result = _run_profile()
+        result = _run_profile(force=args.fresh_profile)
     elif args.stage == "smoke":
-        result = _run_smoke()
+        result = _run_smoke(
+            rerun_implementation_failures=args.rerun_implementation_failures
+        )
     elif args.stage == "fea2d":
         result = _run_full_2d()
     else:

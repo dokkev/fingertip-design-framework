@@ -945,7 +945,11 @@ def run_indentation_case(
             and all(point["rigid_indenter_validation"]["pass"] for point in result["history"]),
         }
         if diagnostic_mode == "minimal":
-            final_groups = result["history"][-1]["contact_groups"]
+            final_groups = (
+                result["history"][-1]["contact_groups"]
+                if result["history"]
+                else {}
+            )
             result["curve_diagnostics"] = {
                 "available": False,
                 "reason": "full force-curve diagnostics are disabled in minimal mode",
@@ -961,12 +965,15 @@ def run_indentation_case(
                 ),
                 "active_set_converged_every_step": all_active_sets_converged,
                 "rigid_indenter_remained_rigid": bool(
-                    result["history"][-1]["rigid_indenter_validation"]["pass"]
+                    result["history"]
+                    and result["history"][-1]["rigid_indenter_validation"]["pass"]
                 ),
             }
         result["case_acceptance_checks"] = case_checks
         result["solve_status"] = "PASS" if completed else "FAIL"
         result["status"] = "PASS" if all(case_checks.values()) else "FAIL"
+        if not result["history"] and "failure_reason" not in result:
+            result["failure_reason"] = "no_converged_steps"
         if completed and result["status"] == "FAIL" and "failure_reason" not in result:
             result["failure_reason"] = "case_acceptance_checks_failed"
         if result["history"]:
