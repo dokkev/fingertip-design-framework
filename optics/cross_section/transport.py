@@ -492,18 +492,12 @@ def _trace_transport(
             float(forward_probe_xy[1]),
         )
         object_hit = (
-            domain.indenter_region is not None
-            and domain.indenter_region.covers(forward_probe)
-        )
-        if (
             state.medium == "silicone"
             and domain.contact_patch is not None
-            and domain.contact_patch.distance(
+            and domain.contact_patch.covers(
                 Point(float(hit_point[0]), float(hit_point[1]))
             )
-            <= domain.geometry_tolerance_mm
-        ):
-            object_hit = True
+        )
         if object_hit:
             object_interface_incident_weight += end_weight
             if domain.indenter_optics is None:
@@ -544,6 +538,13 @@ def _trace_transport(
                 )
             else:
                 terminated_weight += reflected_weight
+            continue
+        if (
+            state.medium == "air"
+            and domain.indenter_region is not None
+            and domain.indenter_region.covers(forward_probe)
+        ):
+            terminated_weight += end_weight
             continue
         if domain.rigid_region.covers(forward_probe):
             terminated_weight += end_weight

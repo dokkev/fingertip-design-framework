@@ -11,8 +11,10 @@ import numpy as np
 from shapely.geometry import Point
 
 from mesh.pad import PadMesh
+from mesh.indenter import IndenterPose2D
 from mesh.types import FingertipMesh
 from model.fingertip import Fingertip
+from optics.contact_object import IndenterOptics
 from optics.cross_section.domain import _build_mesh_domain
 from optics.geometry.extrusion import (
     InvalidExtrudedOpticalMesh,
@@ -30,6 +32,10 @@ EXTERNAL_SURFACE_TAGS = (
     "pad_outer_right",
 )
 
+AIR_INTERFACE = "AIR_INTERFACE"
+OBJECT_CONTACT_INTERFACE = "OBJECT_CONTACT_INTERFACE"
+INTERNAL_INTERFACE = "INTERNAL_INTERFACE"
+
 
 @dataclass(frozen=True)
 class TriangleSurface:
@@ -43,6 +49,7 @@ class TriangleSurface:
     u_start: np.ndarray | None = None
     u_end: np.ndarray | None = None
     semantic_tags: tuple[str, ...] | None = None
+    interface_tags: tuple[str, ...] | None = None
 
     def __post_init__(self) -> None:
         vertices = np.array(self.vertices, dtype=np.float32, copy=True)
@@ -122,6 +129,13 @@ class TriangleSurface:
                 raise Transport3DGeometryError(
                     "semantic_tags must have one value per triangle"
                 )
+        interface_tags = None
+        if self.interface_tags is not None:
+            interface_tags = tuple(str(tag) for tag in self.interface_tags)
+            if len(interface_tags) != len(faces):
+                raise Transport3DGeometryError(
+                    "interface_tags must have one value per triangle"
+                )
         for array in arrays:
             array.setflags(write=False)
         object.__setattr__(self, "vertices", vertices)
@@ -130,6 +144,7 @@ class TriangleSurface:
         for name, value in optional:
             object.__setattr__(self, name, value)
         object.__setattr__(self, "semantic_tags", semantic_tags)
+        object.__setattr__(self, "interface_tags", interface_tags)
 
 
 @dataclass(frozen=True)
@@ -153,6 +168,7 @@ class ExtrudedTransportGeometry:
     optical_domain: Any
     metadata: Mapping[str, Any]
     geometry_mode: Literal["planar_extruded", "full3d_surface"] = "planar_extruded"
+    indenter_optics: IndenterOptics | None = None
 
     def __post_init__(self) -> None:
         if not math.isfinite(self.depth_mm) or self.depth_mm != 11.0:
@@ -338,6 +354,8 @@ def build_transport_geometry(
     *,
     depth_mm: float = 11.0,
     source_epsilon_mm: float = 1.0e-5,
+    indenter_pose: IndenterPose2D | None = None,
+    indenter_optics: IndenterOptics | None = None,
 ) -> ExtrudedTransportGeometry:
     """Build one loaded/reference scene from neutral mesh data only."""
     if not isinstance(tip, Fingertip):
@@ -346,6 +364,10 @@ def build_transport_geometry(
         raise TypeError("reference_mesh must be a FingertipMesh")
     if not hasattr(pad_mesh, "coordinates") or not hasattr(pad_mesh, "triangles"):
         raise TypeError("pad_mesh must expose neutral coordinates and triangles")
+    if (indenter_pose is None) != (indenter_optics is None):
+        raise Transport3DGeometryError(
+            "indenter_pose and indenter_optics must be supplied together"
+        )
     reference_pad = reference_mesh.pad
     if len(pad_mesh.node_ids) != len(reference_pad.node_ids) or not np.array_equal(
         np.asarray(pad_mesh.node_ids), np.asarray(reference_pad.node_ids)
@@ -357,13 +379,70 @@ def build_transport_geometry(
         extrusion = _ExtrudedMesh.from_pad_mesh(reference_pad, depth_mm=depth_mm)
     except InvalidExtrudedOpticalMesh as exc:
         raise Transport3DGeometryError(str(exc)) from exc
-    domain = _build_mesh_domain(tip, pad_mesh)
+    domain = _build_mesh_domain(
+        tip,
+        pad_mesh,
+        indenter_pose=indenter_pose,
+        indenter_optics=indenter_optics,
+    )
 
     side_face_start = 2 * len(reference_pad.triangles)
     side_faces = extrusion.faces_3d[side_face_start:]
     edge_indices, external, u_start, u_end, semantic_tags, chain = _boundary_metadata(
         pad_mesh,
         reference_pad,
+    )
+    contact_edge_mask = np.zeros(len(pad_mesh.boundary_edges), dtype=bool)
+    if indenter_optics is not None:
+        if indenter_pose is None or indenter_pose.contact_patch is None:
+            raise Transport3DGeometryError(
+                "BLOCKED_CONTACT_INTERFACE_MAPPING: requested indenter optics "
+                "requires a nonempty mechanical contact patch"
+            )
+        active_node_ids = set(indenter_pose.active_contact_node_ids)
+        if not active_node_ids:
+            raise Transport3DGeometryError(
+                "BLOCKED_CONTACT_INTERFACE_MAPPING: mechanical contact patch "
+                "has no active contact node provenance"
+            )
+        deformed_coordinates = np.asarray(pad_mesh.coordinates, dtype=float)
+        contact_edge_keys = {
+            _canonical_edge(int(edge[0]), int(edge[1]))
+            for edge in pad_mesh.boundary_edges_for("pad_outer_arc")
+        }
+        for index, edge in enumerate(pad_mesh.boundary_edges):
+            if not external[2 * index]:
+                continue
+            first, second = (int(edge[0]), int(edge[1]))
+            if _canonical_edge(first, second) not in contact_edge_keys:
+                continue
+            node_ids = (
+                int(pad_mesh.node_ids[first]),
+                int(pad_mesh.node_ids[second]),
+            )
+            contact_edge_mask[index] = all(
+                node_id in active_node_ids for node_id in node_ids
+            )
+        mapped_edges = [
+            deformed_coordinates[np.asarray(edge, dtype=np.int64)]
+            for edge, selected in zip(
+                pad_mesh.boundary_edges,
+                contact_edge_mask,
+            )
+            if selected
+        ]
+        if not mapped_edges:
+            raise Transport3DGeometryError(
+                "BLOCKED_CONTACT_INTERFACE_MAPPING: active contact nodes do not "
+                "map to a pad outer boundary edge"
+            )
+    interface_tags = tuple(
+        (
+            OBJECT_CONTACT_INTERFACE
+            if contact_edge_mask[index // 2]
+            else AIR_INTERFACE if external[index] else INTERNAL_INTERFACE
+        )
+        for index in range(len(side_faces))
     )
     silicone = _surface_from_extrusion(
         extrusion,
@@ -374,6 +453,7 @@ def build_transport_geometry(
         u_start=u_start,
         u_end=u_end,
         semantic_tags=semantic_tags,
+        interface_tags=interface_tags,
     )
 
     rigid_pad = _rigid_pad_mesh(reference_mesh)
@@ -440,6 +520,7 @@ def build_transport_geometry(
         optical_domain=domain,
         metadata=metadata,
         geometry_mode="planar_extruded",
+        indenter_optics=indenter_optics,
     )
 
 
@@ -515,8 +596,11 @@ def build_full3d_transport_geometry(
 
 
 __all__ = [
+    "AIR_INTERFACE",
     "EXTERNAL_SURFACE_TAGS",
     "ExtrudedTransportGeometry",
+    "INTERNAL_INTERFACE",
+    "OBJECT_CONTACT_INTERFACE",
     "TriangleSurface",
     "Transport3DGeometryError",
     "build_full3d_transport_geometry",

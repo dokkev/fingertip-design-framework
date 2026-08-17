@@ -14,9 +14,14 @@ from mesh.indenter import (
 from model import Fingertip, FingertipParameters, LED
 from model.optical import OpticalMaterial
 from optics import IndenterOptics, TraceSettings
-from optics.cross_section.domain import _OpticalDomain
+from optics.cross_section.domain import (
+    CrossSectionOpticsError,
+    _OpticalDomain,
+    _build_no_load_domain,
+)
 from optics.cross_section.transport import _trace_transport
 from optics.physics import interface_directions_and_reflectance
+from optics.transport3d.physics import object_interface_split
 
 
 def _object_domain() -> _OpticalDomain:
@@ -120,6 +125,35 @@ def test_dielectric_object_matches_fresnel_and_closes_interface_weight() -> None
     ) == pytest.approx(result.launched_weight)
 
 
+def test_noncontacting_indenter_surface_remains_silicone_air() -> None:
+    domain = replace(
+        _object_domain(),
+        contact_patch=LineString([(1.0, 0.5), (1.0, 0.6)]),
+        indenter_optics=IndenterOptics("absorber"),
+    )
+    result = _trace_transport(
+        domain,
+        led=LED(emission_half_angle_deg=1.0e-3),
+        material=OpticalMaterial(absorption_per_mm=0.0),
+        settings=_object_settings(),
+    )
+    assert result.object_interface_incident_weight == pytest.approx(0.0)
+    assert result.object_absorbed_weight == pytest.approx(0.0)
+
+
+def test_planar_object_interface_directions_have_zero_longitudinal_component() -> None:
+    reflected, transmitted, _reflectance, tir = object_interface_split(
+        np,
+        np.asarray([[0.0, -1.0, 0.0]]),
+        np.asarray([[0.0, -1.0, 0.0]]),
+        1.41,
+        2.0,
+    )
+    assert not bool(tir[0])
+    assert reflected[0, 2] == pytest.approx(0.0)
+    assert transmitted[0, 2] == pytest.approx(0.0)
+
+
 def test_indenter_optics_contract_rejects_implicit_dielectric_index() -> None:
     with pytest.raises(ValueError):
         IndenterOptics("dielectric")
@@ -150,3 +184,19 @@ def test_pose_reuses_fixture_geometry_and_travel() -> None:
             for index in range(2)
         )
     )
+
+
+def test_indenter_optics_requires_mechanical_contact_patch() -> None:
+    tip = Fingertip(FingertipParameters())
+    fixture = build_normal_indenter_fixture_at_x(
+        tip.geometry,
+        0.0,
+        IndenterSettings(initial_gap_mm=0.0),
+    )
+    pose = pose_from_fixture(fixture, 0.5)
+    with pytest.raises(CrossSectionOpticsError, match="BLOCKED_CONTACT_INTERFACE_MAPPING"):
+        _build_no_load_domain(
+            tip,
+            indenter_pose=pose,
+            indenter_optics=IndenterOptics("absorber"),
+        )

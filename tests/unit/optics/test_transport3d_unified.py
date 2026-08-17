@@ -76,10 +76,10 @@ def test_unified_artifact_schema_marks_xy_and_reads_legacy_planar_orientation(
         extrusion_depth_mm=11.0,
         launched_ray_count=3,
         launched_weight=1.0,
-        escaped_weight=1.0,
-        absorbed_weight=0.0,
-        terminated_weight=0.0,
-        outgoing_surface_weight=1.0,
+        escaped_weight=0.5,
+        absorbed_weight=0.2,
+        terminated_weight=0.1,
+        outgoing_surface_weight=0.5,
         surface_u_edges=np.asarray([0.0, 1.0]),
         surface_z_edges=np.asarray([-1.0, 1.0]),
         outgoing_surface_field=np.ones((1, 1)),
@@ -90,12 +90,16 @@ def test_unified_artifact_schema_marks_xy_and_reads_legacy_planar_orientation(
         escape_surface_z=np.asarray([0.0]),
         escape_surface_tags=("pad_outer_arc",),
         escape_surface_primitive_indices=np.asarray([0]),
-        escape_weights=np.asarray([1.0]),
+        escape_weights=np.asarray([0.5]),
         escape_primary_ray_indices=np.asarray([0]),
         escape_path_lengths_mm=np.asarray([1.0]),
         escape_interaction_counts=np.asarray([1]),
         energy_balance_error=0.0,
         energy_balance_tolerance=1.0e-6,
+        object_absorbed_weight=0.1,
+        object_transmitted_weight=0.1,
+        object_interface_incident_weight=0.3,
+        object_reflected_weight=0.1,
         projected_x_edges_mm=np.asarray([0.0, 1.0, 2.0, 3.0]),
         projected_y_edges_mm=np.asarray([0.0, 1.0, 2.0]),
         projected_weighted_path_density=density_yx,
@@ -124,6 +128,10 @@ def test_unified_artifact_schema_marks_xy_and_reads_legacy_planar_orientation(
     assert metadata["field_axis_order"] == "x,y"
     loaded = load_case_artifact(path, expected_contract=contract)
     np.testing.assert_array_equal(loaded.field, result.field)
+    assert loaded.object_absorbed_weight == result.object_absorbed_weight
+    assert loaded.object_transmitted_weight == result.object_transmitted_weight
+    assert loaded.object_interface_incident_weight == result.object_interface_incident_weight
+    assert loaded.object_reflected_weight == result.object_reflected_weight
 
     field_path = path.with_suffix(".npz")
     with field_path.open("wb") as handle:

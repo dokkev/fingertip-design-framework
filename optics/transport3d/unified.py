@@ -23,7 +23,8 @@ from optics.transport3d.transport import trace_geometry
 
 
 UnifiedOpticalMode = Literal["PLANAR_2D", "FULL_3D"]
-UNIFIED_ARTIFACT_SCHEMA = "unified-optix-transport-case-v2"
+UNIFIED_ARTIFACT_SCHEMA = "unified-optix-transport-case-v3"
+LEGACY_UNIFIED_ARTIFACT_SCHEMA_V2 = "unified-optix-transport-case-v2"
 LEGACY_UNIFIED_ARTIFACT_SCHEMA = "unified-optix-transport-case-v1"
 
 
@@ -80,6 +81,10 @@ class UnifiedTransportResult:
     terminated_ray_count: int
     energy_balance_error: float
     path_diagnostics: Mapping[str, Any]
+    object_absorbed_weight: float = 0.0
+    object_transmitted_weight: float = 0.0
+    object_interface_incident_weight: float = 0.0
+    object_reflected_weight: float = 0.0
 
     def __post_init__(self) -> None:
         if self.optical_mode not in ("PLANAR_2D", "FULL_3D"):
@@ -105,6 +110,10 @@ class UnifiedTransportResult:
                 self.absorbed_weight,
                 self.terminated_weight,
                 self.energy_balance_error,
+                self.object_absorbed_weight,
+                self.object_transmitted_weight,
+                self.object_interface_incident_weight,
+                self.object_reflected_weight,
             ],
             dtype=float,
         )
@@ -188,6 +197,10 @@ class UnifiedTransportResult:
             ),
             energy_balance_error=result.energy_balance_error,
             path_diagnostics=result.geometry_metadata,
+            object_absorbed_weight=result.object_absorbed_weight,
+            object_transmitted_weight=result.object_transmitted_weight,
+            object_interface_incident_weight=result.object_interface_incident_weight,
+            object_reflected_weight=result.object_reflected_weight,
         )
 
 
@@ -345,6 +358,10 @@ def save_case_artifact(path: Path, result: UnifiedTransportResult, contract: Map
             "valid_ray_count": result.valid_ray_count,
             "terminated_ray_count": result.terminated_ray_count,
             "energy_balance_error": result.energy_balance_error,
+            "object_absorbed_weight": result.object_absorbed_weight,
+            "object_transmitted_weight": result.object_transmitted_weight,
+            "object_interface_incident_weight": result.object_interface_incident_weight,
+            "object_reflected_weight": result.object_reflected_weight,
             "path_diagnostics": dict(result.path_diagnostics),
         },
     }
@@ -360,7 +377,11 @@ def load_case_artifact(path: Path, *, expected_contract: Mapping[str, Any]) -> U
     """Load an artifact only when the complete fingerprint contract matches."""
     metadata = json.loads(path.read_text(encoding="utf-8"))
     schema = metadata.get("schema")
-    if schema not in (UNIFIED_ARTIFACT_SCHEMA, LEGACY_UNIFIED_ARTIFACT_SCHEMA):
+    if schema not in (
+        UNIFIED_ARTIFACT_SCHEMA,
+        LEGACY_UNIFIED_ARTIFACT_SCHEMA_V2,
+        LEGACY_UNIFIED_ARTIFACT_SCHEMA,
+    ):
         raise ValueError("unsupported unified transport artifact schema")
     if schema == UNIFIED_ARTIFACT_SCHEMA and metadata.get("field_axis_order") != "x,y":
         raise ValueError("unified transport field axis order is missing or unsupported")
@@ -439,11 +460,18 @@ def load_case_artifact(path: Path, *, expected_contract: Mapping[str, Any]) -> U
         terminated_ray_count=int(record["terminated_ray_count"]),
         energy_balance_error=float(record["energy_balance_error"]),
         path_diagnostics=record["path_diagnostics"],
+        object_absorbed_weight=float(record.get("object_absorbed_weight", 0.0)),
+        object_transmitted_weight=float(record.get("object_transmitted_weight", 0.0)),
+        object_interface_incident_weight=float(
+            record.get("object_interface_incident_weight", 0.0)
+        ),
+        object_reflected_weight=float(record.get("object_reflected_weight", 0.0)),
     )
 
 
 __all__ = [
     "LEGACY_UNIFIED_ARTIFACT_SCHEMA",
+    "LEGACY_UNIFIED_ARTIFACT_SCHEMA_V2",
     "OptiXTransport",
     "UNIFIED_ARTIFACT_SCHEMA",
     "UnifiedOpticalMode",

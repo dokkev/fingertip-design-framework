@@ -13,6 +13,7 @@ from optics.cross_section.result import _RawRaySegment
 from optics.cross_section.settings import TraceSettings
 from optics.cross_section.transport import _build_path_density_grid, _prepare_geometry
 from optics.transport3d.geometry import (
+    OBJECT_CONTACT_INTERFACE,
     ExtrudedTransportGeometry,
     Transport3DGeometryError,
     build_transport_geometry,
@@ -27,6 +28,7 @@ from optics.transport3d.optix_backend import (
 from optics.transport3d.physics import (
     Transport3DPhysicsError,
     interface_split,
+    object_interface_split,
     periodic_plane_distance,
     wrapped_periodic_z,
 )
@@ -433,6 +435,10 @@ def _trace_with_runtime(
         raise Transport3DGeometryError(
             "projected path accumulation requires a validated 2D optical domain"
         )
+    if geometry.indenter_optics is not None and geometry.silicone.interface_tags is None:
+        raise Transport3DGeometryError(
+            "indenter optics require semantic silicone interface tags"
+        )
     scene = OptixScene(runtime, geometry.silicone, geometry.rigid, geometry.envelope)
     # OptiX traverses float32 geometry.  Derive the self-hit offset from the
     # existing geometric epsilon and the float32 spacing at this cell scale.
@@ -449,6 +455,17 @@ def _trace_with_runtime(
         "silicone_external": cp.asarray(geometry.silicone.external_surface),
         "silicone_u_start": cp.asarray(geometry.silicone.u_start),
         "silicone_u_end": cp.asarray(geometry.silicone.u_end),
+        "silicone_object_contact": cp.asarray(
+            np.asarray(
+                [
+                    tag == OBJECT_CONTACT_INTERFACE
+                    for tag in geometry.silicone.interface_tags
+                ],
+                dtype=bool,
+            )
+            if geometry.silicone.interface_tags is not None
+            else np.zeros(len(geometry.silicone.faces), dtype=bool)
+        ),
     }
     silicone_surface = type(
         "_DeviceSurface",
@@ -458,6 +475,7 @@ def _trace_with_runtime(
             "external_surface": device_arrays["silicone_external"],
             "u_start": device_arrays["silicone_u_start"],
             "u_end": device_arrays["silicone_u_end"],
+            "object_contact": device_arrays["silicone_object_contact"],
         },
     )()
     source = cp.asarray(geometry.source_position_mm, dtype=cp.float32)
@@ -489,6 +507,10 @@ def _trace_with_runtime(
     escaped_weight = 0.0
     absorbed_weight = 0.0
     terminated_weight = 0.0
+    object_absorbed_weight = 0.0
+    object_transmitted_weight = 0.0
+    object_interface_incident_weight = 0.0
+    object_reflected_weight = 0.0
     periodic_wrap_termination_count = 0
     periodic_wrap_termination_weight = 0.0
     no_event_termination_count = 0
@@ -690,6 +712,9 @@ def _trace_with_runtime(
                 interface_primitive = physical_silicone_primitive[indices]
                 interface_bary = physical_silicone_bary[indices]
                 outward = device_arrays["silicone_normals"][interface_primitive]
+                tagged_contact = silicone_surface.object_contact[interface_primitive]
+                silicone_object_contact = tagged_contact & (interface_medium == 1)
+                air_object_contact = tagged_contact & (interface_medium == 0)
                 medium_normal = cp.where(
                     (interface_medium == 1)[:, None], outward, -outward
                 )
@@ -708,7 +733,10 @@ def _trace_with_runtime(
                 # transmitted medium, so orient the fallback from the
                 # incident direction instead of aborting a valid branch.
                 interface_normal = cp.where(
-                    orientation_fallback[:, None], -medium_normal, medium_normal
+                    silicone_object_contact[:, None], outward, medium_normal
+                )
+                interface_normal = cp.where(
+                    orientation_fallback[:, None], -interface_normal, interface_normal
                 )
                 alignment = cp.sum(interface_directions * interface_normal, axis=1)
                 if bool(cp.any(alignment <= 1.0e-7)):
@@ -731,23 +759,90 @@ def _trace_with_runtime(
                     tip.optical.refractive_index_air,
                     tip.optical.refractive_index_silicone,
                 )
+                if bool(cp.any(silicone_object_contact)):
+                    object_indices = cp.where(silicone_object_contact)[0]
+                    object_incident = interface_end_weights[object_indices]
+                    object_interface_incident_weight += float(
+                        cp.asnumpy(cp.sum(object_incident))
+                    )
+                    if geometry.indenter_optics is not None and geometry.indenter_optics.boundary_model == "absorber":
+                        object_absorbed_weight += float(cp.asnumpy(cp.sum(object_incident)))
+                        reflected[object_indices] = 0.0
+                        transmitted[object_indices] = 0.0
+                        reflectance[object_indices] = 0.0
+                        tir[object_indices] = False
+                    else:
+                        if (
+                            geometry.indenter_optics is None
+                            or geometry.indenter_optics.refractive_index is None
+                        ):
+                            raise Transport3DPhysicsError(
+                                "dielectric indenter optics requires a refractive index"
+                            )
+                        object_reflected, object_transmitted, object_reflectance, object_tir = (
+                            object_interface_split(
+                                cp,
+                                interface_directions[object_indices],
+                                outward[object_indices],
+                                tip.optical.refractive_index_silicone,
+                                float(geometry.indenter_optics.refractive_index),
+                            )
+                        )
+                        if settings.mode == "planar":
+                            object_reflected = _enforce_planar_directions(
+                                cp,
+                                object_reflected,
+                                context="planar object reflected branch",
+                            )
+                            object_transmitted = _enforce_planar_directions(
+                                cp,
+                                object_transmitted,
+                                valid=~object_tir,
+                                context="planar object transmitted branch",
+                            )
+                        reflected[object_indices] = object_reflected
+                        transmitted[object_indices] = object_transmitted
+                        reflectance[object_indices] = object_reflectance
+                        tir[object_indices] = object_tir
+                        object_reflected_weight += float(
+                            cp.asnumpy(
+                                cp.sum(object_incident * object_reflectance)
+                            )
+                        )
+                        object_transmitted_weight += float(
+                            cp.asnumpy(
+                                cp.sum(object_incident * (1.0 - object_reflectance))
+                            )
+                        )
+                if bool(cp.any(air_object_contact)):
+                    terminated_weight += float(
+                        cp.asnumpy(cp.sum(interface_end_weights[air_object_contact]))
+                    )
+                    reflected[air_object_contact] = 0.0
+                    transmitted[air_object_contact] = 0.0
+                    reflectance[air_object_contact] = 0.0
+                    tir[air_object_contact] = False
+                reflected_weight = interface_end_weights * reflectance
+                transmitted_weight = interface_end_weights * (1.0 - reflectance)
                 if settings.mode == "planar":
                     reflected = _enforce_planar_directions(
                         cp,
                         reflected,
+                        valid=reflected_weight > 0.0,
                         context="planar reflected branch",
                     )
                     transmitted = _enforce_planar_directions(
                         cp,
                         transmitted,
-                        valid=~tir,
+                        valid=(transmitted_weight > 0.0) & ~tir & ~tagged_contact,
                         context="planar transmitted branch",
                     )
-                reflected_weight = interface_end_weights * reflectance
-                transmitted_weight = interface_end_weights * (1.0 - reflectance)
                 next_interaction = interface_interactions + 1
                 first_generation = next_interaction <= 1
-                reflected_keep = (reflected_weight >= threshold) | first_generation
+                reflected_keep = (
+                    ((reflected_weight >= threshold) | first_generation)
+                    & (reflected_weight > 0.0)
+                )
                 reflected_terminate = ~reflected_keep
                 if bool(cp.any(reflected_terminate)):
                     terminated_weight += float(cp.asnumpy(cp.sum(reflected_weight[reflected_terminate])))
@@ -770,8 +865,12 @@ def _trace_with_runtime(
                     device_arrays["silicone_vertices"],
                     device_arrays["silicone_faces"],
                 )
-                external_escape = (interface_medium == 1) & silicone_surface.external_surface[interface_primitive]
-                ordinary_transmission = ~external_escape
+                external_escape = (
+                    (interface_medium == 1)
+                    & silicone_surface.external_surface[interface_primitive]
+                    & ~tagged_contact
+                )
+                ordinary_transmission = ~external_escape & ~tagged_contact
                 if bool(cp.any(external_escape)):
                     outgoing_weight = transmitted_weight[external_escape] * (~tir[external_escape])
                     escaped_weight += float(cp.asnumpy(cp.sum(outgoing_weight)))
@@ -923,8 +1022,28 @@ def _trace_with_runtime(
             }
         )
         geometry_metadata["internal_path_field"] = internal_metadata
+    geometry_metadata["object_interface"] = {
+        "enabled": geometry.indenter_optics is not None,
+        "boundary_model": (
+            None
+            if geometry.indenter_optics is None
+            else geometry.indenter_optics.boundary_model
+        ),
+        "indenter_internal_propagation": False,
+        "object_absorbed_weight": object_absorbed_weight,
+        "object_transmitted_weight": object_transmitted_weight,
+        "object_interface_incident_weight": object_interface_incident_weight,
+        "object_reflected_weight": object_reflected_weight,
+    }
     escaped_weight += 0.0
-    energy_balance_error = abs(launched_weight - escaped_weight - absorbed_weight - terminated_weight) / max(launched_weight, 1.0e-30)
+    energy_balance_error = abs(
+        launched_weight
+        - escaped_weight
+        - absorbed_weight
+        - terminated_weight
+        - object_absorbed_weight
+        - object_transmitted_weight
+    ) / max(launched_weight, 1.0e-30)
     if not np.isfinite(energy_balance_error) or energy_balance_error > settings.energy_balance_tolerance:
         raise Transport3DPhysicsError(
             f"energy balance error {energy_balance_error:g} exceeds tolerance {settings.energy_balance_tolerance:g}"
@@ -955,6 +1074,10 @@ def _trace_with_runtime(
         escape_interaction_counts=cp.asnumpy(escaped_interactions),
         energy_balance_error=float(energy_balance_error),
         energy_balance_tolerance=settings.energy_balance_tolerance,
+        object_absorbed_weight=object_absorbed_weight,
+        object_transmitted_weight=object_transmitted_weight,
+        object_interface_incident_weight=object_interface_incident_weight,
+        object_reflected_weight=object_reflected_weight,
         projected_x_edges_mm=None if projected[0] is None else projected[0],
         projected_y_edges_mm=None if projected[1] is None else projected[1],
         projected_weighted_path_density=None if projected[2] is None else projected[2],

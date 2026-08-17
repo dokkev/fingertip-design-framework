@@ -150,17 +150,10 @@ def _validate_domain(
     contact_patch = None if indenter_pose is None else indenter_pose.contact_patch
     indenter_center = None if indenter_pose is None else indenter_pose.center_mm
     if indenter_pose is not None:
-        if indenter_pose.active_contact_node_ids and contact_patch is None:
+        if contact_patch is None or contact_patch.is_empty:
             raise CrossSectionOpticsError(
-                "BLOCKED_CONTACT_INTERFACE_MAPPING: FEA reported active "
-                "external contact nodes but no active pad boundary edge"
-            )
-        if contact_patch is not None and not silicone_region.boundary.buffer(
-            tip.geometry.parameters.geometry_tolerance
-        ).covers(contact_patch):
-            raise CrossSectionOpticsError(
-                "BLOCKED_CONTACT_INTERFACE_MAPPING: mechanical contact patch "
-                "is not on the deformed silicone boundary"
+                "BLOCKED_CONTACT_INTERFACE_MAPPING: requested indenter optics "
+                "requires a nonempty mechanical contact patch"
             )
     occupied_region = rigid_region
     if indenter_region is not None:

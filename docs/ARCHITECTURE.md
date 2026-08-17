@@ -211,10 +211,16 @@ between the fixed stem/LED and the displaced cutout bottom.
 segments, outgoing `ExitEvent` records, silicone/air/rigid/LED regions, source
 position, and energy bookkeeping. With an explicit posed indenter, the
 mechanical active patch is a direct silicone-to-object interface; it is never
-silicone-to-air-to-indenter. Object-absorbed and object-transmitted weights are
-terminal and are not counted as air escape. The density is a deterministic
-light-transport proxy, not camera brightness, irradiance, or a predicted sensor
-image.
+silicone-to-air-to-indenter. PLANAR_2D tags only deformed `pad_outer_arc`
+boundary edges whose two endpoints are in the FEA-supplied active contact-node
+set. It does not infer contact from a circle, distance threshold, or a rebuilt
+indenter pose. Requesting object optics without that nonempty mechanical patch
+is fail-closed. Object-absorbed and object-transmitted weights are terminal and
+are not counted as air escape; dielectric reflection stays in silicone and the
+object interior is never traced. With no `IndenterOptics`, the AIR_CONTROL path
+retains the existing silicone/air transport and all object channels are zero.
+The density is a deterministic light-transport proxy, not camera brightness,
+irradiance, or a predicted sensor image.
 
 `evaluate(reference, loaded)` remains camera-independent and returns a plain
 dictionary. Its deliberately small initial contract is:

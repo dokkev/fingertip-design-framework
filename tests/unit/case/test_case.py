@@ -34,6 +34,7 @@ from optics.transport3d import (
     Transport3DSettings,
     UnifiedTransportResult,
 )
+from optics import IndenterOptics
 
 
 def _mesh(
@@ -218,12 +219,13 @@ def _case(**kwargs) -> FingertipCase:
             retain_projected_segments=True,
         ),
     )
+    indenter_optics = kwargs.pop("indenter_optics", None)
     supplied_optics = kwargs.pop("optics", None)
     if supplied_optics is None:
         configuration = case_module.transport_configuration(
             trace_settings,
             material=case_module._optical_material_mapping(optical),
-            source={"led": asdict(led)},
+            source=case_module._transport_source_mapping(led, indenter_optics),
         )
         optics = replace(
             optics,
@@ -246,6 +248,7 @@ def _case(**kwargs) -> FingertipCase:
         fem_steps=fem_steps,
         internal_contact=internal_contact,
         trace_settings=trace_settings,
+        indenter_optics=indenter_optics,
         provenance=kwargs.pop("provenance", {"test": "synthetic"}),
         **kwargs,
     )
@@ -355,7 +358,7 @@ def test_case_id_is_deterministic() -> None:
 
 
 def test_case_manifest_round_trip_and_references(tmp_path) -> None:
-    original = _case()
+    original = _case(indenter_optics=IndenterOptics("absorber"))
     manifest = save_case(original, tmp_path / "cases")
     loaded = load_case(manifest)
     assert manifest == tmp_path / "cases" / original.case_id / "case.json"
@@ -369,6 +372,7 @@ def test_case_manifest_round_trip_and_references(tmp_path) -> None:
     assert loaded.fem_steps == original.fem_steps
     assert loaded.internal_contact == original.internal_contact
     assert loaded.trace_settings == original.trace_settings
+    assert loaded.indenter_optics == original.indenter_optics
     np.testing.assert_allclose(loaded.displacement, original.displacement)
     np.testing.assert_allclose(loaded.optical_field, original.optical_field)
     np.testing.assert_allclose(
@@ -422,6 +426,9 @@ def test_case_id_includes_run_and_optical_configuration() -> None:
             retain_projected_segments=True,
         ),
     ).case_id
+    assert base.case_id != _case(
+        indenter_optics=IndenterOptics("absorber"),
+    ).case_id
 
 
 def test_case_manifest_rejects_mismatched_optics_artifact(tmp_path) -> None:
@@ -438,6 +445,13 @@ def test_case_manifest_rejects_mismatched_optics_artifact(tmp_path) -> None:
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
     with pytest.raises(ValueError, match="contact provenance"):
         load_case(manifest_path)
+
+
+def test_case_rejects_mismatched_object_channels() -> None:
+    base = _case()
+    bad = replace(base.optics, object_absorbed_weight=1.0)
+    with pytest.raises(ValueError, match="object_absorbed_weight"):
+        _case(optics=bad)
 
 
 def test_pose_tracks_surface_location_and_radius() -> None:

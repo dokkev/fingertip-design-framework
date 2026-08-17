@@ -20,6 +20,7 @@ from model import (
     OpticalMaterial,
     fingertip_parameters_fingerprint,
 )
+from optics.contact_object import IndenterOptics
 from optics.transport3d import (
     Transport3DResult,
     Transport3DSettings,
@@ -31,7 +32,7 @@ from optics.transport3d import (
 from optics.transport3d.geometry import build_transport_geometry
 
 
-CASE_SCHEMA = "fingertip-case-v2"
+CASE_SCHEMA = "fingertip-case-v3"
 
 
 class CaseConstructionError(RuntimeError):
@@ -74,6 +75,18 @@ def _expected_morphology_fingerprint(parameters: FingertipParameters) -> str:
     return fingertip_parameters_fingerprint(parameters)
 
 
+def _transport_source_mapping(
+    led: LED,
+    indenter_optics: IndenterOptics | None,
+) -> dict[str, Any]:
+    return {
+        "led": asdict(led),
+        "indenter_optics": (
+            None if indenter_optics is None else asdict(indenter_optics)
+        ),
+    }
+
+
 def _case_identity_payload(case: "FingertipCase") -> dict[str, Any]:
     return {
         "schema": CASE_SCHEMA,
@@ -96,6 +109,11 @@ def _case_identity_payload(case: "FingertipCase") -> dict[str, Any]:
             "led": asdict(case.led),
             "optical_material": asdict(case.optical),
             "trace_settings": asdict(case.trace_settings),
+            "indenter_optics": (
+                None
+                if case.indenter_optics is None
+                else asdict(case.indenter_optics)
+            ),
             "morphology_fingerprint": case.optics.morphology_fingerprint,
             "mechanics_source": case.optics.mechanics_source,
             "mechanics_dimension": case.optics.mechanics_dimension,
@@ -131,6 +149,7 @@ class FingertipCase:
     fem_steps: int
     internal_contact: str
     trace_settings: Transport3DSettings
+    indenter_optics: IndenterOptics | None = None
     case_id: str = ""
     provenance: Mapping[str, Any] = field(default_factory=dict)
 
@@ -167,6 +186,10 @@ class FingertipCase:
             raise ValueError("internal_contact must be a nonempty string")
         if not isinstance(self.trace_settings, Transport3DSettings):
             raise TypeError("trace_settings must be Transport3DSettings")
+        if self.indenter_optics is not None and not isinstance(
+            self.indenter_optics, IndenterOptics
+        ):
+            raise TypeError("indenter_optics must be IndenterOptics or None")
         if self.trace_settings.mode != "planar":
             raise ValueError("FingertipCase requires planar trace_settings")
         if not self.fea.converged or self.fea.indenter_pose is None:
@@ -210,7 +233,7 @@ class FingertipCase:
         expected_transport_configuration = transport_configuration(
             self.trace_settings,
             material=_optical_material_mapping(self.optical),
-            source={"led": asdict(self.led)},
+            source=_transport_source_mapping(self.led, self.indenter_optics),
         )
         if self.optics.transport_configuration_fingerprint != fingerprint_mapping(
             expected_transport_configuration
@@ -221,6 +244,10 @@ class FingertipCase:
             "escaped_weight",
             "absorbed_weight",
             "terminated_weight",
+            "object_absorbed_weight",
+            "object_transmitted_weight",
+            "object_interface_incident_weight",
+            "object_reflected_weight",
             "energy_balance_error",
         ):
             if not math.isclose(
@@ -344,6 +371,7 @@ def run_case(
     trace_settings: Transport3DSettings | None = None,
     led: LED | None = None,
     optical: OpticalMaterial | None = None,
+    indenter_optics: IndenterOptics | None = None,
     fem_steps: int = 48,
     internal_contact: str = "three_pairs",
     provenance: Mapping[str, Any] | None = None,
@@ -356,6 +384,10 @@ def run_case(
         raise TypeError("indenter_parameters must be IndenterSettings")
     if not isinstance(contact_state, ContactState):
         raise TypeError("contact_state must be a ContactState")
+    if indenter_optics is not None and not isinstance(
+        indenter_optics, IndenterOptics
+    ):
+        raise TypeError("indenter_optics must be IndenterOptics or None")
     if mesh_settings is None:
         mesh_settings = mesh_settings_for_level("medium")
     if not isinstance(mesh_settings, MeshSettings):
@@ -401,11 +433,13 @@ def run_case(
         mesh,
         depth_mm=trace_settings.extrusion_depth_mm,
         source_epsilon_mm=trace_settings.source_epsilon_mm,
+        indenter_pose=(fea.indenter_pose if indenter_optics is not None else None),
+        indenter_optics=indenter_optics,
     )
     configuration = transport_configuration(
         trace_settings,
         material=_optical_material_mapping(tip.optical),
-        source={"led": asdict(tip.led)},
+        source=_transport_source_mapping(tip.led, indenter_optics),
     )
     contact_provenance = {
         **state,
@@ -437,7 +471,7 @@ def run_case(
         "internal_contact": internal_contact,
         "optical_backend": "trace_geometry (shared OptiX backend)",
         "optical_mode": "PLANAR_2D",
-        "indenter_optically_active": False,
+        "indenter_optically_active": indenter_optics is not None,
         **dict(provenance or {}),
     }
     return FingertipCase(
@@ -453,6 +487,7 @@ def run_case(
         fem_steps=fem_steps,
         internal_contact=internal_contact,
         trace_settings=trace_settings,
+        indenter_optics=indenter_optics,
         provenance=case_provenance,
     )
 

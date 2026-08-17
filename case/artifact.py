@@ -26,6 +26,7 @@ from mesh.types import (
     T3Element,
 )
 from model import FingertipParameters, LED, OpticalMaterial
+from optics.contact_object import IndenterOptics
 from optics.transport3d.result import Transport3DResult
 from optics.transport3d.settings import Transport3DSettings
 from optics.transport3d.unified import UnifiedTransportResult, fingerprint_mapping
@@ -35,7 +36,7 @@ from case.state import ContactState
 
 
 MECHANICS_SCHEMA = "fingertip-case-mechanics-v2"
-OPTICAL_SCHEMA = "fingertip-case-optics-v2"
+OPTICAL_SCHEMA = "fingertip-case-optics-v3"
 
 
 def _sha256(path: Path) -> str:
@@ -284,6 +285,10 @@ def _save_optics(case: FingertipCase, directory: Path) -> Path:
             "escaped_weight": raw.escaped_weight,
             "absorbed_weight": raw.absorbed_weight,
             "terminated_weight": raw.terminated_weight,
+            "object_absorbed_weight": raw.object_absorbed_weight,
+            "object_transmitted_weight": raw.object_transmitted_weight,
+            "object_interface_incident_weight": raw.object_interface_incident_weight,
+            "object_reflected_weight": raw.object_reflected_weight,
             "outgoing_surface_weight": raw.outgoing_surface_weight,
             "escape_surface_tags": list(raw.escape_surface_tags),
             "energy_balance_error": raw.energy_balance_error,
@@ -305,6 +310,10 @@ def _save_optics(case: FingertipCase, directory: Path) -> Path:
             "escaped_weight": result.escaped_weight,
             "absorbed_weight": result.absorbed_weight,
             "terminated_weight": result.terminated_weight,
+            "object_absorbed_weight": result.object_absorbed_weight,
+            "object_transmitted_weight": result.object_transmitted_weight,
+            "object_interface_incident_weight": result.object_interface_incident_weight,
+            "object_reflected_weight": result.object_reflected_weight,
             "valid_ray_count": result.valid_ray_count,
             "terminated_ray_count": result.terminated_ray_count,
             "energy_balance_error": result.energy_balance_error,
@@ -348,6 +357,11 @@ def save_case(case: FingertipCase, root: str | Path) -> Path:
         "led": asdict(case.led),
         "optical_material": asdict(case.optical),
         "trace_settings": asdict(case.trace_settings),
+        "indenter_optics": (
+            None
+            if case.indenter_optics is None
+            else asdict(case.indenter_optics)
+        ),
         "indenter_pose_fingerprint": fingerprint_mapping(
             _pose_payload(case)
         ),
@@ -602,6 +616,12 @@ def _load_optics(path: Path) -> tuple[Transport3DResult, UnifiedTransportResult]
         escaped_weight=float(raw_record["escaped_weight"]),
         absorbed_weight=float(raw_record["absorbed_weight"]),
         terminated_weight=float(raw_record["terminated_weight"]),
+        object_absorbed_weight=float(raw_record["object_absorbed_weight"]),
+        object_transmitted_weight=float(raw_record["object_transmitted_weight"]),
+        object_interface_incident_weight=float(
+            raw_record["object_interface_incident_weight"]
+        ),
+        object_reflected_weight=float(raw_record["object_reflected_weight"]),
         outgoing_surface_weight=float(raw_record["outgoing_surface_weight"]),
         surface_u_edges=required("surface_u_edges"),
         surface_z_edges=required("surface_z_edges"),
@@ -655,6 +675,12 @@ def _load_optics(path: Path) -> tuple[Transport3DResult, UnifiedTransportResult]
         terminated_ray_count=int(record["terminated_ray_count"]),
         energy_balance_error=float(record["energy_balance_error"]),
         path_diagnostics=record.get("path_diagnostics", {}),
+        object_absorbed_weight=float(record["object_absorbed_weight"]),
+        object_transmitted_weight=float(record["object_transmitted_weight"]),
+        object_interface_incident_weight=float(
+            record["object_interface_incident_weight"]
+        ),
+        object_reflected_weight=float(record["object_reflected_weight"]),
     )
     return raw, summary
 
@@ -684,6 +710,12 @@ def load_case(path: str | Path) -> FingertipCase:
         if trace_payload.get(key) is not None:
             trace_payload[key] = tuple(trace_payload[key])
     trace_settings = Transport3DSettings(**trace_payload)
+    indenter_optics_payload = manifest.get("indenter_optics")
+    indenter_optics = (
+        None
+        if indenter_optics_payload is None
+        else IndenterOptics(**indenter_optics_payload)
+    )
     fea = _load_mechanics(
         mechanics_path,
         parameters=parameters,
@@ -706,6 +738,7 @@ def load_case(path: str | Path) -> FingertipCase:
         fem_steps=int(manifest["fem_steps"]),
         internal_contact=str(manifest["internal_contact"]),
         trace_settings=trace_settings,
+        indenter_optics=indenter_optics,
         case_id=str(manifest["case_id"]),
         provenance=manifest.get("provenance", {}),
     )

@@ -65,6 +65,10 @@ class Transport3DResult:
     escape_interaction_counts: np.ndarray
     energy_balance_error: float
     energy_balance_tolerance: float
+    object_absorbed_weight: float = 0.0
+    object_transmitted_weight: float = 0.0
+    object_interface_incident_weight: float = 0.0
+    object_reflected_weight: float = 0.0
     projected_x_edges_mm: np.ndarray | None = None
     projected_y_edges_mm: np.ndarray | None = None
     projected_weighted_path_density: np.ndarray | None = None
@@ -100,6 +104,10 @@ class Transport3DResult:
             "outgoing_surface_weight",
             "energy_balance_error",
             "energy_balance_tolerance",
+            "object_absorbed_weight",
+            "object_transmitted_weight",
+            "object_interface_incident_weight",
+            "object_reflected_weight",
         )
         scalars = {name: float(getattr(self, name)) for name in scalar_names}
         if any(not np.isfinite(value) for value in scalars.values()):
@@ -112,6 +120,23 @@ class Transport3DResult:
             raise Transport3DResultError("energy_balance_error must be nonnegative")
         if scalars["energy_balance_error"] > scalars["energy_balance_tolerance"]:
             raise Transport3DResultError("energy balance exceeds its declared tolerance")
+        terminal_weight = sum(
+            scalars[name]
+            for name in (
+                "escaped_weight",
+                "absorbed_weight",
+                "terminated_weight",
+                "object_absorbed_weight",
+                "object_transmitted_weight",
+            )
+        )
+        calculated_error = abs(scalars["launched_weight"] - terminal_weight) / max(
+            scalars["launched_weight"], 1.0e-30
+        )
+        if calculated_error > scalars["energy_balance_tolerance"]:
+            raise Transport3DResultError(
+                "terminal energy channels do not match the declared balance"
+            )
 
         u_edges = _owned_array(self.surface_u_edges, dtype=float, name="surface_u_edges")
         z_edges = _owned_array(self.surface_z_edges, dtype=float, name="surface_z_edges")

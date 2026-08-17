@@ -16,13 +16,12 @@ class Transport3DPhysicsError(RuntimeError):
     """Raised when a deterministic interface calculation is invalid."""
 
 
-def interface_split(
+def _interface_split_indices(
     xp: Any,
     incident: Any,
     normal: Any,
-    medium: Any,
-    refractive_index_air: float,
-    refractive_index_silicone: float,
+    n1: Any,
+    n2: Any,
 ) -> tuple[Any, Any, Any, Any]:
     """Return reflected/transmitted directions, reflectance, and TIR mask.
 
@@ -30,15 +29,12 @@ def interface_split(
     against an array namespace so the same convention runs on NumPy for
     analytic checks and on CuPy for the OptiX wavefront.
     """
-    n1 = xp.where(medium == 0, refractive_index_air, refractive_index_silicone)
-    n2 = xp.where(medium == 0, refractive_index_silicone, refractive_index_air)
     alignment = xp.sum(incident * normal, axis=1)
     if bool(xp.any(alignment <= 1.0e-7)):
         bad = int(xp.asnumpy(xp.where(alignment <= 1.0e-7)[0][0])) if hasattr(xp, "asnumpy") else int(np.where(alignment <= 1.0e-7)[0][0])
         raise Transport3DPhysicsError(
             "interface normal does not point into transmitted medium: "
             f"alignment={float(xp.asnumpy(alignment[bad]) if hasattr(xp, 'asnumpy') else alignment[bad]):g}, "
-            f"medium={int(xp.asnumpy(medium[bad]) if hasattr(xp, 'asnumpy') else medium[bad])}, "
             f"incident={np.asarray(xp.asnumpy(incident[bad]) if hasattr(xp, 'asnumpy') else incident[bad])}, "
             f"normal={np.asarray(xp.asnumpy(normal[bad]) if hasattr(xp, 'asnumpy') else normal[bad])}"
         )
@@ -68,6 +64,34 @@ def interface_split(
     reflectance = xp.where(tir, 1.0, reflectance)
     transmitted = xp.where(tir[:, None], 0.0, transmitted)
     return reflected, transmitted, reflectance, tir
+
+
+def interface_split(
+    xp: Any,
+    incident: Any,
+    normal: Any,
+    medium: Any,
+    refractive_index_air: float,
+    refractive_index_silicone: float,
+) -> tuple[Any, Any, Any, Any]:
+    """Split an air/silicone interface using the shared Fresnel convention."""
+    n1 = xp.where(medium == 0, refractive_index_air, refractive_index_silicone)
+    n2 = xp.where(medium == 0, refractive_index_silicone, refractive_index_air)
+    return _interface_split_indices(xp, incident, normal, n1, n2)
+
+
+def object_interface_split(
+    xp: Any,
+    incident: Any,
+    normal: Any,
+    refractive_index_silicone: float,
+    refractive_index_object: float,
+) -> tuple[Any, Any, Any, Any]:
+    """Split silicone-to-object rays without tracing the object interior."""
+    count = incident.shape[0]
+    n1 = xp.full(count, refractive_index_silicone, dtype=incident.dtype)
+    n2 = xp.full(count, refractive_index_object, dtype=incident.dtype)
+    return _interface_split_indices(xp, incident, normal, n1, n2)
 
 
 def interface_directions_and_reflectance(
@@ -150,6 +174,7 @@ __all__ = [
     "attenuated_weight",
     "interface_directions_and_reflectance",
     "interface_split",
+    "object_interface_split",
     "periodic_plane_distance",
     "wrapped_periodic_z",
 ]

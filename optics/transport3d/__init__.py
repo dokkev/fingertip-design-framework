@@ -7,7 +7,10 @@ from optics.transport3d.artifact import (
     Full3DSurfaceArtifact,
     load_full3d_surface_artifact,
 )
-from optics.transport3d.geometry import build_full3d_transport_geometry
+from optics.transport3d.geometry import (
+    build_full3d_transport_geometry,
+    build_transport_geometry,
+)
 from optics.transport3d.settings import Transport3DSettings
 from optics.transport3d.transport import (
     Transport3DDependencyError,
@@ -20,6 +23,7 @@ from optics.transport3d.transport import (
 from optics.transport3d.unified import (
     OptiXTransport,
     LEGACY_UNIFIED_ARTIFACT_SCHEMA,
+    LEGACY_UNIFIED_ARTIFACT_SCHEMA_V2,
     UnifiedTransportResult,
     fingerprint_mapping,
     load_case_artifact,
@@ -41,8 +45,10 @@ __all__ = [
     "Full3DSurfaceArtifact",
     "OptiXTransport",
     "LEGACY_UNIFIED_ARTIFACT_SCHEMA",
+    "LEGACY_UNIFIED_ARTIFACT_SCHEMA_V2",
     "UnifiedTransportResult",
     "build_full3d_transport_geometry",
+    "build_transport_geometry",
     "fingerprint_mapping",
     "load_case_artifact",
     "load_full3d_surface_artifact",
