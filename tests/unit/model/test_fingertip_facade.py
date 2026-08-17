@@ -2,7 +2,34 @@ from __future__ import annotations
 
 import pytest
 
-from model import Fingertip, FingertipParameters, LED
+from model import Fingertip, FingertipParameters, LED, OpticalMaterial
+
+
+def test_fingertip_uses_authoritative_nominal_parameters_by_default() -> None:
+    default = Fingertip()
+    explicit = Fingertip(FingertipParameters())
+
+    assert default.parameters == FingertipParameters()
+    assert default.geometry.material_geometry.equals(explicit.geometry.material_geometry)
+    assert default.geometry.raw_material_geometry.equals(
+        explicit.geometry.raw_material_geometry
+    )
+    assert default.geometry.void_geometry.equals(explicit.geometry.void_geometry)
+
+
+def test_fingertip_explicit_parameters_override_nominal_defaults() -> None:
+    custom = FingertipParameters(void_height=1.0)
+    tip = Fingertip(custom)
+
+    assert tip.parameters == custom
+    assert tip.parameters != FingertipParameters()
+
+
+def test_fingertip_default_led_and_optical_material_are_unchanged() -> None:
+    tip = Fingertip()
+
+    assert tip.led == LED()
+    assert tip.optical == OpticalMaterial()
 
 
 def test_fingertip_owns_led_metadata_without_changing_mechanical_geometry() -> None:

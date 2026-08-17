@@ -89,7 +89,12 @@ It does not replace mesh-based reference/loaded comparisons.
 - `optics.contact_object.IndenterOptics` owns external indenter boundary
   properties. The indenter material is not part of `Fingertip`; object
   absorption/transmission is terminal and dielectric reflection remains in the
-  current medium without tracing propagation inside the object.
+  current medium without tracing propagation inside the object. In the current
+  PLANAR_2D contact-only contract, only the exact silicone contact patch uses
+  these properties; the exposed carrier is not an air-side blocker because it
+  is not present as an OptiX scene surface. External air-to-indenter
+  interaction remains deferred until both the scene and P2 occupancy use the
+  same exposed-surface contract.
 - `optics.cross_section` is the reduced deterministic 2D optical transport
   model used for design studies. `optics.transport3d` owns the independent,
   deterministic, camera-independent 3D dimensional validator. It consumes
@@ -101,9 +106,11 @@ It does not replace mesh-based reference/loaded comparisons.
   `Camera`, `RenderSettings`, `RenderResult`, and `MitsubaRenderer`; extrusion,
   scene construction, and persistent renderer state are implementation details.
 - `visualization/` is a thin Matplotlib layer. It exposes only
-  `plot_fingertip`, `plot_mesh`, `plot_displacement`, `plot_transport`, and
-  `plot_camera`; these functions consume model/mesh/result objects and return
-  an `Axes`. It does not own a second scientific data model, artifact loader,
+  `plot_fingertip`, `plot_mesh`, `plot_displacement`, `plot_transport`,
+  `plot_camera`, and `plot_case`; these functions consume model/mesh/result
+  objects and return an `Axes`, while `plot_case` returns one composed
+  `Figure` from the existing FingertipCase contract. It does not own a second
+  scientific data model, artifact loader,
   figure DSL, panel hierarchy, or export framework. `plot_transport(result)`
   needs no separate model or optical-domain argument because `TransportResult`
   owns the geometry used to produce the field.

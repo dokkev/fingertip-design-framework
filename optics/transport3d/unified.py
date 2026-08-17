@@ -323,6 +323,12 @@ def transport_configuration(
 
 def save_case_artifact(path: Path, result: UnifiedTransportResult, contract: Mapping[str, Any]) -> None:
     """Persist one independently verifiable transport case artifact."""
+    field_axis_order = {
+        "PLANAR_2D": "x,y",
+        "FULL_3D": "x,y,z",
+    }.get(result.optical_mode)
+    if field_axis_order is None:
+        raise ValueError(f"unsupported unified optical mode: {result.optical_mode!r}")
     path.parent.mkdir(parents=True, exist_ok=True)
     field_path = path.with_suffix(".npz")
     field_tmp = field_path.with_name(field_path.name + ".tmp")
@@ -336,7 +342,7 @@ def save_case_artifact(path: Path, result: UnifiedTransportResult, contract: Map
     field_sha = hashlib.sha256(field_tmp.read_bytes()).hexdigest()
     metadata = {
         "schema": UNIFIED_ARTIFACT_SCHEMA,
-        "field_axis_order": "x,y",
+        "field_axis_order": field_axis_order,
         "contract": dict(contract),
         "contract_fingerprint": fingerprint_mapping(dict(contract)),
         "field_artifact": str(field_path),
@@ -383,8 +389,21 @@ def load_case_artifact(path: Path, *, expected_contract: Mapping[str, Any]) -> U
         LEGACY_UNIFIED_ARTIFACT_SCHEMA,
     ):
         raise ValueError("unsupported unified transport artifact schema")
-    if schema == UNIFIED_ARTIFACT_SCHEMA and metadata.get("field_axis_order") != "x,y":
-        raise ValueError("unified transport field axis order is missing or unsupported")
+    record = metadata.get("result")
+    if not isinstance(record, Mapping):
+        raise ValueError("unified transport result metadata is missing")
+    if schema == UNIFIED_ARTIFACT_SCHEMA:
+        expected_axis_order = {
+            "PLANAR_2D": "x,y",
+            "FULL_3D": "x,y,z",
+        }.get(record.get("optical_mode"))
+        if (
+            expected_axis_order is None
+            or metadata.get("field_axis_order") != expected_axis_order
+        ):
+            raise ValueError(
+                "unified transport field axis order is missing or unsupported"
+            )
     contract = metadata.get("contract")
     if contract != dict(expected_contract):
         raise ValueError("unified transport artifact contract mismatch")
@@ -397,9 +416,6 @@ def load_case_artifact(path: Path, *, expected_contract: Mapping[str, Any]) -> U
         raise ValueError("unified transport field artifact is missing")
     if hashlib.sha256(field_path.read_bytes()).hexdigest() != metadata.get("field_sha256"):
         raise ValueError("unified transport field artifact checksum mismatch")
-    record = metadata.get("result")
-    if not isinstance(record, Mapping):
-        raise ValueError("unified transport result metadata is missing")
     with np.load(field_path, allow_pickle=False) as archive:
         if "field" not in archive:
             raise ValueError("unified transport field is missing")

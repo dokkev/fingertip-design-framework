@@ -94,6 +94,7 @@ From the repository root, run:
 python examples/view_fingertip.py
 python examples/view_fea.py
 python examples/view_light.py
+python examples/view_case.py
 ```
 
 The direct script is also launchable from any working directory:
@@ -106,8 +107,12 @@ python /path/to/lit_ws/examples/view_light.py
 `view_fea.py` compares three indentation diameters with a shared displacement
 color scale. `view_light.py` demonstrates the
 `Fingertip` → mesh → `solve()` → `trace()` → `evaluate()` flow with shared
-reference/loaded transport normalization. The solver-backed examples can take
-significant time and do not write artifacts.
+reference/loaded transport normalization. `view_case.py` demonstrates the
+nominal `Fingertip()` → explicit-contact `run_case()` → PLANAR_2D OptiX flow
+with the exact posed indenter and mechanical contact patch in one figure. The
+solver-backed examples can take significant time and do not write artifacts;
+`view_case.py` additionally requires the externally managed Kratos and
+CUDA/OptiX environment used by the production case path.
 
 The resumable three-radius scientific atlas remains a validation command:
 

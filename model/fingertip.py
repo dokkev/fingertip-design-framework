@@ -21,7 +21,7 @@ class InvalidFingertip(ValueError):
 class Fingertip:
     """Physical fingertip geometry, LED, and bulk optical material."""
 
-    parameters: FingertipParameters
+    parameters: FingertipParameters = field(default_factory=FingertipParameters)
     led: LED = field(default_factory=LED)
     optical: OpticalMaterial = field(default_factory=OpticalMaterial)
     geometry: FingertipModel = field(init=False, repr=False)

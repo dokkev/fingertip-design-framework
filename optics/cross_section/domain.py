@@ -156,8 +156,10 @@ def _validate_domain(
                 "requires a nonempty mechanical contact patch"
             )
     occupied_region = rigid_region
-    if indenter_region is not None:
-        occupied_region = occupied_region.union(indenter_region)
+    # The current indenter optical contract models only the exact
+    # silicone-to-object contact patch.  The planar OptiX scene does not
+    # contain an exposed indenter GAS, so its carrier must not be invented as
+    # an air-side blocker or P2 occupancy mask here.
     accessible_region = outer_envelope.difference(occupied_region)
     if not isinstance(accessible_region, Polygon | MultiPolygon):
         raise CrossSectionOpticsError(

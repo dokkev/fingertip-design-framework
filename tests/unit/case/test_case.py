@@ -398,6 +398,13 @@ def test_case_id_excludes_provenance_notes() -> None:
     assert first.case_id == second.case_id
 
 
+def test_case_id_excludes_serialization_schema(monkeypatch) -> None:
+    first = _case()
+    monkeypatch.setattr(case_module, "CASE_SCHEMA", "future-serialization-schema")
+    second = _case()
+    assert first.case_id == second.case_id
+
+
 def test_case_id_includes_run_and_optical_configuration() -> None:
     base = _case()
     custom_led = _case(led=LED(relative_radiant_power=2.0))

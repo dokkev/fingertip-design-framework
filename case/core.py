@@ -89,7 +89,6 @@ def _transport_source_mapping(
 
 def _case_identity_payload(case: "FingertipCase") -> dict[str, Any]:
     return {
-        "schema": CASE_SCHEMA,
         "fingertip_parameters": asdict(case.fingertip_parameters),
         "indenter_parameters": (
             None

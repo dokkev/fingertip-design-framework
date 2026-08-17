@@ -542,6 +542,7 @@ def _trace_transport(
         if (
             state.medium == "air"
             and domain.indenter_region is not None
+            and domain.indenter_optics is None
             and domain.indenter_region.covers(forward_probe)
         ):
             terminated_weight += end_weight

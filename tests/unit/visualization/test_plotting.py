@@ -14,14 +14,16 @@ from matplotlib.collections import PathCollection
 from matplotlib.quiver import Quiver
 import numpy as np
 import pytest
+from shapely.geometry import LineString, Polygon
 
 import visualization
 from mesh import PadMesh
-from model import Fingertip, FingertipParameters, LED
+from model import Fingertip, FingertipParameters, LED, OpticalMaterial
 from model.fingertip_model import FingertipModel
 from optics import TraceSettings, trace
 from visualization import (
     plot_camera,
+    plot_case,
     plot_displacement,
     plot_fingertip,
     plot_mesh,
@@ -53,6 +55,7 @@ def _square_mesh() -> PadMesh:
 def test_public_exports_are_only_plot_helpers() -> None:
     assert set(visualization.__all__) == {
         "plot_camera",
+        "plot_case",
         "plot_displacement",
         "plot_fingertip",
         "plot_mesh",
@@ -140,6 +143,40 @@ def test_plot_transport_keeps_raw_analytic_density_unchanged() -> None:
     figure, axis = plt.subplots()
     assert plot_transport(result, ax=axis) is axis
     assert np.array_equal(result.density, raw)
+    plt.close(figure)
+
+
+def test_plot_case_composes_mechanics_pose_contact_and_p2() -> None:
+    mesh = _square_mesh()
+    displacement = np.zeros((4, 2), dtype=float)
+    case = SimpleNamespace(
+        parameters=FingertipParameters(),
+        led=LED(),
+        optical=OpticalMaterial(),
+        fea=SimpleNamespace(
+            mesh=mesh,
+            displacement=displacement,
+            deformed_mesh=mesh,
+        ),
+        indenter_pose=SimpleNamespace(
+            carrier_geometry=Polygon(
+                [(0.25, -0.4), (0.75, -0.4), (0.75, -0.1), (0.25, -0.1)]
+            ),
+            contact_patch=LineString([(0.4, 0.0), (0.6, 0.0)]),
+        ),
+        optics=SimpleNamespace(
+            field=np.ones((3, 2), dtype=float),
+            field_axes=(np.arange(4, dtype=float), np.arange(3, dtype=float)),
+        ),
+        raytrace=SimpleNamespace(
+            escape_positions_mm=np.asarray([[0.5, 1.0, 0.0]]),
+            escape_directions=np.asarray([[0.0, 1.0, 0.0]]),
+        ),
+    )
+
+    figure = plot_case(case)
+    figure.canvas.draw()
+    assert len(figure.axes) >= 2
     plt.close(figure)
 
 

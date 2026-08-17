@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from types import SimpleNamespace
 import numpy as np
 import pytest
 from shapely import affinity
@@ -18,10 +19,14 @@ from optics.cross_section.domain import (
     CrossSectionOpticsError,
     _OpticalDomain,
     _build_no_load_domain,
+    _validate_domain,
 )
 from optics.cross_section.transport import _trace_transport
 from optics.physics import interface_directions_and_reflectance
-from optics.transport3d.physics import object_interface_split
+from optics.transport3d.physics import (
+    Transport3DPhysicsError,
+    object_interface_split,
+)
 
 
 def _object_domain() -> _OpticalDomain:
@@ -152,6 +157,49 @@ def test_planar_object_interface_directions_have_zero_longitudinal_component() -
     assert not bool(tir[0])
     assert reflected[0, 2] == pytest.approx(0.0)
     assert transmitted[0, 2] == pytest.approx(0.0)
+
+
+def test_reversed_object_normal_is_corrected_before_fresnel_split() -> None:
+    incident = np.asarray([[0.0, 1.0, 0.0]])
+    reversed_normal = np.asarray([[0.0, -1.0, 0.0]])
+    with pytest.raises(Transport3DPhysicsError, match="normal"):
+        object_interface_split(
+            np,
+            incident,
+            reversed_normal,
+            1.41,
+            2.0,
+        )
+
+    corrected_normal = -reversed_normal
+    reflected, transmitted, _reflectance, tir = object_interface_split(
+        np,
+        incident,
+        corrected_normal,
+        1.41,
+        2.0,
+    )
+    assert not bool(tir[0])
+    assert np.all(np.isfinite(reflected))
+    assert np.all(np.isfinite(transmitted))
+
+
+def test_contact_only_indenter_does_not_mask_air_side_p2_domain() -> None:
+    tip = Fingertip(FingertipParameters())
+    object_region = Point(0.0, -10.0).buffer(0.5, quad_segs=32)
+    pose = SimpleNamespace(
+        carrier_geometry=object_region,
+        contact_patch=LineString([(0.0, -9.5), (0.0, -9.4)]),
+        center_mm=(0.0, -10.0),
+    )
+    domain = _validate_domain(
+        tip,
+        outer_envelope=tip.geometry.outer_pad_geometry,
+        silicone_region=tip.geometry.pad_material_geometry,
+        indenter_pose=pose,
+        indenter_optics=IndenterOptics("absorber"),
+    )
+    assert domain.accessible_region.covers(Point(0.0, -10.0))
 
 
 def test_indenter_optics_contract_rejects_implicit_dielectric_index() -> None:

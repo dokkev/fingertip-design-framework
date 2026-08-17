@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from optics.transport3d import (
     LEGACY_UNIFIED_ARTIFACT_SCHEMA,
@@ -147,3 +148,52 @@ def test_unified_artifact_schema_marks_xy_and_reads_legacy_planar_orientation(
     path.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n")
     legacy_loaded = load_case_artifact(path, expected_contract=contract)
     np.testing.assert_array_equal(legacy_loaded.field, result.field)
+
+
+def test_full3d_artifact_records_and_validates_xyz_axis_order(tmp_path: Path) -> None:
+    result = UnifiedTransportResult(
+        morphology_id="synthetic-3d",
+        morphology_fingerprint="morphology-3d",
+        mechanics_source="explicit_contact_fea",
+        mechanics_dimension="3D",
+        contact_state={},
+        optical_mode="FULL_3D",
+        ray_count=3,
+        transport_configuration_fingerprint="configuration-3d",
+        field=np.ones((2, 3, 4), dtype=float),
+        field_axes=(
+            np.asarray([0.0, 1.0, 2.0]),
+            np.asarray([0.0, 1.0, 2.0, 3.0]),
+            np.asarray([0.0, 1.0, 2.0, 3.0, 4.0]),
+        ),
+        total_transport=1.0,
+        launched_weight=1.0,
+        escaped_weight=1.0,
+        absorbed_weight=0.0,
+        terminated_weight=0.0,
+        valid_ray_count=3,
+        terminated_ray_count=0,
+        energy_balance_error=0.0,
+        path_diagnostics={},
+    )
+    contract = {
+        "morphology_id": "synthetic-3d",
+        "morphology_parameters_fingerprint": "morphology-3d",
+        "mechanics_source": "explicit_contact_fea",
+        "mechanics_dimension": "3D",
+        "optical_mode": "FULL_3D",
+        "ray_count": 3,
+        "transport_configuration_fingerprint": "configuration-3d",
+    }
+    path = tmp_path / "transport-3d.json"
+    save_case_artifact(path, result, contract)
+    metadata = json.loads(path.read_text(encoding="utf-8"))
+    assert metadata["field_axis_order"] == "x,y,z"
+    loaded = load_case_artifact(path, expected_contract=contract)
+    np.testing.assert_array_equal(loaded.field, result.field)
+    np.testing.assert_array_equal(loaded.field_axes[2], result.field_axes[2])
+
+    metadata["field_axis_order"] = "x,y"
+    path.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n")
+    with pytest.raises(ValueError, match="axis order"):
+        load_case_artifact(path, expected_contract=contract)

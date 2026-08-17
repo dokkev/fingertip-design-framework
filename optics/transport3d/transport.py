@@ -783,7 +783,7 @@ def _trace_with_runtime(
                             object_interface_split(
                                 cp,
                                 interface_directions[object_indices],
-                                outward[object_indices],
+                                interface_normal[object_indices],
                                 tip.optical.refractive_index_silicone,
                                 float(geometry.indenter_optics.refractive_index),
                             )
