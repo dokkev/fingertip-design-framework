@@ -25,8 +25,9 @@ from mesh.types import (
     MeshNode,
     T3Element,
 )
-from model import FingertipParameters
+from model import FingertipParameters, LED, OpticalMaterial
 from optics.transport3d.result import Transport3DResult
+from optics.transport3d.settings import Transport3DSettings
 from optics.transport3d.unified import UnifiedTransportResult, fingerprint_mapping
 
 from case.core import CASE_SCHEMA, FingertipCase
@@ -341,6 +342,12 @@ def save_case(case: FingertipCase, root: str | Path) -> Path:
         "fingertip_parameters": asdict(case.fingertip_parameters),
         "fingertip_parameters_fingerprint": morphology_fingerprint,
         "indenter_parameters": asdict(case.indenter),
+        "mesh_settings": asdict(case.mesh_settings),
+        "fem_steps": case.fem_steps,
+        "internal_contact": case.internal_contact,
+        "led": asdict(case.led),
+        "optical_material": asdict(case.optical),
+        "trace_settings": asdict(case.trace_settings),
         "indenter_pose_fingerprint": fingerprint_mapping(
             _pose_payload(case)
         ),
@@ -667,6 +674,16 @@ def load_case(path: str | Path) -> FingertipCase:
     parameters = FingertipParameters(**manifest["fingertip_parameters"])
     indenter = IndenterSettings(**manifest["indenter_parameters"])
     contact_state = ContactState(**manifest["contact_state"])
+    mesh_settings = MeshSettings(**manifest["mesh_settings"])
+    led_payload = dict(manifest["led"])
+    led_payload["emission_rgb"] = tuple(led_payload["emission_rgb"])
+    led = LED(**led_payload)
+    optical = OpticalMaterial(**manifest["optical_material"])
+    trace_payload = dict(manifest["trace_settings"])
+    for key in ("x_bounds_mm", "y_bounds_mm"):
+        if trace_payload.get(key) is not None:
+            trace_payload[key] = tuple(trace_payload[key])
+    trace_settings = Transport3DSettings(**trace_payload)
     fea = _load_mechanics(
         mechanics_path,
         parameters=parameters,
@@ -683,6 +700,12 @@ def load_case(path: str | Path) -> FingertipCase:
         fea=fea,
         raytrace=raytrace,
         optics=optics,
+        led=led,
+        optical=optical,
+        mesh_settings=mesh_settings,
+        fem_steps=int(manifest["fem_steps"]),
+        internal_contact=str(manifest["internal_contact"]),
+        trace_settings=trace_settings,
         case_id=str(manifest["case_id"]),
         provenance=manifest.get("provenance", {}),
     )

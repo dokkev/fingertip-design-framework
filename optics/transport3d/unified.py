@@ -23,7 +23,8 @@ from optics.transport3d.transport import trace_geometry
 
 
 UnifiedOpticalMode = Literal["PLANAR_2D", "FULL_3D"]
-UNIFIED_ARTIFACT_SCHEMA = "unified-optix-transport-case-v1"
+UNIFIED_ARTIFACT_SCHEMA = "unified-optix-transport-case-v2"
+LEGACY_UNIFIED_ARTIFACT_SCHEMA = "unified-optix-transport-case-v1"
 
 
 def _canonical_json(value: Any) -> str:
@@ -138,7 +139,10 @@ class UnifiedTransportResult:
                 or result.projected_weighted_path_density is None
             ):
                 raise ValueError("PLANAR_2D result is missing its native P2 field")
-            field = result.projected_weighted_path_density
+            # The transport accumulator stores projected density as
+            # density[y, x].  The neutral public field convention is
+            # field[x, y], matching the (x_edges, y_edges) axes below.
+            field = np.transpose(result.projected_weighted_path_density, (1, 0))
             axes = (result.projected_x_edges_mm, result.projected_y_edges_mm)
         elif result.source_mode == "full3d":
             mode = "FULL_3D"
@@ -285,15 +289,23 @@ def native_field_separability(
     }
 
 
-def transport_configuration(settings: Transport3DSettings, *, material: Mapping[str, Any]) -> dict[str, Any]:
+def transport_configuration(
+    settings: Transport3DSettings,
+    *,
+    material: Mapping[str, Any],
+    source: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     """Serialize the common settings/material contract for case fingerprints."""
-    return {
+    configuration = {
         "settings": asdict(settings),
         "material": dict(material),
         "source_sampling": "optics.transport3d.sampling.sample_directions",
         "physics": "optics.transport3d.physics.interface_split+attenuation",
         "accumulation": "native P2 for PLANAR_2D; native P3(x,y,z) for FULL_3D",
     }
+    if source is not None:
+        configuration["source"] = dict(source)
+    return configuration
 
 
 def save_case_artifact(path: Path, result: UnifiedTransportResult, contract: Mapping[str, Any]) -> None:
@@ -311,6 +323,7 @@ def save_case_artifact(path: Path, result: UnifiedTransportResult, contract: Map
     field_sha = hashlib.sha256(field_tmp.read_bytes()).hexdigest()
     metadata = {
         "schema": UNIFIED_ARTIFACT_SCHEMA,
+        "field_axis_order": "x,y",
         "contract": dict(contract),
         "contract_fingerprint": fingerprint_mapping(dict(contract)),
         "field_artifact": str(field_path),
@@ -346,8 +359,11 @@ def save_case_artifact(path: Path, result: UnifiedTransportResult, contract: Map
 def load_case_artifact(path: Path, *, expected_contract: Mapping[str, Any]) -> UnifiedTransportResult:
     """Load an artifact only when the complete fingerprint contract matches."""
     metadata = json.loads(path.read_text(encoding="utf-8"))
-    if metadata.get("schema") != UNIFIED_ARTIFACT_SCHEMA:
+    schema = metadata.get("schema")
+    if schema not in (UNIFIED_ARTIFACT_SCHEMA, LEGACY_UNIFIED_ARTIFACT_SCHEMA):
         raise ValueError("unsupported unified transport artifact schema")
+    if schema == UNIFIED_ARTIFACT_SCHEMA and metadata.get("field_axis_order") != "x,y":
+        raise ValueError("unified transport field axis order is missing or unsupported")
     contract = metadata.get("contract")
     if contract != dict(expected_contract):
         raise ValueError("unified transport artifact contract mismatch")
@@ -360,6 +376,9 @@ def load_case_artifact(path: Path, *, expected_contract: Mapping[str, Any]) -> U
         raise ValueError("unified transport field artifact is missing")
     if hashlib.sha256(field_path.read_bytes()).hexdigest() != metadata.get("field_sha256"):
         raise ValueError("unified transport field artifact checksum mismatch")
+    record = metadata.get("result")
+    if not isinstance(record, Mapping):
+        raise ValueError("unified transport result metadata is missing")
     with np.load(field_path, allow_pickle=False) as archive:
         if "field" not in archive:
             raise ValueError("unified transport field is missing")
@@ -368,9 +387,11 @@ def load_case_artifact(path: Path, *, expected_contract: Mapping[str, Any]) -> U
             np.asarray(archive[f"axis_{index}"], dtype=float)
             for index in range(field.ndim)
         )
-    record = metadata.get("result")
-    if not isinstance(record, Mapping):
-        raise ValueError("unified transport result metadata is missing")
+    if schema == LEGACY_UNIFIED_ARTIFACT_SCHEMA and record.get("optical_mode") == "PLANAR_2D":
+        # v1 persisted the raw accumulator convention density[y, x] while
+        # labeling its axes as (x, y).  Convert only legacy planar artifacts;
+        # v1 FULL_3D fields already used the public x,y,z ordering.
+        field = np.transpose(field, (1, 0))
     contract_result_checks = {
         "morphology_id": contract.get("morphology_id"),
         "mechanics_dimension": contract.get("mechanics_dimension"),
@@ -422,6 +443,7 @@ def load_case_artifact(path: Path, *, expected_contract: Mapping[str, Any]) -> U
 
 
 __all__ = [
+    "LEGACY_UNIFIED_ARTIFACT_SCHEMA",
     "OptiXTransport",
     "UNIFIED_ARTIFACT_SCHEMA",
     "UnifiedOpticalMode",

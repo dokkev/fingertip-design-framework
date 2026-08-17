@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict
+from dataclasses import asdict, replace
 import hashlib
 import json
 from types import SimpleNamespace
@@ -22,11 +22,24 @@ from mesh.types import (
     T3Element,
     mesh_settings_for_level,
 )
-from model import Fingertip, FingertipParameters, fingertip_parameters_fingerprint
-from optics.transport3d import Transport3DResult, UnifiedTransportResult
+from model import (
+    Fingertip,
+    FingertipParameters,
+    LED,
+    OpticalMaterial,
+    fingertip_parameters_fingerprint,
+)
+from optics.transport3d import (
+    Transport3DResult,
+    Transport3DSettings,
+    UnifiedTransportResult,
+)
 
 
-def _mesh(parameters: FingertipParameters) -> FingertipMesh:
+def _mesh(
+    parameters: FingertipParameters,
+    settings=None,
+) -> FingertipMesh:
     nodes = {
         1: MeshNode(1, 0.0, 0.0, "pad"),
         2: MeshNode(2, 1.0, 0.0, "pad"),
@@ -72,19 +85,24 @@ def _mesh(parameters: FingertipParameters) -> FingertipMesh:
             MeshedContactPair("synthetic", "pad_outer_arc", "stem_bottom", 0.0, 0.0),
         ),
         parameters=parameters,
-        settings=mesh_settings_for_level("medium"),
+        settings=(
+            mesh_settings_for_level("medium") if settings is None else settings
+        ),
         quality=quality,
         validation=MeshValidationReport(True, {"synthetic": True}, ()),
         gmsh_version="synthetic",
     )
 
 
-def _case_parts(parameters: FingertipParameters | None = None):
+def _case_parts(
+    parameters: FingertipParameters | None = None,
+    mesh_settings=None,
+):
     parameters = FingertipParameters() if parameters is None else parameters
     tip = Fingertip(parameters)
     indenter = IndenterSettings()
     contact = ContactState(0.0, 0.5, indenter.radius_mm)
-    mesh = _mesh(parameters)
+    mesh = _mesh(parameters, mesh_settings)
     displacement = np.asarray(
         [[0.0, 0.0], [0.01, 0.0], [0.0, 0.01]],
         dtype=float,
@@ -138,9 +156,24 @@ def _case_parts(parameters: FingertipParameters | None = None):
         energy_balance_error=0.0,
         energy_balance_tolerance=1.0e-6,
         projected_x_edges_mm=np.asarray([0.0, 1.0, 2.0]),
-        projected_y_edges_mm=np.asarray([0.0, 1.0, 2.0]),
-        projected_weighted_path_density=np.ones((2, 2), dtype=float),
+        projected_y_edges_mm=np.asarray([0.0, 1.0]),
+        projected_weighted_path_density=np.asarray([[1.0, 2.0]], dtype=float),
         geometry_metadata={"source": "synthetic"},
+    )
+    trace_settings = Transport3DSettings(
+        mode="planar",
+        ray_count=3,
+        surface_u_bins=4,
+        surface_z_bins=2,
+        projected_grid_width=16,
+        projected_grid_height=16,
+        internal_z_bins=2,
+        retain_projected_segments=True,
+    )
+    configuration = case_module.transport_configuration(
+        trace_settings,
+        material=case_module._optical_material_mapping(OpticalMaterial()),
+        source={"led": asdict(LED())},
     )
     optics = UnifiedTransportResult.from_transport_result(
         raytrace,
@@ -154,38 +187,77 @@ def _case_parts(parameters: FingertipParameters | None = None):
                 contact_payload
             ),
         },
-        transport_configuration_fingerprint="synthetic-config",
+        transport_configuration_fingerprint=case_module.fingerprint_mapping(
+            configuration
+        ),
     )
     return parameters, indenter, contact, fea, raytrace, optics
 
 
 def _case(**kwargs) -> FingertipCase:
+    requested_mesh_settings = kwargs.get("mesh_settings")
     parameters, indenter, contact, fea, raytrace, optics = _case_parts(
-        kwargs.pop("parameters", None)
+        kwargs.pop("parameters", None),
+        requested_mesh_settings,
     )
+    led = kwargs.pop("led", LED())
+    optical = kwargs.pop("optical", OpticalMaterial())
+    mesh_settings = kwargs.pop("mesh_settings", fea.reference_mesh.settings)
+    fem_steps = kwargs.pop("fem_steps", 48)
+    internal_contact = kwargs.pop("internal_contact", "three_pairs")
+    trace_settings = kwargs.pop(
+        "trace_settings",
+        Transport3DSettings(
+            mode="planar",
+            ray_count=3,
+            surface_u_bins=4,
+            surface_z_bins=2,
+            projected_grid_width=16,
+            projected_grid_height=16,
+            internal_z_bins=2,
+            retain_projected_segments=True,
+        ),
+    )
+    supplied_optics = kwargs.pop("optics", None)
+    if supplied_optics is None:
+        configuration = case_module.transport_configuration(
+            trace_settings,
+            material=case_module._optical_material_mapping(optical),
+            source={"led": asdict(led)},
+        )
+        optics = replace(
+            optics,
+            transport_configuration_fingerprint=case_module.fingerprint_mapping(
+                configuration
+            ),
+        )
+    else:
+        optics = supplied_optics
     return FingertipCase(
         fingertip_parameters=kwargs.pop("fingertip_parameters", parameters),
         indenter_parameters=kwargs.pop("indenter_parameters", indenter),
         contact_state=kwargs.pop("contact_state", contact),
         fea=kwargs.pop("fea", fea),
         raytrace=kwargs.pop("raytrace", raytrace),
-        optics=kwargs.pop("optics", optics),
+        optics=optics,
+        led=led,
+        optical=optical,
+        mesh_settings=mesh_settings,
+        fem_steps=fem_steps,
+        internal_contact=internal_contact,
+        trace_settings=trace_settings,
         provenance=kwargs.pop("provenance", {"test": "synthetic"}),
         **kwargs,
     )
 
 
 def test_case_stores_neutral_inputs_and_delegates_results() -> None:
-    parameters, indenter, contact, fea, raytrace, optics = _case_parts()
-    case = FingertipCase(
-        fingertip_parameters=parameters,
-        indenter_parameters=indenter,
-        contact_state=contact,
-        fea=fea,
-        raytrace=raytrace,
-        optics=optics,
-        provenance={"test": "synthetic"},
-    )
+    case = _case()
+    parameters = case.fingertip_parameters
+    indenter = case.indenter_parameters
+    fea = case.fea
+    raytrace = case.raytrace
+    optics = case.optics
     assert case.fingertip_parameters is parameters
     assert case.indenter_parameters is indenter
     assert case.fea is fea
@@ -199,7 +271,9 @@ def test_case_stores_neutral_inputs_and_delegates_results() -> None:
 
 
 def test_case_rejects_mismatched_fea_parameters() -> None:
-    parameters, _, _, fea, raytrace, optics = _case_parts()
+    base = _case()
+    parameters = base.fingertip_parameters
+    fea = base.fea
     mismatched_mesh = _mesh(FingertipParameters(void_width=1.2))
     mismatched_fea = FEAResult(
         mesh=mismatched_mesh.pad,
@@ -213,17 +287,31 @@ def test_case_rejects_mismatched_fea_parameters() -> None:
     )
     with pytest.raises(ValueError, match="FEA reference_mesh parameters"):
         FingertipCase(
-            parameters,
-            IndenterSettings(),
-            ContactState(0.0, 0.5, 4.0),
-            mismatched_fea,
-            raytrace,
-            optics,
+            fingertip_parameters=parameters,
+            indenter_parameters=base.indenter_parameters,
+            contact_state=base.contact_state,
+            fea=mismatched_fea,
+            raytrace=base.raytrace,
+            optics=base.optics,
+            led=base.led,
+            optical=base.optical,
+            mesh_settings=base.mesh_settings,
+            fem_steps=base.fem_steps,
+            internal_contact=base.internal_contact,
+            trace_settings=base.trace_settings,
         )
 
 
 def test_case_rejects_mismatched_raytrace_morphology() -> None:
-    parameters, indenter, contact, fea, raytrace, optics = _case_parts()
+    base = _case()
+    parameters, indenter, contact, fea, raytrace, optics = (
+        base.fingertip_parameters,
+        base.indenter_parameters,
+        base.contact_state,
+        base.fea,
+        base.raytrace,
+        base.optics,
+    )
     bad = UnifiedTransportResult(
         **{
             name: getattr(optics, name)
@@ -233,11 +321,19 @@ def test_case_rejects_mismatched_raytrace_morphology() -> None:
         morphology_fingerprint="wrong",
     )
     with pytest.raises(ValueError, match="morphology fingerprint"):
-        FingertipCase(parameters, indenter, contact, fea, raytrace, bad)
+        _case(optics=bad)
 
 
 def test_case_rejects_mismatched_contact_provenance() -> None:
-    parameters, indenter, contact, fea, raytrace, optics = _case_parts()
+    base = _case()
+    parameters, indenter, contact, fea, raytrace, optics = (
+        base.fingertip_parameters,
+        base.indenter_parameters,
+        base.contact_state,
+        base.fea,
+        base.raytrace,
+        base.optics,
+    )
     payload = dict(optics.contact_state)
     payload["indentation_mm"] = 0.75
     bad = UnifiedTransportResult(
@@ -249,7 +345,7 @@ def test_case_rejects_mismatched_contact_provenance() -> None:
         contact_state=payload,
     )
     with pytest.raises(ValueError, match="contact provenance"):
-        FingertipCase(parameters, indenter, contact, fea, raytrace, bad)
+        _case(optics=bad)
 
 
 def test_case_id_is_deterministic() -> None:
@@ -267,6 +363,12 @@ def test_case_manifest_round_trip_and_references(tmp_path) -> None:
     assert loaded.fingertip_parameters == original.fingertip_parameters
     assert loaded.indenter_parameters == original.indenter_parameters
     assert loaded.contact_state == original.contact_state
+    assert loaded.led == original.led
+    assert loaded.optical == original.optical
+    assert loaded.mesh_settings == original.mesh_settings
+    assert loaded.fem_steps == original.fem_steps
+    assert loaded.internal_contact == original.internal_contact
+    assert loaded.trace_settings == original.trace_settings
     np.testing.assert_allclose(loaded.displacement, original.displacement)
     np.testing.assert_allclose(loaded.optical_field, original.optical_field)
     np.testing.assert_allclose(
@@ -290,6 +392,36 @@ def test_case_id_excludes_provenance_notes() -> None:
     first = _case(provenance={"test": "synthetic", "note": "first"})
     second = _case(provenance={"test": "synthetic", "note": "second"})
     assert first.case_id == second.case_id
+
+
+def test_case_id_includes_run_and_optical_configuration() -> None:
+    base = _case()
+    custom_led = _case(led=LED(relative_radiant_power=2.0))
+    assert base.case_id != _case(fem_steps=96).case_id
+    assert base.case_id != _case(internal_contact="continuous_u").case_id
+    assert base.case_id != _case(
+        mesh_settings=mesh_settings_for_level("fine"),
+    ).case_id
+    assert base.case_id != custom_led.case_id
+    assert (
+        base.optics.transport_configuration_fingerprint
+        != custom_led.optics.transport_configuration_fingerprint
+    )
+    assert base.case_id != _case(
+        optical=OpticalMaterial(absorption_per_mm=0.03),
+    ).case_id
+    assert base.case_id != _case(
+        trace_settings=Transport3DSettings(
+            mode="planar",
+            ray_count=5,
+            surface_u_bins=4,
+            surface_z_bins=2,
+            projected_grid_width=16,
+            projected_grid_height=16,
+            internal_z_bins=2,
+            retain_projected_segments=True,
+        ),
+    ).case_id
 
 
 def test_case_manifest_rejects_mismatched_optics_artifact(tmp_path) -> None:

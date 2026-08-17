@@ -19,6 +19,7 @@ from optics.transport3d.transport import (
 )
 from optics.transport3d.unified import (
     OptiXTransport,
+    LEGACY_UNIFIED_ARTIFACT_SCHEMA,
     UnifiedTransportResult,
     fingerprint_mapping,
     load_case_artifact,
@@ -39,6 +40,7 @@ __all__ = [
     "NATIVE_3D_FEA_STATE_SCHEMA",
     "Full3DSurfaceArtifact",
     "OptiXTransport",
+    "LEGACY_UNIFIED_ARTIFACT_SCHEMA",
     "UnifiedTransportResult",
     "build_full3d_transport_geometry",
     "fingerprint_mapping",

@@ -71,7 +71,10 @@ It does not replace mesh-based reference/loaded comparisons.
   keeps its `PadMesh` contract in `FEAResult.mesh`; the complete
   `FingertipMesh` used for persistence is carried separately as
   `FEAResult.reference_mesh`. The indenter fixture and posed geometry are
-  stored as exact artifact geometry rather than rebuilt on load.
+  stored as exact artifact geometry rather than rebuilt on load. The case also
+  retains the full mesh settings, FEM step/contact configuration, LED,
+  optical material, and PLANAR_2D transport settings so its identity covers
+  every result-changing run input.
 - `optics/` owns deterministic ray transport and adapters from neutral meshes
   and displacement fields. Its public transport surface is `TraceSettings`,
   `RaySegment`, `ExitEvent`, `TransportResult`, `trace()`, and `evaluate()`.

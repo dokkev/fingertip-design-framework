@@ -405,8 +405,9 @@ def planar_regression_case(
         "normalized_cosine": None,
         "normalized_l1": None,
     }
-    if legacy.density.shape == planar.field.shape:
-        first = np.asarray(legacy.density, dtype=float)
+    legacy_field_xy = np.asarray(legacy.density, dtype=float).T
+    if legacy_field_xy.shape == planar.field.shape:
+        first = legacy_field_xy
         second = np.asarray(planar.field, dtype=float)
         first_mass = float(np.sum(first))
         second_mass = float(np.sum(second))

@@ -38,6 +38,10 @@ def test_production_packages_do_not_import_validation_or_tests() -> None:
         _assert_no_prefix(package, ("validation", "tests"))
 
 
+def test_case_does_not_depend_on_optimization() -> None:
+    _assert_no_prefix("case", ("optimization",))
+
+
 def test_model_is_geometry_only() -> None:
     _assert_no_prefix(
         "model",

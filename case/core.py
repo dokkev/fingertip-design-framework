@@ -85,12 +85,17 @@ def _case_identity_payload(case: "FingertipCase") -> dict[str, Any]:
         ),
         "contact_state": asdict(case.contact_state),
         "mechanics": {
-            "mesh_level": case.fea.reference_mesh.settings.level,
+            "mesh_settings": asdict(case.mesh_settings),
+            "fem_steps": case.fem_steps,
+            "internal_contact": case.internal_contact,
             "morphology_fingerprint": _expected_morphology_fingerprint(
                 case.fingertip_parameters
             ),
         },
         "optics": {
+            "led": asdict(case.led),
+            "optical_material": asdict(case.optical),
+            "trace_settings": asdict(case.trace_settings),
             "morphology_fingerprint": case.optics.morphology_fingerprint,
             "mechanics_source": case.optics.mechanics_source,
             "mechanics_dimension": case.optics.mechanics_dimension,
@@ -120,6 +125,12 @@ class FingertipCase:
     fea: FEAResult
     raytrace: Transport3DResult
     optics: UnifiedTransportResult
+    led: LED
+    optical: OpticalMaterial
+    mesh_settings: MeshSettings
+    fem_steps: int
+    internal_contact: str
+    trace_settings: Transport3DSettings
     case_id: str = ""
     provenance: Mapping[str, Any] = field(default_factory=dict)
 
@@ -140,12 +151,40 @@ class FingertipCase:
             raise TypeError("raytrace must be a Transport3DResult")
         if not isinstance(self.optics, UnifiedTransportResult):
             raise TypeError("optics must be a UnifiedTransportResult")
+        if not isinstance(self.led, LED):
+            raise TypeError("led must be an LED")
+        if not isinstance(self.optical, OpticalMaterial):
+            raise TypeError("optical must be an OpticalMaterial")
+        if not isinstance(self.mesh_settings, MeshSettings):
+            raise TypeError("mesh_settings must be MeshSettings")
+        if (
+            not isinstance(self.fem_steps, int)
+            or isinstance(self.fem_steps, bool)
+            or self.fem_steps <= 0
+        ):
+            raise ValueError("fem_steps must be a positive integer")
+        if not isinstance(self.internal_contact, str) or not self.internal_contact:
+            raise ValueError("internal_contact must be a nonempty string")
+        if not isinstance(self.trace_settings, Transport3DSettings):
+            raise TypeError("trace_settings must be Transport3DSettings")
+        if self.trace_settings.mode != "planar":
+            raise ValueError("FingertipCase requires planar trace_settings")
         if not self.fea.converged or self.fea.indenter_pose is None:
             raise ValueError("a FingertipCase requires converged FEA with indenter_pose")
         if self.fea.reference_mesh is None:
             raise ValueError("FingertipCase requires FEAResult.reference_mesh")
         if self.fea.reference_mesh.parameters != self.fingertip_parameters:
             raise ValueError("FEA reference_mesh parameters do not match fingertip_parameters")
+        if self.fea.reference_mesh.settings != self.mesh_settings:
+            raise ValueError("FEA reference_mesh settings do not match mesh_settings")
+        observed_steps = self.fea.details.get("requested_increments")
+        if observed_steps is not None and int(observed_steps) != self.fem_steps:
+            raise ValueError("FEA requested increments do not match fem_steps")
+        observed_contact = self.fea.details.get("configuration", {}).get(
+            "internal_contact_configuration"
+        )
+        if observed_contact is not None and observed_contact != self.internal_contact:
+            raise ValueError("FEA internal contact does not match internal_contact")
 
         expected_morphology = _expected_morphology_fingerprint(
             self.fingertip_parameters
@@ -168,6 +207,15 @@ class FingertipCase:
             raise ValueError(
                 "FingertipCase requires the explicit-contact mechanics provenance"
             )
+        expected_transport_configuration = transport_configuration(
+            self.trace_settings,
+            material=_optical_material_mapping(self.optical),
+            source={"led": asdict(self.led)},
+        )
+        if self.optics.transport_configuration_fingerprint != fingerprint_mapping(
+            expected_transport_configuration
+        ):
+            raise ValueError("optics transport configuration does not match the case")
         for name in (
             "launched_weight",
             "escaped_weight",
@@ -185,7 +233,7 @@ class FingertipCase:
         if self.raytrace.launched_ray_count != self.optics.ray_count:
             raise ValueError("raw raytrace and optics summary mismatch: ray_count")
         if not np.array_equal(
-            self.raytrace.projected_weighted_path_density,
+            self.raytrace.projected_weighted_path_density.T,
             self.optics.field,
         ):
             raise ValueError("raw P2 field and optics summary field mismatch")
@@ -357,6 +405,7 @@ def run_case(
     configuration = transport_configuration(
         trace_settings,
         material=_optical_material_mapping(tip.optical),
+        source={"led": asdict(tip.led)},
     )
     contact_provenance = {
         **state,
@@ -398,6 +447,12 @@ def run_case(
         fea=fea,
         raytrace=raytrace,
         optics=optics,
+        led=tip.led,
+        optical=tip.optical,
+        mesh_settings=mesh_settings,
+        fem_steps=fem_steps,
+        internal_contact=internal_contact,
+        trace_settings=trace_settings,
         provenance=case_provenance,
     )
 
