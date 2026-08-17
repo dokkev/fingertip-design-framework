@@ -8,7 +8,7 @@ from bootstrap import ensure_repository_root
 
 ensure_repository_root()
 
-from case import ContactState, run_case
+from case import ContactState, FEA2D, FingertipCase, RayTracing2D
 from mesh.indenter import IndenterSettings
 from model import Fingertip
 from optics import IndenterOptics
@@ -27,31 +27,40 @@ DEMO_INDENTER_OPTICS = IndenterOptics(
 
 def main() -> int:
     tip = Fingertip()
-    case = run_case(
-        fingertip_parameters=tip.parameters,
-        indenter_parameters=IndenterSettings(initial_gap_mm=0.0),
-        contact_state=ContactState(
-            location_x_mm=0.0,
-            indentation_mm=INDENTATION_MM,
-            indenter_radius_mm=4.0,
+    indenter = IndenterSettings(initial_gap_mm=0.0)
+    case = FingertipCase(
+        fingertip=tip,
+        fea=FEA2D(
+            indenter=indenter,
+            contact=ContactState(
+                location_x_mm=0.0,
+                indentation_mm=INDENTATION_MM,
+                indenter_radius_mm=indenter.radius_mm,
+            ),
         ),
-        trace_settings=Transport3DSettings(
-            mode="planar",
-            ray_count=256,
-            max_interactions=8,
-            surface_u_bins=64,
-            surface_z_bins=16,
-            projected_grid_width=96,
-            projected_grid_height=96,
-            internal_z_bins=8,
-            retain_projected_segments=True,
+        raytracing=RayTracing2D(
+            settings=Transport3DSettings(
+                mode="planar",
+                ray_count=256,
+                max_interactions=8,
+                surface_u_bins=64,
+                surface_z_bins=16,
+                projected_grid_width=96,
+                projected_grid_height=96,
+                internal_z_bins=8,
+                retain_projected_segments=True,
+            ),
+            indenter_optics=DEMO_INDENTER_OPTICS,
         ),
-        indenter_optics=DEMO_INDENTER_OPTICS,
     )
+    case.run()
 
-    pose = case.indenter_pose
+    assert case.fea.result is not None
+    assert case.fea.result.indenter_pose is not None
+    assert case.raytracing.raw is not None
+    pose = case.fea.result.indenter_pose
     patch_width = 0.0 if pose.contact_patch is None else pose.contact_patch.length
-    raw = case.raytrace
+    raw = case.raytracing.raw
     print("FingertipCase summary:")
     print(f"  case_id: {case.case_id}")
     print(f"  reaction_force_n: {case.reaction_force}")

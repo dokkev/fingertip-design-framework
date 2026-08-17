@@ -14,7 +14,7 @@ from matplotlib.collections import PathCollection
 from matplotlib.quiver import Quiver
 import numpy as np
 import pytest
-from shapely.geometry import LineString, Polygon
+from shapely.geometry import LineString, MultiLineString, Polygon
 
 import visualization
 from mesh import PadMesh
@@ -150,27 +150,38 @@ def test_plot_case_composes_mechanics_pose_contact_and_p2() -> None:
     mesh = _square_mesh()
     displacement = np.zeros((4, 2), dtype=float)
     case = SimpleNamespace(
-        parameters=FingertipParameters(),
-        led=LED(),
-        optical=OpticalMaterial(),
+        fingertip=Fingertip(
+            FingertipParameters(),
+            led=LED(),
+            optical=OpticalMaterial(),
+        ),
         fea=SimpleNamespace(
-            mesh=mesh,
-            displacement=displacement,
-            deformed_mesh=mesh,
-        ),
-        indenter_pose=SimpleNamespace(
-            carrier_geometry=Polygon(
-                [(0.25, -0.4), (0.75, -0.4), (0.75, -0.1), (0.25, -0.1)]
+            result=SimpleNamespace(
+                mesh=mesh,
+                displacement=displacement,
+                deformed_mesh=mesh,
+                indenter_pose=SimpleNamespace(
+                    carrier_geometry=Polygon(
+                        [(0.25, -0.4), (0.75, -0.4), (0.75, -0.1), (0.25, -0.1)]
+                    ),
+                    contact_patch=MultiLineString(
+                        [
+                            [(0.4, 0.0), (0.5, 0.0)],
+                            [(0.5, 0.0), (0.6, 0.0)],
+                        ]
+                    ),
+                ),
             ),
-            contact_patch=LineString([(0.4, 0.0), (0.6, 0.0)]),
         ),
-        optics=SimpleNamespace(
-            field=np.ones((3, 2), dtype=float),
-            field_axes=(np.arange(4, dtype=float), np.arange(3, dtype=float)),
-        ),
-        raytrace=SimpleNamespace(
-            escape_positions_mm=np.asarray([[0.5, 1.0, 0.0]]),
-            escape_directions=np.asarray([[0.0, 1.0, 0.0]]),
+        raytracing=SimpleNamespace(
+            summary=SimpleNamespace(
+                field=np.ones((3, 2), dtype=float),
+                field_axes=(np.arange(4, dtype=float), np.arange(3, dtype=float)),
+            ),
+            raw=SimpleNamespace(
+                escape_positions_mm=np.asarray([[0.5, 1.0, 0.0]]),
+                escape_directions=np.asarray([[0.0, 1.0, 0.0]]),
+            ),
         ),
     )
 

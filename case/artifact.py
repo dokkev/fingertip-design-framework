@@ -25,13 +25,15 @@ from mesh.types import (
     MeshNode,
     T3Element,
 )
-from model import FingertipParameters, LED, OpticalMaterial
+from model import Fingertip, FingertipParameters, LED, OpticalMaterial
 from optics.contact_object import IndenterOptics
 from optics.transport3d.result import Transport3DResult
 from optics.transport3d.settings import Transport3DSettings
 from optics.transport3d.unified import UnifiedTransportResult, fingerprint_mapping
 
 from case.core import CASE_SCHEMA, FingertipCase
+from case.fea2d import FEA2D
+from case.raytracing2d import RayTracing2D
 from case.state import ContactState
 
 
@@ -162,7 +164,9 @@ def _mesh_from_dict(payload: Mapping[str, Any]) -> FingertipMesh:
 
 
 def _pose_payload(case: FingertipCase) -> dict[str, Any]:
-    pose = case.indenter_pose
+    if case.fea.result is None or case.fea.result.indenter_pose is None:
+        raise ValueError("a persisted FingertipCase requires an FEA indenter pose")
+    pose = case.fea.result.indenter_pose
     payload = pose.to_dict()
     payload.update(
         {
@@ -201,12 +205,15 @@ def _save_mechanics(case: FingertipCase, directory: Path) -> Path:
     mesh_path = directory / "mesh.json"
     arrays_path = directory / "fea.npz"
     manifest_path = directory / "fea.json"
-    if case.fea.reference_mesh is None:
+    if case.fea.result is None:
+        raise ValueError("a persisted FingertipCase requires an FEA result")
+    result = case.fea.result
+    if result.reference_mesh is None:
         raise ValueError("a persisted FingertipCase requires reference_mesh")
-    _write_json(mesh_path, case.fea.reference_mesh.to_dict())
-    if case.fea.displacement is None:
+    _write_json(mesh_path, result.reference_mesh.to_dict())
+    if result.displacement is None:
         raise ValueError("a persisted FingertipCase requires displacement")
-    _write_npz(arrays_path, displacement=case.fea.displacement)
+    _write_npz(arrays_path, displacement=result.displacement)
     metadata = {
         "schema": MECHANICS_SCHEMA,
         "mesh_artifact": mesh_path.name,
@@ -214,10 +221,10 @@ def _save_mechanics(case: FingertipCase, directory: Path) -> Path:
         "arrays_artifact": arrays_path.name,
         "arrays_sha256": _sha256(arrays_path),
         "displacement_key": "displacement",
-        "reaction_force_n": case.fea.reaction_force,
-        "contact": _jsonable(case.fea.contact),
-        "converged": case.fea.converged,
-        "details": _jsonable(case.fea.details),
+        "reaction_force_n": result.reaction_force,
+        "contact": _jsonable(result.contact),
+        "converged": result.converged,
+        "details": _jsonable(result.details),
         "indenter_pose": _pose_payload(case),
     }
     _write_json(manifest_path, metadata)
@@ -227,8 +234,10 @@ def _save_mechanics(case: FingertipCase, directory: Path) -> Path:
 def _save_optics(case: FingertipCase, directory: Path) -> Path:
     arrays_path = directory / "raytrace.npz"
     manifest_path = directory / "raytrace.json"
-    raw = case.raytrace
-    result = case.optics
+    raw = case.raytracing.raw
+    result = case.raytracing.summary
+    if raw is None or result is None:
+        raise ValueError("a persisted FingertipCase requires completed optics")
     arrays: dict[str, Any] = {
         "source_position_mm": raw.source_position_mm,
         "surface_u_edges": raw.surface_u_edges,
@@ -342,33 +351,39 @@ def save_case(case: FingertipCase, root: str | Path) -> Path:
     optics_directory = case_directory / "optics"
     mechanics_directory.mkdir(parents=True, exist_ok=True)
     optics_directory.mkdir(parents=True, exist_ok=True)
+    if (
+        case.fea.result is None
+        or case.raytracing.raw is None
+        or case.raytracing.summary is None
+    ):
+        raise ValueError("a persisted FingertipCase requires completed FEA and optics")
     mechanics_path = _save_mechanics(case, mechanics_directory)
     optical_path = _save_optics(case, optics_directory)
-    morphology_fingerprint = case.optics.morphology_fingerprint
+    morphology_fingerprint = case.raytracing.summary.morphology_fingerprint
     top_level = {
         "schema": CASE_SCHEMA,
         "case_id": case.case_id,
-        "fingertip_parameters": asdict(case.fingertip_parameters),
+        "fingertip_parameters": asdict(case.fingertip.parameters),
         "fingertip_parameters_fingerprint": morphology_fingerprint,
         "indenter_parameters": asdict(case.indenter),
-        "mesh_settings": asdict(case.mesh_settings),
-        "fem_steps": case.fem_steps,
-        "internal_contact": case.internal_contact,
-        "led": asdict(case.led),
-        "optical_material": asdict(case.optical),
-        "trace_settings": asdict(case.trace_settings),
+        "mesh_settings": asdict(case.fea.mesh_settings),
+        "fem_steps": case.fea.steps,
+        "internal_contact": case.fea.internal_contact,
+        "led": asdict(case.fingertip.led),
+        "optical_material": asdict(case.fingertip.optical),
+        "trace_settings": asdict(case.raytracing.settings),
         "indenter_optics": (
             None
-            if case.indenter_optics is None
-            else asdict(case.indenter_optics)
+            if case.raytracing.indenter_optics is None
+            else asdict(case.raytracing.indenter_optics)
         ),
         "indenter_pose_fingerprint": fingerprint_mapping(
             _pose_payload(case)
         ),
         "contact_state": asdict(case.contact_state),
         "provenance": dict(case.provenance),
-        "optical_mode": case.optics.optical_mode,
-        "configuration_fingerprint": case.optics.transport_configuration_fingerprint,
+        "optical_mode": case.raytracing.summary.optical_mode,
+        "configuration_fingerprint": case.raytracing.summary.transport_configuration_fingerprint,
         "mechanics": {
             "artifact": str(mechanics_path.relative_to(case_directory)),
             "artifact_sha256": _sha256(mechanics_path),
@@ -725,31 +740,41 @@ def load_case(path: str | Path) -> FingertipCase:
     raytrace, optics = _load_optics(optical_path)
     if manifest.get("fingertip_parameters_fingerprint") != optics.morphology_fingerprint:
         raise ValueError("case morphology fingerprint mismatch")
-    case = FingertipCase(
-        fingertip_parameters=parameters,
-        indenter_parameters=indenter,
-        contact_state=contact_state,
-        fea=fea,
-        raytrace=raytrace,
-        optics=optics,
+    fingertip = Fingertip(
+        parameters,
         led=led,
         optical=optical,
+    )
+    fea_config = FEA2D(
+        indenter=indenter,
+        contact=contact_state,
         mesh_settings=mesh_settings,
-        fem_steps=int(manifest["fem_steps"]),
+        steps=int(manifest["fem_steps"]),
         internal_contact=str(manifest["internal_contact"]),
-        trace_settings=trace_settings,
+    )
+    fea_config.result = fea
+    raytracing = RayTracing2D(
+        settings=trace_settings,
         indenter_optics=indenter_optics,
-        case_id=str(manifest["case_id"]),
+    )
+    raytracing.raw = raytrace
+    raytracing.summary = optics
+    case = FingertipCase(
+        fingertip=fingertip,
+        fea=fea_config,
+        raytracing=raytracing,
         provenance=manifest.get("provenance", {}),
     )
+    if manifest.get("case_id") != case.case_id:
+        raise ValueError("case ID mismatch")
     if manifest.get("indenter_pose_fingerprint") != fingerprint_mapping(
         _pose_payload(case)
     ):
         raise ValueError("case indenter-pose fingerprint mismatch")
-    if manifest.get("optical_mode") != case.optics.optical_mode:
+    if manifest.get("optical_mode") != case.raytracing.summary.optical_mode:
         raise ValueError("case optical mode mismatch")
     if manifest.get("configuration_fingerprint") != (
-        case.optics.transport_configuration_fingerprint
+        case.raytracing.summary.transport_configuration_fingerprint
     ):
         raise ValueError("case optical configuration fingerprint mismatch")
     return case

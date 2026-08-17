@@ -9,7 +9,16 @@ import numpy as np
 import pytest
 
 import case.core as case_module
-from case import ContactState, FingertipCase, load_case, run_case, save_case
+from case import (
+    CaseConstructionError,
+    ContactState,
+    FEA2D,
+    FingertipCase,
+    RayTracing2D,
+    load_case,
+    run_case,
+    save_case,
+)
 from fem import FEAResult
 from mesh.indenter import IndenterSettings, pose_from_fixture, build_normal_indenter_fixture_at_x
 from mesh.types import (
@@ -171,10 +180,8 @@ def _case_parts(
         internal_z_bins=2,
         retain_projected_segments=True,
     )
-    configuration = case_module.transport_configuration(
-        trace_settings,
-        material=case_module._optical_material_mapping(OpticalMaterial()),
-        source={"led": asdict(LED())},
+    configuration = RayTracing2D(settings=trace_settings).configuration(
+        Fingertip()
     )
     optics = UnifiedTransportResult.from_transport_result(
         raytrace,
@@ -222,10 +229,11 @@ def _case(**kwargs) -> FingertipCase:
     indenter_optics = kwargs.pop("indenter_optics", None)
     supplied_optics = kwargs.pop("optics", None)
     if supplied_optics is None:
-        configuration = case_module.transport_configuration(
-            trace_settings,
-            material=case_module._optical_material_mapping(optical),
-            source=case_module._transport_source_mapping(led, indenter_optics),
+        configuration = RayTracing2D(
+            settings=trace_settings,
+            indenter_optics=indenter_optics,
+        ).configuration(
+            Fingertip(parameters, led=led, optical=optical)
         )
         optics = replace(
             optics,
@@ -235,20 +243,30 @@ def _case(**kwargs) -> FingertipCase:
         )
     else:
         optics = supplied_optics
-    return FingertipCase(
-        fingertip_parameters=kwargs.pop("fingertip_parameters", parameters),
-        indenter_parameters=kwargs.pop("indenter_parameters", indenter),
-        contact_state=kwargs.pop("contact_state", contact),
-        fea=kwargs.pop("fea", fea),
-        raytrace=kwargs.pop("raytrace", raytrace),
-        optics=optics,
-        led=led,
-        optical=optical,
+    fingertip_parameters = kwargs.pop("fingertip_parameters", parameters)
+    indenter = kwargs.pop("indenter_parameters", indenter)
+    contact = kwargs.pop("contact_state", contact)
+    fea = kwargs.pop("fea", fea)
+    raytrace = kwargs.pop("raytrace", raytrace)
+    tip = Fingertip(fingertip_parameters, led=led, optical=optical)
+    fea_config = FEA2D(
+        indenter=indenter,
+        contact=contact,
         mesh_settings=mesh_settings,
-        fem_steps=fem_steps,
+        steps=fem_steps,
         internal_contact=internal_contact,
-        trace_settings=trace_settings,
+    )
+    fea_config.result = fea
+    raytracing = RayTracing2D(
+        settings=trace_settings,
         indenter_optics=indenter_optics,
+    )
+    raytracing.raw = raytrace
+    raytracing.summary = optics
+    return FingertipCase(
+        fingertip=tip,
+        fea=fea_config,
+        raytracing=raytracing,
         provenance=kwargs.pop("provenance", {"test": "synthetic"}),
         **kwargs,
     )
@@ -256,27 +274,45 @@ def _case(**kwargs) -> FingertipCase:
 
 def test_case_stores_neutral_inputs_and_delegates_results() -> None:
     case = _case()
-    parameters = case.fingertip_parameters
-    indenter = case.indenter_parameters
+    parameters = case.fingertip.parameters
+    indenter = case.fea.indenter
     fea = case.fea
-    raytrace = case.raytrace
-    optics = case.optics
-    assert case.fingertip_parameters is parameters
-    assert case.indenter_parameters is indenter
+    raytrace = case.raytracing
+    optics = case.raytracing.summary
+    assert case.fingertip.parameters is parameters
+    assert case.fea.indenter is indenter
     assert case.fea is fea
-    assert case.raytrace is raytrace
-    assert case.optics is optics
-    assert case.displacement is fea.displacement
+    assert case.raytracing is raytrace
+    assert case.raytracing.summary is optics
+    assert case.displacement is fea.result.displacement
     assert case.optical_field is optics.field
-    assert case.reaction_force == fea.reaction_force
-    assert case.escaped_weight == raytrace.escaped_weight
-    assert case.indenter_pose is fea.indenter_pose
+    assert case.reaction_force == fea.result.reaction_force
+    assert case.escaped_weight == raytrace.raw.escaped_weight
+    assert case.indenter_pose is fea.result.indenter_pose
+
+
+def test_case_exposes_staged_nested_experiments_before_execution() -> None:
+    indenter = IndenterSettings()
+    case = FingertipCase(
+        fingertip=Fingertip(),
+        fea=FEA2D(
+            indenter=indenter,
+            contact=ContactState(0.0, 0.5, indenter.radius_mm),
+        ),
+        raytracing=RayTracing2D(),
+    )
+    assert case.fea.result is None
+    assert case.raytracing.raw is None
+    assert case.raytracing.summary is None
+    assert case.case_id.startswith("case-")
+    with pytest.raises(CaseConstructionError, match="solve the case"):
+        case.trace()
 
 
 def test_case_rejects_mismatched_fea_parameters() -> None:
     base = _case()
-    parameters = base.fingertip_parameters
-    fea = base.fea
+    parameters = base.fingertip.parameters
+    fea = base.fea.result
     mismatched_mesh = _mesh(FingertipParameters(void_width=1.2))
     mismatched_fea = FEAResult(
         mesh=mismatched_mesh.pad,
@@ -288,33 +324,25 @@ def test_case_rejects_mismatched_fea_parameters() -> None:
         indenter_pose=fea.indenter_pose,
         reference_mesh=mismatched_mesh,
     )
+    fea_config = FEA2D(
+        indenter=base.fea.indenter,
+        contact=base.fea.contact,
+        mesh_settings=base.fea.mesh_settings,
+        steps=base.fea.steps,
+        internal_contact=base.fea.internal_contact,
+    )
+    fea_config.result = mismatched_fea
     with pytest.raises(ValueError, match="FEA reference_mesh parameters"):
         FingertipCase(
-            fingertip_parameters=parameters,
-            indenter_parameters=base.indenter_parameters,
-            contact_state=base.contact_state,
-            fea=mismatched_fea,
-            raytrace=base.raytrace,
-            optics=base.optics,
-            led=base.led,
-            optical=base.optical,
-            mesh_settings=base.mesh_settings,
-            fem_steps=base.fem_steps,
-            internal_contact=base.internal_contact,
-            trace_settings=base.trace_settings,
+            fingertip=base.fingertip,
+            fea=fea_config,
+            raytracing=base.raytracing,
         )
 
 
 def test_case_rejects_mismatched_raytrace_morphology() -> None:
     base = _case()
-    parameters, indenter, contact, fea, raytrace, optics = (
-        base.fingertip_parameters,
-        base.indenter_parameters,
-        base.contact_state,
-        base.fea,
-        base.raytrace,
-        base.optics,
-    )
+    optics = base.raytracing.summary
     bad = UnifiedTransportResult(
         **{
             name: getattr(optics, name)
@@ -329,14 +357,7 @@ def test_case_rejects_mismatched_raytrace_morphology() -> None:
 
 def test_case_rejects_mismatched_contact_provenance() -> None:
     base = _case()
-    parameters, indenter, contact, fea, raytrace, optics = (
-        base.fingertip_parameters,
-        base.indenter_parameters,
-        base.contact_state,
-        base.fea,
-        base.raytrace,
-        base.optics,
-    )
+    optics = base.raytracing.summary
     payload = dict(optics.contact_state)
     payload["indentation_mm"] = 0.75
     bad = UnifiedTransportResult(
@@ -363,32 +384,34 @@ def test_case_manifest_round_trip_and_references(tmp_path) -> None:
     loaded = load_case(manifest)
     assert manifest == tmp_path / "cases" / original.case_id / "case.json"
     assert loaded.case_id == original.case_id
-    assert loaded.fingertip_parameters == original.fingertip_parameters
-    assert loaded.indenter_parameters == original.indenter_parameters
-    assert loaded.contact_state == original.contact_state
-    assert loaded.led == original.led
-    assert loaded.optical == original.optical
-    assert loaded.mesh_settings == original.mesh_settings
-    assert loaded.fem_steps == original.fem_steps
-    assert loaded.internal_contact == original.internal_contact
-    assert loaded.trace_settings == original.trace_settings
-    assert loaded.indenter_optics == original.indenter_optics
+    assert loaded.fingertip.parameters == original.fingertip.parameters
+    assert loaded.fingertip.led == original.fingertip.led
+    assert loaded.fingertip.optical == original.fingertip.optical
+    assert loaded.fea.indenter == original.fea.indenter
+    assert loaded.fea.contact == original.fea.contact
+    assert loaded.fingertip.led == original.fingertip.led
+    assert loaded.fingertip.optical == original.fingertip.optical
+    assert loaded.fea.mesh_settings == original.fea.mesh_settings
+    assert loaded.fea.steps == original.fea.steps
+    assert loaded.fea.internal_contact == original.fea.internal_contact
+    assert loaded.raytracing.settings == original.raytracing.settings
+    assert loaded.raytracing.indenter_optics == original.raytracing.indenter_optics
     np.testing.assert_allclose(loaded.displacement, original.displacement)
     np.testing.assert_allclose(loaded.optical_field, original.optical_field)
     np.testing.assert_allclose(
-        loaded.raytrace.escape_positions_mm,
-        original.raytrace.escape_positions_mm,
+        loaded.raytracing.raw.escape_positions_mm,
+        original.raytracing.raw.escape_positions_mm,
     )
     np.testing.assert_allclose(
-        loaded.raytrace.escape_directions,
-        original.raytrace.escape_directions,
+        loaded.raytracing.raw.escape_directions,
+        original.raytracing.raw.escape_directions,
     )
     np.testing.assert_allclose(
-        loaded.raytrace.escape_weights,
-        original.raytrace.escape_weights,
+        loaded.raytracing.raw.escape_weights,
+        original.raytracing.raw.escape_weights,
     )
-    assert loaded.fea.reference_mesh == original.fea.reference_mesh
-    assert loaded.fea.mesh is loaded.fea.reference_mesh.pad
+    assert loaded.fea.result.reference_mesh == original.fea.result.reference_mesh
+    assert loaded.fea.result.mesh is loaded.fea.result.reference_mesh.pad
     assert dict(loaded.provenance) == dict(original.provenance)
 
 
@@ -415,8 +438,8 @@ def test_case_id_includes_run_and_optical_configuration() -> None:
     ).case_id
     assert base.case_id != custom_led.case_id
     assert (
-        base.optics.transport_configuration_fingerprint
-        != custom_led.optics.transport_configuration_fingerprint
+        base.raytracing.summary.transport_configuration_fingerprint
+        != custom_led.raytracing.summary.transport_configuration_fingerprint
     )
     assert base.case_id != _case(
         optical=OpticalMaterial(absorption_per_mm=0.03),
@@ -456,7 +479,7 @@ def test_case_manifest_rejects_mismatched_optics_artifact(tmp_path) -> None:
 
 def test_case_rejects_mismatched_object_channels() -> None:
     base = _case()
-    bad = replace(base.optics, object_absorbed_weight=1.0)
+    bad = replace(base.raytracing.summary, object_absorbed_weight=1.0)
     with pytest.raises(ValueError, match="object_absorbed_weight"):
         _case(optics=bad)
 
@@ -476,41 +499,55 @@ def test_pose_tracks_surface_location_and_radius() -> None:
 
 
 def test_run_case_routes_to_existing_explicit_contact_solver(monkeypatch) -> None:
-    parameters, indenter, contact, fea, raytrace, _ = _case_parts()
+    parameters, indenter, contact, fea, raytrace, optics = _case_parts()
     real_tip = Fingertip(parameters)
     synthetic_mesh = fea.reference_mesh
     calls = {}
 
-    fake_tip = SimpleNamespace(
-        geometry=real_tip.geometry,
-        led=real_tip.led,
-        optical=real_tip.optical,
-        mesh=lambda settings: synthetic_mesh,
-    )
-
-    def fake_solve(tip, mesh, **kwargs):
+    def fake_solve(self, tip):
         calls["tip"] = tip
-        calls["mesh"] = mesh
-        calls["kwargs"] = kwargs
+        calls["mesh"] = synthetic_mesh
+        calls["kwargs"] = {
+            "indentation": self.contact.indentation_mm,
+            "surface_x_mm": self.contact.location_x_mm,
+            "indenter": self.indenter,
+            "steps": self.steps,
+            "internal_contact": self.internal_contact,
+        }
+        self.result = fea
         return fea
 
-    monkeypatch.setattr(case_module, "Fingertip", lambda *args, **kwargs: fake_tip)
-    monkeypatch.setattr(case_module, "solve", fake_solve)
-    monkeypatch.setattr(case_module, "build_transport_geometry", lambda *args, **kwargs: object())
-
-    def fake_trace_geometry(tip, geometry, **kwargs):
+    def fake_trace(self, fingertip, fea_result, **kwargs):
         calls["trace"] = kwargs
-        return raytrace
+        self.raw = raytrace
+        self.summary = replace(
+            optics,
+            transport_configuration_fingerprint=case_module.fingerprint_mapping(
+                self.configuration(fingertip)
+            ),
+        )
+        return self.summary
 
-    monkeypatch.setattr(case_module, "trace_geometry", fake_trace_geometry)
+    monkeypatch.setattr(FEA2D, "solve", fake_solve)
+    monkeypatch.setattr(RayTracing2D, "trace", fake_trace)
 
     result = run_case(
         fingertip_parameters=parameters,
         indenter_parameters=indenter,
         contact_state=contact,
         fem_steps=3,
+        trace_settings=Transport3DSettings(
+            mode="planar",
+            ray_count=3,
+            surface_u_bins=4,
+            surface_z_bins=2,
+            projected_grid_width=16,
+            projected_grid_height=16,
+            internal_z_bins=2,
+            retain_projected_segments=True,
+        ),
     )
-    assert result.fea is fea
+    assert result.fea.result is fea
     assert calls["kwargs"]["indentation"] == contact.indentation_mm
     assert calls["kwargs"]["surface_x_mm"] == contact.location_x_mm
     assert calls["kwargs"]["indenter"] is indenter

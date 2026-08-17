@@ -92,6 +92,14 @@ def test_study_is_immutable_and_contains_fixed_scientific_configuration() -> Non
         study.fem_steps = 10  # type: ignore[misc]
 
 
+def test_production_study_defaults_to_validated_12_step_search() -> None:
+    assert _study().fem_steps == 12
+
+
+def test_validation_reference_can_explicitly_keep_48_steps() -> None:
+    assert _study(fem_steps=48).fem_steps == 48
+
+
 def test_study_rejects_zero_active_variables() -> None:
     with pytest.raises(ValueError, match="at least one active"):
         _study(design_space=_design_space(active=()))

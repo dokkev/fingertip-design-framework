@@ -7,8 +7,8 @@ from typing import Any
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.figure import Figure
+from shapely.geometry import LineString, MultiLineString
 
-from model import Fingertip
 from visualization.geometry import plot_fingertip
 from visualization.mesh import plot_displacement
 
@@ -16,9 +16,11 @@ from visualization.mesh import plot_displacement
 def _line_parts(geometry: Any) -> tuple[Any, ...]:
     if geometry is None:
         return ()
-    if hasattr(geometry, "xy"):
+    if isinstance(geometry, LineString):
         return (geometry,)
-    return tuple(geometry.geoms)
+    if isinstance(geometry, MultiLineString):
+        return tuple(geometry.geoms)
+    raise TypeError("contact_patch must be a LineString or MultiLineString")
 
 
 def _plot_pose(ax: Any, pose: Any) -> None:
@@ -45,9 +47,11 @@ def _plot_pose(ax: Any, pose: Any) -> None:
 
 
 def _set_case_limits(ax: Any, case: Any) -> None:
-    deformed = np.asarray(case.fea.deformed_mesh.coordinates, dtype=float)
+    if case.fea.result is None:
+        raise RuntimeError("case FEA result is unavailable")
+    deformed = np.asarray(case.fea.result.deformed_mesh.coordinates, dtype=float)
     carrier = np.asarray(
-        case.indenter_pose.carrier_geometry.exterior.coords,
+        case.fea.result.indenter_pose.carrier_geometry.exterior.coords,
         dtype=float,
     )
     coordinates = np.vstack((deformed, carrier))
@@ -59,8 +63,10 @@ def _set_case_limits(ax: Any, case: Any) -> None:
 
 
 def _plot_optical_field(ax: Any, case: Any) -> None:
-    field = np.asarray(case.optics.field, dtype=float)
-    x_edges, y_edges = case.optics.field_axes
+    if case.raytracing.summary is None or case.raytracing.raw is None:
+        raise RuntimeError("case optical result is unavailable")
+    field = np.asarray(case.raytracing.summary.field, dtype=float)
+    x_edges, y_edges = case.raytracing.summary.field_axes
     scale = max(float(np.max(field)), 1.0e-15)
     image = ax.pcolormesh(
         x_edges,
@@ -75,8 +81,8 @@ def _plot_optical_field(ax: Any, case: Any) -> None:
         "P2 weighted path density"
     )
 
-    positions = np.asarray(case.raytrace.escape_positions_mm, dtype=float)
-    directions = np.asarray(case.raytrace.escape_directions, dtype=float)
+    positions = np.asarray(case.raytracing.raw.escape_positions_mm, dtype=float)
+    directions = np.asarray(case.raytracing.raw.escape_directions, dtype=float)
     if len(positions):
         selected = np.linspace(
             0,
@@ -120,11 +126,13 @@ def plot_case(case: Any) -> Figure:
     without importing the case package, preserving visualization's neutral
     dependency boundary.
     """
-    required = ("parameters", "led", "optical", "fea", "indenter_pose", "optics", "raytrace")
+    required = ("fingertip", "fea", "raytracing")
     if any(not hasattr(case, name) for name in required):
         raise TypeError("case must expose the FingertipCase visualization contract")
 
-    tip = Fingertip(case.parameters, led=case.led, optical=case.optical)
+    if case.fea.result is None or case.fea.result.indenter_pose is None:
+        raise RuntimeError("case FEA result is unavailable")
+    tip = case.fingertip
     figure, axes = plt.subplots(1, 2, figsize=(14.0, 6.0), constrained_layout=True)
     plot_fingertip(
         tip,
@@ -135,15 +143,15 @@ def plot_case(case: Any) -> Figure:
         title="Reference geometry + deformed FEA mesh",
     )
     plot_displacement(
-        case.fea.mesh,
-        case.fea.displacement,
+        case.fea.result.mesh,
+        case.fea.result.displacement,
         ax=axes[0],
         show_magnitude=False,
         show_vectors=False,
         show_rigid_structure=False,
         title="Reference geometry + deformed FEA mesh",
     )
-    _plot_pose(axes[0], case.indenter_pose)
+    _plot_pose(axes[0], case.fea.result.indenter_pose)
     _set_case_limits(axes[0], case)
     axes[0].set_aspect("equal", adjustable="box")
     axes[0].legend(loc="upper center", fontsize=8)

@@ -6,7 +6,12 @@ import math
 
 import pytest
 
-from model import FingertipParameters, silicone_ligament_measures
+from model import (
+    Fingertip,
+    FingertipParameters,
+    fingertip_parameters_fingerprint,
+    silicone_ligament_measures,
+)
 from optimization import (
     DesignSpace,
     DesignVariable,
@@ -41,7 +46,7 @@ def _space(
     return DesignSpace(nominal_parameters, tuple(variables))
 
 
-def test_exact_supported_set_includes_both_void_dimensions() -> None:
+def test_exact_supported_set_freezes_void_height_but_keeps_void_width_active() -> None:
     assert OPTIMIZABLE_PARAMETER_NAMES == (
         "flat_pad_width",
         "flat_pad_height",
@@ -49,10 +54,9 @@ def test_exact_supported_set_includes_both_void_dimensions() -> None:
         "stem_width",
         "stem_height",
         "void_width",
-        "void_height",
     )
     assert "void_width" in OPTIMIZABLE_PARAMETER_NAMES
-    assert "void_height" in OPTIMIZABLE_PARAMETER_NAMES
+    assert "void_height" not in OPTIMIZABLE_PARAMETER_NAMES
 
 
 @pytest.mark.parametrize(
@@ -147,7 +151,7 @@ def test_decode_preserves_fixed_geometry_and_mechanical_values() -> None:
         link_thickness=4.0,
         bond_extension_width=3.0,
         bond_extension_height=1.5,
-        void_height=0.5,
+        void_height=0.0,
         young_modulus_mpa=0.8,
         poisson_ratio=0.2,
         arc_resolution=64,
@@ -185,15 +189,23 @@ def test_void_width_decode_changes_only_void_width() -> None:
     assert one.void_height == zero.void_height
 
 
-def test_void_height_is_an_active_design_variable() -> None:
-    space = _space(
-        active=("void_height",),
-        lower={"void_height": 0.0},
-        upper={"void_height": 1.0},
+def test_production_space_rejects_nonzero_nominal_void_height() -> None:
+    with pytest.raises(ValueError, match="void_height=0.0"):
+        _space(FingertipParameters(void_height=0.5))
+
+
+def test_production_space_cannot_generate_a_void_height_candidate() -> None:
+    with pytest.raises(ValueError, match="unsupported"):
+        DesignVariable("void_height", True, 0.0, 1.0)  # type: ignore[arg-type]
+
+
+def test_generic_parameters_keep_nonzero_void_height_and_fingerprint_identity() -> None:
+    nonzero = FingertipParameters(void_height=0.5)
+    assert nonzero.void_height == 0.5
+    assert Fingertip(nonzero).parameters == nonzero
+    assert fingertip_parameters_fingerprint(nonzero) != fingertip_parameters_fingerprint(
+        FingertipParameters()
     )
-    decoded = space.decode({"void_height": 1.0})
-    assert decoded.void_height == 1.0
-    assert decoded.void_width == space.nominal_parameters.void_width
 
 
 def test_shared_ligament_measures_are_finite_for_nominal_parameters() -> None:

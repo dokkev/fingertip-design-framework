@@ -24,7 +24,9 @@ class OptimizationStudy:
     led: LED
     optical: OpticalMaterial
     indenter_optics: IndenterOptics | None = None
-    fem_steps: int = 48
+    # Production morphology search uses the validated fast tier.  Validation
+    # and finalist/reference callers pass 48 explicitly.
+    fem_steps: int = 12
     internal_contact: str = "three_pairs"
 
     def __post_init__(self) -> None:

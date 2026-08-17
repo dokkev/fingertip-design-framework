@@ -1,4 +1,4 @@
-"""Algorithm-independent morphology design-space definitions."""
+"""Algorithm-independent production morphology design-space definitions."""
 
 from __future__ import annotations
 
@@ -18,7 +18,6 @@ OptimizableParameterName = Literal[
     "stem_width",
     "stem_height",
     "void_width",
-    "void_height",
 ]
 
 OPTIMIZABLE_PARAMETER_NAMES: tuple[OptimizableParameterName, ...] = (
@@ -28,7 +27,6 @@ OPTIMIZABLE_PARAMETER_NAMES: tuple[OptimizableParameterName, ...] = (
     "stem_width",
     "stem_height",
     "void_width",
-    "void_height",
 )
 _OPTIMIZABLE_PARAMETER_SET = frozenset(OPTIMIZABLE_PARAMETER_NAMES)
 
@@ -69,8 +67,11 @@ class DesignVariable:
 
 @dataclass(frozen=True)
 class DesignSpace:
-    """Immutable nominal parameters plus the complete seven-variable morphology
-    design-space contract.
+    """Immutable nominal parameters plus the six-variable production contract.
+
+    ``FingertipParameters.void_height`` remains a supported physical geometry
+    parameter, but production morphology search freezes it at zero so the
+    initial bottom-contact contract is not changed by candidate generation.
     """
 
     nominal_parameters: FingertipParameters
@@ -79,11 +80,17 @@ class DesignSpace:
     def __post_init__(self) -> None:
         if not isinstance(self.nominal_parameters, FingertipParameters):
             raise TypeError("nominal_parameters must be FingertipParameters")
+        if self.nominal_parameters.void_height != 0.0:
+            raise ValueError(
+                "production DesignSpace requires void_height=0.0; "
+                "use FingertipParameters directly for historical or diagnostic "
+                "nonzero bottom clearance"
+            )
 
         variables = tuple(self.variables)
         if len(variables) != len(OPTIMIZABLE_PARAMETER_NAMES):
             raise ValueError(
-                "DesignSpace must contain exactly one entry for each of the seven "
+                "DesignSpace must contain exactly one entry for each of the six "
                 "optimizable parameters"
             )
         if any(not isinstance(variable, DesignVariable) for variable in variables):
@@ -98,7 +105,7 @@ class DesignSpace:
             missing = _OPTIMIZABLE_PARAMETER_SET - set(by_name)
             unknown = set(by_name) - _OPTIMIZABLE_PARAMETER_SET
             raise ValueError(
-                "DesignSpace variables must contain exactly the seven supported "
+                "DesignSpace variables must contain exactly the six supported "
                 f"parameters; missing={sorted(missing)!r}, unknown={sorted(unknown)!r}"
             )
 
@@ -150,6 +157,8 @@ class DesignSpace:
         # FingertipParameters remains the authority for physical constraints;
         # the optimization-only coupled ligament rule is enforced here.
         candidate = replace(self.nominal_parameters, **updates)
+        if candidate.void_height != 0.0:
+            raise ValueError("production candidates must have void_height=0.0")
         validate_silicone_ligament(candidate)
         return candidate
 

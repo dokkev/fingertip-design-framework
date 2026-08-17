@@ -26,7 +26,9 @@ Fingertip -> mesh -> deformed mesh
                   solve(...) -> FEA result
                   trace(...) -> TransportResult
                   evaluate(...) -> proxy metrics
-                  run_case(...) -> FingertipCase [explicit contact + PLANAR_2D OptiX]
+                  FingertipCase(Fingertip, FEA2D, RayTracing2D)
+                    solve() -> FEA2D.result
+                    trace() -> RayTracing2D.raw + .summary
                   render(...) -> RenderResult   [optional]
 ```
 
@@ -62,19 +64,18 @@ It does not replace mesh-based reference/loaded comparisons.
   `solve()`, `FEAResult`, and the solver-facing `IndenterSettings` fixture;
   Kratos objects do not cross into optics or visualization.
 - `case/` is the thin top-level research-case aggregate. `FingertipCase`
-  connects one `FingertipParameters`, `IndenterSettings`, existing explicit
-  contact `FEAResult`, the raw `PLANAR_2D` OptiX result, and its unified optical
-  summary. It
-  owns no solver or ray-tracing algorithm; `case.run_case()` delegates to the
-  existing public subsystem APIs and `case.save_case()`/`load_case()` connect
-  their separate arrays through one checked manifest. The mechanics result
-  keeps its `PadMesh` contract in `FEAResult.mesh`; the complete
-  `FingertipMesh` used for persistence is carried separately as
-  `FEAResult.reference_mesh`. The indenter fixture and posed geometry are
-  stored as exact artifact geometry rather than rebuilt on load. The case also
-  retains the full mesh settings, FEM step/contact configuration, LED,
-  optical material, and PLANAR_2D transport settings so its identity covers
-  every result-changing run input.
+  owns one physical `Fingertip`, one `FEA2D` mechanics experiment, and one
+  `RayTracing2D` optics experiment. `FEA2D` owns mesh/indenter/contact/solver
+  configuration and stores its optional `FEAResult`; `RayTracing2D` owns
+  PLANAR_2D settings and optional raw/summary results. `case.run_case()` is a
+  convenience wrapper around `FingertipCase.run()`, while explicit users can
+  call `solve()` and `trace()` separately. The case owns orchestration and
+  consistency checks but neither solver algorithm. `case.save_case()` and
+  `load_case()` retain the existing checked manifest and exact pose geometry.
+  The mechanics result keeps its `PadMesh` contract in `FEAResult.mesh`; the
+  complete `FingertipMesh` used for persistence remains
+  `FEAResult.reference_mesh`. Case identity is derived from physical and
+  numerical configuration, not free-form provenance.
 - `optics/` owns deterministic ray transport and adapters from neutral meshes
   and displacement fields. Its public transport surface is `TraceSettings`,
   `RaySegment`, `ExitEvent`, `TransportResult`, `trace()`, and `evaluate()`.
@@ -121,7 +122,13 @@ It does not replace mesh-based reference/loaded comparisons.
   it does not alter production defaults, constitutive/contact formulation, or
   downstream optical physics; generated reports remain under `output/`.
 - `optimization/design_space.py` owns algorithm-independent study geometry
-  variable and bound definitions. It does not import NiceGUI or an optimizer.
+  variable and bound definitions. The production search has six active
+  morphology variables and freezes `FingertipParameters.void_height` at zero;
+  the generic parameter object still supports nonzero historical/diagnostic
+  geometry. It does not import NiceGUI or an optimizer.
+- `OptimizationStudy` uses the validated 12-step FEM tier for production
+  search by default. Validation/reference callers explicitly request 48 steps;
+  low-level FEM defaults remain unchanged.
 - `gui/` is a top-level interactive consumer. It owns parameter editing,
   design-space presentation, validation feedback, and embedded visualization
   composition. It does not own geometry equations, meshing, FEM, optical

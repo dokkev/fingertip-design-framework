@@ -120,6 +120,14 @@ void         = cutout - stem
 The stem clearance remains meaningful to both mechanics and optics. The
 extension surfaces are bonded pad material, not contact surfaces.
 
+For the current production morphology search, `h_v = 0` is a fixed physical
+contract, not an optimizer variable. `PadCutoutBottom` and `StemBottom` are
+therefore coincident semantic boundaries and initially contacting with zero
+geometric gap. Bottom contact does not begin only after a later indentation
+such as 1.375 mm; a large-indentation acceptance failure is a separate
+enforcement-quality diagnostic. Nonzero `void_height` remains supported by
+`FingertipParameters` for historical, geometry, and diagnostic cases.
+
 ## Three-segment bonded interfaces
 
 Each side has one connected, three-segment perfectly bonded interface:
