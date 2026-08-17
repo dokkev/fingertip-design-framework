@@ -39,6 +39,7 @@ from optics.transport3d import (
 )
 from optics.transport3d.geometry import build_transport_geometry
 from optics.transport3d.settings import Transport3DSettings
+from optics.transport3d.optix_backend import create_runtime
 from validation.common.io import atomic_write_json, strict_read_json
 from validation.common.provenance import sha256_file
 from validation import localized_load_trend as localized
@@ -931,7 +932,7 @@ def _optix_stage() -> dict[str, Any]:
     force = _production_force()
     two_d = {row["case_id"]: row for row in strict_read_json(OUTPUT / "fea2d_summary.json")["records"]}
     three_d = {row["case_id"]: row for row in strict_read_json(OUTPUT / "fea3d_summary.json")["records"]}
-    runtime = legacy_optix._Runtime.create()
+    runtime = create_runtime()
     records = []
     for pair in _parent_manifest()["pairs"]:
         for arm in ("FIXED", "VARIED"):
@@ -1344,7 +1345,7 @@ def _interim_report(rows: Sequence[Mapping[str, Any]], *, completed: bool = Fals
 
 def _interim_optix() -> dict[str, Any]:
     INTERIM_OUTPUT.mkdir(parents=True, exist_ok=True)
-    runtime = legacy_optix._Runtime.create()
+    runtime = create_runtime()
     records_by_id = {row["case_id"]: row for row in (_interim_valid_record(path) for path in INTERIM_OUTPUT.glob("*.json")) if row is not None}
     while True:
         for left, right, l2, r2, l3, r3 in _interim_eligible_cases():

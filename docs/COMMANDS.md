@@ -131,6 +131,21 @@ The optional Mitsuba camera validator is demonstrated by:
 python /path/to/lit_ws/examples/camera_render.py
 ```
 
+The production 2D optical transport does not require CUDA or OptiX. The
+optional environment doctor reports import, header, and GPU-runtime status
+without compiling a kernel:
+
+```bash
+python -m optics.optix.doctor
+python -m optics.optix.doctor --json
+```
+
+`OPTIX_INCLUDE_DIR` should point directly to the directory containing both
+`optix.h` and `optix_device.h`. Header resolution precedence is: explicit
+`discover_paths(..., optix_include_dir=..., cuda_include_dir=...)` arguments,
+`OPTIX_INCLUDE_DIR` / `CUDA_INCLUDE_DIR`, `OptiX_INSTALL_DIR` or `OPTIX_ROOT`
+(root and `include`), then the documented conventional CUDA/OptiX locations.
+
 The focused NVIDIA OptiX transport validator uses the externally managed
 CUDA/OptiX environment documented in `README.md`:
 

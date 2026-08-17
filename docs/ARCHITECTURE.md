@@ -26,6 +26,7 @@ Fingertip -> mesh -> deformed mesh
                   solve(...) -> FEA result
                   trace(...) -> TransportResult
                   evaluate(...) -> proxy metrics
+                  run_case(...) -> FingertipCase [explicit contact + PLANAR_2D OptiX]
                   render(...) -> RenderResult   [optional]
 ```
 
@@ -60,9 +61,25 @@ It does not replace mesh-based reference/loaded comparisons.
   and Poisson ratio come from `FingertipMesh.parameters`; its public surface is
   `solve()`, `FEAResult`, and the solver-facing `IndenterSettings` fixture;
   Kratos objects do not cross into optics or visualization.
+- `case/` is the thin top-level research-case aggregate. `FingertipCase`
+  connects one `FingertipParameters`, `IndenterSettings`, existing explicit
+  contact `FEAResult`, and the current neutral `PLANAR_2D` OptiX result. It
+  owns no solver or ray-tracing algorithm; `case.run_case()` delegates to the
+  existing public subsystem APIs and `case.save_case()`/`load_case()` connect
+  their separate arrays through one checked manifest.
 - `optics/` owns deterministic ray transport and adapters from neutral meshes
   and displacement fields. Its public transport surface is `TraceSettings`,
-  `RaySegment`, `TransportResult`, `trace()`, and `evaluate()`.
+  `RaySegment`, `ExitEvent`, `TransportResult`, `trace()`, and `evaluate()`.
+  The normal 2D path is NumPy-only and does not require CUDA, CuPy, PyOptiX,
+  or OptiX headers.
+- `mesh.indenter.IndenterPose2D` is the neutral mechanical-to-optical pose
+  contract. A converged explicit-contact 2D solve carries the exact fixture,
+  final prescribed travel, and mechanically identified active contact patch;
+  optics does not reconstruct an independent circle.
+- `optics.contact_object.IndenterOptics` owns external indenter boundary
+  properties. The indenter material is not part of `Fingertip`; object
+  absorption/transmission is terminal and dielectric reflection remains in the
+  current medium without tracing propagation inside the object.
 - `optics.cross_section` is the reduced deterministic 2D optical transport
   model used for design studies. `optics.transport3d` owns the independent,
   deterministic, camera-independent 3D dimensional validator. It consumes
@@ -99,6 +116,10 @@ It does not replace mesh-based reference/loaded comparisons.
   design scores. It does not own fingertip geometry, meshing, FEM, optical
   transport, camera rendering, GUI code, optimizer algorithms, or
   Ax/BoTorch models.
+
+- `optimization.scenarios.ContactScenario` is reused as the neutral
+  `case.ContactState` contract. It is a physical location/indentation/radius
+  state, not a generalized load description.
 
 - `optimization/ax_adapter.py` is the thin optional Ax 1.3.1 orchestration
   boundary. It maps active `DesignVariable` bounds into Ax, attaches the
@@ -154,6 +175,9 @@ state-container class.
 `FEAResult.displacement` follows the pad mesh's node order. On a converged
 solve, `FEAResult.deformed_mesh` delegates directly to
 `mesh.deformed(displacement)`; it neither rebuilds nor copies topology.
+The result retains the full `FingertipMesh` used by the solve, so a
+`FingertipCase` or artifact loader can verify morphology parameters and
+rigid/contact topology without reconstructing them from a pad-only view.
 
 Strong validation remains at user, Gmsh/Kratos, and artifact boundaries.
 `PadMesh.deformed()` still rejects non-finite fields and degenerate or inverted
@@ -172,9 +196,13 @@ the deformed silicone and fixed rigid material is air, including any gap opened
 between the fixed stem/LED and the displaced cutout bottom.
 
 `TransportResult` contains raw weighted path density, grid edges, retained ray
-segments, silicone/air/rigid/LED regions, source position, and energy
-bookkeeping. The density is a deterministic light-transport proxy, not camera
-brightness, irradiance, or a predicted sensor image.
+segments, outgoing `ExitEvent` records, silicone/air/rigid/LED regions, source
+position, and energy bookkeeping. With an explicit posed indenter, the
+mechanical active patch is a direct silicone-to-object interface; it is never
+silicone-to-air-to-indenter. Object-absorbed and object-transmitted weights are
+terminal and are not counted as air escape. The density is a deterministic
+light-transport proxy, not camera brightness, irradiance, or a predicted sensor
+image.
 
 `evaluate(reference, loaded)` remains camera-independent and returns a plain
 dictionary. Its deliberately small initial contract is:
@@ -195,6 +223,9 @@ The three optical paths have intentionally different purposes:
 
 ```text
 optics.cross_section  -> reduced deterministic 2D transport for design studies
+optics.physics        -> shared NumPy interface/Fresnel math
+optics.contact_object -> external posed-indenter optical boundary contract
+optics.optix          -> optional CUDA/OptiX paths, doctor, and low-level runtime
 optics.transport3d    -> deterministic camera-independent 3D dimensional validation
 optics.mitsuba        -> optional camera/rendering validation
 ```

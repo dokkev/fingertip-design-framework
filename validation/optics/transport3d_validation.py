@@ -26,7 +26,7 @@ from optics import trace
 from optics.cross_section.settings import TraceSettings
 from optics.metrics import field_difference
 from optics.transport3d import Transport3DSettings, trace_3d
-from optics.transport3d.optix_backend import _Runtime
+from optics.transport3d.optix_backend import create_runtime
 from optimization.scenarios import ContactScenario
 
 
@@ -633,7 +633,7 @@ def _convergence_diagnostics(convergence: Mapping[str, Any]) -> dict[str, Any]:
 def run_validation(output: Path = OUTPUT) -> dict[str, Any]:
     """Run the focused 2D/internal-3D/outgoing-3D comparison."""
     output.mkdir(parents=True, exist_ok=True)
-    runtime = _Runtime.create()
+    runtime = create_runtime()
     design_parameters = {
         "nominal": FingertipParameters(),
         "candidate49": FingertipParameters(**CANDIDATE49),
@@ -711,7 +711,7 @@ def run_validation(output: Path = OUTPUT) -> dict[str, Any]:
     runtime.cp.cuda.Stream.null.synchronize()
     runtime.cp.get_default_memory_pool().free_all_blocks()
     del runtime
-    full_runtime = _Runtime.create()
+    full_runtime = create_runtime()
 
     reduced_results: dict[str, Any] = {}
     reduced: dict[str, Any] = {}

@@ -10,6 +10,7 @@ from dataclasses import asdict, dataclass
 import math
 from typing import Any
 
+from shapely import affinity
 from shapely.geometry import LineString, MultiLineString, Point, Polygon
 
 from model.fingertip_model import FingertipModel
@@ -113,6 +114,102 @@ class IndenterFixture:
                 Point(self.frame.point_mm)
             ),
         }
+
+
+@dataclass(frozen=True)
+class IndenterPose2D:
+    """Neutral final pose of the exact circular fixture used by 2D FEA.
+
+    The pose contains no Kratos objects.  ``contact_patch`` is the deformed
+    pad boundary assembled from the mechanical active-contact edge contract;
+    it is ``None`` for a posed but non-contacting fixture.
+    """
+
+    fixture: IndenterFixture
+    prescribed_travel_mm: float
+    translation_mm: Vector2
+    center_mm: Vector2
+    carrier_geometry: Polygon
+    contact_arc: LineString
+    outer_remainder: MultiLineString
+    contact_patch: LineString | MultiLineString | None = None
+    active_contact_node_ids: tuple[int, ...] = ()
+
+    def __post_init__(self) -> None:
+        if (
+            not math.isfinite(self.prescribed_travel_mm)
+            or self.prescribed_travel_mm < 0.0
+        ):
+            raise InvalidIndenterSettings(
+                "prescribed_travel_mm must be finite and nonnegative"
+            )
+        if not all(
+            math.isfinite(float(value))
+            for value in (*self.translation_mm, *self.center_mm)
+        ):
+            raise InvalidIndenterSettings("indenter pose coordinates must be finite")
+        if self.carrier_geometry.is_empty or not self.carrier_geometry.is_valid:
+            raise InvalidIndenterSettings("posed indenter carrier is invalid")
+        if self.contact_arc.is_empty or self.outer_remainder.is_empty:
+            raise InvalidIndenterSettings("posed indenter boundary is empty")
+        if self.contact_patch is not None and (
+            self.contact_patch.is_empty or not self.contact_patch.is_valid
+        ):
+            raise InvalidIndenterSettings("mechanical contact patch is invalid")
+        if any(
+            not isinstance(node_id, int) or isinstance(node_id, bool)
+            for node_id in self.active_contact_node_ids
+        ):
+            raise InvalidIndenterSettings("active contact node IDs must be integers")
+
+    @property
+    def has_mechanical_contact_patch(self) -> bool:
+        """Whether FEA supplied a nonempty active external contact patch."""
+        return self.contact_patch is not None
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize the pose provenance and geometry without solver objects."""
+        return {
+            "prescribed_travel_mm": self.prescribed_travel_mm,
+            "translation_mm": list(self.translation_mm),
+            "center_mm": list(self.center_mm),
+            "active_contact_node_ids": list(self.active_contact_node_ids),
+            "has_mechanical_contact_patch": self.has_mechanical_contact_patch,
+            "contact_patch_source": (
+                "deformed pad_outer_arc edges with both endpoints ACTIVE"
+                if self.contact_patch is not None
+                else "no active external contact edge"
+            ),
+            "fixture": self.fixture.to_dict(),
+        }
+
+
+def pose_from_fixture(
+    fixture: IndenterFixture,
+    prescribed_travel_mm: float,
+    *,
+    contact_patch: LineString | MultiLineString | None = None,
+    active_contact_node_ids: tuple[int, ...] = (),
+) -> IndenterPose2D:
+    """Return the final neutral pose for one solver-used fixture and travel."""
+    translation = fixture.displacement_for_travel(prescribed_travel_mm)
+    translate = lambda geometry: affinity.translate(
+        geometry, xoff=translation[0], yoff=translation[1]
+    )
+    return IndenterPose2D(
+        fixture=fixture,
+        prescribed_travel_mm=float(prescribed_travel_mm),
+        translation_mm=translation,
+        center_mm=(
+            fixture.center_mm[0] + translation[0],
+            fixture.center_mm[1] + translation[1],
+        ),
+        carrier_geometry=translate(fixture.carrier_geometry),
+        contact_arc=translate(fixture.contact_arc),
+        outer_remainder=translate(fixture.outer_remainder),
+        contact_patch=contact_patch,
+        active_contact_node_ids=tuple(sorted(set(active_contact_node_ids))),
+    )
 
 
 @dataclass(frozen=True)

@@ -44,7 +44,7 @@ from optics.transport3d import (
     trace_3d,
     transport_configuration,
 )
-from optics.transport3d.optix_backend import _Runtime
+from optics.transport3d.optix_backend import create_runtime
 from validation.common.io import atomic_write_json, strict_read_json
 from validation.fem.throughput import _mesh_policies
 from validation.optimization.nominal_sweep import (
@@ -1061,7 +1061,7 @@ def _run_optix_stage() -> dict[str, Any]:
     precommit = _load_precommit()
     two_d = {row["case_id"]: row for row in strict_read_json(OUTPUT / "fea2d_summary.json")["records"]}
     three_d = {row["case_id"]: row for row in strict_read_json(OUTPUT / "fea3d_summary.json")["records"]}
-    runtime = _Runtime.create()
+    runtime = create_runtime()
     records: list[dict[str, Any]] = []
     pair_results: dict[str, Any] = {}
     try:
@@ -1216,7 +1216,7 @@ def _fidelity_convergence(precommit: Mapping[str, Any], optix_summary: Mapping[s
     targets = [row for row in optix_summary["records"] if row.get("status") == "PASS" and row.get("base_id") in {"base_00_nominal", "base_01_candidate49"}]
     if not targets:
         return {"status": "INCONCLUSIVE", "reason": "anchor pair transport records missing"}
-    runtime = _Runtime.create()
+    runtime = create_runtime()
     records = []
     try:
         for target in targets:

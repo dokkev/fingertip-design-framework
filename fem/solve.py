@@ -7,6 +7,8 @@ import math
 from typing import Any, Mapping
 
 import numpy as np
+from shapely.geometry import LineString, MultiLineString
+from shapely.ops import unary_union
 
 from fem.indentation import (
     ConvergedIndentationStep,
@@ -14,8 +16,10 @@ from fem.indentation import (
     run_indentation_case,
 )
 from mesh.indenter import (
+    IndenterPose2D,
     IndenterSettings,
     build_normal_indenter_fixture_at_x,
+    pose_from_fixture,
 )
 from mesh.pad import PadMesh
 from mesh.types import FingertipMesh
@@ -26,12 +30,13 @@ from model import Fingertip
 class FEAResult:
     """Neutral final state of one displacement-controlled indentation solve."""
 
-    mesh: PadMesh
+    mesh: PadMesh | FingertipMesh
     displacement: np.ndarray | None
     reaction_force: float | None
     contact: Mapping[str, Any]
     converged: bool
     details: Mapping[str, Any]
+    indenter_pose: IndenterPose2D | None = None
 
     def __post_init__(self) -> None:
         if self.reaction_force is not None and not math.isfinite(
@@ -119,13 +124,54 @@ def solve(
     final = details.get("final", {})
     reaction = final.get("indenter_normal_reaction_n")
     converged = details.get("solve_status") == "PASS" and displacement is not None
+    indenter_pose = None
+    if converged:
+        external = final.get("contact_groups", {}).get(
+            "external_pad_indenter", {}
+        )
+        active_node_ids = tuple(
+            int(node_id)
+            for node_id in external.get("active_slave_node_ids", [])
+        )
+        active = set(active_node_ids)
+        id_to_local = {
+            int(node_id): index for index, node_id in enumerate(pad_mesh.node_ids)
+        }
+        deformed_coordinates = pad_mesh.coordinates + displacement
+        patch_segments = [
+            LineString(
+                [
+                    deformed_coordinates[id_to_local[int(first)]],
+                    deformed_coordinates[id_to_local[int(second)]],
+                ]
+            )
+            for first, second in pad_mesh.boundaries.get("pad_outer_arc", ())
+            if int(pad_mesh.node_ids[int(first)]) in active
+            and int(pad_mesh.node_ids[int(second)]) in active
+        ]
+        contact_patch = None
+        if patch_segments:
+            merged = unary_union(patch_segments)
+            if isinstance(merged, LineString | MultiLineString):
+                contact_patch = merged
+        indenter_pose = pose_from_fixture(
+            fixture,
+            float(final["prescribed_indenter_travel_mm"]),
+            contact_patch=contact_patch,
+            active_contact_node_ids=active_node_ids,
+        )
     return FEAResult(
-        mesh=pad_mesh,
+        # Retain the full neutral mesh so downstream case/artifact contracts
+        # can validate morphology parameters and rigid/contact topology.  The
+        # displacement remains in the pad view's node order and
+        # ``deformed_mesh`` still delegates to the same pad topology.
+        mesh=mesh,
         displacement=displacement,
         reaction_force=None if reaction is None else float(reaction),
         contact=dict(final.get("contact_groups", {})),
         converged=converged,
         details=details,
+        indenter_pose=indenter_pose,
     )
 
 

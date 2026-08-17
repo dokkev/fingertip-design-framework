@@ -32,6 +32,7 @@ from model import (
 )
 from model.fingertip_model import InvalidFingertipGeometry
 from optics import (
+    IndenterOptics,
     TraceSettings,
     evaluate as evaluate_transport,
     field_difference,
@@ -244,6 +245,7 @@ class DesignEvaluator:
         trace_settings: TraceSettings,
         led: LED | None = None,
         optical: OpticalMaterial | None = None,
+        indenter_optics: IndenterOptics | None = None,
         fem_steps: int = 48,
         internal_contact: str = "three_pairs",
     ) -> None:
@@ -261,6 +263,10 @@ class DesignEvaluator:
             raise TypeError("led must be an LED or None")
         if optical is not None and not isinstance(optical, OpticalMaterial):
             raise TypeError("optical must be an OpticalMaterial or None")
+        if indenter_optics is not None and not isinstance(
+            indenter_optics, IndenterOptics
+        ):
+            raise TypeError("indenter_optics must be an IndenterOptics or None")
         if (
             not isinstance(fem_steps, int)
             or isinstance(fem_steps, bool)
@@ -272,6 +278,7 @@ class DesignEvaluator:
         self.trace_settings = trace_settings
         self.led = LED() if led is None else led
         self.optical = OpticalMaterial() if optical is None else optical
+        self.indenter_optics = indenter_optics
         self.fem_steps = fem_steps
         self.internal_contact = internal_contact
 
@@ -335,10 +342,17 @@ class DesignEvaluator:
                 )
 
             try:
+                loaded_kwargs = {}
+                if self.indenter_optics is not None:
+                    loaded_kwargs = {
+                        "indenter_pose": fea.indenter_pose,
+                        "indenter_optics": self.indenter_optics,
+                    }
                 loaded = trace(
                     tip,
                     fea.deformed_mesh,
                     settings=self.trace_settings,
+                    **loaded_kwargs,
                 )
                 metrics = evaluate_transport(reference_transport, loaded)
                 scenario_result = ScenarioEvaluation(

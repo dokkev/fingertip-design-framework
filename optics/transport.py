@@ -9,11 +9,17 @@ import numpy as np
 from shapely.geometry.base import BaseGeometry
 
 from model import Fingertip
+from mesh.indenter import IndenterPose2D
+from optics.contact_object import IndenterOptics
 from optics.cross_section.domain import (
     _build_mesh_domain,
     _build_no_load_domain,
 )
-from optics.cross_section.result import OpticalMedium, _RawRaySegment
+from optics.cross_section.result import (
+    OpticalMedium,
+    _RawExitEvent,
+    _RawRaySegment,
+)
 from optics.cross_section.settings import TraceSettings
 from optics.cross_section.transport import _trace_transport
 
@@ -44,6 +50,29 @@ class RaySegment:
 
 
 @dataclass(frozen=True)
+class ExitEvent:
+    """One outgoing escape event from the reduced optical domain."""
+
+    position: tuple[float, float]
+    direction: tuple[float, float]
+    weight: float
+    boundary_tag: str | None
+    ray_index: int
+    interaction_index: int
+
+    @classmethod
+    def _from_engine(cls, event: _RawExitEvent) -> ExitEvent:
+        return cls(
+            position=event.position_mm,
+            direction=event.direction,
+            weight=event.weight,
+            boundary_tag=event.boundary_tag,
+            ray_index=event.primary_ray_index,
+            interaction_index=event.interaction_index,
+        )
+
+
+@dataclass(frozen=True)
 class TransportResult:
     """A self-contained light-transport proxy and its plotting geometry."""
 
@@ -53,6 +82,7 @@ class TransportResult:
     density: np.ndarray
     optical_mask: np.ndarray
     segments: tuple[RaySegment, ...]
+    exit_events: tuple[ExitEvent, ...]
     outer_envelope: BaseGeometry
     silicone_region: BaseGeometry
     air_region: BaseGeometry
@@ -63,6 +93,10 @@ class TransportResult:
     escaped_weight: float
     absorbed_weight: float
     terminated_weight: float
+    object_absorbed_weight: float = 0.0
+    object_transmitted_weight: float = 0.0
+    object_interface_incident_weight: float = 0.0
+    object_reflected_weight: float = 0.0
 
     def __post_init__(self) -> None:
         """Own immutable copies of the neutral numerical result."""
@@ -91,6 +125,10 @@ class TransportResult:
                 self.escaped_weight,
                 self.absorbed_weight,
                 self.terminated_weight,
+                self.object_absorbed_weight,
+                self.object_transmitted_weight,
+                self.object_interface_incident_weight,
+                self.object_reflected_weight,
             ],
             dtype=float,
         )
@@ -102,6 +140,27 @@ class TransportResult:
         object.__setattr__(self, "y_edges", y_edges)
         object.__setattr__(self, "density", density)
         object.__setattr__(self, "optical_mask", optical_mask)
+
+    @property
+    def bulk_absorbed_weight(self) -> float:
+        """Bulk silicone absorption; ``absorbed_weight`` remains the legacy name."""
+        return self.absorbed_weight
+
+    @property
+    def terminal_weight(self) -> float:
+        """Sum of all terminal energy channels, including the object."""
+        return (
+            self.escaped_weight
+            + self.bulk_absorbed_weight
+            + self.terminated_weight
+            + self.object_absorbed_weight
+            + self.object_transmitted_weight
+        )
+
+    @property
+    def energy_balance_error(self) -> float:
+        """Absolute launched-to-terminal weight residual."""
+        return self.launched_weight - self.terminal_weight
 
 def _pad_view(mesh: Any) -> Any:
     """Accept either the full mechanical mesh or a pad mesh view."""
@@ -119,14 +178,25 @@ def trace(
     tip: Fingertip,
     mesh: Any | None = None,
     settings: TraceSettings | None = None,
+    indenter_pose: IndenterPose2D | None = None,
+    indenter_optics: IndenterOptics | None = None,
 ) -> TransportResult:
     """Trace a reference, loaded, or analytic no-load fingertip state."""
     if not isinstance(tip, Fingertip):
         raise TypeError("tip must be a Fingertip")
     domain = (
-        _build_no_load_domain(tip)
+        _build_no_load_domain(
+            tip,
+            indenter_pose=indenter_pose,
+            indenter_optics=indenter_optics,
+        )
         if mesh is None
-        else _build_mesh_domain(tip, _pad_view(mesh))
+        else _build_mesh_domain(
+            tip,
+            _pad_view(mesh),
+            indenter_pose=indenter_pose,
+            indenter_optics=indenter_optics,
+        )
     )
     raw = _trace_transport(
         domain,
@@ -141,6 +211,7 @@ def trace(
         density=raw.weighted_path_density,
         optical_mask=raw.optical_mask,
         segments=tuple(RaySegment._from_engine(item) for item in raw.segments),
+        exit_events=tuple(ExitEvent._from_engine(item) for item in raw.exit_events),
         outer_envelope=domain.outer_envelope,
         silicone_region=domain.silicone_region,
         air_region=domain.accessible_region.difference(domain.silicone_region),
@@ -151,7 +222,17 @@ def trace(
         escaped_weight=raw.escaped_weight,
         absorbed_weight=raw.absorbed_weight,
         terminated_weight=raw.terminated_weight,
+        object_absorbed_weight=raw.object_absorbed_weight,
+        object_transmitted_weight=raw.object_transmitted_weight,
+        object_interface_incident_weight=raw.object_interface_incident_weight,
+        object_reflected_weight=raw.object_reflected_weight,
     )
 
 
-__all__ = ["RaySegment", "TraceSettings", "TransportResult", "trace"]
+__all__ = [
+    "ExitEvent",
+    "RaySegment",
+    "TraceSettings",
+    "TransportResult",
+    "trace",
+]

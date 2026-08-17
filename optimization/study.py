@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 from mesh import MeshSettings
 from model import Fingertip, LED, OpticalMaterial
-from optics import TraceSettings
+from optics import IndenterOptics, TraceSettings
 
 from optimization.design_space import DesignSpace
 from optimization.evaluator import DesignEvaluator
@@ -23,6 +23,7 @@ class OptimizationStudy:
     trace_settings: TraceSettings
     led: LED
     optical: OpticalMaterial
+    indenter_optics: IndenterOptics | None = None
     fem_steps: int = 48
     internal_contact: str = "three_pairs"
 
@@ -43,6 +44,10 @@ class OptimizationStudy:
             raise TypeError("led must be an LED")
         if not isinstance(self.optical, OpticalMaterial):
             raise TypeError("optical must be an OpticalMaterial")
+        if self.indenter_optics is not None and not isinstance(
+            self.indenter_optics, IndenterOptics
+        ):
+            raise TypeError("indenter_optics must be an IndenterOptics or None")
         if (
             not isinstance(self.fem_steps, int)
             or isinstance(self.fem_steps, bool)

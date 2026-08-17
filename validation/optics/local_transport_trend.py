@@ -37,7 +37,7 @@ from validation.optics.transport3d_validation import (
     _solve_contact,
     _state_trace_3d,
 )
-from optics.transport3d.optix_backend import _Runtime
+from optics.transport3d.optix_backend import create_runtime
 
 
 OUTPUT = Path("output/validation/optics/local_transport_trend")
@@ -857,7 +857,7 @@ def run_intrinsic_3d(output: Path = OUTPUT) -> dict[str, Any]:
                     },
                 ],
             )
-    runtime = _Runtime.create()
+    runtime = create_runtime()
     try:
         for sample in precommit["selected_valid_samples"]:
             sample_id = str(sample["sample_id"])

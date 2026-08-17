@@ -1384,7 +1384,7 @@ def run_benchmark(output: Path = OUTPUT) -> dict[str, Any]:
     from mesh import mesh_settings_for_level
     from model import Fingertip, FingertipParameters
     from optics.transport3d import trace_3d
-    from optics.transport3d.optix_backend import _Runtime
+    from optics.transport3d.optix_backend import create_runtime
     from optimization.scenarios import ContactScenario
     from validation.optics.transport3d_validation import _solve_contact
 
@@ -1471,7 +1471,7 @@ def run_benchmark(output: Path = OUTPUT) -> dict[str, Any]:
                     ),
                 }
 
-    runtime = _Runtime.create()
+    runtime = create_runtime()
     new_event_results: dict[str, dict[str, Any]] = {name: {} for name in designs}
     trace_started = time.perf_counter()
     active_trace: str | None = None

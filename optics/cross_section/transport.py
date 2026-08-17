@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass
-from math import asin, ceil, cos, exp, hypot, radians, sin, sqrt
+from math import asin, ceil, cos, exp, hypot, radians, sin
 from typing import Iterable
 
 import numpy as np
@@ -29,10 +29,15 @@ from optics.cross_section.domain import (
 )
 from optics.cross_section.result import (
     OpticalMedium,
+    _RawExitEvent,
     _RawRaySegment,
     _RawTransportResult,
 )
 from optics.cross_section.settings import TraceSettings
+from optics.physics import (
+    OpticalPhysicsError,
+    interface_directions_and_reflectance as _canonical_interface,
+)
 
 
 @dataclass(frozen=True)
@@ -86,6 +91,11 @@ def _prepare_geometry(domain: _OpticalDomain) -> _PreparedGeometry:
             domain.silicone_region.boundary,
             domain.rigid_region.boundary,
             domain.outer_envelope.boundary,
+            *(
+                [domain.indenter_region.boundary]
+                if domain.indenter_region is not None
+                else []
+            ),
         ]
     )
     min_x, min_y, max_x, max_y = domain.outer_envelope.bounds
@@ -254,64 +264,32 @@ def _silicone_outward_normal(
     )
 
 
+def _indenter_interface_normal(
+    hit_point: np.ndarray,
+    domain: _OpticalDomain,
+) -> np.ndarray:
+    """Return the normal from the hit point into the posed circular object."""
+    if domain.indenter_region is None or domain.indenter_center_mm is None:
+        raise CrossSectionOpticsError("indenter interface geometry is unavailable")
+    normal = np.asarray(domain.indenter_center_mm, dtype=float) - hit_point
+    return _normalize(normal, context="indenter interface normal")
+
+
 def _interface_directions_and_reflectance(
     incident_direction: np.ndarray,
     interface_normal: np.ndarray,
     refractive_index_1: float,
     refractive_index_2: float,
 ) -> tuple[np.ndarray, np.ndarray | None, float]:
-    incident = _normalize(incident_direction, context="incident direction")
-    normal = _normalize(interface_normal, context="interface normal")
-    alignment = float(np.dot(incident, normal))
-    if alignment <= 1.0e-12:
-        raise CrossSectionOpticsError(
-            "the interface normal does not point into the next medium"
+    try:
+        reflected, transmitted, reflectance, _ = _canonical_interface(
+            incident_direction,
+            interface_normal,
+            refractive_index_1,
+            refractive_index_2,
         )
-
-    tangent = np.asarray([-normal[1], normal[0]], dtype=float)
-    sin_incident = float(np.dot(incident, tangent))
-    sin_transmitted = (
-        refractive_index_1 / refractive_index_2
-    ) * sin_incident
-    reflected = _normalize(
-        incident - 2.0 * alignment * normal,
-        context="reflected direction",
-    )
-    if abs(sin_transmitted) > 1.0:
-        return reflected, None, 1.0
-
-    cos_incident = abs(alignment)
-    cos_transmitted = sqrt(max(0.0, 1.0 - sin_transmitted**2))
-    transmitted = _normalize(
-        tangent * sin_transmitted + normal * cos_transmitted,
-        context="transmitted direction",
-    )
-
-    s_denominator = (
-        refractive_index_1 * cos_incident
-        + refractive_index_2 * cos_transmitted
-    )
-    p_denominator = (
-        refractive_index_1 * cos_transmitted
-        + refractive_index_2 * cos_incident
-    )
-    if s_denominator <= 0.0 or p_denominator <= 0.0:
-        raise CrossSectionOpticsError("the Fresnel denominator is nonpositive")
-    reflectance_s = (
-        (
-            refractive_index_1 * cos_incident
-            - refractive_index_2 * cos_transmitted
-        )
-        / s_denominator
-    ) ** 2
-    reflectance_p = (
-        (
-            refractive_index_1 * cos_transmitted
-            - refractive_index_2 * cos_incident
-        )
-        / p_denominator
-    ) ** 2
-    reflectance = min(1.0, max(0.0, 0.5 * (reflectance_s + reflectance_p)))
+    except OpticalPhysicsError as exc:
+        raise CrossSectionOpticsError(str(exc)) from exc
     return reflected, transmitted, reflectance
 
 
@@ -454,9 +432,14 @@ def _trace_transport(
     )
 
     segments: list[_RawRaySegment] = []
+    exit_events: list[_RawExitEvent] = []
     escaped_weight = 0.0
     absorbed_weight = 0.0
     terminated_weight = 0.0
+    object_absorbed_weight = 0.0
+    object_transmitted_weight = 0.0
+    object_interface_incident_weight = 0.0
+    object_reflected_weight = 0.0
 
     while active:
         state = active.popleft()
@@ -508,12 +491,76 @@ def _trace_transport(
             float(forward_probe_xy[0]),
             float(forward_probe_xy[1]),
         )
+        object_hit = (
+            domain.indenter_region is not None
+            and domain.indenter_region.covers(forward_probe)
+        )
+        if (
+            state.medium == "silicone"
+            and domain.contact_patch is not None
+            and domain.contact_patch.distance(
+                Point(float(hit_point[0]), float(hit_point[1]))
+            )
+            <= domain.geometry_tolerance_mm
+        ):
+            object_hit = True
+        if object_hit:
+            object_interface_incident_weight += end_weight
+            if domain.indenter_optics is None:
+                raise CrossSectionOpticsError(
+                    "indenter boundary was hit without optical properties"
+                )
+            if domain.indenter_optics.boundary_model == "absorber":
+                object_absorbed_weight += end_weight
+                continue
+
+            reflected_direction, transmitted_direction, reflectance = (
+                _interface_directions_and_reflectance(
+                    state.direction,
+                    _indenter_interface_normal(hit_point, domain),
+                    _refractive_index(state.medium, material_properties),
+                    float(domain.indenter_optics.refractive_index),
+                )
+            )
+            reflected_weight = end_weight * reflectance
+            transmitted_weight = end_weight * (1.0 - reflectance)
+            object_reflected_weight += reflected_weight
+            object_transmitted_weight += transmitted_weight
+            next_interaction = state.interaction_count + 1
+            if reflected_weight >= branch_weight_threshold or next_interaction <= 1:
+                active.append(
+                    _RayState(
+                        origin=(
+                            hit_point
+                            + trace_settings.intersection_epsilon_mm
+                            * reflected_direction
+                        ),
+                        direction=reflected_direction,
+                        weight=reflected_weight,
+                        medium=state.medium,
+                        interaction_count=next_interaction,
+                        primary_ray_index=state.primary_ray_index,
+                    )
+                )
+            else:
+                terminated_weight += reflected_weight
+            continue
         if domain.rigid_region.covers(forward_probe):
             terminated_weight += end_weight
             continue
         if not domain.outer_envelope.covers(forward_probe):
             if state.medium == "air":
                 escaped_weight += end_weight
+                exit_events.append(
+                    _RawExitEvent(
+                        position_mm=(float(hit_point[0]), float(hit_point[1])),
+                        direction=(float(state.direction[0]), float(state.direction[1])),
+                        weight=float(end_weight),
+                        boundary_tag="outer_envelope",
+                        primary_ray_index=state.primary_ray_index,
+                        interaction_index=state.interaction_count,
+                    )
+                )
                 continue
 
             silicone_outward_normal = _silicone_outward_normal(
@@ -533,6 +580,20 @@ def _trace_transport(
             reflected_weight = end_weight * reflectance
             transmitted_weight = end_weight * (1.0 - reflectance)
             escaped_weight += transmitted_weight
+            if transmitted_direction is not None and transmitted_weight > 0.0:
+                exit_events.append(
+                    _RawExitEvent(
+                        position_mm=(float(hit_point[0]), float(hit_point[1])),
+                        direction=(
+                            float(transmitted_direction[0]),
+                            float(transmitted_direction[1]),
+                        ),
+                        weight=float(transmitted_weight),
+                        boundary_tag="silicone_outer_boundary",
+                        primary_ray_index=state.primary_ray_index,
+                        interaction_index=state.interaction_count,
+                    )
+                )
             next_interaction = state.interaction_count + 1
 
             if reflected_weight >= branch_weight_threshold or next_interaction <= 1:
@@ -645,12 +706,34 @@ def _trace_transport(
         retained_segments,
     )
     weights = np.asarray(
-        [escaped_weight, absorbed_weight, terminated_weight],
+        [
+            escaped_weight,
+            absorbed_weight,
+            terminated_weight,
+            object_absorbed_weight,
+            object_transmitted_weight,
+        ],
         dtype=float,
     )
     if not np.all(np.isfinite(weights)) or np.any(weights < 0.0):
         raise CrossSectionOpticsError(
             "transport accounting is non-finite or negative"
+        )
+    terminal_weight = (
+        escaped_weight
+        + absorbed_weight
+        + terminated_weight
+        + object_absorbed_weight
+        + object_transmitted_weight
+    )
+    if abs(led_properties.relative_radiant_power - terminal_weight) > max(
+        1.0e-10 * max(1.0, led_properties.relative_radiant_power),
+        1.0e-12,
+    ):
+        raise CrossSectionOpticsError(
+            "transport energy accounting does not close: "
+            f"launched={led_properties.relative_radiant_power:g}, "
+            f"terminal={terminal_weight:g}"
         )
 
     return _RawTransportResult(
@@ -660,9 +743,14 @@ def _trace_transport(
         weighted_path_density=density,
         optical_mask=optical_mask,
         segments=retained_segments,
+        exit_events=tuple(exit_events),
         launched_ray_count=trace_settings.ray_count,
         launched_weight=float(led_properties.relative_radiant_power),
         escaped_weight=float(escaped_weight),
         absorbed_weight=float(absorbed_weight),
         terminated_weight=float(terminated_weight),
+        object_absorbed_weight=float(object_absorbed_weight),
+        object_transmitted_weight=float(object_transmitted_weight),
+        object_interface_incident_weight=float(object_interface_incident_weight),
+        object_reflected_weight=float(object_reflected_weight),
     )

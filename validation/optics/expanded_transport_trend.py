@@ -42,7 +42,7 @@ from validation.optics.transport3d_validation import (
     _internal_path_tv,
     _state_trace_3d,
 )
-from optics.transport3d.optix_backend import _Runtime
+from optics.transport3d.optix_backend import create_runtime
 
 
 OUTPUT = Path("output/validation/optics/expanded_transport_trend")
@@ -922,7 +922,7 @@ def run_guardrail(output: Path = OUTPUT) -> dict[str, Any]:
         },
     ]
     samples = [_execution_sample(sample, precommit) for sample in samples]
-    runtime = _Runtime.create()
+    runtime = create_runtime()
     records: dict[str, Any] = {}
     try:
         for sample in samples:
@@ -1112,7 +1112,7 @@ def run_3d(output: Path = OUTPUT) -> dict[str, Any]:
     if progress_path.exists():
         existing = strict_read_json(progress_path)
         records.update({str(item["sample_id"]): item for item in existing.get("records", [])})
-    runtime = _Runtime.create()
+    runtime = create_runtime()
     try:
         for item in precommit["selected_samples"]:
             sample_id = str(item["sample_id"])

@@ -1,6 +1,7 @@
 """Public solver-independent mesh data contracts."""
 
 from mesh.pad import InvalidPadMesh, PadMesh
+from mesh.indenter import IndenterPose2D
 from mesh.types import (
     FingertipMesh,
     InvalidMeshSettings,
@@ -27,6 +28,7 @@ __all__ = [
     "FingertipMesh",
     "InvalidMeshSettings",
     "InvalidPadMesh",
+    "IndenterPose2D",
     "MeshSettings",
     "PadMesh",
     "mesh_settings_for_level",

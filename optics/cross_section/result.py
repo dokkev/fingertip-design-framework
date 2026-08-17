@@ -24,6 +24,18 @@ class _RawRaySegment:
 
 
 @dataclass(frozen=True)
+class _RawExitEvent:
+    """One outgoing air escape event retained for later side-view analysis."""
+
+    position_mm: tuple[float, float]
+    direction: tuple[float, float]
+    weight: float
+    boundary_tag: str | None
+    primary_ray_index: int
+    interaction_index: int
+
+
+@dataclass(frozen=True)
 class _RawTransportResult:
     """Raw weighted paths and a regular-grid path-length accumulation."""
 
@@ -33,8 +45,13 @@ class _RawTransportResult:
     weighted_path_density: np.ndarray
     optical_mask: np.ndarray
     segments: tuple[_RawRaySegment, ...]
+    exit_events: tuple[_RawExitEvent, ...]
     launched_ray_count: int
     launched_weight: float
     escaped_weight: float
     absorbed_weight: float
     terminated_weight: float
+    object_absorbed_weight: float
+    object_transmitted_weight: float
+    object_interface_incident_weight: float
+    object_reflected_weight: float

@@ -6,6 +6,10 @@ from math import isfinite
 from typing import Any
 
 import numpy as np
+from optics.physics import (
+    OpticalPhysicsError,
+    interface_directions_and_reflectance as _canonical_interface,
+)
 
 
 class Transport3DPhysicsError(RuntimeError):
@@ -73,40 +77,16 @@ def interface_directions_and_reflectance(
     refractive_index_2: float,
 ) -> tuple[np.ndarray, np.ndarray | None, float]:
     """Scalar NumPy form matching the reduced 2D Fresnel convention."""
-    incident = np.asarray(incident_direction, dtype=float)
-    normal = np.asarray(interface_normal, dtype=float)
-    incident /= np.linalg.norm(incident)
-    normal /= np.linalg.norm(normal)
-    if float(np.dot(incident, normal)) <= 1.0e-7:
-        raise Transport3DPhysicsError("interface normal does not point forward")
-    # Medium 0/1 is selected below only to reuse the vector formula; explicit
-    # indices are passed through the equivalent air/silicone ratio.
-    if refractive_index_1 <= 0.0 or refractive_index_2 <= 0.0:
-        raise Transport3DPhysicsError("refractive indices must be positive")
-    ratio = refractive_index_1 / refractive_index_2
-    tangent = incident - float(np.dot(incident, normal)) * normal
-    sin_transmitted_squared = ratio * ratio * float(np.dot(tangent, tangent))
-    reflected = incident - 2.0 * float(np.dot(incident, normal)) * normal
-    reflected /= np.linalg.norm(reflected)
-    if sin_transmitted_squared > 1.0:
-        return reflected, None, 1.0
-    cos_i = abs(float(np.dot(incident, normal)))
-    cos_t = max(0.0, 1.0 - sin_transmitted_squared) ** 0.5
-    transmitted = ratio * tangent + cos_t * normal
-    transmitted /= np.linalg.norm(transmitted)
-    s_denominator = refractive_index_1 * cos_i + refractive_index_2 * cos_t
-    p_denominator = refractive_index_1 * cos_t + refractive_index_2 * cos_i
-    if s_denominator <= 0.0 or p_denominator <= 0.0:
-        raise Transport3DPhysicsError("Fresnel denominator is nonpositive")
-    reflectance_s = (
-        (refractive_index_1 * cos_i - refractive_index_2 * cos_t)
-        / s_denominator
-    ) ** 2
-    reflectance_p = (
-        (refractive_index_1 * cos_t - refractive_index_2 * cos_i)
-        / p_denominator
-    ) ** 2
-    return reflected, transmitted, float(np.clip(0.5 * (reflectance_s + reflectance_p), 0.0, 1.0))
+    try:
+        reflected, transmitted, reflectance, _ = _canonical_interface(
+            incident_direction,
+            interface_normal,
+            refractive_index_1,
+            refractive_index_2,
+        )
+    except OpticalPhysicsError as exc:
+        raise Transport3DPhysicsError(str(exc)) from exc
+    return reflected, transmitted, reflectance
 
 
 def attenuated_weight(

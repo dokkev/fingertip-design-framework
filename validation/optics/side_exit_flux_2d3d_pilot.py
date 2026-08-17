@@ -32,7 +32,7 @@ from optics.transport3d import (
     transport_configuration,
 )
 from optics.transport3d.geometry import TriangleSurface, build_transport_geometry
-from optics.transport3d.optix_backend import _Runtime
+from optics.transport3d.optix_backend import create_runtime
 from optics.transport3d.settings import Transport3DSettings
 from validation import overnight_force_localized_trend as localized
 from validation.common.io import atomic_write_json, strict_read_json
@@ -1176,7 +1176,7 @@ def run_pilot(output: Path = OUTPUT) -> dict[str, Any]:
             for load_state in ("no_load", "left", "right"):
                 prepared[(morphology_id, mode, load_state)] = states[(mode, load_state)]
 
-    runtime = _Runtime.create()
+    runtime = create_runtime()
     trace_payloads: dict[tuple[str, str, str], dict[str, Any]] = {}
     for morphology in morphologies:
         morphology_id = str(morphology["morphology_id"])

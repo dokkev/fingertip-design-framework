@@ -12,6 +12,8 @@ from shapely.ops import linemerge, unary_union
 from model.fingertip_model import PolygonalGeometry
 from model.fingertip import Fingertip
 from mesh.pad import PadMesh
+from mesh.indenter import IndenterPose2D
+from optics.contact_object import IndenterOptics
 
 
 class CrossSectionOpticsError(RuntimeError):
@@ -29,6 +31,10 @@ class _OpticalDomain:
     source_position_mm: tuple[float, float]
     source_emission_axis_2d: tuple[float, float]
     geometry_tolerance_mm: float
+    indenter_region: Polygon | None = None
+    contact_patch: LineString | MultiLineString | None = None
+    indenter_optics: IndenterOptics | None = None
+    indenter_center_mm: tuple[float, float] | None = None
 
 
 _OUTER_ENVELOPE_TAGS = (
@@ -132,9 +138,34 @@ def _validate_domain(
     *,
     outer_envelope: PolygonalGeometry,
     silicone_region: PolygonalGeometry,
+    indenter_pose: IndenterPose2D | None = None,
+    indenter_optics: IndenterOptics | None = None,
 ) -> _OpticalDomain:
     rigid_region = tip.geometry.link_geometry
-    accessible_region = outer_envelope.difference(rigid_region)
+    if (indenter_pose is None) != (indenter_optics is None):
+        raise CrossSectionOpticsError(
+            "indenter_pose and indenter_optics must be supplied together"
+        )
+    indenter_region = None if indenter_pose is None else indenter_pose.carrier_geometry
+    contact_patch = None if indenter_pose is None else indenter_pose.contact_patch
+    indenter_center = None if indenter_pose is None else indenter_pose.center_mm
+    if indenter_pose is not None:
+        if indenter_pose.active_contact_node_ids and contact_patch is None:
+            raise CrossSectionOpticsError(
+                "BLOCKED_CONTACT_INTERFACE_MAPPING: FEA reported active "
+                "external contact nodes but no active pad boundary edge"
+            )
+        if contact_patch is not None and not silicone_region.boundary.buffer(
+            tip.geometry.parameters.geometry_tolerance
+        ).covers(contact_patch):
+            raise CrossSectionOpticsError(
+                "BLOCKED_CONTACT_INTERFACE_MAPPING: mechanical contact patch "
+                "is not on the deformed silicone boundary"
+            )
+    occupied_region = rigid_region
+    if indenter_region is not None:
+        occupied_region = occupied_region.union(indenter_region)
+    accessible_region = outer_envelope.difference(occupied_region)
     if not isinstance(accessible_region, Polygon | MultiPolygon):
         raise CrossSectionOpticsError(
             "outer envelope minus rigid region is not polygonal"
@@ -149,6 +180,10 @@ def _validate_domain(
             raise CrossSectionOpticsError(f"{name} is empty")
         if not geometry.is_valid:
             raise CrossSectionOpticsError(f"{name} is invalid")
+    if indenter_region is not None and (
+        indenter_region.is_empty or not indenter_region.is_valid
+    ):
+        raise CrossSectionOpticsError("posed indenter region is invalid")
 
     tolerance = tip.geometry.parameters.geometry_tolerance
     if not isfinite(tolerance) or tolerance <= 0.0:
@@ -193,6 +228,10 @@ def _validate_domain(
         silicone_region=silicone_region,
         rigid_region=rigid_region,
         accessible_region=accessible_region,
+        indenter_region=indenter_region,
+        contact_patch=contact_patch,
+        indenter_optics=indenter_optics,
+        indenter_center_mm=indenter_center,
         source_position_mm=source_position,
         source_emission_axis_2d=emission_axis,
         geometry_tolerance_mm=tolerance,
@@ -201,18 +240,26 @@ def _validate_domain(
 
 def _build_no_load_domain(
     tip: Fingertip,
+    *,
+    indenter_pose: IndenterPose2D | None = None,
+    indenter_optics: IndenterOptics | None = None,
 ) -> _OpticalDomain:
     """Build a neutral optical domain from the analytic undeformed geometry."""
     return _validate_domain(
         tip,
         outer_envelope=tip.geometry.outer_pad_geometry,
         silicone_region=tip.geometry.pad_material_geometry,
+        indenter_pose=indenter_pose,
+        indenter_optics=indenter_optics,
     )
 
 
 def _build_mesh_domain(
     tip: Fingertip,
     mesh: PadMesh,
+    *,
+    indenter_pose: IndenterPose2D | None = None,
+    indenter_optics: IndenterOptics | None = None,
 ) -> _OpticalDomain:
     """Build an optical domain from a reference or deformed pad mesh view."""
     coordinates = mesh.coordinates
@@ -240,4 +287,6 @@ def _build_mesh_domain(
         tip,
         outer_envelope=outer_envelope,
         silicone_region=silicone_region,
+        indenter_pose=indenter_pose,
+        indenter_optics=indenter_optics,
     )

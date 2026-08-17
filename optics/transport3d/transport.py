@@ -21,7 +21,8 @@ from optics.transport3d.optix_backend import (
     OptixScene,
     Transport3DDependencyError,
     Transport3DTraceError,
-    _Runtime,
+    OptixRuntime,
+    create_runtime,
 )
 from optics.transport3d.physics import (
     Transport3DPhysicsError,
@@ -421,7 +422,7 @@ def _trace_with_runtime(
     tip: Fingertip,
     geometry: ExtrudedTransportGeometry,
     settings: Transport3DSettings,
-    runtime: _Runtime,
+    runtime: OptixRuntime,
 ) -> Transport3DResult:
     cp = runtime.cp
     if settings.mode == "planar" and geometry.geometry_mode != "planar_extruded":
@@ -1024,9 +1025,9 @@ def trace_geometry(
     if not isinstance(geometry, ExtrudedTransportGeometry):
         raise TypeError("geometry must be an ExtrudedTransportGeometry")
     trace_settings = settings or Transport3DSettings()
-    actual_runtime = runtime or _Runtime.create()
-    if not isinstance(actual_runtime, _Runtime):
-        raise TypeError("runtime must be an internal OptiX runtime")
+    actual_runtime = runtime or create_runtime()
+    if not isinstance(actual_runtime, OptixRuntime):
+        raise TypeError("runtime must be an OptixRuntime")
     return _trace_with_runtime(tip, geometry, trace_settings, actual_runtime)
 
 
