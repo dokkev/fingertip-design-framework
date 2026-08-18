@@ -10,6 +10,10 @@ import time
 from typing import Any, Mapping, Sequence
 
 from optics import IndenterOptics
+from optics.transport3d.optix_backend import (
+    Transport3DDependencyError,
+    create_runtime,
+)
 from optimization import (
     PRODUCTION_EVALUATION_CONTRACT_ID,
     PRODUCTION_SEARCH_BOUNDS,
@@ -19,7 +23,9 @@ from optimization.ax_adapter import (
     AxRunResult,
     AxSettings,
     AxTrialRecord,
+    CampaignInfrastructureError,
     MAX_CONSECUTIVE_KNOWN_PROPOSALS,
+    OPTIX_RUNTIME_FAILURE_SIGNATURE,
     run_ax_optimization,
 )
 from optimization.evaluation_registry import (
@@ -47,6 +53,26 @@ NEAR_BOUND_FRACTION = 0.05
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _optix_preflight() -> dict[str, Any]:
+    """Validate the full OptiX setup before Ax creates any trial."""
+    try:
+        runtime = create_runtime()
+    except Transport3DDependencyError as exc:
+        return {
+            "status": "FAIL",
+            "failure_category": "infrastructure_failure",
+            "failure_signature": OPTIX_RUNTIME_FAILURE_SIGNATURE,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+    return {
+        "status": "PASS",
+        "failure_category": None,
+        "failure_signature": None,
+        "error": None,
+        "runtime_metadata": _jsonable(runtime.metadata),
+    }
 
 
 def _jsonable(value: Any) -> Any:
@@ -742,17 +768,9 @@ def run_campaign(
     study = create_production_study()
     configuration = _configuration(study, settings)
     registry = EvaluationRegistry(registry_path)
-    historical_import_count = sum(
-        _import_historical_checkpoint(
-            registry,
-            checkpoint,
-            expected_configuration=configuration,
-        )
-        for checkpoint in historical_checkpoints
-    )
     state = _initial_state(configuration)
     state["evaluation_registry_path"] = str(registry.path)
-    state["historical_registry_records_imported"] = historical_import_count
+    state["historical_registry_records_imported"] = 0
     atomic_write_json(output / "checkpoint.json", state)
     started = time.perf_counter()
 
@@ -760,6 +778,26 @@ def run_campaign(
         _persist_checkpoint(output, state, client, records)
 
     try:
+        preflight = _optix_preflight()
+        state["optix_preflight"] = preflight
+        atomic_write_json(output / "preflight.json", preflight)
+        atomic_write_json(output / "checkpoint.json", state)
+        if preflight["status"] != "PASS":
+            raise CampaignInfrastructureError(
+                str(preflight["error"]),
+                signature=str(preflight["failure_signature"]),
+            )
+
+        historical_import_count = sum(
+            _import_historical_checkpoint(
+                registry,
+                checkpoint,
+                expected_configuration=configuration,
+            )
+            for checkpoint in historical_checkpoints
+        )
+        state["historical_registry_records_imported"] = historical_import_count
+        atomic_write_json(output / "checkpoint.json", state)
         result = run_ax_optimization(
             study,
             settings,
@@ -770,6 +808,15 @@ def run_campaign(
             result_artifact_path=str((output / "checkpoint.json").resolve()),
             max_consecutive_known_proposals=MAX_CONSECUTIVE_KNOWN_PROPOSALS,
         )
+    except CampaignInfrastructureError as exc:
+        state["status"] = "ERROR"
+        state["failure_category"] = "infrastructure_failure"
+        state["failure_signature"] = exc.signature
+        state["error"] = str(exc)
+        state["total_wall_time_seconds"] = time.perf_counter() - started
+        state["updated_at"] = _now()
+        atomic_write_json(output / "checkpoint.json", state)
+        raise
     except Exception as exc:
         state["status"] = "ERROR"
         state["error"] = f"{type(exc).__name__}: {exc}"

@@ -255,12 +255,16 @@ _FEA_ERRORS = (
     InvalidIndenterSettings,
 )
 _OPTICS_ERRORS = (
-    Transport3DDependencyError,
     Transport3DGeometryError,
     Transport3DPhysicsError,
     Transport3DResultError,
     Transport3DTraceError,
 )
+
+# A missing or unusable OptiX runtime is an environment failure, not a
+# morphology-specific optical result.  Transport3DDependencyError is
+# intentionally excluded from _OPTICS_ERRORS so the campaign can abort before
+# registering the candidate in the persistent evaluation registry.
 
 
 def _failure(

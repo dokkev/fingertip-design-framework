@@ -11,6 +11,7 @@ from ax.api.client import Client
 from ax.api.configs import RangeParameterConfig
 
 from model import InvalidFingertipParameters
+from optics.transport3d import Transport3DDependencyError
 from optimization.design_space import DesignSpace
 from optimization.evaluator import DesignEvaluation
 from optimization.evaluation_registry import (
@@ -22,7 +23,16 @@ from optimization.study import OptimizationStudy
 
 AX_OBJECTIVE_NAME = "minimum_auc"
 MAX_CONSECUTIVE_KNOWN_PROPOSALS = 20
+OPTIX_RUNTIME_FAILURE_SIGNATURE = "optix-runtime-initialization"
 AxTrialPhase = Literal["nominal", "initialization", "search"]
+
+
+class CampaignInfrastructureError(RuntimeError):
+    """Abort a campaign without attributing an environment failure to a design."""
+
+    def __init__(self, message: str, *, signature: str) -> None:
+        super().__init__(message)
+        self.signature = signature
 
 
 @dataclass(frozen=True)
@@ -312,7 +322,14 @@ def _evaluate_trial(
             evaluation=evaluation,
             failure_message=None,
         )
+    except CampaignInfrastructureError:
+        raise
     except Exception as exc:
+        if isinstance(exc, Transport3DDependencyError):
+            raise CampaignInfrastructureError(
+                f"{type(exc).__name__}: {exc}",
+                signature=OPTIX_RUNTIME_FAILURE_SIGNATURE,
+            ) from exc
         _attempt_mark_failed(client, trial_index, f"{type(exc).__name__}: {exc}")
         raise
 
@@ -570,7 +587,9 @@ def run_ax_optimization(
 
 __all__ = [
     "AX_OBJECTIVE_NAME",
+    "CampaignInfrastructureError",
     "MAX_CONSECUTIVE_KNOWN_PROPOSALS",
+    "OPTIX_RUNTIME_FAILURE_SIGNATURE",
     "AxRunResult",
     "AxSettings",
     "AxTrialPhase",

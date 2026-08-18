@@ -10,7 +10,7 @@ import pytest
 from mesh import mesh_settings_for_level
 from model import FingertipParameters, LED, OpticalMaterial
 from optics import IndenterOptics
-from optics.transport3d import Transport3DSettings
+from optics.transport3d import Transport3DSettings, Transport3DTraceError
 from optimization.design_space import DesignSpace, DesignVariable
 from optimization.evaluator import DesignEvaluator
 from optimization.study import (
@@ -247,3 +247,34 @@ def test_evaluator_uses_one_reference_twelve_fea_and_48_loaded_traces(monkeypatc
         result.states[0].contact_diagnostics["exact_indenter_pose"]
         is expected_poses[0]
     )
+
+
+def test_candidate_specific_transport_trace_failure_remains_optics_failure(
+    monkeypatch,
+) -> None:
+    import optimization.evaluator as evaluator_module
+
+    monkeypatch.setattr(
+        evaluator_module.Fingertip,
+        "mesh",
+        lambda self, settings: object(),
+    )
+
+    def candidate_trace_failure(*args, **kwargs):
+        raise Transport3DTraceError(
+            "active branch has no physical hit or periodic event"
+        )
+
+    monkeypatch.setattr(evaluator_module, "trace_3d", candidate_trace_failure)
+    evaluator = DesignEvaluator(
+        ScenarioGrid(),
+        mesh_settings=mesh_settings_for_level("medium"),
+        trace_settings=Transport3DSettings(mode="planar"),
+        indenter_optics=IndenterOptics("absorber"),
+    )
+
+    result = evaluator.evaluate(FingertipParameters())
+
+    assert result.status == "optics_failure"
+    assert result.failure_message is not None
+    assert "active branch has no physical hit" in result.failure_message

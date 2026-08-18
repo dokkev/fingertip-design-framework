@@ -2,19 +2,40 @@
 
 from __future__ import annotations
 
+import pytest
+
 from validation.common.io import atomic_write_json
+from validation.optimization import bo_campaign
 from validation.optimization.bo_campaign import (
     _configuration,
     _import_historical_checkpoint,
     _plateau_assessment,
     _write_summary,
 )
-from optimization.ax_adapter import AxSettings
+from validation.optimization.registry_cleanup import (
+    ABORTED_OPTIX_HEADER_FAILURE_SIGNATURE,
+    cleanup_aborted_infrastructure_records,
+)
+from optics.transport3d.optix_backend import Transport3DDependencyError
+from optimization.ax_adapter import (
+    AxRunResult,
+    AxSettings,
+    AxTrialRecord,
+    CampaignInfrastructureError,
+)
 from optimization.evaluation_registry import EvaluationRegistry
 from optimization.study import (
     PRODUCTION_EVALUATION_CONTRACT_ID,
     create_production_study,
 )
+
+
+NOMINAL_PARAMETERS = {
+    "flat_pad_height": 5.0,
+    "stem_width": 7.6,
+    "stem_height": 6.0,
+    "void_width": 1.0,
+}
 
 
 def _record(
@@ -173,3 +194,235 @@ def test_summary_restores_known_nominal_and_overall_best(tmp_path) -> None:
     assert "Campaign new best minimum_auc: 0.6" in summary
     assert "Overall known best minimum_auc: 0.9" in summary
     assert "Overall known best source: ('old-campaign', 8)" in summary
+
+
+def _failed_preflight(message: str) -> dict[str, object]:
+    return {
+        "status": "FAIL",
+        "failure_category": "infrastructure_failure",
+        "failure_signature": "optix-runtime-initialization",
+        "error": message,
+    }
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Could not find a valid OptiX include directory",
+        "OptiX runtime setup failed: NVRTC compilation failed",
+    ],
+)
+def test_optix_preflight_classifies_runtime_initialization_failure(
+    monkeypatch,
+    message: str,
+) -> None:
+    def fail_runtime():
+        raise Transport3DDependencyError(message)
+
+    monkeypatch.setattr(bo_campaign, "create_runtime", fail_runtime)
+
+    result = bo_campaign._optix_preflight()
+
+    assert result["status"] == "FAIL"
+    assert result["failure_category"] == "infrastructure_failure"
+    assert result["failure_signature"] == "optix-runtime-initialization"
+    assert message in result["error"]
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Transport3DDependencyError: Could not find a valid OptiX include directory",
+        "Transport3DDependencyError: OptiX runtime setup failed: NVRTC compilation failed",
+    ],
+)
+def test_campaign_preflight_fails_before_ax_evaluator_or_registry(
+    monkeypatch,
+    tmp_path,
+    message: str,
+) -> None:
+    events: list[str] = []
+    output = tmp_path / "campaign"
+    registry_path = tmp_path / "registry.json"
+
+    monkeypatch.setattr(
+        bo_campaign,
+        "_optix_preflight",
+        lambda: _failed_preflight(message),
+    )
+
+    def unexpected_ax(*args, **kwargs):
+        events.append("ax")
+        raise AssertionError("Ax must not be created after preflight failure")
+
+    monkeypatch.setattr(bo_campaign, "run_ax_optimization", unexpected_ax)
+
+    with pytest.raises(CampaignInfrastructureError):
+        bo_campaign.run_campaign(
+            output,
+            registry_path=registry_path,
+            historical_checkpoints=(),
+        )
+
+    assert events == []
+    checkpoint = bo_campaign.strict_read_json(output / "checkpoint.json")
+    assert checkpoint["status"] == "ERROR"
+    assert checkpoint["failure_category"] == "infrastructure_failure"
+    assert checkpoint["records"] == []
+    assert not (output / "ax_client.json").exists()
+    assert not registry_path.exists()
+
+
+def test_successful_preflight_reaches_ax_orchestration(monkeypatch, tmp_path) -> None:
+    events: list[str] = []
+    output = tmp_path / "campaign"
+
+    def pass_preflight() -> dict[str, object]:
+        events.append("preflight")
+        return {
+            "status": "PASS",
+            "failure_category": None,
+            "failure_signature": None,
+            "error": None,
+            "runtime_metadata": {"synthetic": True},
+        }
+
+    record = AxTrialRecord(
+        trial_index=0,
+        phase="nominal",
+        parameters=NOMINAL_PARAMETERS,
+        evaluation=None,
+        failure_message="synthetic orchestration stub",
+    )
+
+    class _SnapshotClient:
+        def _to_json_snapshot(self):
+            return {"synthetic": True}
+
+    def fake_ax(*args, **kwargs):
+        events.append("ax")
+        kwargs["on_record"](_SnapshotClient(), (record,))
+        return AxRunResult(records=(record,))
+
+    monkeypatch.setattr(bo_campaign, "_optix_preflight", pass_preflight)
+    monkeypatch.setattr(bo_campaign, "run_ax_optimization", fake_ax)
+
+    result = bo_campaign.run_campaign(
+        output,
+        registry_path=tmp_path / "registry.json",
+        historical_checkpoints=(),
+    )
+
+    assert events == ["preflight", "ax"]
+    assert result.records == (record,)
+    checkpoint = bo_campaign.strict_read_json(output / "checkpoint.json")
+    assert checkpoint["status"] == "COMPLETE"
+    assert checkpoint["optix_preflight"]["status"] == "PASS"
+
+
+def test_cleanup_removes_only_checkpoint_proven_infrastructure_records(tmp_path) -> None:
+    registry_path = tmp_path / "registry.json"
+    checkpoint_path = tmp_path / "aborted" / "checkpoint.json"
+    backup_path = tmp_path / "registry.before-cleanup.json"
+    registry = EvaluationRegistry(registry_path)
+
+    contaminated = {
+        **NOMINAL_PARAMETERS,
+        "flat_pad_height": 5.1,
+    }
+    historical_success = {
+        **NOMINAL_PARAMETERS,
+        "flat_pad_height": 5.2,
+    }
+    historical_trace_failure = {
+        **NOMINAL_PARAMETERS,
+        "flat_pad_height": 5.3,
+    }
+
+    registry.register(
+        PRODUCTION_EVALUATION_CONTRACT_ID,
+        contaminated,
+        status="optics_failure",
+        first_trial_index=101,
+        first_campaign_id="production_bo_20260818_02",
+        result_artifact_path=str(checkpoint_path.resolve()),
+        minimum_auc=None,
+        failure_category="optics_failure",
+        failure_message=(
+            "Transport3DDependencyError: "
+            f"{ABORTED_OPTIX_HEADER_FAILURE_SIGNATURE}"
+        ),
+        failure_scenario=None,
+        evaluation_wall_time_seconds=1.5,
+    )
+    registry.register(
+        PRODUCTION_EVALUATION_CONTRACT_ID,
+        historical_success,
+        status="success",
+        first_trial_index=2,
+        first_campaign_id="production_bo_20260818",
+        result_artifact_path="output/old/checkpoint.json",
+        minimum_auc=0.7,
+        failure_category=None,
+        failure_message=None,
+        failure_scenario=None,
+        evaluation_wall_time_seconds=10.0,
+    )
+    registry.register(
+        PRODUCTION_EVALUATION_CONTRACT_ID,
+        historical_trace_failure,
+        status="optics_failure",
+        first_trial_index=3,
+        first_campaign_id="production_bo_20260818",
+        result_artifact_path="output/old/checkpoint.json",
+        minimum_auc=None,
+        failure_category="optics_failure",
+        failure_message="Transport3DTraceError: active branch has no physical hit",
+        failure_scenario="candidate-specific transport",
+        evaluation_wall_time_seconds=11.0,
+    )
+    contaminated_key = registry.lookup(
+        PRODUCTION_EVALUATION_CONTRACT_ID,
+        contaminated,
+    ).key
+
+    atomic_write_json(
+        checkpoint_path,
+        {
+            "records": [
+                {
+                    "registry_key": contaminated_key,
+                    "phase": "initialization",
+                    "status": "optics_failure",
+                    "failure_message": (
+                        "Transport3DDependencyError: "
+                        f"{ABORTED_OPTIX_HEADER_FAILURE_SIGNATURE}"
+                    ),
+                    "evaluation": {
+                        "fem_trajectories_attempted": 0,
+                        "captured_states_attempted": 0,
+                    },
+                }
+            ]
+        },
+    )
+
+    report = cleanup_aborted_infrastructure_records(
+        registry_path,
+        checkpoint_path,
+        campaign_id="production_bo_20260818_02",
+        backup_path=backup_path,
+    )
+
+    assert report.before_count == 3
+    assert report.removed_count == 1
+    assert report.after_count == 2
+    assert report.retained_statuses == ("optics_failure", "success")
+    assert report.retained_campaign_ids == (
+        "production_bo_20260818",
+    )
+    assert backup_path.exists()
+    reloaded = EvaluationRegistry(registry_path)
+    assert reloaded.lookup(PRODUCTION_EVALUATION_CONTRACT_ID, contaminated) is None
+    assert reloaded.lookup(PRODUCTION_EVALUATION_CONTRACT_ID, historical_success)
+    assert reloaded.lookup(PRODUCTION_EVALUATION_CONTRACT_ID, historical_trace_failure)
