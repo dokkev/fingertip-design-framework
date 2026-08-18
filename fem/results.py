@@ -495,6 +495,100 @@ def finite_field_failures(model_part: Any, pad_node_ids: Sequence[int]) -> list[
     return failures
 
 
+def extract_element_von_mises_stress_mpa(
+    model_part: Any,
+    element_ids: Sequence[int],
+) -> dict[int, float]:
+    """Extract element-mean Cauchy von Mises stress in MPa.
+
+    The current 2D constitutive element exposes the current Cauchy stress
+    tensor through ``CalculateOnIntegrationPoints``.  The returned scalar is
+    the arithmetic mean of the integration-point von Mises values for each
+    requested element; no nodal smoothing or displacement-based stress
+    approximation is used.  Both the in-plane 2x2 and full 3x3 tensor forms,
+    and the corresponding 3/4/6-component Cauchy vector forms, exposed by
+    Kratos are accepted.
+    """
+    KM, _, _, _ = import_kratos()
+    tensor_variable = getattr(KM, "CAUCHY_STRESS_TENSOR", None)
+    vector_variable = getattr(KM, "CAUCHY_STRESS_VECTOR", None)
+    if tensor_variable is None and vector_variable is None:
+        raise IndentationPostprocessError(
+            "Kratos exposes neither CAUCHY_STRESS_TENSOR nor CAUCHY_STRESS_VECTOR"
+        )
+    output: dict[int, float] = {}
+    for element_id in element_ids:
+        element = model_part.Elements[int(element_id)]
+        von_mises_values: list[float] = []
+        extraction_errors: list[str] = []
+        for variable, variable_name in (
+            (tensor_variable, "CAUCHY_STRESS_TENSOR"),
+            (vector_variable, "CAUCHY_STRESS_VECTOR"),
+        ):
+            if variable is None:
+                continue
+            try:
+                values = element.CalculateOnIntegrationPoints(
+                    variable,
+                    model_part.ProcessInfo,
+                )
+            except Exception as exc:
+                extraction_errors.append(f"{variable_name}: {exc}")
+                continue
+            if not values:
+                extraction_errors.append(f"{variable_name}: no integration-point values")
+                continue
+            try:
+                von_mises_values = [
+                    _cauchy_von_mises_from_value(value) for value in values
+                ]
+            except IndentationPostprocessError as exc:
+                extraction_errors.append(f"{variable_name}: {exc}")
+                continue
+            break
+        if not von_mises_values:
+            raise IndentationPostprocessError(
+                f"failed to extract Cauchy stress for element {element_id}; "
+                + "; ".join(extraction_errors)
+            )
+        output[int(element_id)] = float(np.mean(von_mises_values))
+    return output
+
+
+def _cauchy_von_mises_from_value(value: Any) -> float:
+    """Convert one Kratos Cauchy tensor/vector integration-point value."""
+    array = np.asarray(value, dtype=float)
+    if not np.all(np.isfinite(array)):
+        raise IndentationPostprocessError("Cauchy stress value is non-finite")
+    if array.shape == (2, 2):
+        tensor = np.pad(array, ((0, 1), (0, 1)))
+    elif array.shape == (3, 3):
+        tensor = array
+    elif array.shape in {(3,), (4,), (6,)}:
+        flat = array.reshape(-1)
+        tensor = np.zeros((3, 3), dtype=float)
+        tensor[0, 0] = flat[0]
+        tensor[1, 1] = flat[1]
+        if len(flat) == 3:
+            tensor[0, 1] = tensor[1, 0] = flat[2]
+        else:
+            tensor[2, 2] = flat[2]
+            tensor[0, 1] = tensor[1, 0] = flat[3]
+            if len(flat) == 6:
+                tensor[1, 2] = tensor[2, 1] = flat[4]
+                tensor[0, 2] = tensor[2, 0] = flat[5]
+    else:
+        raise IndentationPostprocessError(
+            "Cauchy stress value must be a 2x2/3x3 tensor or 3/4/6-vector"
+        )
+    symmetric = 0.5 * (tensor + tensor.T)
+    deviatoric = symmetric - np.trace(symmetric) / 3.0 * np.eye(3)
+    von_mises = math.sqrt(max(0.0, 1.5 * float(np.sum(deviatoric**2))))
+    if not math.isfinite(von_mises):
+        raise IndentationPostprocessError("Cauchy von Mises stress is non-finite")
+    return von_mises
+
+
 def rigid_domain_validation(
     model_part: Any,
     node_ids: Sequence[int],

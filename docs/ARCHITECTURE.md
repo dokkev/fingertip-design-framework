@@ -108,9 +108,10 @@ It does not replace mesh-based reference/loaded comparisons.
   scene construction, and persistent renderer state are implementation details.
 - `visualization/` is a thin Matplotlib layer. It exposes only
   `plot_fingertip`, `plot_mesh`, `plot_displacement`, `plot_transport`,
-  `plot_camera`, and `plot_case`; these functions consume model/mesh/result
-  objects and return an `Axes`, while `plot_case` returns one composed
-  `Figure` from the existing FingertipCase contract. It does not own a second
+  `plot_camera`, and `plot_case_comparison`; these functions consume
+  model/mesh/result objects and return an `Axes`, while
+  `plot_case_comparison` returns one composed `Figure` from precomputed
+  unloaded/loaded states. It does not own a second
   scientific data model, artifact loader,
   figure DSL, panel hierarchy, or export framework. `plot_transport(result)`
   needs no separate model or optical-domain argument because `TransportResult`

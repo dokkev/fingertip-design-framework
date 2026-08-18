@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
+from types import MappingProxyType
 from typing import Any, Mapping
 
 import numpy as np
@@ -38,6 +39,7 @@ class FEAResult:
     details: Mapping[str, Any]
     indenter_pose: IndenterPose2D | None = None
     reference_mesh: FingertipMesh | None = None
+    element_von_mises_stress_mpa: Mapping[int, float] | None = None
 
     def __post_init__(self) -> None:
         if self.reaction_force is not None and not math.isfinite(
@@ -56,6 +58,23 @@ class FEAResult:
                 self.mesh.triangles,
             ):
                 raise ValueError("reference_mesh pad elements do not match mesh")
+        if self.element_von_mises_stress_mpa is not None:
+            stress = {
+                int(element_id): float(value)
+                for element_id, value in self.element_von_mises_stress_mpa.items()
+            }
+            if any(
+                not math.isfinite(value) or value < 0.0
+                for value in stress.values()
+            ):
+                raise ValueError(
+                    "element_von_mises_stress_mpa must be finite and nonnegative"
+                )
+            object.__setattr__(
+                self,
+                "element_von_mises_stress_mpa",
+                MappingProxyType(stress),
+            )
         if self.displacement is None:
             if self.converged:
                 raise ValueError("a converged FEAResult requires displacement")
@@ -137,6 +156,7 @@ def solve(
     final = details.get("final", {})
     reaction = final.get("indenter_normal_reaction_n")
     converged = details.get("solve_status") == "PASS" and displacement is not None
+    stress = final.get("element_von_mises_stress_mpa")
     indenter_pose = None
     if converged:
         external = final.get("contact_groups", {}).get(
@@ -147,15 +167,12 @@ def solve(
             for node_id in external.get("active_slave_node_ids", [])
         )
         active = set(active_node_ids)
-        id_to_local = {
-            int(node_id): index for index, node_id in enumerate(pad_mesh.node_ids)
-        }
         deformed_coordinates = pad_mesh.coordinates + displacement
         patch_segments = [
             LineString(
                 [
-                    deformed_coordinates[id_to_local[int(first)]],
-                    deformed_coordinates[id_to_local[int(second)]],
+                    deformed_coordinates[int(first)],
+                    deformed_coordinates[int(second)],
                 ]
             )
             for first, second in pad_mesh.boundaries.get("pad_outer_arc", ())
@@ -182,6 +199,7 @@ def solve(
         details=details,
         indenter_pose=indenter_pose,
         reference_mesh=mesh,
+        element_von_mises_stress_mpa=stress,
     )
 
 

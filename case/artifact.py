@@ -225,6 +225,9 @@ def _save_mechanics(case: FingertipCase, directory: Path) -> Path:
         "contact": _jsonable(result.contact),
         "converged": result.converged,
         "details": _jsonable(result.details),
+        "element_von_mises_stress_mpa": _jsonable(
+            result.element_von_mises_stress_mpa
+        ),
         "indenter_pose": _pose_payload(case),
     }
     _write_json(manifest_path, metadata)
@@ -586,6 +589,16 @@ def _load_mechanics(
         details=metadata.get("details", {}),
         indenter_pose=pose,
         reference_mesh=mesh,
+        element_von_mises_stress_mpa=(
+            None
+            if metadata.get("element_von_mises_stress_mpa") is None
+            else {
+                int(element_id): float(value)
+                for element_id, value in metadata[
+                    "element_von_mises_stress_mpa"
+                ].items()
+            }
+        ),
     )
 
 

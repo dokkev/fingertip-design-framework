@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 from fem import FEAResult
+from fem import results as fem_results
 from mesh import PadMesh
 
 
@@ -54,3 +55,87 @@ def test_failed_fea_result_does_not_expose_a_deformed_mesh() -> None:
 
     with pytest.raises(RuntimeError, match="did not converge"):
         _ = result.deformed_mesh
+
+
+def test_element_von_mises_extraction_uses_cauchy_stress_tensor(monkeypatch) -> None:
+    class FakeElement:
+        def CalculateOnIntegrationPoints(self, variable, process_info):
+            assert variable == "CAUCHY_STRESS_TENSOR"
+            assert process_info == "process-info"
+            return [
+                np.asarray(
+                    [[3.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, -3.0]]
+                )
+            ]
+
+    class FakeModelPart:
+        Elements = {7: FakeElement()}
+        ProcessInfo = "process-info"
+
+    monkeypatch.setattr(
+        fem_results,
+        "import_kratos",
+        lambda: (type("KM", (), {"CAUCHY_STRESS_TENSOR": "CAUCHY_STRESS_TENSOR"}), None, None, None),
+    )
+
+    values = fem_results.extract_element_von_mises_stress_mpa(FakeModelPart(), [7])
+
+    assert values[7] == pytest.approx(np.sqrt(27.0))
+
+
+def test_element_von_mises_extraction_accepts_2d_cauchy_tensor(monkeypatch) -> None:
+    class FakeElement:
+        def CalculateOnIntegrationPoints(self, variable, process_info):
+            return [np.asarray([[3.0, 2.0], [2.0, -1.0]])]
+
+    class FakeModelPart:
+        Elements = {7: FakeElement()}
+        ProcessInfo = object()
+
+    monkeypatch.setattr(
+        fem_results,
+        "import_kratos",
+        lambda: (
+            type("KM", (), {"CAUCHY_STRESS_TENSOR": "CAUCHY_STRESS_TENSOR"}),
+            None,
+            None,
+            None,
+        ),
+    )
+    values = fem_results.extract_element_von_mises_stress_mpa(FakeModelPart(), [7])
+
+    assert values[7] == pytest.approx(5.0)
+
+
+def test_element_von_mises_extraction_falls_back_to_cauchy_vector(monkeypatch) -> None:
+    class FakeElement:
+        def CalculateOnIntegrationPoints(self, variable, process_info):
+            if variable == "CAUCHY_STRESS_TENSOR":
+                return []
+            assert variable == "CAUCHY_STRESS_VECTOR"
+            return [np.asarray([3.0, 0.0, -3.0, 0.0])]
+
+    class FakeModelPart:
+        Elements = {7: FakeElement()}
+        ProcessInfo = object()
+
+    monkeypatch.setattr(
+        fem_results,
+        "import_kratos",
+        lambda: (
+            type(
+                "KM",
+                (),
+                {
+                    "CAUCHY_STRESS_TENSOR": "CAUCHY_STRESS_TENSOR",
+                    "CAUCHY_STRESS_VECTOR": "CAUCHY_STRESS_VECTOR",
+                },
+            ),
+            None,
+            None,
+            None,
+        ),
+    )
+    values = fem_results.extract_element_von_mises_stress_mpa(FakeModelPart(), [7])
+
+    assert values[7] == pytest.approx(np.sqrt(27.0))

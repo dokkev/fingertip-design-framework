@@ -9,11 +9,11 @@ from bootstrap import ensure_repository_root
 ensure_repository_root()
 
 from case import ContactState, FEA2D, FingertipCase, RayTracing2D
-from mesh.indenter import IndenterSettings
+from mesh.indenter import IndenterSettings, pose_from_fixture
 from model import Fingertip
 from optics import IndenterOptics
-from optics.transport3d import Transport3DSettings
-from visualization import plot_case
+from optics.transport3d import Transport3DSettings, trace_3d
+from visualization import plot_case_comparison
 
 
 
@@ -23,6 +23,7 @@ DEMO_INDENTER_OPTICS = IndenterOptics(
     boundary_model="dielectric",
     refractive_index=1.5,
 )
+FEM_STEPS = 12
 
 
 def main() -> int:
@@ -32,7 +33,7 @@ def main() -> int:
         fingertip=tip,
         fea=FEA2D(
             indenter=indenter,
-            steps=24,
+            steps=FEM_STEPS,
             contact=ContactState(
                 location_x_mm=0.0,
                 indentation_mm=1,
@@ -75,7 +76,18 @@ def main() -> int:
     print(f"  object_transmitted_weight: {raw.object_transmitted_weight:.6g}")
     print(f"  energy_balance_error: {raw.energy_balance_error:.6g}")
 
-    plot_case(case)
+    unloaded_optics = trace_3d(
+        tip,
+        case.fea.result.reference_mesh,
+        settings=case.raytracing.settings,
+    )
+    unloaded_pose = pose_from_fixture(case.indenter_pose.fixture, 0.0)
+    plot_case_comparison(
+        case,
+        unloaded_optics,
+        unloaded_pose=unloaded_pose,
+        title="Nominal fingertip: unloaded vs loaded",
+    )
     plt.show()
     return 0
 

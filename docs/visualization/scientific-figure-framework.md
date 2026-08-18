@@ -26,6 +26,13 @@ physical displacement vectors and are deterministically limited only for
 display. `plot_transport` visualizes the raw `TransportResult.density` on a
 normalized display scale without changing the result. `plot_camera` copies
 and normalizes `linear_rgb` for display, so camera results remain raw.
+`plot_case_comparison` similarly keeps optical transport raw: its paper
+optical panels mask projected cells outside the silicone domain, suppress
+extremely small path-density values, and apply at most one grid-cell of
+display-only raster smoothing before a shared `PowerNorm`. These operations
+are not part of optical evaluation or optimization; raw transport arrays and
+their metrics remain unchanged. Detailed exit markers and direction arrows
+are available only through the comparison helper's explicit debug flag.
 
 Scientific figure workflows belong in `validation/figures/` or the relevant
 validation package. They own artifact manifests, checksums, case selection,

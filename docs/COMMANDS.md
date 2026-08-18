@@ -109,8 +109,9 @@ color scale. `view_light.py` demonstrates the
 `Fingertip` → mesh → `solve()` → `trace()` → `evaluate()` flow with shared
 reference/loaded transport normalization. `view_case.py` demonstrates the
 nominal `Fingertip()` → `FEA2D` → `RayTracing2D` → `FingertipCase.run()`
-PLANAR_2D OptiX flow with the exact posed indenter and mechanical contact patch
-in one figure. `run_case()` remains a convenience wrapper for the same flow.
+PLANAR_2D OptiX flow with a 12-step loaded state, a no-contact reference
+optical trace, and a 2x2 unloaded-vs-loaded comparison figure. `run_case()`
+remains a convenience wrapper for the same flow.
 The solver-backed examples can take significant time and do not write artifacts;
 `view_case.py` additionally requires the externally managed Kratos and
 CUDA/OptiX environment used by the production case path.

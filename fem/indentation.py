@@ -25,6 +25,8 @@ from fem.results import (
     curve_acceptance,
     finite_field_failures,
     extract_nodal_fields,
+    extract_element_von_mises_stress_mpa,
+    IndentationPostprocessError,
     rigid_domain_validation,
     compressive_indenter_reaction,
     contact_width_metrics,
@@ -695,6 +697,19 @@ def run_indentation_case(
                 }
                 if field_failures:
                     point["non_finite_fields"] = field_failures[:50]
+                if step == settings.number_of_steps:
+                    try:
+                        point["element_von_mises_stress_mpa"] = (
+                            extract_element_von_mises_stress_mpa(
+                                model_part,
+                                base_topology.pad_element_ids,
+                            )
+                        )
+                    except IndentationPostprocessError as exception:
+                        point["element_von_mises_stress_mpa"] = None
+                        point["element_von_mises_stress_status"] = (
+                            f"UNAVAILABLE: {exception}"
+                        )
                 if converged_step_observer is not None:
                     observer_value = converged_step_observer(
                         ConvergedIndentationStep(
@@ -830,6 +845,19 @@ def run_indentation_case(
             }
             if field_failures:
                 point["non_finite_fields"] = field_failures[:50]
+            if step == settings.number_of_steps:
+                try:
+                    point["element_von_mises_stress_mpa"] = (
+                        extract_element_von_mises_stress_mpa(
+                            model_part,
+                            base_topology.pad_element_ids,
+                        )
+                    )
+                except IndentationPostprocessError as exception:
+                    point["element_von_mises_stress_mpa"] = None
+                    point["element_von_mises_stress_status"] = (
+                        f"UNAVAILABLE: {exception}"
+                    )
             if converged_step_observer is not None:
                 observer_value = converged_step_observer(
                     ConvergedIndentationStep(

@@ -2,28 +2,31 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
+import inspect
 import subprocess
 import sys
+from types import SimpleNamespace
 
 import matplotlib
 
 matplotlib.use("Agg", force=True)
 import matplotlib.pyplot as plt
-from matplotlib.collections import PathCollection
+from matplotlib.collections import PathCollection, PolyCollection, QuadMesh
+from matplotlib.colors import PowerNorm
 from matplotlib.quiver import Quiver
 import numpy as np
 import pytest
 from shapely.geometry import LineString, MultiLineString, Polygon
 
 import visualization
+import visualization.case as visualization_case
 from mesh import PadMesh
 from model import Fingertip, FingertipParameters, LED, OpticalMaterial
 from model.fingertip_model import FingertipModel
 from optics import TraceSettings, trace
 from visualization import (
     plot_camera,
-    plot_case,
+    plot_case_comparison,
     plot_displacement,
     plot_fingertip,
     plot_mesh,
@@ -55,7 +58,7 @@ def _square_mesh() -> PadMesh:
 def test_public_exports_are_only_plot_helpers() -> None:
     assert set(visualization.__all__) == {
         "plot_camera",
-        "plot_case",
+        "plot_case_comparison",
         "plot_displacement",
         "plot_fingertip",
         "plot_mesh",
@@ -146,9 +149,38 @@ def test_plot_transport_keeps_raw_analytic_density_unchanged() -> None:
     plt.close(figure)
 
 
-def test_plot_case_composes_mechanics_pose_contact_and_p2() -> None:
+def test_plot_case_comparison_builds_unloaded_loaded_2x2_without_execution() -> None:
     mesh = _square_mesh()
-    displacement = np.zeros((4, 2), dtype=float)
+    displacement = np.asarray(
+        [[0.0, 0.0], [0.10, 0.0], [0.10, 0.20], [0.0, 0.20]],
+        dtype=float,
+    )
+    unloaded_field = np.asarray(
+        [[1.0e-3, 2.0e-2, 1.0e-1], [0.0, 3.0e-3, 2.0e-1]],
+        dtype=float,
+    )
+    loaded_field = np.asarray(
+        [[2.0e-3, 4.0e-2, 2.0e-1], [0.0, 6.0e-3, 4.0e-1]],
+        dtype=float,
+    )
+    pose = SimpleNamespace(
+        carrier_geometry=Polygon(
+            [(0.25, -0.4), (0.75, -0.4), (0.75, -0.1), (0.25, -0.1)]
+        ),
+        contact_patch=MultiLineString(
+            [[(0.4, 0.0), (0.5, 0.0)], [(0.5, 0.0), (0.6, 0.0)]]
+        ),
+    )
+
+    def raw(field: np.ndarray) -> SimpleNamespace:
+        return SimpleNamespace(
+            projected_x_edges_mm=np.arange(4, dtype=float),
+            projected_y_edges_mm=np.arange(3, dtype=float),
+            projected_weighted_path_density=field,
+            escape_positions_mm=np.asarray([[0.5, 1.0, 0.0]]),
+            escape_weights=np.asarray([1.0]),
+        )
+
     case = SimpleNamespace(
         fingertip=Fingertip(
             FingertipParameters(),
@@ -159,36 +191,66 @@ def test_plot_case_composes_mechanics_pose_contact_and_p2() -> None:
             result=SimpleNamespace(
                 mesh=mesh,
                 displacement=displacement,
-                deformed_mesh=mesh,
-                indenter_pose=SimpleNamespace(
-                    carrier_geometry=Polygon(
-                        [(0.25, -0.4), (0.75, -0.4), (0.75, -0.1), (0.25, -0.1)]
-                    ),
-                    contact_patch=MultiLineString(
-                        [
-                            [(0.4, 0.0), (0.5, 0.0)],
-                            [(0.5, 0.0), (0.6, 0.0)],
-                        ]
-                    ),
-                ),
+                deformed_mesh=mesh.deformed(displacement),
+                reference_mesh=mesh,
+                indenter_pose=pose,
+                element_von_mises_stress_mpa={0: 0.25, 1: 0.75},
             ),
         ),
         raytracing=SimpleNamespace(
-            summary=SimpleNamespace(
-                field=np.ones((3, 2), dtype=float),
-                field_axes=(np.arange(4, dtype=float), np.arange(3, dtype=float)),
-            ),
-            raw=SimpleNamespace(
-                escape_positions_mm=np.asarray([[0.5, 1.0, 0.0]]),
-                escape_directions=np.asarray([[0.0, 1.0, 0.0]]),
-            ),
+            raw=raw(loaded_field),
         ),
     )
 
-    figure = plot_case(case)
+    case.fea.solve = lambda *_args, **_kwargs: pytest.fail("plotting must not solve FEA")
+    unloaded_before = unloaded_field.copy()
+    loaded_before = loaded_field.copy()
+    figure = plot_case_comparison(case, raw(unloaded_field), unloaded_pose=pose)
     figure.canvas.draw()
-    assert len(figure.axes) >= 2
+    panel_axes = [axis for axis in figure.axes if axis.get_title()]
+    assert len(panel_axes) == 4
+    assert {axis.get_title() for axis in panel_axes} == {
+        "FEA — unloaded reference (zero stress)",
+        "FEA — loaded",
+        "PLANAR_2D OptiX — unloaded",
+        "PLANAR_2D OptiX — loaded",
+    }
+    optical_axes = [axis for axis in panel_axes if "OptiX" in axis.get_title()]
+    optical_images = [
+        collection
+        for axis in optical_axes
+        for collection in axis.collections
+        if isinstance(collection, QuadMesh)
+    ]
+    assert len(optical_images) == 2
+    assert optical_images[0].norm is optical_images[1].norm
+    assert isinstance(optical_images[0].norm, PowerNorm)
+    assert optical_images[0].norm.gamma == pytest.approx(0.45)
+    assert optical_images[0].norm.vmin == pytest.approx(0.0)
+    assert optical_images[0].norm.vmax < 4.0e-1
+    assert any(np.ma.getmaskarray(image.get_array()).any() for image in optical_images)
+    loaded_mask = np.ma.getmaskarray(optical_images[1].get_array()).reshape(loaded_field.shape)
+    assert loaded_mask[1, 2]
+    assert not any(isinstance(collection, Quiver) for axis in optical_axes for collection in axis.collections)
+    fea_axes = [axis for axis in panel_axes if axis.get_title().startswith("FEA")]
+    stress_collections = [
+        collection
+        for axis in fea_axes
+        for collection in axis.collections
+        if isinstance(collection, PolyCollection)
+    ]
+    assert any(np.allclose(collection.get_array(), 0.0) for collection in stress_collections)
+    assert any(np.max(collection.get_array()) == pytest.approx(0.75) for collection in stress_collections)
+    assert np.array_equal(unloaded_field, unloaded_before)
+    assert np.array_equal(loaded_field, loaded_before)
+    assert np.array_equal(case.raytracing.raw.projected_weighted_path_density, loaded_field)
     plt.close(figure)
+
+
+def test_case_display_transform_does_not_enter_evaluation_code() -> None:
+    source = inspect.getsource(visualization_case)
+    assert "evaluate(" not in source
+    assert "optics.metrics" not in visualization_case.__dict__
 
 
 def test_plot_camera_does_not_import_mitsuba_or_mutate_rgb() -> None:
