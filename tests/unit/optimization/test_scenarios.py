@@ -43,24 +43,25 @@ def test_contact_scenario_rejects_nonpositive_load_dimensions(
 def test_grid_validates_nonempty_strictly_increasing_levels() -> None:
     grid = ScenarioGrid(
         locations_x_mm=(-1.0, 1.0),
-        indentations_mm=(0.5, 1.0),
+        captured_depths_mm=(0.5, 1.0),
         indenter_radii_mm=(2.0, 4.0),
+        maximum_indentation_mm=1.0,
     )
 
     assert grid.locations_x_mm == (-1.0, 1.0)
-    assert grid.indentations_mm == (0.5, 1.0)
+    assert grid.captured_depths_mm == (0.5, 1.0)
     assert grid.indenter_radii_mm == (2.0, 4.0)
     assert [
         (scenario.location_x_mm, scenario.indentation_mm, scenario.indenter_radius_mm)
-        for scenario in grid.scenarios
+        for scenario in grid.captured_states
     ] == [
         (-1.0, 0.5, 2.0),
-        (1.0, 0.5, 2.0),
         (-1.0, 1.0, 2.0),
+        (1.0, 0.5, 2.0),
         (1.0, 1.0, 2.0),
         (-1.0, 0.5, 4.0),
-        (1.0, 0.5, 4.0),
         (-1.0, 1.0, 4.0),
+        (1.0, 0.5, 4.0),
         (1.0, 1.0, 4.0),
     ]
 
@@ -71,49 +72,36 @@ def test_grid_validates_nonempty_strictly_increasing_levels() -> None:
         {"locations_x_mm": ()},
         {"locations_x_mm": (1.0, 0.0)},
         {"locations_x_mm": (0.0, 0.0)},
-        {"indentations_mm": (1.0, 0.5)},
+        {"captured_depths_mm": (1.0, 0.5)},
         {"indenter_radii_mm": (4.0, 2.0)},
     ),
 )
 def test_grid_rejects_empty_unsorted_or_duplicate_levels(grid_values) -> None:
     values = {
         "locations_x_mm": (-1.0, 1.0),
-        "indentations_mm": (0.5, 1.0),
+        "captured_depths_mm": (0.5, 1.0),
         "indenter_radii_mm": (2.0, 4.0),
+        "maximum_indentation_mm": 1.0,
     }
     values.update(grid_values)
     with pytest.raises(ValueError):
         ScenarioGrid(**values)
 
 
-def test_grid_generates_only_deterministic_adjacent_pairs() -> None:
+def test_grid_generates_deterministic_trajectories_and_captured_states() -> None:
     grid = ScenarioGrid(
         locations_x_mm=(-1.0, 1.0),
-        indentations_mm=(0.5, 1.0),
+        captured_depths_mm=(0.5, 1.0),
         indenter_radii_mm=(2.0, 4.0),
+        maximum_indentation_mm=1.0,
     )
-    pairs = grid.adjacent_pairs
-
-    assert len(pairs) == 12
-    assert {pair.axis for pair in pairs} == {
-        "location",
-        "indentation",
-        "radius",
-    }
-    assert sum(pair.axis == "location" for pair in pairs) == 4
-    assert sum(pair.axis == "indentation" for pair in pairs) == 4
-    assert sum(pair.axis == "radius" for pair in pairs) == 4
-    assert len(
-        {
-            frozenset((pair.first, pair.second))
-            for pair in pairs
-        }
-    ) == len(pairs)
-    for pair in pairs:
-        differences = (
-            pair.first.location_x_mm != pair.second.location_x_mm,
-            pair.first.indentation_mm != pair.second.indentation_mm,
-            pair.first.indenter_radius_mm != pair.second.indenter_radius_mm,
-        )
-        assert sum(differences) == 1
-    assert pairs == grid.adjacent_pairs
+    assert [
+        (trajectory.location_x_mm, trajectory.indenter_radius_mm)
+        for trajectory in grid.trajectories
+    ] == [
+        (-1.0, 2.0),
+        (1.0, 2.0),
+        (-1.0, 4.0),
+        (1.0, 4.0),
+    ]
+    assert len(grid.captured_states) == 8

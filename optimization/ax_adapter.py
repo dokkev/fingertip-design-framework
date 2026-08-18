@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+import time
 from types import MappingProxyType
-from typing import Literal, Mapping
+from typing import Callable, Literal, Mapping
 
 from ax.api.client import Client
 from ax.api.configs import RangeParameterConfig
@@ -52,6 +53,7 @@ class AxTrialRecord:
     parameters: Mapping[str, float]
     evaluation: DesignEvaluation | None
     failure_message: str | None
+    wall_time_seconds: float | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -211,8 +213,15 @@ def _next_candidate(
 def run_ax_optimization(
     study: OptimizationStudy,
     settings: AxSettings,
+    *,
+    on_record: Callable[[Client, tuple[AxTrialRecord, ...]], None] | None = None,
 ) -> AxRunResult:
-    """Evaluate the nominal trial, initialization attempts, then search attempts."""
+    """Evaluate nominal, initialization, and search attempts in order.
+
+    ``on_record`` is an optional observation hook for validation runners that
+    need durable per-trial provenance. It is called only after Ax has marked a
+    trial complete or failed.
+    """
     if not isinstance(study, OptimizationStudy):
         raise TypeError("study must be an OptimizationStudy")
     if not isinstance(settings, AxSettings):
@@ -221,6 +230,28 @@ def run_ax_optimization(
     client = create_ax_client(study, settings)
     evaluator = study.create_evaluator()
     records: list[AxTrialRecord] = []
+
+    def evaluate_and_record(
+        trial_index: int,
+        phase: AxTrialPhase,
+        candidate: Mapping[str, float],
+    ) -> None:
+        started = time.perf_counter()
+        record = _evaluate_trial(
+            client,
+            evaluator,
+            study.design_space,
+            trial_index,
+            phase,
+            candidate,
+        )
+        record = replace(
+            record,
+            wall_time_seconds=time.perf_counter() - started,
+        )
+        records.append(record)
+        if on_record is not None:
+            on_record(client, tuple(records))
 
     nominal_values = {
         variable.name: getattr(
@@ -233,41 +264,26 @@ def run_ax_optimization(
         parameters=nominal_values,
         arm_name="nominal",
     )
-    records.append(
-        _evaluate_trial(
-            client,
-            evaluator,
-            study.design_space,
-            nominal_trial,
-            "nominal",
-            nominal_values,
-        )
+    evaluate_and_record(
+        nominal_trial,
+        "nominal",
+        nominal_values,
     )
 
     for attempt in range(1, settings.initialization_trials + 1):
         trial_index, candidate = _next_candidate(client, "initialization", attempt)
-        records.append(
-            _evaluate_trial(
-                client,
-                evaluator,
-                study.design_space,
-                trial_index,
-                "initialization",
-                candidate,
-            )
+        evaluate_and_record(
+            trial_index,
+            "initialization",
+            candidate,
         )
 
     for attempt in range(1, settings.search_trials + 1):
         trial_index, candidate = _next_candidate(client, "search", attempt)
-        records.append(
-            _evaluate_trial(
-                client,
-                evaluator,
-                study.design_space,
-                trial_index,
-                "search",
-                candidate,
-            )
+        evaluate_and_record(
+            trial_index,
+            "search",
+            candidate,
         )
 
     return AxRunResult(records=tuple(records))
