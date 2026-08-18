@@ -419,6 +419,7 @@ def _run_child(case: Mapping[str, Any]) -> int:
             IndentationSettings(INDENTATION_MM, STEPS),
             fixture_override=fixture,
             internal_contact_configuration="three_pairs",
+            basal_interface="explicit_contact",
             mesh_override=mesh,
             diagnostic_mode="minimal",
         )

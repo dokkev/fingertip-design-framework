@@ -24,6 +24,7 @@ def runtime_preflight():
         "medium",
         IndentationSettings(0.25, 48),
         internal_contact_configuration="three_pairs",
+        basal_interface="explicit_contact",
     )
 
 
@@ -69,6 +70,7 @@ def test_production_zero_gap_uses_bonded_bottom_and_side_contacts(
     assert preflight["bonded_bottom_node_count"] > 0
     assert preflight["bonded_bottom_constraints"]["all_displacement_dofs_fixed"]
     assert preflight["bonded_bottom_excludes_pad_void_unpaired"]
+    assert preflight["pad_void_unpaired_only_nodes_are_unfixed"]
     assert {
         group[0] for group in preflight["contact_groups"]
     } == {
@@ -118,6 +120,7 @@ def separated_internal_gap_small_solve():
         "medium",
         IndentationSettings(0.01, 1),
         internal_contact_configuration="three_pairs",
+        basal_interface="explicit_contact",
     )
     return result
 

@@ -11,20 +11,21 @@ from matplotlib.patches import PathPatch
 from shapely.geometry import MultiPolygon, Polygon
 
 from model.fingertip_model import PolygonalGeometry
+from visualization._style import STYLE
 
-PAD_COLOR = "#C7E8D2"
-PAD_EDGE = "#4E9270"
-ALUMINUM_COLOR = "#D9DCDF"
-ALUMINUM_EDGE = "#7B8288"
-VOID_COLOR = "#F7B4AE"
-VOID_EDGE = "#C9473D"
-PAD_CONTACT_COLOR = "#D95F02"
-BONDED_INTERFACE_COLOR = "#F4E04D"
-BONDED_INTERFACE_EDGE = "#C49A00"
-LED_COLOR = "#F6C453"
-LED_EDGE = "#9A6700"
-LIGHT_SOURCE_COLOR = "#E63946"
-LIGHT_SOURCE_EDGE = "#4A1018"
+PAD_COLOR = STYLE.silicone_face
+PAD_EDGE = STYLE.silicone_edge
+ALUMINUM_COLOR = STYLE.rigid_face
+ALUMINUM_EDGE = STYLE.rigid_edge
+VOID_COLOR = STYLE.void_face
+VOID_EDGE = STYLE.void_edge
+PAD_CONTACT_COLOR = STYLE.contact_edge
+BONDED_INTERFACE_COLOR = STYLE.bonded_interface_face
+BONDED_INTERFACE_EDGE = STYLE.bonded_interface_edge
+LED_COLOR = STYLE.led_face
+LED_EDGE = STYLE.led_edge
+LIGHT_SOURCE_COLOR = STYLE.source_face
+LIGHT_SOURCE_EDGE = STYLE.source_edge
 
 
 def add_polygonal_patches(

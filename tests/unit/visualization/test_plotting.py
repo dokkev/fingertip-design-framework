@@ -13,6 +13,7 @@ import matplotlib
 matplotlib.use("Agg", force=True)
 import matplotlib.pyplot as plt
 from matplotlib.collections import PathCollection, PolyCollection
+from matplotlib.collections import QuadMesh
 from matplotlib.colors import PowerNorm
 from matplotlib.image import AxesImage
 from matplotlib.quiver import Quiver
@@ -30,7 +31,7 @@ from optics.transport3d import Transport3DSettings
 from visualization import (
     plot_camera,
     plot_case_comparison,
-    plot_displacement,
+    plot_fea,
     plot_fingertip,
     plot_mesh,
     plot_transport,
@@ -62,7 +63,7 @@ def test_public_exports_are_only_plot_helpers() -> None:
     assert set(visualization.__all__) == {
         "plot_camera",
         "plot_case_comparison",
-        "plot_displacement",
+        "plot_fea",
         "plot_fingertip",
         "plot_mesh",
         "plot_transport",
@@ -93,7 +94,7 @@ def test_plot_mesh_draws_t3_connectivity_without_gmsh() -> None:
     plt.close(figure)
 
 
-def test_plot_displacement_preserves_mesh_and_draws_magnitude_and_vectors() -> None:
+def test_plot_fea_preserves_mesh_and_draws_magnitude_and_vectors() -> None:
     mesh = _square_mesh()
     before = mesh.coordinates.copy()
     displacement = np.asarray(
@@ -101,7 +102,7 @@ def test_plot_displacement_preserves_mesh_and_draws_magnitude_and_vectors() -> N
         dtype=float,
     )
     figure, axis = plt.subplots()
-    plot_displacement(
+    plot_fea(
         mesh,
         displacement,
         ax=axis,
@@ -121,15 +122,15 @@ def test_plot_displacement_preserves_mesh_and_draws_magnitude_and_vectors() -> N
         (np.asarray([[0.0, 0.0], [np.nan, 0.0], [0.0, 0.0], [0.0, 0.0]]), "finite"),
     ],
 )
-def test_plot_displacement_rejects_invalid_fields(bad, message) -> None:
+def test_plot_fea_rejects_invalid_fields(bad, message) -> None:
     with pytest.raises(ValueError, match=message):
-        plot_displacement(_square_mesh(), bad)
+        plot_fea(_square_mesh(), bad)
     with pytest.raises(ValueError, match="deformation_scale"):
-        plot_displacement(_square_mesh(), np.zeros((4, 2)), deformation_scale=-1.0)
+        plot_fea(_square_mesh(), np.zeros((4, 2)), deformation_scale=-1.0)
     with pytest.raises(ValueError, match="deformation_scale"):
-        plot_displacement(_square_mesh(), np.zeros((4, 2)), deformation_scale=0.0)
+        plot_fea(_square_mesh(), np.zeros((4, 2)), deformation_scale=0.0)
     with pytest.raises(ValueError, match="arrow_scale"):
-        plot_displacement(_square_mesh(), np.ones((4, 2)), arrow_scale=0.0)
+        plot_fea(_square_mesh(), np.ones((4, 2)), arrow_scale=0.0)
 
 
 def test_plot_transport_keeps_raw_analytic_density_unchanged() -> None:
@@ -175,11 +176,17 @@ def test_plot_case_comparison_builds_unloaded_loaded_2x2_without_execution() -> 
         ),
     )
 
-    def raw(field: np.ndarray) -> SimpleNamespace:
+    loaded_domain_mask = np.ones_like(loaded_field, dtype=bool)
+    loaded_domain_mask[1, 2] = False
+
+    def raw(field: np.ndarray, mask: np.ndarray | None = None) -> SimpleNamespace:
         return SimpleNamespace(
             projected_x_edges_mm=np.arange(4, dtype=float),
             projected_y_edges_mm=np.arange(3, dtype=float),
             projected_weighted_path_density=field,
+            projected_optical_mask=(
+                np.ones_like(field, dtype=bool) if mask is None else mask
+            ),
             escape_positions_mm=np.asarray([[0.5, 1.0, 0.0]]),
             escape_directions=np.asarray([[0.0, 1.0, 0.0]]),
             escape_weights=np.asarray([1.0]),
@@ -202,7 +209,7 @@ def test_plot_case_comparison_builds_unloaded_loaded_2x2_without_execution() -> 
             ),
         ),
         raytracing=SimpleNamespace(
-            raw=raw(loaded_field),
+            raw=raw(loaded_field, loaded_domain_mask),
         ),
     )
 
@@ -220,22 +227,22 @@ def test_plot_case_comparison_builds_unloaded_loaded_2x2_without_execution() -> 
         "PLANAR_2D OptiX — loaded",
     }
     optical_axes = [axis for axis in panel_axes if "OptiX" in axis.get_title()]
-    optical_images = [
+    optical_collections = [
         image
         for axis in optical_axes
-        for image in axis.images
-        if isinstance(image, AxesImage)
+        for image in axis.collections
+        if isinstance(image, QuadMesh)
     ]
-    assert len(optical_images) == 2
-    assert optical_images[0].norm is optical_images[1].norm
-    assert isinstance(optical_images[0].norm, PowerNorm)
-    assert optical_images[0].norm.gamma == pytest.approx(0.45)
-    assert optical_images[0].norm.vmin == pytest.approx(0.0)
-    assert optical_images[0].norm.vmax < 4.0e-1
-    assert any(np.ma.getmaskarray(image.get_array()).any() for image in optical_images)
-    loaded_mask = np.ma.getmaskarray(optical_images[1].get_array()).reshape(loaded_field.shape)
-    assert not loaded_mask[0, 0]
-    assert loaded_mask[1, 2]
+    assert len(optical_collections) == 2
+    assert optical_collections[0].norm is optical_collections[1].norm
+    assert isinstance(optical_collections[0].norm, PowerNorm)
+    assert optical_collections[0].norm.gamma == pytest.approx(0.45)
+    assert optical_collections[0].norm.vmin == pytest.approx(0.0)
+    assert optical_collections[0].norm.vmax < 4.0e-1
+    assert any(np.ma.getmaskarray(collection.get_array()).any() for collection in optical_collections)
+    loaded_display_mask = np.ma.getmaskarray(optical_collections[1].get_array()).reshape(-1)
+    assert not loaded_display_mask[0]
+    assert loaded_display_mask[-1]
     assert not any(isinstance(collection, Quiver) for axis in optical_axes for collection in axis.collections)
     assert any(
         axis.get_ylabel() == "Weighted optical path density"

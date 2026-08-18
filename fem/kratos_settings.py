@@ -82,12 +82,18 @@ InternalContactConfiguration = Literal[
     "right_only",
 ]
 
+BasalInterface = Literal["bonded", "explicit_contact", "free"]
+
+BASAL_INTERFACES = ("bonded", "explicit_contact", "free")
+
 INTERNAL_CONTACT_CONFIGURATIONS = (
     "none",
     "bottom_only",
     "sides_separate",
     "three_pairs",
     "continuous_u",
+    "left_only",
+    "right_only",
 )
 
 _EXTERNAL_CONTACT_GROUP = (
@@ -134,6 +140,43 @@ def validate_internal_contact_configuration(
             f"expected one of: {supported}"
         )
     return configuration  # type: ignore[return-value]
+
+
+def validate_basal_interface(interface: str) -> BasalInterface:
+    """Validate the physical basal-interface condition independently."""
+    if interface not in BASAL_INTERFACES:
+        supported = ", ".join(BASAL_INTERFACES)
+        raise ValueError(
+            f"unsupported basal interface {interface!r}; "
+            f"expected one of: {supported}"
+        )
+    return interface  # type: ignore[return-value]
+
+
+def validate_basal_interface_configuration(
+    basal_interface: str,
+    internal_contact_configuration: str,
+) -> tuple[BasalInterface, InternalContactConfiguration]:
+    """Validate the independent basal and internal-contact selections."""
+    basal = validate_basal_interface(basal_interface)
+    internal = validate_internal_contact_configuration(
+        internal_contact_configuration
+    )
+    has_bottom_contact = any(
+        name == "internal_bottom"
+        for name, _, _ in indentation_contact_groups(internal)
+    )
+    if basal in ("bonded", "free") and has_bottom_contact:
+        raise ValueError(
+            f"basal_interface={basal!r} cannot be combined with "
+            f"internal_contact={internal!r}, which registers internal_bottom"
+        )
+    if basal == "explicit_contact" and not has_bottom_contact:
+        raise ValueError(
+            "basal_interface='explicit_contact' requires an internal contact "
+            "configuration containing internal_bottom"
+        )
+    return basal, internal
 
 
 def indentation_contact_groups(

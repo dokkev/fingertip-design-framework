@@ -10,6 +10,7 @@ from typing import Literal
 from fem import solve
 from fem.contact import InternalContactTopologyError
 from fem.indentation import InvalidIndentationSettings
+from fem.kratos_settings import validate_basal_interface_configuration
 from fem.kratos_adapter import KratosAdapterError, KratosDependencyError
 from fem.results import IndentationPostprocessError
 from mesh import InvalidPadMesh, InvalidMeshSettings, MeshSettings
@@ -248,6 +249,7 @@ class DesignEvaluator:
         indenter_optics: IndenterOptics | None = None,
         fem_steps: int = 48,
         internal_contact: str = "sides_separate",
+        basal_interface: str = "bonded",
     ) -> None:
         if not isinstance(scenario_grid, ScenarioGrid):
             raise TypeError("scenario_grid must be a ScenarioGrid")
@@ -273,6 +275,13 @@ class DesignEvaluator:
             or fem_steps <= 0
         ):
             raise ValueError("fem_steps must be a positive integer")
+        try:
+            basal, internal = validate_basal_interface_configuration(
+                basal_interface,
+                internal_contact,
+            )
+        except ValueError as exception:
+            raise ValueError(str(exception)) from exception
         self.scenario_grid = scenario_grid
         self.mesh_settings = mesh_settings
         self.trace_settings = trace_settings
@@ -280,7 +289,8 @@ class DesignEvaluator:
         self.optical = OpticalMaterial() if optical is None else optical
         self.indenter_optics = indenter_optics
         self.fem_steps = fem_steps
-        self.internal_contact = internal_contact
+        self.internal_contact = internal
+        self.basal_interface = basal
 
     def evaluate(self, parameters: FingertipParameters) -> DesignEvaluation:
         """Run one deterministic mesh/FEM/optical design evaluation."""
@@ -320,6 +330,7 @@ class DesignEvaluator:
                     steps=self.fem_steps,
                     indenter=indenter,
                     internal_contact=self.internal_contact,
+                    basal_interface=self.basal_interface,
                 )
             except _MESH_ERRORS as exc:
                 return _failure(

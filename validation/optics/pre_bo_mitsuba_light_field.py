@@ -272,6 +272,7 @@ def _run_design(
                     steps=48,
                     indenter=IndenterSettings(radius_mm=scenario.indenter_radius_mm),
                     internal_contact="three_pairs",
+                    basal_interface="explicit_contact",
                 )
                 fem_record = {
                     "status": "success" if fea.converged else "failure",

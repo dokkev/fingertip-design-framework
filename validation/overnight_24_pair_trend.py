@@ -562,6 +562,7 @@ def _run_2d_child(case: Mapping[str, Any]) -> int:
             IndentationSettings(INDENTATION_MM, STEPS),
             fixture_override=fixture,
             internal_contact_configuration="three_pairs",
+            basal_interface="explicit_contact",
             mesh_override=mesh,
             converged_step_observer=observe,
             diagnostic_mode="minimal",

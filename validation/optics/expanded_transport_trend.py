@@ -708,6 +708,7 @@ def _run_fast_fea(output: Path, sample: Mapping[str, Any]) -> dict[str, Any]:
             IndentationSettings(1.0, FAST_STEPS),
             fixture_override=fixture,
             internal_contact_configuration="three_pairs",
+            basal_interface="explicit_contact",
             mesh_override=mesh,
             diagnostic_mode=FAST_DIAGNOSTIC_MODE,
         )

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import matplotlib.pyplot as plt
+from matplotlib.colors import Normalize
 import numpy as np
 
 from bootstrap import ensure_repository_root
@@ -11,12 +12,12 @@ ensure_repository_root()
 
 from fem import IndenterSettings, solve
 from model import Fingertip, FingertipParameters
-from visualization import plot_displacement
+from visualization import plot_fea
 
 
 
 
-DIAMETERS_MM = (4.0, 8.0, 12.0)
+DIAMETERS_MM = (4.0, 8.0)
 INDENTATION_MM = 1.5
 
 
@@ -49,6 +50,7 @@ def main() -> int:
         float(np.linalg.norm(result.displacement, axis=1).max())
         for result in results
     )
+    displacement_norm = Normalize(vmin=0.0, vmax=shared_max)
     figure, axes = plt.subplots(
         1,
         len(DIAMETERS_MM),
@@ -62,11 +64,11 @@ def main() -> int:
             if result.reaction_force is None
             else f"{result.reaction_force:.3g} N"
         )
-        plot_displacement(
+        plot_fea(
             mesh,
             result.displacement,
             ax=axis,
-            normalization_max=shared_max,
+            norm=displacement_norm,
             title=f"Ø {diameter:g} mm\nReaction = {reaction}",
         )
 

@@ -27,6 +27,7 @@ def test_kratos_initialization_and_element_contract(smoke_result) -> None:
     assert smoke_result["basal_interface"] == "bonded"
     assert smoke_result["bonded_bottom_constraints"]
     assert all(smoke_result["bonded_bottom_constraints"].values())
+    assert smoke_result["pad_void_unpaired_only_nodes_are_unfixed"]
     contract = smoke_result["element_runtime_contract"]
     assert contract["pad_registered_creation_name"] == MIXED_PAD_ELEMENT
     assert contract["carrier_registered_creation_name"] == CARRIER_ELEMENT

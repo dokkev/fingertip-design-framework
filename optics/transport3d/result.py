@@ -72,6 +72,7 @@ class Transport3DResult:
     projected_x_edges_mm: np.ndarray | None = None
     projected_y_edges_mm: np.ndarray | None = None
     projected_weighted_path_density: np.ndarray | None = None
+    projected_optical_mask: np.ndarray | None = None
     internal_path_x_edges_mm: np.ndarray | None = None
     internal_path_y_edges_mm: np.ndarray | None = None
     internal_path_z_edges_mm: np.ndarray | None = None
@@ -80,6 +81,11 @@ class Transport3DResult:
     retained_segment_lengths_mm: np.ndarray | None = None
     retained_segment_primary_ray_indices: np.ndarray | None = None
     retained_segment_interaction_counts: np.ndarray | None = None
+    retained_segment_starts_mm: np.ndarray | None = None
+    retained_segment_ends_mm: np.ndarray | None = None
+    retained_segment_media: np.ndarray | None = None
+    retained_segment_start_weights: np.ndarray | None = None
+    retained_segment_end_weights: np.ndarray | None = None
     geometry_metadata: Mapping[str, Any] = field(default_factory=dict)
     timings_seconds: Mapping[str, float] = field(default_factory=dict)
 
@@ -215,9 +221,19 @@ class Transport3DResult:
             projected_x = _owned_array(self.projected_x_edges_mm, dtype=float, name="projected_x_edges_mm")
             projected_y = _owned_array(self.projected_y_edges_mm, dtype=float, name="projected_y_edges_mm")
             projected_density = _owned_array(self.projected_weighted_path_density, dtype=float, name="projected_weighted_path_density")
-            if projected_density.shape != (len(projected_y) - 1, len(projected_x) - 1) or np.any(projected_density < 0.0):
+            projected_mask = (
+                np.ones_like(projected_density, dtype=bool)
+                if self.projected_optical_mask is None
+                else np.array(self.projected_optical_mask, dtype=bool, copy=True)
+            )
+            if (
+                projected_density.shape != (len(projected_y) - 1, len(projected_x) - 1)
+                or projected_mask.shape != projected_density.shape
+                or np.any(projected_density < 0.0)
+            ):
                 raise Transport3DResultError("projected diagnostic shape is invalid")
-            projected = [projected_x, projected_y, projected_density]
+            projected_mask.setflags(write=False)
+            projected = [projected_x, projected_y, projected_density, projected_mask]
 
         internal = []
         internal_values = (
@@ -293,6 +309,11 @@ class Transport3DResult:
             self.retained_segment_lengths_mm,
             self.retained_segment_primary_ray_indices,
             self.retained_segment_interaction_counts,
+            self.retained_segment_starts_mm,
+            self.retained_segment_ends_mm,
+            self.retained_segment_media,
+            self.retained_segment_start_weights,
+            self.retained_segment_end_weights,
         )
         if any(value is not None for value in retained_values):
             if any(value is None for value in retained_values):
@@ -314,23 +335,68 @@ class Transport3DResult:
                 dtype=np.int64,
                 copy=True,
             )
+            retained_starts = _owned_array(
+                self.retained_segment_starts_mm,
+                dtype=float,
+                name="retained_segment_starts_mm",
+            )
+            retained_ends = _owned_array(
+                self.retained_segment_ends_mm,
+                dtype=float,
+                name="retained_segment_ends_mm",
+            )
+            retained_media = np.array(
+                self.retained_segment_media,
+                dtype=np.uint8,
+                copy=True,
+            )
+            retained_start_weights = _owned_array(
+                self.retained_segment_start_weights,
+                dtype=float,
+                name="retained_segment_start_weights",
+            )
+            retained_end_weights = _owned_array(
+                self.retained_segment_end_weights,
+                dtype=float,
+                name="retained_segment_end_weights",
+            )
             if (
                 retained_lengths.ndim != 1
                 or retained_primary.ndim != 1
                 or retained_interactions.ndim != 1
+                or retained_starts.ndim != 2
+                or retained_starts.shape[1:] != (3,)
+                or retained_ends.shape != retained_starts.shape
+                or retained_media.ndim != 1
+                or retained_start_weights.ndim != 1
+                or retained_end_weights.ndim != 1
                 or len(retained_primary) != len(retained_lengths)
                 or len(retained_interactions) != len(retained_lengths)
+                or len(retained_starts) != len(retained_lengths)
+                or len(retained_ends) != len(retained_lengths)
+                or len(retained_media) != len(retained_lengths)
+                or len(retained_start_weights) != len(retained_lengths)
+                or len(retained_end_weights) != len(retained_lengths)
                 or np.any(retained_lengths < 0.0)
                 or np.any(retained_primary < 0)
                 or np.any(retained_interactions < 0)
+                or np.any(retained_media > 1)
+                or np.any(retained_start_weights < 0.0)
+                or np.any(retained_end_weights < 0.0)
             ):
                 raise Transport3DResultError("retained segment metadata is invalid")
             retained_primary.setflags(write=False)
             retained_interactions.setflags(write=False)
+            retained_media.setflags(write=False)
             retained_segments = [
                 retained_lengths,
                 retained_primary,
                 retained_interactions,
+                retained_starts,
+                retained_ends,
+                retained_media,
+                retained_start_weights,
+                retained_end_weights,
             ]
 
         for name, array in (
@@ -366,6 +432,7 @@ class Transport3DResult:
             object.__setattr__(self, "projected_x_edges_mm", projected[0])
             object.__setattr__(self, "projected_y_edges_mm", projected[1])
             object.__setattr__(self, "projected_weighted_path_density", projected[2])
+            object.__setattr__(self, "projected_optical_mask", projected[3])
         if internal:
             object.__setattr__(self, "internal_path_x_edges_mm", internal[0])
             object.__setattr__(self, "internal_path_y_edges_mm", internal[1])
@@ -376,6 +443,11 @@ class Transport3DResult:
             object.__setattr__(self, "retained_segment_lengths_mm", retained_segments[0])
             object.__setattr__(self, "retained_segment_primary_ray_indices", retained_segments[1])
             object.__setattr__(self, "retained_segment_interaction_counts", retained_segments[2])
+            object.__setattr__(self, "retained_segment_starts_mm", retained_segments[3])
+            object.__setattr__(self, "retained_segment_ends_mm", retained_segments[4])
+            object.__setattr__(self, "retained_segment_media", retained_segments[5])
+            object.__setattr__(self, "retained_segment_start_weights", retained_segments[6])
+            object.__setattr__(self, "retained_segment_end_weights", retained_segments[7])
         object.__setattr__(self, "geometry_metadata", _freeze_metadata(self.geometry_metadata))
         object.__setattr__(self, "timings_seconds", MappingProxyType({key: float(value) for key, value in self.timings_seconds.items()}))
 

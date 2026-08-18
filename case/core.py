@@ -77,6 +77,7 @@ def _case_identity_payload(case: "FingertipCase") -> dict[str, Any]:
             "contact": asdict(case.fea.contact),
             "steps": case.fea.steps,
             "internal_contact": case.fea.internal_contact,
+            "basal_interface": case.fea.basal_interface,
         },
         "raytracing": {
             "settings": asdict(case.raytracing.settings),
@@ -126,6 +127,14 @@ def _validate_completed_case(case: "FingertipCase") -> None:
         and observed_internal_contact != case.fea.internal_contact
     ):
         raise ValueError("FEA internal contact does not match FEA2D.internal_contact")
+    observed_basal_interface = fea_result.details.get("configuration", {}).get(
+        "basal_interface"
+    )
+    if (
+        observed_basal_interface is not None
+        and observed_basal_interface != case.fea.basal_interface
+    ):
+        raise ValueError("FEA basal interface does not match FEA2D.basal_interface")
 
     expected_morphology = _expected_morphology_fingerprint(case.fingertip.parameters)
     if summary.morphology_fingerprint != expected_morphology:
@@ -334,6 +343,7 @@ def run_case(
     indenter_optics: IndenterOptics | None = None,
     fem_steps: int = 48,
     internal_contact: str = "sides_separate",
+    basal_interface: str = "bonded",
     provenance: Mapping[str, Any] | None = None,
     optix_runtime: Any | None = None,
 ) -> FingertipCase:
@@ -361,6 +371,7 @@ def run_case(
             mesh_settings=mesh_settings,
             steps=fem_steps,
             internal_contact=internal_contact,
+            basal_interface=basal_interface,
         ),
         raytracing=RayTracing2D(
             settings=trace_settings,

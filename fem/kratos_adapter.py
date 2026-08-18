@@ -15,9 +15,16 @@ from fem.kratos_settings import (
     YOUNG_MODULUS_MPA,
     build_project_parameters_json,
     indentation_contact_groups,
+    validate_basal_interface_configuration,
 )
-from mesh.indenter import IndenterFixture, IndenterMesh
+from mesh.indenter import (
+    IndenterFixture,
+    IndenterMesh,
+    build_indenter_fixture,
+    generate_indenter_mesh,
+)
 from mesh.types import BoundaryEdge, FingertipMesh
+from model.fingertip_model import FingertipModel
 
 
 class KratosDependencyError(RuntimeError):
@@ -643,6 +650,7 @@ def inspect_runtime_contact_contract(
 def run_initialization_smoke(
     mesh: FingertipMesh,
     internal_contact_configuration: str = "sides_separate",
+    basal_interface: str = "bonded",
 ) -> dict[str, Any]:
     """Initialize the selected internal-contact model without a nonlinear solve."""
     KM, _, _, _ = import_kratos()
@@ -651,18 +659,36 @@ def run_initialization_smoke(
     )
 
     model = KM.Model()
-    configuration = indentation_contact_groups(internal_contact_configuration)
-    bonded_bottom = internal_contact_configuration == "sides_separate"
+    try:
+        basal, internal_configuration = validate_basal_interface_configuration(
+            basal_interface,
+            internal_contact_configuration,
+        )
+    except ValueError as exception:
+        raise KratosAdapterError(str(exception)) from exception
+    configuration = indentation_contact_groups(internal_configuration)
+    bonded_bottom = basal == "bonded"
     if bonded_bottom and mesh.parameters.void_height != 0.0:
         raise KratosAdapterError(
             "bonded PadCutoutBottom requires void_height=0.0"
         )
     parameters = KM.Parameters(
-        build_project_parameters_json(internal_contact_configuration)
+        build_project_parameters_json(internal_configuration)
     )
     analysis = StructuralMechanicsAnalysis(model, parameters)
     model_part = model["Structure"]
     topology = populate_kratos_model_part(model_part, mesh)
+    indenter_model = FingertipModel(mesh.parameters)
+    indenter_fixture = build_indenter_fixture(indenter_model)
+    indenter_mesh = generate_indenter_mesh(
+        indenter_fixture,
+        mesh.settings.contact_boundary_target_size_mm,
+    )
+    indenter_topology = populate_indenter_model_part(
+        model_part,
+        indenter_mesh,
+        topology,
+    )
     bonded_bottom_node_ids = tuple(
         sorted(
             node.Id
@@ -699,6 +725,29 @@ def run_initialization_smoke(
                 for variable in (KM.DISPLACEMENT_X, KM.DISPLACEMENT_Y)
             )
             for node_id in bonded_bottom_node_ids
+        }
+        pad_void_unpaired_only_node_ids = tuple(
+            sorted(
+                set(pad_void_unpaired_node_ids).difference(
+                    bonded_bottom_node_ids
+                )
+            )
+        )
+        pad_void_unpaired_shared_node_ids = tuple(
+            sorted(
+                set(pad_void_unpaired_node_ids).intersection(
+                    bonded_bottom_node_ids
+                )
+            )
+        )
+        pad_void_unpaired_only_fixed = {
+            int(node_id): any(
+                model_part.Nodes[node_id]
+                .GetDof(variable)
+                .IsFixed()
+                for variable in (KM.DISPLACEMENT_X, KM.DISPLACEMENT_Y)
+            )
+            for node_id in pad_void_unpaired_only_node_ids
         }
         pad_element_info = sorted(
             {
@@ -760,7 +809,10 @@ def run_initialization_smoke(
             ),
             "bonded_bottom_excludes_pad_void_unpaired": set(
                 bonded_bottom_node_ids
-            ).isdisjoint(pad_void_unpaired_node_ids),
+            ).isdisjoint(pad_void_unpaired_only_node_ids),
+            "pad_void_unpaired_only_nodes_unfixed": not any(
+                pad_void_unpaired_only_fixed.values()
+            ),
         }
         return {
             "status": "PASS" if all(acceptance_checks.values()) else "FAIL",
@@ -796,10 +848,19 @@ def run_initialization_smoke(
             "topology": asdict(topology),
             "submodel_parts": submodel_parts,
             "runtime_contact_contract": runtime,
-            "internal_contact_configuration": internal_contact_configuration,
-            "basal_interface": "bonded" if bonded_bottom else "not_bonded",
+            "internal_contact_configuration": internal_configuration,
+            "basal_interface": basal,
             "bonded_bottom_node_ids": list(bonded_bottom_node_ids),
             "pad_void_unpaired_node_ids": list(pad_void_unpaired_node_ids),
+            "pad_void_unpaired_only_node_ids": list(
+                pad_void_unpaired_only_node_ids
+            ),
+            "pad_void_unpaired_shared_bond_endpoint_node_ids": list(
+                pad_void_unpaired_shared_node_ids
+            ),
+            "pad_void_unpaired_only_nodes_are_unfixed": not any(
+                pad_void_unpaired_only_fixed.values()
+            ),
             "bonded_bottom_constraints": bonded_bottom_constraints,
             "acceptance_checks": acceptance_checks,
         }

@@ -312,6 +312,7 @@ def run_nominal_smoke(output: Path = DEFAULT_OUTPUT) -> dict[str, Any]:
         "medium",
         IndentationSettings(indentation_mm=0.5, number_of_steps=12),
         internal_contact_configuration="three_pairs",
+        basal_interface="explicit_contact",
     )
     fixture = build_normal_indenter_fixture_at_x(model, 0.0)
     details, _ = run_indentation_case(
@@ -319,6 +320,7 @@ def run_nominal_smoke(output: Path = DEFAULT_OUTPUT) -> dict[str, Any]:
         "medium",
         IndentationSettings(indentation_mm=0.5, number_of_steps=12),
         internal_contact_configuration="three_pairs",
+        basal_interface="explicit_contact",
         mesh_override=mesh,
         fixture_override=fixture,
         diagnostic_mode="full",

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import matplotlib.pyplot as plt
+from matplotlib.cm import ScalarMappable
 
 from bootstrap import ensure_repository_root
 
@@ -10,8 +11,9 @@ ensure_repository_root()
 
 from fem import IndenterSettings, solve
 from model import Fingertip, FingertipParameters
-from optics import evaluate, trace
-from visualization import plot_displacement, plot_transport
+from optics.transport3d import Transport3DSettings, trace_3d
+from visualization import plot_fea, plot_transport
+from visualization.optics import shared_optical_normalization
 
 
 OBJECT_DIAMETER_MM = 8.0
@@ -22,7 +24,8 @@ def main() -> int:
     tip = Fingertip(
         FingertipParameters(
             void_width=1.0,
-            void_height=1.0,
+            # Production morphology is the bonded zero-clearance case.
+            void_height=0.0,
             poisson_ratio=0.49,
         )
     )
@@ -38,17 +41,13 @@ def main() -> int:
         reason = fea.details.get("failure_reason", "unknown failure")
         raise RuntimeError(f"indentation solve did not converge: {reason}")
 
-    reference = trace(tip, mesh)
-    loaded = trace(tip, fea.deformed_mesh)
-    metrics = evaluate(reference, loaded)
-
-    print("Optical transport change:")
-    for name, value in metrics.items():
-        print(f"  {name}: {value:.4g}")
-
-    shared_light_max = max(
-        float(reference.density.max()),
-        float(loaded.density.max()),
+    settings = Transport3DSettings(mode="planar", retain_projected_segments=True)
+    reference = trace_3d(tip, mesh, settings=settings)
+    loaded = trace_3d(
+        tip,
+        fea.deformed_mesh,
+        reference_mesh=mesh,
+        settings=settings,
     )
     figure, axes = plt.subplots(
         1,
@@ -56,7 +55,8 @@ def main() -> int:
         figsize=(19.0, 6.0),
         constrained_layout=True,
     )
-    plot_displacement(
+    optical_norm, optical_cmap = shared_optical_normalization((reference, loaded))
+    plot_fea(
         mesh,
         fea.displacement,
         ax=axes[0],
@@ -65,15 +65,23 @@ def main() -> int:
     plot_transport(
         reference,
         ax=axes[1],
-        normalization_max=shared_light_max,
+        norm=optical_norm,
         title="Reference light",
     )
     plot_transport(
         loaded,
         ax=axes[2],
-        normalization_max=shared_light_max,
+        norm=optical_norm,
         title="Loaded light",
     )
+    optical_mappable = ScalarMappable(norm=optical_norm, cmap=optical_cmap)
+    optical_mappable.set_array([])
+    figure.colorbar(
+        optical_mappable,
+        ax=axes[1:].tolist(),
+        fraction=0.046,
+        pad=0.04,
+    ).set_label("Weighted optical path density")
     figure.suptitle("Mechanical deformation → optical transport")
     plt.show()
     return 0

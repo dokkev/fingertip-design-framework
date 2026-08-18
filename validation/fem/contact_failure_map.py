@@ -35,6 +35,15 @@ ISOLATION_CONTACTS = (
     "three_pairs",
     "continuous_u",
 )
+
+
+def _basal_interface_for_contact(configuration: str) -> str:
+    """Keep diagnostic contact selection separate from the basal condition."""
+    if configuration in ("bottom_only", "three_pairs"):
+        return "explicit_contact"
+    if configuration == "sides_separate":
+        return "bonded"
+    return "free"
 DIAGNOSTIC_API_AVAILABILITY = {
     "load_fraction": "derived from prescribed_indenter_travel_mm / requested indentation",
     "applied_pressure_mpa": "not_applicable: displacement-controlled experiment",
@@ -56,14 +65,24 @@ class CaseSpec:
     location_x_mm: float
     indentation_mm: float
     internal_contact: str = "three_pairs"
+    basal_interface: str | None = None
     steps: int = DEFAULT_STEPS
     origin_stage: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.basal_interface is None:
+            object.__setattr__(
+                self,
+                "basal_interface",
+                _basal_interface_for_contact(self.internal_contact),
+            )
 
     def key(self) -> tuple[Any, ...]:
         return (
             self.location_x_mm,
             self.indentation_mm,
             self.internal_contact,
+            self.basal_interface,
             self.steps,
         )
 
@@ -333,6 +352,7 @@ def _make_case_record(spec: CaseSpec) -> dict[str, Any]:
             steps=spec.steps,
             indenter=indenter,
             internal_contact=spec.internal_contact,
+            basal_interface=spec.basal_interface or "free",
         )
         details = result.details
         history = _diagnostic_history(

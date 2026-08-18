@@ -53,6 +53,7 @@ from fem.kratos_settings import (
     YOUNG_MODULUS_MPA,
     build_indentation_project_parameters_json,
     indentation_contact_groups,
+    validate_basal_interface_configuration,
     validate_internal_contact_configuration,
 )
 from mesh.types import MeshLevel, mesh_settings_for_level
@@ -122,6 +123,15 @@ def configuration_for_case(case: str) -> str:
         ) from exception
 
 
+def basal_interface_for_configuration(configuration: str) -> str:
+    """Map an isolation contact selection to its explicit physical basal mode."""
+    if configuration in ("bottom_only", "three_pairs"):
+        return "explicit_contact"
+    if configuration == "sides_separate":
+        return "bonded"
+    return "free"
+
+
 def _entity_counts(model_part: Any) -> dict[str, int]:
     return {
         "nodes": int(model_part.NumberOfNodes()),
@@ -154,7 +164,10 @@ def build_diagnostic_context(
         StructuralMechanicsAnalysis,
     )
 
-    validated = validate_internal_contact_configuration(configuration)
+    basal, validated = validate_basal_interface_configuration(
+        basal_interface_for_configuration(configuration),
+        configuration,
+    )
     fingertip_model = FingertipModel(FingertipParameters())
     mesh = (
         mesh_override
@@ -199,7 +212,10 @@ def build_diagnostic_context(
         )
     analysis.Initialize()
     apply_indentation_constraints(
-        model_part, base_topology, indenter_topology
+        model_part,
+        base_topology,
+        indenter_topology,
+        bonded_bottom=basal == "bonded",
     )
     return DiagnosticContext(
         configuration=validated,
@@ -1124,6 +1140,7 @@ def run_first_step_case(
             number_of_steps=1,
         ),
         internal_contact_configuration=configuration,
+        basal_interface=basal_interface_for_configuration(configuration),
     )
     evaluated = evaluate_first_step_result(result)
     evaluated.update(
@@ -1152,6 +1169,7 @@ def run_continuous_u_full_trial(
             number_of_steps=steps,
         ),
         internal_contact_configuration="continuous_u",
+        basal_interface="free",
     )
     result["phase"] = "4I-D"
     result["diagnostic_case"] = "E"

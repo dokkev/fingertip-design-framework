@@ -109,6 +109,7 @@ def solve(
     steps: int = 48,
     indenter: IndenterSettings | None = None,
     internal_contact: str = "sides_separate",
+    basal_interface: str = "bonded",
 ) -> FEAResult:
     """Solve one local-normal indentation case and return neutral data."""
     if not isinstance(tip, Fingertip):
@@ -140,6 +141,7 @@ def solve(
             number_of_steps=steps,
         ),
         internal_contact_configuration=internal_contact,
+        basal_interface=basal_interface,
         mesh_override=mesh,
         fixture_override=fixture,
         converged_step_observer=capture,

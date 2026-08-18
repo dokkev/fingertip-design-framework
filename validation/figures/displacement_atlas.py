@@ -12,11 +12,12 @@ import matplotlib
 matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
+from matplotlib.colors import Normalize
 import numpy as np
 
 from optics.adapters import load_pad_mesh_npz
 from validation.common.io import strict_read_json
-from visualization import plot_displacement
+from visualization import plot_fea
 
 
 class DisplacementAtlasError(RuntimeError):
@@ -122,6 +123,7 @@ def render_displacement_atlas(
         float(np.max(np.linalg.norm(case["displacement"], axis=1)))
         for case in cases
     )
+    displacement_norm = Normalize(vmin=0.0, vmax=common_max if common_max > 0.0 else 1.0)
     figure, axes = plt.subplots(
         1,
         len(cases),
@@ -137,7 +139,7 @@ def render_displacement_atlas(
         )
         contact = np.asarray(result["actual_surface_point_mm"], dtype=float)
         delta = float(result["final"]["achieved_indentation_mm"])
-        plot_displacement(
+        plot_fea(
             case["mesh"],
             case["displacement"],
             ax=axis,
@@ -145,7 +147,7 @@ def render_displacement_atlas(
             arrow_scale=1.0,
             arrow_minimum_mm=0.001,
             maximum_arrows=80,
-            normalization_max=common_max if common_max > 0.0 else 1.0,
+            norm=displacement_norm,
             contact_point=contact + delta * direction,
             indentation_direction=direction,
             title=f"R={case['radius_mm']:g} mm, δ={delta:.2f} mm",

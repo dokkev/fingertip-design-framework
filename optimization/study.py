@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from fem.kratos_settings import validate_basal_interface_configuration
 from mesh import MeshSettings
 from model import Fingertip, LED, OpticalMaterial
 from optics import IndenterOptics, TraceSettings
@@ -28,6 +29,7 @@ class OptimizationStudy:
     # and finalist/reference callers pass 48 explicitly.
     fem_steps: int = 12
     internal_contact: str = "sides_separate"
+    basal_interface: str = "bonded"
 
     def __post_init__(self) -> None:
         if not isinstance(self.design_space, DesignSpace):
@@ -58,6 +60,14 @@ class OptimizationStudy:
             raise ValueError("fem_steps must be a positive integer")
         if not isinstance(self.internal_contact, str) or not self.internal_contact:
             raise ValueError("internal_contact must be a non-empty string")
+        if not isinstance(self.basal_interface, str) or not self.basal_interface:
+            raise ValueError("basal_interface must be a non-empty string")
+        basal, internal = validate_basal_interface_configuration(
+            self.basal_interface,
+            self.internal_contact,
+        )
+        object.__setattr__(self, "basal_interface", basal)
+        object.__setattr__(self, "internal_contact", internal)
         if not self.design_space.active_variables:
             raise ValueError("OptimizationStudy requires at least one active variable")
 
@@ -95,6 +105,7 @@ class OptimizationStudy:
             optical=self.optical,
             fem_steps=self.fem_steps,
             internal_contact=self.internal_contact,
+            basal_interface=self.basal_interface,
         )
 
 

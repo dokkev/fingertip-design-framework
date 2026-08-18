@@ -271,6 +271,7 @@ def _solve_contact(
         steps=48,
         indenter=IndenterSettings(radius_mm=scenario.indenter_radius_mm),
         internal_contact="three_pairs",
+        basal_interface="explicit_contact",
     )
     record = {
         "converged": bool(result.converged),

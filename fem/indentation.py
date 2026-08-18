@@ -60,7 +60,7 @@ from fem.kratos_settings import (
     THICKNESS_MM,
     build_indentation_project_parameters_json,
     indentation_contact_groups,
-    validate_internal_contact_configuration,
+    validate_basal_interface_configuration,
 )
 from mesh.types import BoundaryEdge, FingertipMesh, MeshLevel, mesh_settings_for_level
 from model.fingertip_model import FingertipModel
@@ -160,17 +160,51 @@ ConvergedStepObserver = Callable[
 
 def _resolve_bonded_bottom(
     mesh: FingertipMesh,
-    internal_contact_configuration: str,
+    basal_interface: str,
 ) -> bool:
-    """Resolve the production basal bond from the physical morphology."""
-    bonded_bottom = internal_contact_configuration == "sides_separate"
+    """Resolve the physical basal bond independently of contact selection."""
+    if basal_interface not in ("bonded", "explicit_contact", "free"):
+        raise InvalidIndentationSettings(
+            f"unsupported basal interface {basal_interface!r}"
+        )
+    bonded_bottom = basal_interface == "bonded"
     if bonded_bottom and mesh.parameters.void_height != 0.0:
         raise InvalidIndentationSettings(
             "bonded PadCutoutBottom requires void_height=0.0; "
-            "request an explicit bottom_only or three_pairs diagnostic "
-            "configuration for finite bottom clearance"
+            "request basal_interface='explicit_contact' with "
+            "internal_contact='bottom_only' or 'three_pairs' for finite "
+            "bottom clearance"
         )
     return bonded_bottom
+
+
+def _pad_void_unpaired_only_contract(
+    model_part: Any,
+    unpaired_node_ids: Sequence[int],
+    bonded_bottom_node_ids: Sequence[int],
+) -> dict[str, Any]:
+    """Check only the shelf nodes that are not shared bond endpoints."""
+    KM, _, _, _ = import_kratos()
+    only_node_ids = tuple(
+        sorted(set(unpaired_node_ids).difference(bonded_bottom_node_ids))
+    )
+    shared_node_ids = tuple(
+        sorted(set(unpaired_node_ids).intersection(bonded_bottom_node_ids))
+    )
+    fixed_by_node = {
+        int(node_id): any(
+            model_part.Nodes[node_id].GetDof(variable).IsFixed()
+            for variable in (KM.DISPLACEMENT_X, KM.DISPLACEMENT_Y)
+        )
+        for node_id in only_node_ids
+    }
+    return {
+        "node_ids": list(only_node_ids),
+        "node_count": len(only_node_ids),
+        "shared_bond_endpoint_node_ids": list(shared_node_ids),
+        "fixed_by_node": fixed_by_node,
+        "all_nodes_unfixed": not any(fixed_by_node.values()),
+    }
 
 
 def _bonded_bottom_contract(
@@ -289,6 +323,7 @@ def inspect_indentation_runtime_contract(
     settings: IndentationSettings,
     indenter_settings: IndenterSettings | None = None,
     internal_contact_configuration: str = "sides_separate",
+    basal_interface: str = "bonded",
 ) -> dict[str, Any]:
     """Initialize and inspect Phase 4I without entering a nonlinear step."""
     KM, CSMA, _, _ = import_kratos()
@@ -300,14 +335,15 @@ def inspect_indentation_runtime_contract(
     initialized = False
     start = time.perf_counter()
     try:
-        configuration = validate_internal_contact_configuration(
-            internal_contact_configuration
+        basal, configuration = validate_basal_interface_configuration(
+            basal_interface,
+            internal_contact_configuration,
         )
         contact_groups = indentation_contact_groups(configuration)
         mesh = generate_fingertip_mesh(
             fingertip_model, mesh_settings_for_level(mesh_level)
         )
-        bonded_bottom = _resolve_bonded_bottom(mesh, configuration)
+        bonded_bottom = _resolve_bonded_bottom(mesh, basal)
         fixture = build_indenter_fixture(fingertip_model, indenter_settings)
         indenter_mesh = generate_indenter_mesh(
             fixture, mesh.settings.contact_boundary_target_size_mm
@@ -361,6 +397,11 @@ def inspect_indentation_runtime_contract(
             bonded_bottom_node_ids,
             bonded_bottom=bonded_bottom,
         )
+        pad_void_unpaired_only = _pad_void_unpaired_only_contract(
+            model_part,
+            pad_void_unpaired_node_ids,
+            bonded_bottom_node_ids,
+        )
         runtime = runtime_contact_contract(
             model, model_part, contact_groups
         )
@@ -396,8 +437,29 @@ def inspect_indentation_runtime_contract(
                 CSMA.LAGRANGE_MULTIPLIER_CONTACT_PRESSURE
             )
         }
+        acceptance_checks = {
+            "mesh_validation_pass": mesh.validation.passed,
+            "pad_indenter_node_ids_disjoint": set(
+                base_topology.pad_node_ids
+            ).isdisjoint(indenter_topology.node_ids),
+            "strategy_check": int(
+                analysis._GetSolver()._GetSolutionStrategy().Check()
+            )
+            == 0,
+            "runtime_contact_contract": runtime["all_group_contracts_pass"],
+            "bonded_bottom_displacement_dofs_fixed": (
+                not bonded_bottom
+                or (
+                    bonded_bottom_constraints is not None
+                    and bonded_bottom_constraints["all_displacement_dofs_fixed"]
+                )
+            ),
+            "pad_void_unpaired_only_nodes_unfixed": pad_void_unpaired_only[
+                "all_nodes_unfixed"
+            ],
+        }
         return {
-            "status": "PASS" if runtime["all_group_contracts_pass"] else "FAIL",
+            "status": "PASS" if all(acceptance_checks.values()) else "FAIL",
             "mesh_level": mesh_level,
             "kratos_version": KM.Kernel.Version(),
             "mesh_validation_pass": mesh.validation.passed,
@@ -414,17 +476,18 @@ def inspect_indentation_runtime_contract(
             ),
             "fixture": fixture.to_dict(),
             "internal_contact_configuration": configuration,
-            "basal_interface": "bonded" if bonded_bottom else (
-                "explicit_contact"
-                if any(name == "internal_bottom" for name, _, _ in contact_groups)
-                else "not_bonded"
-            ),
+            "basal_interface": basal,
             "bonded_bottom_node_count": len(bonded_bottom_node_ids),
             "bonded_bottom_node_ids": list(bonded_bottom_node_ids),
             "pad_void_unpaired_node_ids": list(pad_void_unpaired_node_ids),
+            "pad_void_unpaired_only_node_ids": pad_void_unpaired_only["node_ids"],
             "bonded_bottom_excludes_pad_void_unpaired": set(
                 bonded_bottom_node_ids
-            ).isdisjoint(pad_void_unpaired_node_ids),
+            ).isdisjoint(pad_void_unpaired_only["node_ids"]),
+            "pad_void_unpaired_only_nodes_are_unfixed": pad_void_unpaired_only[
+                "all_nodes_unfixed"
+            ],
+            "pad_void_unpaired_only_contract": pad_void_unpaired_only,
             "bonded_bottom_constraints": bonded_bottom_constraints,
             "contact_groups": [list(group) for group in contact_groups],
             "continuous_u_aggregate_contract": aggregate_contract,
@@ -461,6 +524,7 @@ def inspect_indentation_runtime_contract(
                 analysis._GetSolver()._GetSolutionStrategy().Check()
             ),
             "wall_clock_seconds": time.perf_counter() - start,
+            "acceptance_checks": acceptance_checks,
         }
     finally:
         if initialized and analysis is not None:
@@ -473,6 +537,7 @@ def run_indentation_case(
     settings: IndentationSettings,
     indenter_settings: IndenterSettings | None = None,
     internal_contact_configuration: str = "sides_separate",
+    basal_interface: str = "bonded",
     mesh_override: FingertipMesh | None = None,
     fixture_override: IndenterFixture | None = None,
     converged_step_observer: ConvergedStepObserver | None = None,
@@ -514,8 +579,9 @@ def run_indentation_case(
             "diagnostic_mode must be 'full' or 'minimal'"
         )
     try:
-        configuration = validate_internal_contact_configuration(
-            internal_contact_configuration
+        basal, configuration = validate_basal_interface_configuration(
+            basal_interface,
+            internal_contact_configuration,
         )
         contact_group_definitions = indentation_contact_groups(configuration)
         mesh = (
@@ -529,7 +595,7 @@ def run_indentation_case(
             raise InvalidIndentationSettings(
                 "mesh_override level must match mesh_level"
             )
-        bonded_bottom = _resolve_bonded_bottom(mesh, configuration)
+        bonded_bottom = _resolve_bonded_bottom(mesh, basal)
         if fixture_override is not None and indenter_settings is not None:
             raise InvalidIndentationSettings(
                 "fixture_override and indenter_settings are mutually exclusive"
@@ -591,6 +657,11 @@ def run_indentation_case(
             bonded_bottom_node_ids,
             bonded_bottom=bonded_bottom,
         )
+        pad_void_unpaired_only = _pad_void_unpaired_only_contract(
+            model_part,
+            pad_void_unpaired_node_ids,
+            bonded_bottom_node_ids,
+        )
         runtime_contact = runtime_contact_contract(
             model, model_part, contact_group_definitions
         )
@@ -622,20 +693,20 @@ def run_indentation_case(
                 "configuration": {
                     "mesh_level": mesh_level,
                     "internal_contact_configuration": configuration,
-                    "basal_interface": "bonded" if bonded_bottom else (
-                        "explicit_contact"
-                        if any(
-                            name == "internal_bottom"
-                            for name, _, _ in contact_group_definitions
-                        )
-                        else "not_bonded"
-                    ),
+                    "basal_interface": basal,
                     "bonded_bottom_node_count": len(bonded_bottom_node_ids),
                     "bonded_bottom_node_ids": list(bonded_bottom_node_ids),
                     "pad_void_unpaired_node_ids": list(pad_void_unpaired_node_ids),
+                    "pad_void_unpaired_only_node_ids": pad_void_unpaired_only[
+                        "node_ids"
+                    ],
                     "bonded_bottom_excludes_pad_void_unpaired": set(
                         bonded_bottom_node_ids
-                    ).isdisjoint(pad_void_unpaired_node_ids),
+                    ).isdisjoint(pad_void_unpaired_only["node_ids"]),
+                    "pad_void_unpaired_only_nodes_are_unfixed": pad_void_unpaired_only[
+                        "all_nodes_unfixed"
+                    ],
+                    "pad_void_unpaired_only_contract": pad_void_unpaired_only,
                     "bonded_bottom_constraints": bonded_bottom_constraints,
                     "contact_groups": [
                         list(group) for group in contact_group_definitions
@@ -697,9 +768,15 @@ def run_indentation_case(
                     "bonded_bottom_node_count": len(bonded_bottom_node_ids),
                     "bonded_bottom_node_ids": list(bonded_bottom_node_ids),
                     "pad_void_unpaired_node_ids": list(pad_void_unpaired_node_ids),
+                    "pad_void_unpaired_only_node_ids": pad_void_unpaired_only[
+                        "node_ids"
+                    ],
                     "bonded_bottom_excludes_pad_void_unpaired": set(
                         bonded_bottom_node_ids
-                    ).isdisjoint(pad_void_unpaired_node_ids),
+                    ).isdisjoint(pad_void_unpaired_only["node_ids"]),
+                    "pad_void_unpaired_only_nodes_are_unfixed": pad_void_unpaired_only[
+                        "all_nodes_unfixed"
+                    ],
                     "bonded_bottom_constraints": bonded_bottom_constraints,
                     "bonded_bottom_in_support_reaction": bool(
                         bonded_bottom_node_ids

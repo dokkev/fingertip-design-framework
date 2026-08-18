@@ -21,7 +21,7 @@ from visualization import plot_case_comparison
 # Demonstration optical parameter, not a measured indenter material value.
 DEMO_INDENTER_OPTICS = IndenterOptics(
     boundary_model="dielectric",
-    refractive_index=1.5,
+    refractive_index=2.0,
 )
 
 
@@ -30,17 +30,17 @@ DEMO_INDENTER_OPTICS = IndenterOptics(
 def main() -> int:
     tip = Fingertip()
     indenter = IndenterSettings(
-        radius_mm=3.0,
+        radius_mm=15.0,
         initial_gap_mm=0.0,
     )
     case = FingertipCase(
         fingertip=tip,
         fea=FEA2D(
             indenter=indenter,
-            steps=12,
+            steps=48,
             contact=ContactState(
                 location_x_mm=0.0,
-                indentation_mm=1,
+                indentation_mm=3.0,
                 indenter_radius_mm=indenter.radius_mm,
             ),
         ),

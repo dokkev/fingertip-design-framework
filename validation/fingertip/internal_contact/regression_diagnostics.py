@@ -19,6 +19,7 @@ from fem.contact import (
 )
 from validation.fingertip.internal_contact.diagnostics import (
     assemble_first_step_diagnostics,
+    basal_interface_for_configuration,
     run_first_step_case,
 )
 from fem.kratos_adapter import import_kratos, populate_kratos_model_part
@@ -95,6 +96,7 @@ def initialized_contracts():
             "medium",
             settings,
             internal_contact_configuration=configuration,
+            basal_interface=basal_interface_for_configuration(configuration),
         )
         for configuration in (
             "none",

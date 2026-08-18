@@ -19,6 +19,8 @@ from fem.kratos_settings import (
     build_project_parameters_data,
     build_indentation_project_parameters_data,
     indentation_contact_groups,
+    validate_basal_interface,
+    validate_basal_interface_configuration,
     validate_internal_contact_configuration,
 )
 from fem.solve import solve
@@ -56,6 +58,20 @@ def test_invalid_contact_configuration_is_rejected() -> None:
         validate_internal_contact_configuration("invented_pair")
 
 
+def test_basal_interface_is_separate_from_internal_contact_selection() -> None:
+    assert validate_basal_interface("bonded") == "bonded"
+    assert validate_basal_interface_configuration(
+        "bonded", "sides_separate"
+    ) == ("bonded", "sides_separate")
+    assert validate_basal_interface_configuration(
+        "explicit_contact", "three_pairs"
+    ) == ("explicit_contact", "three_pairs")
+    with pytest.raises(ValueError, match="requires an internal contact"):
+        validate_basal_interface_configuration("explicit_contact", "none")
+    with pytest.raises(ValueError, match="cannot be combined"):
+        validate_basal_interface_configuration("bonded", "three_pairs")
+
+
 def test_production_defaults_use_bonded_bottom_and_side_contacts() -> None:
     expected = (
         ("external_pad_indenter", "PadOuterArc", "IndenterContactArc"),
@@ -81,20 +97,26 @@ def test_production_defaults_use_bonded_bottom_and_side_contacts() -> None:
     assert inspect.signature(solve).parameters["internal_contact"].default == (
         "sides_separate"
     )
+    assert inspect.signature(solve).parameters["basal_interface"].default == (
+        "bonded"
+    )
     assert inspect.signature(run_indentation_case).parameters[
         "internal_contact_configuration"
     ].default == "sides_separate"
+    assert inspect.signature(run_indentation_case).parameters[
+        "basal_interface"
+    ].default == "bonded"
 
 
 def test_bonded_bottom_requires_zero_height_and_is_not_a_diagnostic_contact() -> None:
     zero_gap_mesh = SimpleNamespace(parameters=SimpleNamespace(void_height=0.0))
     finite_gap_mesh = SimpleNamespace(parameters=SimpleNamespace(void_height=0.25))
 
-    assert _resolve_bonded_bottom(zero_gap_mesh, "sides_separate")
-    assert not _resolve_bonded_bottom(zero_gap_mesh, "three_pairs")
-    assert not _resolve_bonded_bottom(finite_gap_mesh, "three_pairs")
+    assert _resolve_bonded_bottom(zero_gap_mesh, "bonded")
+    assert not _resolve_bonded_bottom(zero_gap_mesh, "explicit_contact")
+    assert not _resolve_bonded_bottom(finite_gap_mesh, "explicit_contact")
     with pytest.raises(InvalidIndentationSettings, match="void_height=0.0"):
-        _resolve_bonded_bottom(finite_gap_mesh, "sides_separate")
+        _resolve_bonded_bottom(finite_gap_mesh, "bonded")
 
 
 def test_synthetic_zero_row_maps_to_node_and_dof() -> None:

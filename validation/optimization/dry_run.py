@@ -249,6 +249,7 @@ def main() -> int:
         optical=optical,
         fem_steps=48,
         internal_contact="three_pairs",
+        basal_interface="explicit_contact",
     )
 
     nominal_result = _run_design("nominal", nominal_parameters, evaluator)

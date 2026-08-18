@@ -24,6 +24,7 @@ class FEA2D:
     )
     steps: int = 48
     internal_contact: str = "sides_separate"
+    basal_interface: str = "bonded"
     result: FEAResult | None = field(default=None, init=False)
 
     def __post_init__(self) -> None:
@@ -43,6 +44,8 @@ class FEA2D:
             raise ValueError("steps must be a positive integer")
         if not isinstance(self.internal_contact, str) or not self.internal_contact:
             raise ValueError("internal_contact must be a nonempty string")
+        if not isinstance(self.basal_interface, str) or not self.basal_interface:
+            raise ValueError("basal_interface must be a nonempty string")
 
     def solve(self, fingertip: Fingertip) -> FEAResult:
         """Solve this configuration against the supplied physical fingertip."""
@@ -57,6 +60,7 @@ class FEA2D:
             steps=self.steps,
             indenter=self.indenter,
             internal_contact=self.internal_contact,
+            basal_interface=self.basal_interface,
         )
         return self.result
 

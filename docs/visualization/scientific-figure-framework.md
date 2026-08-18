@@ -1,43 +1,64 @@
-# Visualization ownership
+# Scientific visualization layer
 
-`visualization/` is intentionally a small Matplotlib layer. Its public API is:
+`visualization/` is a thin Matplotlib consumer of neutral model, mesh, FEA,
+and optical result data. It never starts Gmsh, Kratos, OptiX, or Mitsuba and it
+does not calculate evaluation metrics or alter raw arrays.
+
+The public plot facade is:
 
 ```python
 from visualization import (
     plot_camera,
-    plot_displacement,
+    plot_case_comparison,
+    plot_fea,
     plot_fingertip,
     plot_mesh,
     plot_transport,
 )
 ```
 
-Each helper consumes an object already owned by another package, draws on an
-optional Matplotlib `Axes`, and returns that `Axes`. The package does not load
-validation artifacts, reconstruct topology, start Gmsh/Kratos, import
-Mitsuba at package import time, calculate scientific metrics, or serialize a
-figure specification.
+The implementation has three deliberately small levels:
 
-`plot_fingertip` accepts the public `model.Fingertip` facade. `plot_mesh` and
-`plot_displacement` consume the neutral `mesh.PadMesh` contract (and use the
-private `.pad` view when passed a full `FingertipMesh`). Displacement magnitude
-is shown in millimeters on the deformed T3 connectivity; arrows remain the
-physical displacement vectors and are deterministically limited only for
-display. `plot_transport` visualizes the raw `TransportResult.density` on a
-normalized display scale without changing the result. `plot_camera` copies
-and normalizes `linear_rgb` for display, so camera results remain raw.
-`plot_case_comparison` similarly keeps optical transport raw: its paper
-optical panels mask projected cells outside the silicone domain, suppress
-extremely small path-density values, and apply at most one grid-cell of
-display-only raster smoothing before a shared `PowerNorm`. These operations
-are not part of optical evaluation or optimization; raw transport arrays and
-their metrics remain unchanged. Detailed exit markers and direction arrows
-are available only through the comparison helper's explicit debug flag.
+- `draw_*` functions add one physical or scalar layer to an existing Axes.
+  They do not choose limits, aspect, labels, colorbars, or figure layout.
+- `plot_*` functions create an optional standalone Axes, call the draw layers,
+  apply physical-axis policy, and own standalone colorbars/titles.
+- `plot_case_comparison` owns only the 2×2 layout, shared physical bounds,
+  shared norms, row colorbars, titles, and calls to the same geometry,
+  mechanics, and optics draw layers.
 
-Scientific figure workflows belong in `validation/figures/` or the relevant
-validation package. They own artifact manifests, checksums, case selection,
-scientific labels, direct `savefig` calls, and any publication-specific
-layout. The normal-indentation displacement atlas is rendered with:
+There is no generic figure DSL, panel data model, scene graph, or export
+framework. A scientific workflow under `validation/figures/` remains an
+explicit consumer that owns artifact selection, provenance, labels, and
+`savefig` calls.
+
+## Optical paper view
+
+The optical paper panels consume the result-owned PLANAR_2D projected field and
+`projected_optical_mask`. They build one `PowerNorm(gamma=0.45)` from the
+positive in-domain values of both unloaded and loaded fields, using the shared
+99.5th percentile as `vmax`. The fields are never independently normalized.
+
+The raster shown in a figure is a display copy: cells outside the physical
+optical domain and extremely small path-density values are masked, and a
+one-cell domain-aware raster filter suppresses bin/ray aliasing. This smoothing
+and low-weight floor are visualization-only; optimization and evaluation use
+the raw result field.
+
+The default paper optical layers are limited to the scalar field, clean
+fingertip outline, LED/source marker, and loaded contact boundary. Exit points,
+quivers, and representative retained paths are available through the explicit
+debug view (`show_exits=True` in the case composer or `debug=True`/`show_rays`
+in `plot_transport`). Debug paths are deterministically bounded to about 100
+primary paths.
+
+Production PLANAR_2D results expose the field, grid edges, and mask directly;
+when segment retention is enabled they also expose neutral retained segment
+starts, ends, media, weights, and primary-ray indices for debug rendering.
+
+## Existing figure workflow
+
+The normal-indentation displacement atlas is rendered with:
 
 ```bash
 python -m validation.figures.displacement_atlas \
@@ -45,7 +66,4 @@ python -m validation.figures.displacement_atlas \
   --output output/figures/displacement_vector_atlas/displacement_vector_atlas.png
 ```
 
-The Phase 4K transfer-map workflow lives in
-`validation/figures/transfer_map.py` and writes its plots from canonical
-arrays. Reproducibility is provided by tracked Python code, persisted
-artifacts, and explicit command arguments rather than a generic figure DSL.
+Generated figures belong under `output/` and remain untracked.

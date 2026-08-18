@@ -78,7 +78,13 @@ def _study(**overrides) -> OptimizationStudy:
 def test_study_is_immutable_and_contains_fixed_scientific_configuration() -> None:
     led = LED(width_mm=3.0, height_mm=1.5, relative_radiant_power=0.8)
     optical = OpticalMaterial(absorption_per_mm=0.04, anisotropy_g=0.2)
-    study = _study(led=led, optical=optical, fem_steps=9, internal_contact="three_pairs")
+    study = _study(
+        led=led,
+        optical=optical,
+        fem_steps=9,
+        internal_contact="three_pairs",
+        basal_interface="explicit_contact",
+    )
 
     assert study.design_space.active_variables[0].name == "stem_width"
     assert study.scenario_grid == _grid()
@@ -88,6 +94,7 @@ def test_study_is_immutable_and_contains_fixed_scientific_configuration() -> Non
     assert study.optical is optical
     assert study.fem_steps == 9
     assert study.internal_contact == "three_pairs"
+    assert study.basal_interface == "explicit_contact"
     with pytest.raises(AttributeError):
         study.fem_steps = 10  # type: ignore[misc]
 

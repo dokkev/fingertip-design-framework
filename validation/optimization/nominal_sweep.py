@@ -97,6 +97,7 @@ def _create_evaluator() -> DesignEvaluator:
         optical=OpticalMaterial(),
         fem_steps=48,
         internal_contact="three_pairs",
+        basal_interface="explicit_contact",
     )
 
 

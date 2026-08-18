@@ -107,15 +107,18 @@ It does not replace mesh-based reference/loaded comparisons.
   `Camera`, `RenderSettings`, `RenderResult`, and `MitsubaRenderer`; extrusion,
   scene construction, and persistent renderer state are implementation details.
 - `visualization/` is a thin Matplotlib layer. It exposes only
-  `plot_fingertip`, `plot_mesh`, `plot_displacement`, `plot_transport`,
-  `plot_camera`, and `plot_case_comparison`; these functions consume
-  model/mesh/result objects and return an `Axes`, while
-  `plot_case_comparison` returns one composed `Figure` from precomputed
-  unloaded/loaded states. It does not own a second
-  scientific data model, artifact loader,
-  figure DSL, panel hierarchy, or export framework. `plot_transport(result)`
-  needs no separate model or optical-domain argument because `TransportResult`
-  owns the geometry used to produce the field.
+  `plot_fingertip`, `plot_mesh`, `plot_fea`, `plot_transport`, `plot_camera`,
+  and `plot_case_comparison`; these functions consume model/mesh/result
+  objects and return an `Axes`, while `plot_case_comparison` returns one
+  composed `Figure` from precomputed unloaded/loaded states. Private
+  `draw_*` layers add geometry, mechanics, and optics to an existing Axes;
+  they do not choose limits or figure layout. Plot wrappers own standalone
+  axes policy and colorbars; the case composer owns only layout, shared
+  physical bounds, shared norms, row colorbars, titles, and calls to those
+  shared layers. It does not own a second scientific data model, artifact
+  loader, figure DSL, panel hierarchy, or export framework. Visualization
+  consumes the result-owned optical domain mask and never reconstructs it from
+  deformed triangles.
 - `validation/` owns scientific baselines, Phase acceptance, provenance,
   checkpointing, reports, and generated artifact schemas.
 - `validation/fem/throughput.py` owns the staged Kratos FEA throughput/fidelity
@@ -289,7 +292,7 @@ The public plotting helpers do not generate Gmsh meshes, start Kratos, or
 import Mitsuba. Full scientific figure workflows remain explicit under
 `validation/figures/` or the relevant validation package. For example,
 `validation.figures.displacement_atlas` validates persisted normal-indentation
-NPZ artifacts and calls `plot_displacement`; `validation.figures.transfer_map`
+NPZ artifacts and calls `plot_fea`; `validation.figures.transfer_map`
 owns the Phase 4K artifact tables and direct plots from canonical arrays.
 
 ## Artifact boundary

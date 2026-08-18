@@ -268,6 +268,7 @@ def _save_optics(case: FingertipCase, directory: Path) -> Path:
         "projected_x_edges_mm",
         "projected_y_edges_mm",
         "projected_weighted_path_density",
+        "projected_optical_mask",
         "internal_path_x_edges_mm",
         "internal_path_y_edges_mm",
         "internal_path_z_edges_mm",
@@ -276,6 +277,11 @@ def _save_optics(case: FingertipCase, directory: Path) -> Path:
         "retained_segment_lengths_mm",
         "retained_segment_primary_ray_indices",
         "retained_segment_interaction_counts",
+        "retained_segment_starts_mm",
+        "retained_segment_ends_mm",
+        "retained_segment_media",
+        "retained_segment_start_weights",
+        "retained_segment_end_weights",
     )
     arrays.update(
         {
@@ -372,6 +378,7 @@ def save_case(case: FingertipCase, root: str | Path) -> Path:
         "mesh_settings": asdict(case.fea.mesh_settings),
         "fem_steps": case.fea.steps,
         "internal_contact": case.fea.internal_contact,
+        "basal_interface": case.fea.basal_interface,
         "led": asdict(case.fingertip.led),
         "optical_material": asdict(case.fingertip.optical),
         "trace_settings": asdict(case.raytracing.settings),
@@ -670,6 +677,7 @@ def _load_optics(path: Path) -> tuple[Transport3DResult, UnifiedTransportResult]
         projected_x_edges_mm=optional("projected_x_edges_mm"),
         projected_y_edges_mm=optional("projected_y_edges_mm"),
         projected_weighted_path_density=optional("projected_weighted_path_density"),
+        projected_optical_mask=optional("projected_optical_mask"),
         internal_path_x_edges_mm=optional("internal_path_x_edges_mm"),
         internal_path_y_edges_mm=optional("internal_path_y_edges_mm"),
         internal_path_z_edges_mm=optional("internal_path_z_edges_mm"),
@@ -678,6 +686,11 @@ def _load_optics(path: Path) -> tuple[Transport3DResult, UnifiedTransportResult]
         retained_segment_lengths_mm=optional("retained_segment_lengths_mm"),
         retained_segment_primary_ray_indices=optional("retained_segment_primary_ray_indices"),
         retained_segment_interaction_counts=optional("retained_segment_interaction_counts"),
+        retained_segment_starts_mm=optional("retained_segment_starts_mm"),
+        retained_segment_ends_mm=optional("retained_segment_ends_mm"),
+        retained_segment_media=optional("retained_segment_media"),
+        retained_segment_start_weights=optional("retained_segment_start_weights"),
+        retained_segment_end_weights=optional("retained_segment_end_weights"),
         geometry_metadata=raw_record.get("geometry_metadata", {}),
         timings_seconds=raw_record.get("timings_seconds", {}),
     )
@@ -764,6 +777,7 @@ def load_case(path: str | Path) -> FingertipCase:
         mesh_settings=mesh_settings,
         steps=int(manifest["fem_steps"]),
         internal_contact=str(manifest["internal_contact"]),
+        basal_interface=str(manifest.get("basal_interface", "bonded")),
     )
     fea_config.result = fea
     raytracing = RayTracing2D(

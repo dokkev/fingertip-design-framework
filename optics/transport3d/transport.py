@@ -953,18 +953,27 @@ def _trace_with_runtime(
             raise Transport3DPhysicsError(
                 "PLANAR_2D escape history contains a nonzero longitudinal direction"
             )
-    projected = (None, None, None)
+    projected = (None, None, None, None)
     if settings.retain_projected_segments:
-        projected = _projected_density(geometry, settings, segment_chunks, cp)[0:3]
+        projected = _projected_density(geometry, settings, segment_chunks, cp)
     internal = (None, None, None, None, None, None)
     if internal_context is not None:
         internal = _finalize_internal_path_context(internal_context, settings)
     retained_segments = (None, None, None)
+    retained_geometry = (None, None, None, None, None, None)
     if settings.retain_projected_segments:
         retained_segments = (
             _concatenate(cp, [chunk[0] for chunk in segment_metadata_chunks], dtype=cp.float64),
             _concatenate(cp, [chunk[1] for chunk in segment_metadata_chunks], dtype=cp.int64),
             _concatenate(cp, [chunk[2] for chunk in segment_metadata_chunks], dtype=cp.int64),
+        )
+        retained_geometry = (
+            _concatenate(cp, [chunk[0] for chunk in segment_chunks], dtype=cp.float32, width=3),
+            _concatenate(cp, [chunk[1] for chunk in segment_chunks], dtype=cp.float32, width=3),
+            _concatenate(cp, [chunk[2] for chunk in segment_chunks], dtype=cp.uint8),
+            _concatenate(cp, [chunk[3] for chunk in segment_chunks], dtype=cp.float64),
+            _concatenate(cp, [chunk[4] for chunk in segment_chunks], dtype=cp.float64),
+            _concatenate(cp, [chunk[1] for chunk in segment_metadata_chunks], dtype=cp.int64),
         )
     geometry_metadata = dict(geometry.metadata)
     geometry_metadata["branch_cutoff"] = {
@@ -1076,6 +1085,7 @@ def _trace_with_runtime(
         projected_x_edges_mm=None if projected[0] is None else projected[0],
         projected_y_edges_mm=None if projected[1] is None else projected[1],
         projected_weighted_path_density=None if projected[2] is None else projected[2],
+        projected_optical_mask=None if projected[3] is None else projected[3],
         internal_path_x_edges_mm=None if internal[0] is None else internal[0],
         internal_path_y_edges_mm=None if internal[1] is None else internal[1],
         internal_path_z_edges_mm=None if internal[2] is None else internal[2],
@@ -1084,6 +1094,11 @@ def _trace_with_runtime(
         retained_segment_lengths_mm=None if retained_segments[0] is None else cp.asnumpy(retained_segments[0]),
         retained_segment_primary_ray_indices=None if retained_segments[1] is None else cp.asnumpy(retained_segments[1]),
         retained_segment_interaction_counts=None if retained_segments[2] is None else cp.asnumpy(retained_segments[2]),
+        retained_segment_starts_mm=None if retained_geometry[0] is None else cp.asnumpy(retained_geometry[0]),
+        retained_segment_ends_mm=None if retained_geometry[1] is None else cp.asnumpy(retained_geometry[1]),
+        retained_segment_media=None if retained_geometry[2] is None else cp.asnumpy(retained_geometry[2]),
+        retained_segment_start_weights=None if retained_geometry[3] is None else cp.asnumpy(retained_geometry[3]),
+        retained_segment_end_weights=None if retained_geometry[4] is None else cp.asnumpy(retained_geometry[4]),
         geometry_metadata=geometry_metadata,
         timings_seconds={
             "gas_build": scene.gas_build_seconds,
