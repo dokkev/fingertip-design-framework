@@ -10,6 +10,10 @@ Kratos is an external environment dependency and must not be added to
 pyproject.toml.
 Generated files belong under output/ and remain untracked.
 
+Use the Conda environment named `lit` for repository commands. Activate it
+with `conda activate lit` before running Python, tests, examples, or
+validation; Kratos, Gmsh, and OptiX remain externally managed dependencies.
+
 Keep implementations scoped to the requested task. Do not introduce new
 abstractions, compatibility layers, registries, frameworks, or generalized
 infrastructure unless the current task clearly requires them.

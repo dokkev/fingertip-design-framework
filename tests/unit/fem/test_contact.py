@@ -2,15 +2,26 @@
 
 from __future__ import annotations
 
+import inspect
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
 from scipy import sparse
 
+from case.fea2d import FEA2D
+from fem.indentation import (
+    InvalidIndentationSettings,
+    _resolve_bonded_bottom,
+    run_indentation_case,
+)
 from fem.kratos_settings import (
+    build_project_parameters_data,
     build_indentation_project_parameters_data,
     indentation_contact_groups,
     validate_internal_contact_configuration,
 )
+from fem.solve import solve
 from validation.fingertip.internal_contact.sparse import analyze_sparse_system
 
 
@@ -43,6 +54,47 @@ def test_contact_configuration_expected_pair_count(
 def test_invalid_contact_configuration_is_rejected() -> None:
     with pytest.raises(ValueError, match="unsupported internal contact"):
         validate_internal_contact_configuration("invented_pair")
+
+
+def test_production_defaults_use_bonded_bottom_and_side_contacts() -> None:
+    expected = (
+        ("external_pad_indenter", "PadOuterArc", "IndenterContactArc"),
+        ("internal_left", "PadCutoutLeft", "StemLeft"),
+        ("internal_right", "PadCutoutRight", "StemRight"),
+    )
+    assert indentation_contact_groups() == expected
+    data = build_indentation_project_parameters_data(1)
+    contact_model_part = data["processes"]["contact_process_list"][0]["Parameters"][
+        "contact_model_part"
+    ]
+    assert len(contact_model_part) == 3
+    assert all("PadCutoutBottom" not in pair for pair in contact_model_part.values())
+    initialization_data = build_project_parameters_data()
+    initialization_pairs = initialization_data["processes"][
+        "contact_process_list"
+    ][0]["Parameters"]["contact_model_part"]
+    assert len(initialization_pairs) == 3
+    assert all("PadCutoutBottom" not in pair for pair in initialization_pairs.values())
+    assert inspect.signature(FEA2D).parameters["internal_contact"].default == (
+        "sides_separate"
+    )
+    assert inspect.signature(solve).parameters["internal_contact"].default == (
+        "sides_separate"
+    )
+    assert inspect.signature(run_indentation_case).parameters[
+        "internal_contact_configuration"
+    ].default == "sides_separate"
+
+
+def test_bonded_bottom_requires_zero_height_and_is_not_a_diagnostic_contact() -> None:
+    zero_gap_mesh = SimpleNamespace(parameters=SimpleNamespace(void_height=0.0))
+    finite_gap_mesh = SimpleNamespace(parameters=SimpleNamespace(void_height=0.25))
+
+    assert _resolve_bonded_bottom(zero_gap_mesh, "sides_separate")
+    assert not _resolve_bonded_bottom(zero_gap_mesh, "three_pairs")
+    assert not _resolve_bonded_bottom(finite_gap_mesh, "three_pairs")
+    with pytest.raises(InvalidIndentationSettings, match="void_height=0.0"):
+        _resolve_bonded_bottom(finite_gap_mesh, "sides_separate")
 
 
 def test_synthetic_zero_row_maps_to_node_and_dof() -> None:

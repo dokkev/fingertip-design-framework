@@ -247,7 +247,7 @@ class DesignEvaluator:
         optical: OpticalMaterial | None = None,
         indenter_optics: IndenterOptics | None = None,
         fem_steps: int = 48,
-        internal_contact: str = "three_pairs",
+        internal_contact: str = "sides_separate",
     ) -> None:
         if not isinstance(scenario_grid, ScenarioGrid):
             raise TypeError("scenario_grid must be a ScenarioGrid")

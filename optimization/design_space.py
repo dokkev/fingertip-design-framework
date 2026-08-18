@@ -71,7 +71,7 @@ class DesignSpace:
 
     ``FingertipParameters.void_height`` remains a supported physical geometry
     parameter, but production morphology search freezes it at zero so the
-    initial bottom-contact contract is not changed by candidate generation.
+    bonded basal stem/pad interface is not changed by candidate generation.
     """
 
     nominal_parameters: FingertipParameters

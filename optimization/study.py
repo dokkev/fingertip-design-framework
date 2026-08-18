@@ -27,7 +27,7 @@ class OptimizationStudy:
     # Production morphology search uses the validated fast tier.  Validation
     # and finalist/reference callers pass 48 explicitly.
     fem_steps: int = 12
-    internal_contact: str = "three_pairs"
+    internal_contact: str = "sides_separate"
 
     def __post_init__(self) -> None:
         if not isinstance(self.design_space, DesignSpace):

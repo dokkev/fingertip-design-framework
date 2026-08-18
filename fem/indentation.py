@@ -158,13 +158,137 @@ ConvergedStepObserver = Callable[
 ]
 
 
+def _resolve_bonded_bottom(
+    mesh: FingertipMesh,
+    internal_contact_configuration: str,
+) -> bool:
+    """Resolve the production basal bond from the physical morphology."""
+    bonded_bottom = internal_contact_configuration == "sides_separate"
+    if bonded_bottom and mesh.parameters.void_height != 0.0:
+        raise InvalidIndentationSettings(
+            "bonded PadCutoutBottom requires void_height=0.0; "
+            "request an explicit bottom_only or three_pairs diagnostic "
+            "configuration for finite bottom clearance"
+        )
+    return bonded_bottom
+
+
+def _bonded_bottom_contract(
+    displacements: Mapping[int, Sequence[float]],
+    node_ids: Sequence[int],
+    *,
+    bonded_bottom: bool,
+) -> dict[str, Any] | None:
+    """Summarize the fixed basal bond without fabricating contact pressure."""
+    if not bonded_bottom:
+        return None
+    mismatches = [
+        math.hypot(float(displacements[node_id][0]), float(displacements[node_id][1]))
+        for node_id in node_ids
+    ]
+    return {
+        "bottom_interface_type": "bonded",
+        "bonded_bottom_node_count": len(node_ids),
+        "maximum_bond_displacement_mismatch_mm": max(mismatches, default=0.0),
+        "expected_carrier_displacement_mm": [0.0, 0.0],
+    }
+
+
+def _bonded_bottom_constraint_contract(
+    model_part: Any,
+    node_ids: Sequence[int],
+    *,
+    bonded_bottom: bool,
+) -> dict[str, Any] | None:
+    """Report displacement-DOF constraints for the basal bond."""
+    if not bonded_bottom:
+        return None
+    KM, _, _, _ = import_kratos()
+    variables = (KM.DISPLACEMENT_X, KM.DISPLACEMENT_Y)
+    fixed = {
+        int(node_id): all(
+            model_part.Nodes[node_id].GetDof(variable).IsFixed()
+            for variable in variables
+        )
+        for node_id in node_ids
+    }
+    return {
+        "node_ids": list(node_ids),
+        "node_count": len(node_ids),
+        "all_displacement_dofs_fixed": bool(fixed) and all(fixed.values()),
+        "fixed_by_node": fixed,
+    }
+
+
+def _assembled_contact_lm_contract(
+    model: Any,
+    model_part: Any,
+    contact_group_definitions: Sequence[tuple[str, str, str]],
+) -> dict[str, Any]:
+    """Inspect assembled LM conditions for the selected contact groups."""
+    _, CSMA, _, _ = import_kratos()
+    assembled_lm_node_ids = sorted(
+        {
+            int(dof.Id())
+            for index, _ in enumerate(contact_group_definitions)
+            for condition in model[
+                "Structure.ComputingContact."
+                f"ComputingContactSub{index}"
+            ].Conditions
+            for dof in condition.GetDofList(model_part.ProcessInfo)
+            if dof.GetVariable().Name()
+            == CSMA.LAGRANGE_MULTIPLIER_CONTACT_PRESSURE.Name()
+        }
+    )
+    internal_source_ids = {
+        node.Id
+        for name in (
+            "PadCutoutLeft",
+            "PadCutoutRight",
+            "PadCutoutBottom",
+            "StemLeft",
+            "StemRight",
+            "StemBottom",
+        )
+        for node in model_part.GetSubModelPart(name).Nodes
+    }
+    external_slave_ids = {
+        node.Id for node in model_part.GetSubModelPart("PadOuterArc").Nodes
+    }
+    internal_exclusive_lm_node_ids = sorted(
+        set(assembled_lm_node_ids)
+        .intersection(internal_source_ids)
+        .difference(external_slave_ids)
+    )
+    return {
+        "assembled_lm_node_ids": assembled_lm_node_ids,
+        "assembled_lm_node_count": len(assembled_lm_node_ids),
+        "contact_group_names": [
+            group_name for group_name, _, _ in contact_group_definitions
+        ],
+        "identification_method": (
+            "LM DOFs returned by generated ComputingContact condition "
+            "GetDofList"
+        ),
+        "external_slave_lm_node_count": len(
+            set(assembled_lm_node_ids).intersection(external_slave_ids)
+        ),
+        "internal_exclusive_lm_node_ids": internal_exclusive_lm_node_ids,
+        "no_internal_contact_lm_assembly": not internal_exclusive_lm_node_ids,
+        "no_internal_bottom_contact_lm_assembly": not any(
+            group_name == "internal_bottom"
+            for group_name, _, _ in contact_group_definitions
+        ),
+    }
+
+
 
 def inspect_indentation_runtime_contract(
     fingertip_model: FingertipModel,
     mesh_level: MeshLevel,
     settings: IndentationSettings,
     indenter_settings: IndenterSettings | None = None,
-    internal_contact_configuration: str = "three_pairs",
+    internal_contact_configuration: str = "sides_separate",
 ) -> dict[str, Any]:
     """Initialize and inspect Phase 4I without entering a nonlinear step."""
     KM, CSMA, _, _ = import_kratos()
@@ -183,6 +307,7 @@ def inspect_indentation_runtime_contract(
         mesh = generate_fingertip_mesh(
             fingertip_model, mesh_settings_for_level(mesh_level)
         )
+        bonded_bottom = _resolve_bonded_bottom(mesh, configuration)
         fixture = build_indenter_fixture(fingertip_model, indenter_settings)
         indenter_mesh = generate_indenter_mesh(
             fixture, mesh.settings.contact_boundary_target_size_mm
@@ -198,6 +323,23 @@ def inspect_indentation_runtime_contract(
         )
         model_part = model["Structure"]
         base_topology = populate_kratos_model_part(model_part, mesh)
+        bonded_bottom_node_ids = (
+            tuple(
+                sorted(
+                    node.Id
+                    for node in model_part.GetSubModelPart("PadCutoutBottom").Nodes
+                )
+            )
+            if bonded_bottom
+            else ()
+        )
+        pad_void_unpaired_node_ids = tuple(
+            sorted(
+                node_id
+                for edge in mesh.boundary_edges["pad_void_unpaired"]
+                for node_id in edge.node_ids
+            )
+        )
         indenter_topology = populate_indenter_model_part(
             model_part, indenter_mesh, base_topology
         )
@@ -209,10 +351,23 @@ def inspect_indentation_runtime_contract(
         analysis.Initialize()
         initialized = True
         apply_indentation_constraints(
-            model_part, base_topology, indenter_topology
+            model_part,
+            base_topology,
+            indenter_topology,
+            bonded_bottom=bonded_bottom,
+        )
+        bonded_bottom_constraints = _bonded_bottom_constraint_contract(
+            model_part,
+            bonded_bottom_node_ids,
+            bonded_bottom=bonded_bottom,
         )
         runtime = runtime_contact_contract(
             model, model_part, contact_groups
+        )
+        assembled_lm_contract = _assembled_contact_lm_contract(
+            model,
+            model_part,
+            contact_groups,
         )
         model_part_names = sorted(str(name) for name in model.GetModelPartNames())
         indexed_contact_paths = [
@@ -259,9 +414,22 @@ def inspect_indentation_runtime_contract(
             ),
             "fixture": fixture.to_dict(),
             "internal_contact_configuration": configuration,
+            "basal_interface": "bonded" if bonded_bottom else (
+                "explicit_contact"
+                if any(name == "internal_bottom" for name, _, _ in contact_groups)
+                else "not_bonded"
+            ),
+            "bonded_bottom_node_count": len(bonded_bottom_node_ids),
+            "bonded_bottom_node_ids": list(bonded_bottom_node_ids),
+            "pad_void_unpaired_node_ids": list(pad_void_unpaired_node_ids),
+            "bonded_bottom_excludes_pad_void_unpaired": set(
+                bonded_bottom_node_ids
+            ).isdisjoint(pad_void_unpaired_node_ids),
+            "bonded_bottom_constraints": bonded_bottom_constraints,
             "contact_groups": [list(group) for group in contact_groups],
             "continuous_u_aggregate_contract": aggregate_contract,
             "runtime_contact_contract": runtime,
+            "assembled_contact_lm_contract": assembled_lm_contract,
             "contact_process_count": len(contact_groups),
             "indexed_contact_model_part_paths": indexed_contact_paths,
             "internal_contact_registration": {
@@ -281,6 +449,7 @@ def inspect_indentation_runtime_contract(
                 "internal_source_nodes_with_root_level_lm_dof": len(
                     internal_surface_node_ids.intersection(global_lm_node_ids)
                 ),
+                "bonded_bottom_node_ids": list(bonded_bottom_node_ids),
                 "root_level_lm_dof_explanation": (
                     "AuxiliaryAddDofs adds the ALM pressure DOF to every root "
                     "node even for one external pair. These dormant DOFs are "
@@ -303,7 +472,7 @@ def run_indentation_case(
     mesh_level: MeshLevel,
     settings: IndentationSettings,
     indenter_settings: IndenterSettings | None = None,
-    internal_contact_configuration: str = "three_pairs",
+    internal_contact_configuration: str = "sides_separate",
     mesh_override: FingertipMesh | None = None,
     fixture_override: IndenterFixture | None = None,
     converged_step_observer: ConvergedStepObserver | None = None,
@@ -360,6 +529,7 @@ def run_indentation_case(
             raise InvalidIndentationSettings(
                 "mesh_override level must match mesh_level"
             )
+        bonded_bottom = _resolve_bonded_bottom(mesh, configuration)
         if fixture_override is not None and indenter_settings is not None:
             raise InvalidIndentationSettings(
                 "fixture_override and indenter_settings are mutually exclusive"
@@ -391,16 +561,46 @@ def run_indentation_case(
             if configuration == "continuous_u"
             else None
         )
+        bonded_bottom_node_ids = (
+            tuple(
+                sorted(
+                    node.Id
+                    for node in model_part.GetSubModelPart("PadCutoutBottom").Nodes
+                )
+            )
+            if bonded_bottom
+            else ()
+        )
+        pad_void_unpaired_node_ids = tuple(
+            sorted(
+                node_id
+                for edge in mesh.boundary_edges["pad_void_unpaired"]
+                for node_id in edge.node_ids
+            )
+        )
         analysis.Initialize()
         initialized = True
         apply_indentation_constraints(
-            model_part, base_topology, indenter_topology
+            model_part,
+            base_topology,
+            indenter_topology,
+            bonded_bottom=bonded_bottom,
+        )
+        bonded_bottom_constraints = _bonded_bottom_constraint_contract(
+            model_part,
+            bonded_bottom_node_ids,
+            bonded_bottom=bonded_bottom,
         )
         runtime_contact = runtime_contact_contract(
             model, model_part, contact_group_definitions
         )
         if not runtime_contact["all_group_contracts_pass"]:
             raise KratosAdapterError("one or more indexed contact group contracts failed")
+        assembled_lm_contract = _assembled_contact_lm_contract(
+            model,
+            model_part,
+            contact_group_definitions,
+        )
         strategy_check = int(analysis._GetSolver()._GetSolutionStrategy().Check())
         if strategy_check != 0:
             raise KratosAdapterError(f"solution strategy Check returned {strategy_check}")
@@ -410,6 +610,7 @@ def run_indentation_case(
             support_node_ids.update(
                 node.Id for node in model_part.GetSubModelPart(name).Nodes
             )
+        support_node_ids.update(bonded_bottom_node_ids)
         all_node_ids = tuple(node.Id for node in model_part.Nodes)
         capture_steps = {
             settings.capture_step(depth): depth for depth in settings.capture_depths_mm
@@ -421,6 +622,21 @@ def run_indentation_case(
                 "configuration": {
                     "mesh_level": mesh_level,
                     "internal_contact_configuration": configuration,
+                    "basal_interface": "bonded" if bonded_bottom else (
+                        "explicit_contact"
+                        if any(
+                            name == "internal_bottom"
+                            for name, _, _ in contact_group_definitions
+                        )
+                        else "not_bonded"
+                    ),
+                    "bonded_bottom_node_count": len(bonded_bottom_node_ids),
+                    "bonded_bottom_node_ids": list(bonded_bottom_node_ids),
+                    "pad_void_unpaired_node_ids": list(pad_void_unpaired_node_ids),
+                    "bonded_bottom_excludes_pad_void_unpaired": set(
+                        bonded_bottom_node_ids
+                    ).isdisjoint(pad_void_unpaired_node_ids),
+                    "bonded_bottom_constraints": bonded_bottom_constraints,
                     "contact_groups": [
                         list(group) for group in contact_group_definitions
                     ],
@@ -470,6 +686,26 @@ def run_indentation_case(
                     "pad_indenter_node_ids_disjoint": set(base_topology.pad_node_ids).isdisjoint(indenter_topology.node_ids),
                 },
                 "runtime_contact_contract": runtime_contact,
+                "assembled_contact_lm_contract": assembled_lm_contract,
+                "support_reaction_contract": {
+                    "support_node_count": len(support_node_ids),
+                    "carrier_node_count": len(base_topology.carrier_node_ids),
+                    "bonded_pad_interface_node_count": sum(
+                        model_part.GetSubModelPart(name).NumberOfNodes()
+                        for name in ("PadBondLeft", "PadBondRight")
+                    ),
+                    "bonded_bottom_node_count": len(bonded_bottom_node_ids),
+                    "bonded_bottom_node_ids": list(bonded_bottom_node_ids),
+                    "pad_void_unpaired_node_ids": list(pad_void_unpaired_node_ids),
+                    "bonded_bottom_excludes_pad_void_unpaired": set(
+                        bonded_bottom_node_ids
+                    ).isdisjoint(pad_void_unpaired_node_ids),
+                    "bonded_bottom_constraints": bonded_bottom_constraints,
+                    "bonded_bottom_in_support_reaction": bool(
+                        bonded_bottom_node_ids
+                        and set(bonded_bottom_node_ids).issubset(support_node_ids)
+                    ),
+                },
                 "continuous_u_aggregate_contract": aggregate_contract,
                 "internal_contact_lm_boundary_treatment": (
                     "Kratos process default; no manual LM pressure constraints"
@@ -535,66 +771,6 @@ def run_indentation_case(
                 )
                 break
 
-            if "assembled_contact_lm_contract" not in result:
-                assembled_lm_node_ids = sorted(
-                    {
-                        int(dof.Id())
-                        for index, _ in enumerate(
-                            contact_group_definitions
-                        )
-                        for condition in model[
-                            "Structure.ComputingContact."
-                            f"ComputingContactSub{index}"
-                        ].Conditions
-                        for dof in condition.GetDofList(
-                            model_part.ProcessInfo
-                        )
-                        if dof.GetVariable().Name()
-                        == (
-                            CSMA.LAGRANGE_MULTIPLIER_CONTACT_PRESSURE.Name()
-                        )
-                    }
-                )
-                internal_source_ids = {
-                    node.Id
-                    for name in (
-                        "PadCutoutLeft",
-                        "PadCutoutRight",
-                        "PadCutoutBottom",
-                        "StemLeft",
-                        "StemRight",
-                        "StemBottom",
-                    )
-                    for node in model_part.GetSubModelPart(name).Nodes
-                }
-                external_slave_ids = {
-                    node.Id
-                    for node in model_part.GetSubModelPart("PadOuterArc").Nodes
-                }
-                result["assembled_contact_lm_contract"] = {
-                    "assembled_lm_node_ids": assembled_lm_node_ids,
-                    "assembled_lm_node_count": len(assembled_lm_node_ids),
-                    "identification_method": (
-                        "LM DOFs returned by generated ComputingContact "
-                        "condition GetDofList"
-                    ),
-                    "external_slave_lm_node_count": len(
-                        set(assembled_lm_node_ids).intersection(
-                            external_slave_ids
-                        )
-                    ),
-                    "internal_exclusive_lm_node_ids": sorted(
-                        set(assembled_lm_node_ids)
-                        .intersection(internal_source_ids)
-                        .difference(external_slave_ids)
-                    ),
-                    "no_internal_contact_lm_assembly": not (
-                        set(assembled_lm_node_ids)
-                        .intersection(internal_source_ids)
-                        .difference(external_slave_ids)
-                    ),
-                }
-
             if diagnostic_mode == "minimal":
                 displacements, reactions = extract_nodal_fields(
                     model_part, all_node_ids
@@ -625,6 +801,11 @@ def run_indentation_case(
                     math.isfinite(float(component))
                     for values in (*displacements.values(), *reactions.values())
                     for component in values
+                )
+                bonded_bottom_contract = _bonded_bottom_contract(
+                    displacements,
+                    bonded_bottom_node_ids,
+                    bonded_bottom=bonded_bottom,
                 )
                 compact_groups = {
                     name: {
@@ -695,6 +876,8 @@ def run_indentation_case(
                     "rigid_indenter_validation": rigid_validation,
                     "diagnostic_mode": "minimal",
                 }
+                if bonded_bottom_contract is not None:
+                    point["bonded_bottom"] = bonded_bottom_contract
                 if field_failures:
                     point["non_finite_fields"] = field_failures[:50]
                 if step == settings.number_of_steps:
@@ -767,6 +950,11 @@ def run_indentation_case(
                 model_part, base_topology.pad_node_ids
             )
             pad_statistics = pad_strain_det_f_statistics(mesh, displacements)
+            bonded_bottom_contract = _bonded_bottom_contract(
+                displacements,
+                bonded_bottom_node_ids,
+                bonded_bottom=bonded_bottom,
+            )
             volumetric_values = {
                 node_id: float(
                     model_part.Nodes[node_id].GetSolutionStepValue(
@@ -843,6 +1031,8 @@ def run_indentation_case(
                 "maximum_pad_displacement_mm": max(pad_displacement_values),
                 "rigid_indenter_validation": rigid_validation,
             }
+            if bonded_bottom_contract is not None:
+                point["bonded_bottom"] = bonded_bottom_contract
             if field_failures:
                 point["non_finite_fields"] = field_failures[:50]
             if step == settings.number_of_steps:
@@ -1006,6 +1196,10 @@ def run_indentation_case(
             result["failure_reason"] = "case_acceptance_checks_failed"
         if result["history"]:
             result["final"] = result["history"][-1]
+            if bonded_bottom:
+                result["bonded_bottom_contract"] = result["final"].get(
+                    "bonded_bottom"
+                )
             result["maximum_nonlinear_iterations"] = max(
                 point["nonlinear_iterations"] for point in result["history"]
             )

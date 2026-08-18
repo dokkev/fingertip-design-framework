@@ -17,8 +17,7 @@ from visualization.geometry import plot_fingertip
 
 OPTICAL_DISPLAY_GAMMA = 0.45
 OPTICAL_UPPER_PERCENTILE = 99.5
-OPTICAL_LOW_WEIGHT_FRACTION = 2.5e-3
-OPTICAL_SMOOTHING_RADIUS_CELLS = 1
+OPTICAL_SMOOTHING_RADIUS_CELLS = 0
 
 
 def _line_parts(geometry: Any) -> tuple[Any, ...]:
@@ -245,8 +244,10 @@ def _optical_field(raw: Any) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     y_values = np.asarray(y_edges, dtype=float)
     if values.shape != (len(y_values) - 1, len(x_values) - 1):
         raise ValueError("projected path-density field shape does not match its axes")
-    if not np.all(np.isfinite(values)) or np.any(values < 0.0):
-        raise ValueError("projected path-density field must be finite and nonnegative")
+    if not np.all(np.isfinite(x_values)) or not np.all(np.isfinite(y_values)):
+        raise ValueError("projected path-density axes must be finite")
+    if np.any(values < 0.0):
+        raise ValueError("projected path-density field must be nonnegative")
     return x_values, y_values, values
 
 
@@ -263,7 +264,11 @@ def _shared_optical_norm(
         ):
             raise ValueError("optical domain masks must match both optical fields")
         fields = [field[mask] for field, mask in zip(fields, masks)]
-    positive_fields = [field[field > 0.0] for field in fields if np.any(field > 0.0)]
+    positive_fields = [
+        field[np.isfinite(field) & (field > 0.0)]
+        for field in fields
+        if np.any(np.isfinite(field) & (field > 0.0))
+    ]
     if not positive_fields:
         raise ValueError("unloaded and loaded optical fields contain no positive transport")
     positive = np.concatenate(positive_fields)
@@ -278,14 +283,6 @@ def _shared_optical_norm(
             clip=True,
         ),
         plt.get_cmap("magma").with_extremes(bad="#FFFFFF"),
-    )
-
-
-def _optical_display_floor(optical_norm: PowerNorm) -> float:
-    """Return a shared display-only floor for numerical path traces."""
-    return max(
-        float(optical_norm.vmax) * OPTICAL_LOW_WEIGHT_FRACTION,
-        float(np.finfo(float).tiny),
     )
 
 
@@ -333,7 +330,8 @@ def _smooth_display_field(
     """Apply at most one-cell display smoothing without changing the raw field."""
     if radius_cells < 0:
         raise ValueError("radius_cells must be nonnegative")
-    source = np.where(domain_mask, np.asarray(field, dtype=float), 0.0)
+    finite_domain = domain_mask & np.isfinite(field)
+    source = np.where(finite_domain, np.asarray(field, dtype=float), 0.0)
     if radius_cells == 0:
         return source.copy()
     if radius_cells != 1:
@@ -359,10 +357,9 @@ def _display_optical_field(
     raw: Any,
     *,
     domain: Any,
-    display_floor: float,
     smoothing_radius_cells: int = OPTICAL_SMOOTHING_RADIUS_CELLS,
 ) -> np.ma.MaskedArray:
-    """Build a masked, smoothed display copy; transport data stay untouched."""
+    """Build a masked, optionally smoothed display copy of the raw field."""
     x_edges, y_edges, field = _optical_field(raw)
     domain_mask = _grid_domain_mask(x_edges, y_edges, domain)
     display_field = _smooth_display_field(
@@ -370,11 +367,7 @@ def _display_optical_field(
         domain_mask,
         radius_cells=smoothing_radius_cells,
     )
-    suppressed = (
-        ~domain_mask
-        | ~np.isfinite(display_field)
-        | (display_field <= display_floor)
-    )
+    suppressed = ~domain_mask | ~np.isfinite(field) | ~np.isfinite(display_field)
     return np.ma.masked_where(suppressed, display_field)
 
 
@@ -387,23 +380,23 @@ def _plot_optical_panel(
     optical_norm: PowerNorm,
     optical_cmap: Any,
     show_exits: bool,
-    display_floor: float,
     domain: Any,
 ) -> None:
     x_edges, y_edges, _ = _optical_field(raw)
     image_field = _display_optical_field(
         raw,
         domain=domain,
-        display_floor=display_floor,
     )
     ax.set_facecolor("#FFFFFF")
-    ax.pcolormesh(
-        x_edges,
-        y_edges,
+    ax.imshow(
         image_field,
-        shading="flat",
+        extent=(x_edges[0], x_edges[-1], y_edges[0], y_edges[-1]),
+        origin="lower",
+        interpolation="bilinear",
+        resample=True,
         cmap=optical_cmap,
         norm=optical_norm,
+        aspect="auto",
     )
     result = case.fea.result
     if result is None or result.reference_mesh is None:
@@ -530,9 +523,9 @@ def plot_case_comparison(
     """Plot precomputed unloaded and loaded FEA/PLANAR_2D states in 2x2.
 
     The optical panels use one shared, robust ``PowerNorm`` and a copied
-    display raster. Silicone-domain masking, low-weight suppression, and the
-    one-cell raster smoothing are visualization-only; raw transport arrays
-    remain the inputs to evaluation and are never modified here. Set
+    display raster. Silicone-domain masking and optional raster interpolation
+    are visualization-only; positive in-domain transport is never thresholded
+    out, and raw transport arrays remain the inputs to evaluation. Set
     ``show_exits=True`` only for the optional ray/exit debug overlay.
     """
     required = ("fingertip", "fea", "raytracing")
@@ -572,7 +565,6 @@ def plot_case_comparison(
         optical_results,
         optical_domain_masks,
     )
-    display_floor = _optical_display_floor(optical_norm)
 
     figure, axes = plt.subplots(
         2,
@@ -605,7 +597,6 @@ def plot_case_comparison(
         optical_norm=optical_norm,
         optical_cmap=optical_cmap,
         show_exits=show_exits,
-        display_floor=display_floor,
         domain=optical_domains[0],
     )
     _plot_optical_panel(
@@ -616,7 +607,6 @@ def plot_case_comparison(
         optical_norm=optical_norm,
         optical_cmap=optical_cmap,
         show_exits=show_exits,
-        display_floor=display_floor,
         domain=optical_domains[1],
     )
     x_min, x_max, y_min, y_max = _comparison_limits(case, unloaded_optics)
@@ -640,7 +630,7 @@ def plot_case_comparison(
         ax=axes[1, :].tolist(),
         fraction=0.046,
         pad=0.04,
-    ).set_label("P2 weighted path density (display-only)")
+    ).set_label("Weighted optical path density")
     if title is None:
         title = "Fingertip unloaded vs loaded comparison"
     figure.suptitle(title)

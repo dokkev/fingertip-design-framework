@@ -333,7 +333,7 @@ def run_case(
     optical: OpticalMaterial | None = None,
     indenter_optics: IndenterOptics | None = None,
     fem_steps: int = 48,
-    internal_contact: str = "three_pairs",
+    internal_contact: str = "sides_separate",
     provenance: Mapping[str, Any] | None = None,
     optix_runtime: Any | None = None,
 ) -> FingertipCase:

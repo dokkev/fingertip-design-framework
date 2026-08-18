@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+from pathlib import Path
 import subprocess
 import sys
 from types import SimpleNamespace
@@ -11,8 +12,9 @@ import matplotlib
 
 matplotlib.use("Agg", force=True)
 import matplotlib.pyplot as plt
-from matplotlib.collections import PathCollection, PolyCollection, QuadMesh
+from matplotlib.collections import PathCollection, PolyCollection
 from matplotlib.colors import PowerNorm
+from matplotlib.image import AxesImage
 from matplotlib.quiver import Quiver
 import numpy as np
 import pytest
@@ -24,6 +26,7 @@ from mesh import PadMesh
 from model import Fingertip, FingertipParameters, LED, OpticalMaterial
 from model.fingertip_model import FingertipModel
 from optics import TraceSettings, trace
+from optics.transport3d import Transport3DSettings
 from visualization import (
     plot_camera,
     plot_case_comparison,
@@ -178,6 +181,7 @@ def test_plot_case_comparison_builds_unloaded_loaded_2x2_without_execution() -> 
             projected_y_edges_mm=np.arange(3, dtype=float),
             projected_weighted_path_density=field,
             escape_positions_mm=np.asarray([[0.5, 1.0, 0.0]]),
+            escape_directions=np.asarray([[0.0, 1.0, 0.0]]),
             escape_weights=np.asarray([1.0]),
         )
 
@@ -217,10 +221,10 @@ def test_plot_case_comparison_builds_unloaded_loaded_2x2_without_execution() -> 
     }
     optical_axes = [axis for axis in panel_axes if "OptiX" in axis.get_title()]
     optical_images = [
-        collection
+        image
         for axis in optical_axes
-        for collection in axis.collections
-        if isinstance(collection, QuadMesh)
+        for image in axis.images
+        if isinstance(image, AxesImage)
     ]
     assert len(optical_images) == 2
     assert optical_images[0].norm is optical_images[1].norm
@@ -230,8 +234,13 @@ def test_plot_case_comparison_builds_unloaded_loaded_2x2_without_execution() -> 
     assert optical_images[0].norm.vmax < 4.0e-1
     assert any(np.ma.getmaskarray(image.get_array()).any() for image in optical_images)
     loaded_mask = np.ma.getmaskarray(optical_images[1].get_array()).reshape(loaded_field.shape)
+    assert not loaded_mask[0, 0]
     assert loaded_mask[1, 2]
     assert not any(isinstance(collection, Quiver) for axis in optical_axes for collection in axis.collections)
+    assert any(
+        axis.get_ylabel() == "Weighted optical path density"
+        for axis in figure.axes
+    )
     fea_axes = [axis for axis in panel_axes if axis.get_title().startswith("FEA")]
     stress_collections = [
         collection
@@ -244,6 +253,22 @@ def test_plot_case_comparison_builds_unloaded_loaded_2x2_without_execution() -> 
     assert np.array_equal(unloaded_field, unloaded_before)
     assert np.array_equal(loaded_field, loaded_before)
     assert np.array_equal(case.raytracing.raw.projected_weighted_path_density, loaded_field)
+
+    debug_figure = plot_case_comparison(
+        case,
+        raw(unloaded_field),
+        unloaded_pose=pose,
+        show_exits=True,
+    )
+    debug_optical_axes = [
+        axis for axis in debug_figure.axes if "OptiX" in axis.get_title()
+    ]
+    assert any(
+        isinstance(collection, Quiver)
+        for axis in debug_optical_axes
+        for collection in axis.collections
+    )
+    plt.close(debug_figure)
     plt.close(figure)
 
 
@@ -251,6 +276,40 @@ def test_case_display_transform_does_not_enter_evaluation_code() -> None:
     source = inspect.getsource(visualization_case)
     assert "evaluate(" not in source
     assert "optics.metrics" not in visualization_case.__dict__
+
+
+def test_publication_example_uses_high_resolution_transport_defaults() -> None:
+    source = (
+        Path(__file__).resolve().parents[3] / "examples" / "view_case.py"
+    ).read_text(encoding="utf-8")
+    assert "ray_count=256" not in source
+    assert "max_interactions=8" not in source
+    assert "projected_grid_width=96" not in source
+    assert "projected_grid_height=96" not in source
+
+    settings = Transport3DSettings(
+        mode="planar",
+        retain_projected_segments=True,
+    )
+    assert settings.ray_count == 4096
+    assert settings.max_interactions == 10
+    assert settings.projected_grid_width == 240
+    assert settings.projected_grid_height == 240
+
+
+def test_display_smoothing_is_optional_and_does_not_mutate_raw_field() -> None:
+    field = np.asarray(
+        [[0.0, 1.0, 0.0], [1.0, 4.0, 1.0], [0.0, 1.0, 0.0]],
+        dtype=float,
+    )
+    before = field.copy()
+    smoothed = visualization_case._smooth_display_field(
+        field,
+        np.ones_like(field, dtype=bool),
+        radius_cells=1,
+    )
+    assert np.array_equal(field, before)
+    assert smoothed.shape == field.shape
 
 
 def test_plot_camera_does_not_import_mitsuba_or_mutate_rgb() -> None:

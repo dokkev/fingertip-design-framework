@@ -93,7 +93,9 @@ def test_study_is_immutable_and_contains_fixed_scientific_configuration() -> Non
 
 
 def test_production_study_defaults_to_validated_12_step_search() -> None:
-    assert _study().fem_steps == 12
+    study = _study()
+    assert study.fem_steps == 12
+    assert study.internal_contact == "sides_separate"
 
 
 def test_validation_reference_can_explicitly_keep_48_steps() -> None:

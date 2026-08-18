@@ -9,12 +9,12 @@ from typing import Any, Sequence
 from fem.kratos_settings import (
     CARRIER_ELEMENT,
     CONSTITUTIVE_LAW,
-    CONTACT_GROUPS,
     MIXED_PAD_ELEMENT,
     POISSON_RATIO,
     THICKNESS_MM,
     YOUNG_MODULUS_MPA,
     build_project_parameters_json,
+    indentation_contact_groups,
 )
 from mesh.indenter import IndenterFixture, IndenterMesh
 from mesh.types import BoundaryEdge, FingertipMesh
@@ -241,10 +241,16 @@ def apply_indentation_constraints(
     model_part: Any,
     base_topology: KratosTopology,
     indenter_topology: IndenterKratosTopology,
+    *,
+    bonded_bottom: bool = False,
 ) -> None:
     """Fix the model supports and constrain the indenter to translation."""
     KM, _, _, _ = import_kratos()
-    apply_initialization_constraints(model_part, base_topology)
+    apply_initialization_constraints(
+        model_part,
+        base_topology,
+        bonded_bottom=bonded_bottom,
+    )
     for node_id in indenter_topology.node_ids:
         node = model_part.Nodes[node_id]
         for variable in (KM.DISPLACEMENT_X, KM.DISPLACEMENT_Y, KM.DISPLACEMENT_Z):
@@ -404,15 +410,24 @@ def populate_kratos_model_part(
 
 
 def apply_initialization_constraints(
-    model_part: Any, topology: KratosTopology
+    model_part: Any,
+    topology: KratosTopology,
+    *,
+    bonded_bottom: bool = False,
 ) -> None:
-    """Fix the pad bond and the entire kinematic carrier for the smoke model."""
+    """Fix bonded pad/carrier interfaces and the kinematic carrier."""
     KM, _, _, _ = import_kratos()
+    if not isinstance(bonded_bottom, bool):
+        raise TypeError("bonded_bottom must be bool")
     for node in model_part.Nodes:
         node.SetSolutionStepValue(KM.VOLUMETRIC_STRAIN, 0.0)
     constrained_ids = set(topology.carrier_node_ids)
     for name in ("PadBondLeft", "PadBondRight"):
         constrained_ids.update(node.Id for node in model_part.GetSubModelPart(name).Nodes)
+    if bonded_bottom:
+        constrained_ids.update(
+            node.Id for node in model_part.GetSubModelPart("PadCutoutBottom").Nodes
+        )
     for node_id in constrained_ids:
         node = model_part.Nodes[node_id]
         for variable in (
@@ -482,9 +497,15 @@ def inspect_runtime_contact_contract(
     model: Any,
     model_part: Any,
     mesh: FingertipMesh,
+    contact_group_definitions: Sequence[tuple[str, str, str]] | None = None,
 ) -> dict[str, Any]:
     """Inspect flags and fields after ``ALMContactProcess`` initialization."""
     KM, CSMA, _, _ = import_kratos()
+    contact_groups = (
+        indentation_contact_groups()
+        if contact_group_definitions is None
+        else tuple(contact_group_definitions)
+    )
     if not model.HasModelPart("Structure.Contact"):
         raise KratosAdapterError("ALMContactProcess did not create Structure.Contact")
     contact_part = model["Structure.Contact"]
@@ -494,7 +515,12 @@ def inspect_runtime_contact_contract(
         else None
     )
     inverse_names = {value: key for key, value in BOUNDARY_MODEL_PART_NAMES.items()}
-    surface_names = [name for group in CONTACT_GROUPS for name in group]
+    internal_groups = tuple(
+        group for group in contact_groups if group[0].startswith("internal_")
+    )
+    surface_names = [
+        name for _, slave, master in internal_groups for name in (slave, master)
+    ]
     surfaces: dict[str, Any] = {}
     for name in surface_names:
         submodel_part = model_part.GetSubModelPart(name)
@@ -561,13 +587,13 @@ def inspect_runtime_contact_contract(
         surfaces[slave]["condition_flags"]["SLAVE"]
         == surfaces[slave]["condition_count"]
         and surfaces[slave]["condition_flags"]["MASTER"] == 0
-        for slave, _ in CONTACT_GROUPS
+        for _, slave, _ in internal_groups
     )
     stem_master = all(
         surfaces[master]["condition_flags"]["MASTER"]
         == surfaces[master]["condition_count"]
         and surfaces[master]["condition_flags"]["SLAVE"] == 0
-        for _, master in CONTACT_GROUPS
+        for _, _, master in internal_groups
     )
     nodal_h_valid = all(
         data["nodal_h"]["positive"] for data in surfaces.values()
@@ -614,24 +640,66 @@ def inspect_runtime_contact_contract(
     }
 
 
-def run_initialization_smoke(mesh: FingertipMesh) -> dict[str, Any]:
-    """Initialize the mixed-solid/internal-ALM model without a nonlinear solve."""
+def run_initialization_smoke(
+    mesh: FingertipMesh,
+    internal_contact_configuration: str = "sides_separate",
+) -> dict[str, Any]:
+    """Initialize the selected internal-contact model without a nonlinear solve."""
     KM, _, _, _ = import_kratos()
     from KratosMultiphysics.StructuralMechanicsApplication.structural_mechanics_analysis import (
         StructuralMechanicsAnalysis,
     )
 
     model = KM.Model()
-    parameters = KM.Parameters(build_project_parameters_json())
+    configuration = indentation_contact_groups(internal_contact_configuration)
+    bonded_bottom = internal_contact_configuration == "sides_separate"
+    if bonded_bottom and mesh.parameters.void_height != 0.0:
+        raise KratosAdapterError(
+            "bonded PadCutoutBottom requires void_height=0.0"
+        )
+    parameters = KM.Parameters(
+        build_project_parameters_json(internal_contact_configuration)
+    )
     analysis = StructuralMechanicsAnalysis(model, parameters)
     model_part = model["Structure"]
     topology = populate_kratos_model_part(model_part, mesh)
+    bonded_bottom_node_ids = tuple(
+        sorted(
+            node.Id
+            for node in model_part.GetSubModelPart("PadCutoutBottom").Nodes
+        )
+    ) if bonded_bottom else ()
+    pad_void_unpaired_node_ids = tuple(
+        sorted(
+            node_id
+            for edge in mesh.boundary_edges["pad_void_unpaired"]
+            for node_id in edge.node_ids
+        )
+    )
     initialized = False
     try:
         analysis.Initialize()
         initialized = True
-        apply_initialization_constraints(model_part, topology)
-        runtime = inspect_runtime_contact_contract(model, model_part, mesh)
+        apply_initialization_constraints(
+            model_part,
+            topology,
+            bonded_bottom=bonded_bottom,
+        )
+        runtime = inspect_runtime_contact_contract(
+            model,
+            model_part,
+            mesh,
+            configuration,
+        )
+        bonded_bottom_constraints = {
+            int(node_id): all(
+                model_part.Nodes[node_id]
+                .GetDof(variable)
+                .IsFixed()
+                for variable in (KM.DISPLACEMENT_X, KM.DISPLACEMENT_Y)
+            )
+            for node_id in bonded_bottom_node_ids
+        }
         pad_element_info = sorted(
             {
                 model_part.Elements[element_id].Info().split(" #", 1)[0]
@@ -683,6 +751,16 @@ def run_initialization_smoke(mesh: FingertipMesh) -> dict[str, Any]:
         acceptance_checks = {
             **element_checks,
             **runtime["checks"],
+            "bonded_bottom_displacement_dofs_fixed": (
+                not bonded_bottom
+                or (
+                    bool(bonded_bottom_constraints)
+                    and all(bonded_bottom_constraints.values())
+                )
+            ),
+            "bonded_bottom_excludes_pad_void_unpaired": set(
+                bonded_bottom_node_ids
+            ).isdisjoint(pad_void_unpaired_node_ids),
         }
         return {
             "status": "PASS" if all(acceptance_checks.values()) else "FAIL",
@@ -718,6 +796,11 @@ def run_initialization_smoke(mesh: FingertipMesh) -> dict[str, Any]:
             "topology": asdict(topology),
             "submodel_parts": submodel_parts,
             "runtime_contact_contract": runtime,
+            "internal_contact_configuration": internal_contact_configuration,
+            "basal_interface": "bonded" if bonded_bottom else "not_bonded",
+            "bonded_bottom_node_ids": list(bonded_bottom_node_ids),
+            "pad_void_unpaired_node_ids": list(pad_void_unpaired_node_ids),
+            "bonded_bottom_constraints": bonded_bottom_constraints,
             "acceptance_checks": acceptance_checks,
         }
     finally:

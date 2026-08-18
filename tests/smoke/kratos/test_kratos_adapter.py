@@ -24,6 +24,9 @@ def smoke_result():
 def test_kratos_initialization_and_element_contract(smoke_result) -> None:
     assert smoke_result["initialization_succeeded"]
     assert smoke_result["status"] == "PASS"
+    assert smoke_result["basal_interface"] == "bonded"
+    assert smoke_result["bonded_bottom_constraints"]
+    assert all(smoke_result["bonded_bottom_constraints"].values())
     contract = smoke_result["element_runtime_contract"]
     assert contract["pad_registered_creation_name"] == MIXED_PAD_ELEMENT
     assert contract["carrier_registered_creation_name"] == CARRIER_ELEMENT
@@ -40,12 +43,12 @@ def test_internal_contact_runtime_roles_and_nodal_h(smoke_result) -> None:
     for name in (
         "PadCutoutLeft",
         "PadCutoutRight",
-        "PadCutoutBottom",
         "StemLeft",
         "StemRight",
-        "StemBottom",
     ):
         assert runtime["surfaces"][name]["condition_count"] > 0
+    assert "PadCutoutBottom" not in runtime["surfaces"]
+    assert "StemBottom" not in runtime["surfaces"]
 
 
 def test_required_submodel_parts_have_topology(smoke_result) -> None:

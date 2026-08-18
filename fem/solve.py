@@ -108,7 +108,7 @@ def solve(
     surface_x_mm: float = 0.0,
     steps: int = 48,
     indenter: IndenterSettings | None = None,
-    internal_contact: str = "three_pairs",
+    internal_contact: str = "sides_separate",
 ) -> FEAResult:
     """Solve one local-normal indentation case and return neutral data."""
     if not isinstance(tip, Fingertip):

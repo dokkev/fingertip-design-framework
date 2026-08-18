@@ -23,6 +23,16 @@ def runtime_preflight():
         FingertipModel(FingertipParameters()),
         "medium",
         IndentationSettings(0.25, 48),
+        internal_contact_configuration="three_pairs",
+    )
+
+
+@pytest.fixture(scope="module")
+def production_runtime_preflight():
+    return inspect_indentation_runtime_contract(
+        FingertipModel(FingertipParameters()),
+        "medium",
+        IndentationSettings(0.25, 48),
     )
 
 
@@ -48,6 +58,32 @@ def test_internal_three_pair_runtime_contract_is_preserved(
     for name in ("internal_left", "internal_right", "internal_bottom"):
         assert all(groups[name]["checks"].values())
         assert groups[name]["contact_submodelpart_condition_ids"]
+
+
+def test_production_zero_gap_uses_bonded_bottom_and_side_contacts(
+    production_runtime_preflight,
+) -> None:
+    preflight = production_runtime_preflight
+    assert preflight["basal_interface"] == "bonded"
+    assert preflight["internal_contact_configuration"] == "sides_separate"
+    assert preflight["bonded_bottom_node_count"] > 0
+    assert preflight["bonded_bottom_constraints"]["all_displacement_dofs_fixed"]
+    assert preflight["bonded_bottom_excludes_pad_void_unpaired"]
+    assert {
+        group[0] for group in preflight["contact_groups"]
+    } == {
+        "external_pad_indenter",
+        "internal_left",
+        "internal_right",
+    }
+    assert set(preflight["runtime_contact_contract"]["groups"]) == {
+        "external_pad_indenter",
+        "internal_left",
+        "internal_right",
+    }
+    assembled = preflight["assembled_contact_lm_contract"]
+    assert assembled["no_internal_bottom_contact_lm_assembly"]
+    assert "internal_bottom" not in assembled["contact_group_names"]
 
 
 def test_no_void_external_only_runtime_has_no_internal_contact_registration() -> None:
@@ -81,6 +117,7 @@ def separated_internal_gap_small_solve():
         ),
         "medium",
         IndentationSettings(0.01, 1),
+        internal_contact_configuration="three_pairs",
     )
     return result
 

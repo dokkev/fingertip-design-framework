@@ -122,11 +122,15 @@ extension surfaces are bonded pad material, not contact surfaces.
 
 For the current production morphology search, `h_v = 0` is a fixed physical
 contract, not an optimizer variable. `PadCutoutBottom` and `StemBottom` are
-therefore coincident semantic boundaries and initially contacting with zero
-geometric gap. Bottom contact does not begin only after a later indentation
-such as 1.375 mm; a large-indentation acceptance failure is a separate
-enforcement-quality diagnostic. Nonzero `void_height` remains supported by
-`FingertipParameters` for historical, geometry, and diagnostic cases.
+coincident semantic boundaries forming a mechanically bonded basal
+stem/pad interface. The production solver fixes the displacement DOFs of the
+actual stem-width `PadCutoutBottom` pad nodes together with the already fixed
+carrier and upper pad bonds; it does not create a bottom ALM contact pair.
+The lateral `PadCutoutLeft`/`StemLeft` and `PadCutoutRight`/`StemRight`
+interfaces remain frictionless unilateral contacts. Nonzero `void_height`
+remains supported by `FingertipParameters` for historical, geometry, and
+diagnostic cases, where an explicit bottom-contact configuration may be
+requested.
 
 ## Three-segment bonded interfaces
 

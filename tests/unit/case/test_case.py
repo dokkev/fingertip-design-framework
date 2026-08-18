@@ -552,7 +552,7 @@ def test_run_case_routes_to_existing_explicit_contact_solver(monkeypatch) -> Non
     assert calls["kwargs"]["surface_x_mm"] == contact.location_x_mm
     assert calls["kwargs"]["indenter"] is indenter
     assert calls["kwargs"]["steps"] == 3
-    assert calls["kwargs"]["internal_contact"] == "three_pairs"
+    assert calls["kwargs"]["internal_contact"] == "sides_separate"
     assert result.provenance["localized_load_used"] is False
 
 

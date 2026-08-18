@@ -60,15 +60,11 @@ class IndentationSolverSettings:
 
 DEFAULT_INDENTATION_SOLVER_SETTINGS = IndentationSolverSettings()
 
-CONTACT_GROUPS = (
-    ("PadCutoutLeft", "StemLeft"),
-    ("PadCutoutRight", "StemRight"),
-    ("PadCutoutBottom", "StemBottom"),
-)
-
 # The order is a runtime contract: Kratos creates ContactSubN and
 # ComputingContactSubN with the same numeric key.  Post-processing uses these
 # model parts directly instead of classifying generated conditions by position.
+# Complete semantic contact catalog used by mesh/runtime diagnostics. Production
+# selection is controlled by ``indentation_contact_groups`` below.
 INDENTATION_CONTACT_GROUPS = (
     ("external_pad_indenter", "PadOuterArc", "IndenterContactArc"),
     ("internal_left", "PadCutoutLeft", "StemLeft"),
@@ -141,22 +137,24 @@ def validate_internal_contact_configuration(
 
 
 def indentation_contact_groups(
-    configuration: str = "three_pairs",
+    configuration: str = "sides_separate",
 ) -> tuple[tuple[str, str, str], ...]:
     """Return the indexed external and selected internal ALM surface pairs."""
     validated = validate_internal_contact_configuration(configuration)
     return (_EXTERNAL_CONTACT_GROUP, *_INTERNAL_CONTACT_GROUPS[validated])
 
 
-def build_project_parameters_data() -> dict[str, Any]:
-    """Build the single source for the Phase 4M initialization configuration."""
+def build_project_parameters_data(
+    internal_contact_configuration: str = "sides_separate",
+) -> dict[str, Any]:
+    """Build the Phase 4M configuration for the selected contact policy."""
+    groups = indentation_contact_groups(internal_contact_configuration)
     assume_master_slave = {
-        str(index): [slave]
-        for index, (slave, _) in enumerate(CONTACT_GROUPS)
+        str(index): [slave] for index, (_, slave, _) in enumerate(groups)
     }
     contact_model_part = {
         str(index): [slave, master]
-        for index, (slave, master) in enumerate(CONTACT_GROUPS)
+        for index, (_, slave, master) in enumerate(groups)
     }
     return {
         "problem_data": {
@@ -226,17 +224,21 @@ def build_project_parameters_data() -> dict[str, Any]:
     }
 
 
-def build_project_parameters_json() -> str:
+def build_project_parameters_json(
+    internal_contact_configuration: str = "sides_separate",
+) -> str:
     """Serialize the shared settings for ``KM.Parameters``."""
-    return json.dumps(build_project_parameters_data())
+    return json.dumps(
+        build_project_parameters_data(internal_contact_configuration)
+    )
 
 
 def build_indentation_project_parameters_data(
     number_of_steps: int,
-    internal_contact_configuration: str = "three_pairs",
+    internal_contact_configuration: str = "sides_separate",
     solver_settings: IndentationSolverSettings | None = None,
 ) -> dict[str, Any]:
-    """Build the common Phase 4I nonlinear solve and four-pair ALM settings."""
+    """Build the common Phase 4I nonlinear solve and selected ALM settings."""
     if (
         not isinstance(number_of_steps, int)
         or isinstance(number_of_steps, bool)
@@ -289,7 +291,7 @@ def build_indentation_project_parameters_data(
 
 def build_indentation_project_parameters_json(
     number_of_steps: int,
-    internal_contact_configuration: str = "three_pairs",
+    internal_contact_configuration: str = "sides_separate",
     solver_settings: IndentationSolverSettings | None = None,
 ) -> str:
     """Serialize the common Phase 4I settings for ``KM.Parameters``."""

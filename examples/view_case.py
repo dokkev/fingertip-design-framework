@@ -23,17 +23,21 @@ DEMO_INDENTER_OPTICS = IndenterOptics(
     boundary_model="dielectric",
     refractive_index=1.5,
 )
-FEM_STEPS = 12
+
+
 
 
 def main() -> int:
     tip = Fingertip()
-    indenter = IndenterSettings(initial_gap_mm=0.0)
+    indenter = IndenterSettings(
+        radius_mm=3.0,
+        initial_gap_mm=0.0,
+    )
     case = FingertipCase(
         fingertip=tip,
         fea=FEA2D(
             indenter=indenter,
-            steps=FEM_STEPS,
+            steps=12,
             contact=ContactState(
                 location_x_mm=0.0,
                 indentation_mm=1,
@@ -43,13 +47,6 @@ def main() -> int:
         raytracing=RayTracing2D(
             settings=Transport3DSettings(
                 mode="planar",
-                ray_count=256,
-                max_interactions=8,
-                surface_u_bins=64,
-                surface_z_bins=16,
-                projected_grid_width=96,
-                projected_grid_height=96,
-                internal_z_bins=8,
                 retain_projected_segments=True,
             ),
             indenter_optics=DEMO_INDENTER_OPTICS,

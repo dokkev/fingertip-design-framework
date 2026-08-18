@@ -89,7 +89,9 @@ class FingertipParameters:
     link share one full width: ``flat_pad_width``. The link-pad interface is
     ``y = 0`` and the distal direction is negative ``y``. ``void_width`` is
     the one-sided clearance beside the stem; ``void_height`` is the
-    additional clearance below the stem tip.
+    additional clearance below the stem tip. Production zero-height
+    morphology uses a bonded basal stem/pad interface; positive height
+    remains a finite-clearance diagnostic geometry.
     """
 
     flat_pad_width: float = 30.0

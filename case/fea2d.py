@@ -23,7 +23,7 @@ class FEA2D:
         default_factory=lambda: mesh_settings_for_level("medium")
     )
     steps: int = 48
-    internal_contact: str = "three_pairs"
+    internal_contact: str = "sides_separate"
     result: FEAResult | None = field(default=None, init=False)
 
     def __post_init__(self) -> None:
