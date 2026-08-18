@@ -161,7 +161,8 @@ class DesignEvaluation:
     limiting_trajectory: TrajectoryScenario | None
     limiting_diameter_mm: float | None
     limiting_location_x_mm: float | None
-    limiting_depth_mm: float | None
+    minimum_raw_contact_state: ContactScenario | None
+    minimum_raw_contact_depth_mm: float | None
     trajectories: tuple[TrajectoryEvaluation, ...]
     states: tuple[StateEvaluation, ...]
     diagnostics: Mapping[str, Any] = field(default_factory=dict)
@@ -204,6 +205,12 @@ class DesignEvaluation:
             self.limiting_trajectory, TrajectoryScenario
         ):
             raise TypeError("limiting_trajectory must be a TrajectoryScenario or None")
+        if self.minimum_raw_contact_state is not None and not isinstance(
+            self.minimum_raw_contact_state, ContactScenario
+        ):
+            raise TypeError(
+                "minimum_raw_contact_state must be a ContactScenario or None"
+            )
         for name in ("limiting_diameter_mm", "limiting_location_x_mm"):
             value = getattr(self, name)
             if value is not None:
@@ -212,11 +219,15 @@ class DesignEvaluation:
                     name,
                     _finite_metric(name, value),
                 )
-        if self.limiting_depth_mm is not None:
+        if self.minimum_raw_contact_depth_mm is not None:
             object.__setattr__(
                 self,
-                "limiting_depth_mm",
-                _finite_metric("limiting_depth_mm", self.limiting_depth_mm, nonnegative=True),
+                "minimum_raw_contact_depth_mm",
+                _finite_metric(
+                    "minimum_raw_contact_depth_mm",
+                    self.minimum_raw_contact_depth_mm,
+                    nonnegative=True,
+                ),
             )
         object.__setattr__(self, "trajectories", tuple(self.trajectories))
         object.__setattr__(self, "states", tuple(self.states))
@@ -270,7 +281,8 @@ def _failure(
         limiting_trajectory=None,
         limiting_diameter_mm=None,
         limiting_location_x_mm=None,
-        limiting_depth_mm=None,
+        minimum_raw_contact_state=None,
+        minimum_raw_contact_depth_mm=None,
         trajectories=trajectories,
         states=states,
         failure_message=message,
@@ -601,7 +613,8 @@ class DesignEvaluator:
             limiting_trajectory=limiting_trajectory,
             limiting_diameter_mm=limiting_trajectory.diameter_mm,
             limiting_location_x_mm=limiting_trajectory.location_x_mm,
-            limiting_depth_mm=limiting_state.state.indentation_mm,
+            minimum_raw_contact_state=limiting_state.state,
+            minimum_raw_contact_depth_mm=limiting_state.state.indentation_mm,
             trajectories=tuple(trajectory_results),
             states=tuple(state_results),
             diagnostics={

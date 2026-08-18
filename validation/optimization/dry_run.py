@@ -9,11 +9,9 @@ from pathlib import Path
 import time
 from typing import Any
 
-from mesh import mesh_settings_for_level
-from model import FingertipParameters, LED, OpticalMaterial
-from optics.transport3d import Transport3DSettings
+from model import FingertipParameters
+from optimization import create_production_study
 from optimization.evaluator import DesignEvaluation, DesignEvaluator
-from optimization.scenarios import ScenarioGrid
 
 
 OUTPUT_PATH = Path("output/validation/optimization/dry_run/result.json")
@@ -56,7 +54,14 @@ def _evaluation_to_dict(
         },
         "limiting_diameter_mm": evaluation.limiting_diameter_mm,
         "limiting_location_x_mm": evaluation.limiting_location_x_mm,
-        "limiting_depth_mm": evaluation.limiting_depth_mm,
+        "minimum_raw_contact_state": None
+        if evaluation.minimum_raw_contact_state is None
+        else {
+            "location_x_mm": evaluation.minimum_raw_contact_state.location_x_mm,
+            "indenter_radius_mm": evaluation.minimum_raw_contact_state.indenter_radius_mm,
+            "indentation_mm": evaluation.minimum_raw_contact_state.indentation_mm,
+        },
+        "minimum_raw_contact_depth_mm": evaluation.minimum_raw_contact_depth_mm,
         "failure_message": evaluation.failure_message,
         "wall_time_seconds": wall_time_seconds,
         "captured_states_attempted": len(evaluation.states),
@@ -106,12 +111,17 @@ def _configuration(
         "scenario_grid": {
             "locations_x_mm": list(grid.locations_x_mm),
             "indenter_radii_mm": list(grid.indenter_radii_mm),
+            "indenter_diameters_mm": [
+                2.0 * radius for radius in grid.indenter_radii_mm
+            ],
             "captured_depths_mm": list(grid.captured_depths_mm),
             "trajectory_count": grid.trajectory_count,
             "captured_state_count": grid.captured_state_count,
         },
         "mesh_settings": asdict(evaluator.mesh_settings),
         "trace_settings": asdict(evaluator.trace_settings),
+        "optical_mode": evaluator.trace_settings.mode,
+        "indenter_optics": asdict(evaluator.indenter_optics),
         "fem_steps": evaluator.fem_steps,
         "internal_contact": evaluator.internal_contact,
         "basal_interface": evaluator.basal_interface,
@@ -121,16 +131,7 @@ def _configuration(
 
 def main() -> int:
     parameters = FingertipParameters()
-    evaluator = DesignEvaluator(
-        ScenarioGrid(),
-        mesh_settings=mesh_settings_for_level("medium"),
-        trace_settings=Transport3DSettings(mode="planar"),
-        led=LED(),
-        optical=OpticalMaterial(),
-        fem_steps=48,
-        internal_contact="sides_separate",
-        basal_interface="bonded",
-    )
+    evaluator = create_production_study().create_evaluator()
     result = {
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
         "parameters": asdict(parameters),

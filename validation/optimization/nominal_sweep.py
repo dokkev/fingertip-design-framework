@@ -14,17 +14,18 @@ from typing import Any, Mapping
 
 from scipy.stats import qmc
 
-from mesh import mesh_settings_for_level
 from model import (
     FingertipParameters,
-    LED,
-    OpticalMaterial,
     silicone_ligament_measures,
     validate_silicone_ligament,
 )
-from optics.transport3d import Transport3DSettings
+from optimization import (
+    PRODUCTION_FIXED_FLAT_PAD_WIDTH_MM,
+    PRODUCTION_SEARCH_BOUNDS,
+    ScenarioGrid,
+    create_production_study,
+)
 from optimization.evaluator import DesignEvaluation, DesignEvaluator
-from optimization.scenarios import ScenarioGrid
 from validation.common.io import atomic_write_json, strict_read_json
 from validation.common.runner import run_isolated
 from validation.optimization.dry_run import _evaluation_to_dict
@@ -36,13 +37,8 @@ SOBOL_SEED = 20260815
 SAMPLE_COUNT = 64
 SOBOL_EXPONENT = 6
 DESIGN_TIMEOUT_SECONDS = 1800.0
-FIXED_FLAT_PAD_WIDTH_MM = 30.0
-SWEPT_RANGES: tuple[tuple[str, float, float], ...] = (
-    ("flat_pad_height", 3.5, 6.5),
-    ("stem_width", 6.5, 9.0),
-    ("stem_height", 5.0, 7.5),
-    ("void_width", 0.5, 2.0),
-)
+FIXED_FLAT_PAD_WIDTH_MM = PRODUCTION_FIXED_FLAT_PAD_WIDTH_MM
+SWEPT_RANGES = PRODUCTION_SEARCH_BOUNDS
 OBJECTIVE_FIELDS = (
     "score",
     "minimum_auc",
@@ -65,6 +61,9 @@ def _scenario_configuration(grid: ScenarioGrid) -> dict[str, Any]:
     return {
         "locations_x_mm": list(grid.locations_x_mm),
         "indenter_radii_mm": list(grid.indenter_radii_mm),
+        "indenter_diameters_mm": [
+            2.0 * radius for radius in grid.indenter_radii_mm
+        ],
         "captured_depths_mm": list(grid.captured_depths_mm),
         "trajectory_count": grid.trajectory_count,
         "captured_state_count": grid.captured_state_count,
@@ -80,17 +79,7 @@ def _jsonable(value: Any) -> Any:
 
 
 def _create_evaluator() -> DesignEvaluator:
-    scenario_grid = ScenarioGrid()
-    return DesignEvaluator(
-        scenario_grid,
-        mesh_settings=mesh_settings_for_level("medium"),
-        trace_settings=Transport3DSettings(mode="planar"),
-        led=LED(),
-        optical=OpticalMaterial(),
-        fem_steps=48,
-        internal_contact="sides_separate",
-        basal_interface="bonded",
-    )
+    return create_production_study().create_evaluator()
 
 
 def _configuration() -> dict[str, Any]:
@@ -112,10 +101,11 @@ def _configuration() -> dict[str, Any]:
         "scenario_grid": _scenario_configuration(evaluator.scenario_grid),
         "mesh_settings": asdict(evaluator.mesh_settings),
         "trace_settings": asdict(evaluator.trace_settings),
-        "led": asdict(evaluator.led),
-        "optical": asdict(evaluator.optical),
+        "optical_mode": evaluator.trace_settings.mode,
+        "indenter_optics": asdict(evaluator.indenter_optics),
         "fem_steps": evaluator.fem_steps,
         "internal_contact": evaluator.internal_contact,
+        "basal_interface": evaluator.basal_interface,
         "timeout_seconds": DESIGN_TIMEOUT_SECONDS,
         "protocol": "pre-BO nominal morphology exploratory sweep",
     })

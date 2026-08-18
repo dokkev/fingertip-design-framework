@@ -13,7 +13,11 @@ from optics import IndenterOptics
 from optics.transport3d import Transport3DSettings
 from optimization.design_space import DesignSpace, DesignVariable
 from optimization.evaluator import DesignEvaluator
-from optimization.study import OptimizationStudy
+from optimization.study import (
+    PRODUCTION_SEARCH_BOUNDS,
+    OptimizationStudy,
+    create_production_study,
+)
 from optimization.scenarios import ScenarioGrid
 
 
@@ -96,6 +100,47 @@ def test_design_space_has_four_active_variables_and_derived_height() -> None:
     assert decoded.flat_pad_width == 30.0
     assert decoded.semielliptical_pad_height == 9.0
     assert decoded.void_height == 0.0
+
+
+def test_production_configuration_is_frozen() -> None:
+    study = create_production_study()
+    grid = study.scenario_grid
+
+    assert grid.indenter_radii_mm == (3.0, 5.0, 7.0, 10.0)
+    assert tuple(sorted({trajectory.diameter_mm for trajectory in grid.trajectories})) == (
+        6.0,
+        10.0,
+        14.0,
+        20.0,
+    )
+    assert grid.trajectory_count == 12
+    assert grid.captured_state_count == 48
+    assert study.indenter_optics == IndenterOptics("absorber")
+    assert study.trace_settings.mode == "planar"
+    assert study.fem_steps == 48
+    assert study.internal_contact == "sides_separate"
+    assert study.basal_interface == "bonded"
+    assert tuple(
+        (variable.name, variable.lower, variable.upper)
+        for variable in study.design_space.variables
+    ) == PRODUCTION_SEARCH_BOUNDS
+
+
+def test_validation_runners_share_production_configuration() -> None:
+    from validation.optimization import dry_run, nominal_sweep
+
+    evaluator = create_production_study().create_evaluator()
+    dry_configuration = dry_run._configuration(evaluator)
+    sweep_configuration = nominal_sweep._configuration()
+
+    assert dry_configuration["scenario_grid"] == sweep_configuration["scenario_grid"]
+    assert dry_configuration["trace_settings"] == sweep_configuration["trace_settings"]
+    assert dry_configuration["optical_mode"] == sweep_configuration["optical_mode"] == "planar"
+    assert dry_configuration["indenter_optics"] == sweep_configuration["indenter_optics"] == {
+        "boundary_model": "absorber",
+        "refractive_index": None,
+    }
+    assert nominal_sweep.SWEPT_RANGES == PRODUCTION_SEARCH_BOUNDS
 
 
 def _production_study(*, indenter_optics: IndenterOptics | None) -> OptimizationStudy:
@@ -181,6 +226,8 @@ def test_evaluator_uses_one_reference_twelve_fea_and_48_loaded_traces(monkeypatc
     assert result.minimum_auc == 1.0
     assert result.diagnostics["captured_state_count"] == 48
     assert asdict(parameters) == before
+    assert result.minimum_raw_contact_state == result.states[0].state
+    assert result.minimum_raw_contact_depth_mm == result.states[0].state.indentation_mm
     assert "indenter_pose" not in trace_calls[0][1]
     assert "indenter_optics" not in trace_calls[0][1]
     assert [call[1]["indenter_pose"] for call in trace_calls[1:]] == expected_poses

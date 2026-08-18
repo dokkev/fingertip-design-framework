@@ -5,14 +5,44 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from fem.kratos_settings import validate_basal_interface_configuration
-from mesh import MeshSettings
-from model import Fingertip, LED, OpticalMaterial
+from mesh import MeshSettings, mesh_settings_for_level
+from model import Fingertip, FingertipParameters, LED, OpticalMaterial
 from optics import IndenterOptics
 from optics.transport3d import Transport3DSettings
 
-from optimization.design_space import DesignSpace
+from optimization.design_space import (
+    OPTIMIZABLE_PARAMETER_NAMES,
+    DesignSpace,
+    DesignVariable,
+)
 from optimization.evaluator import DesignEvaluator
 from optimization.scenarios import ScenarioGrid
+
+
+PRODUCTION_FIXED_FLAT_PAD_WIDTH_MM = 30.0
+PRODUCTION_SEARCH_BOUNDS: tuple[tuple[str, float, float], ...] = (
+    ("flat_pad_height", 3.5, 6.5),
+    ("stem_width", 6.5, 9.0),
+    ("stem_height", 5.0, 7.5),
+    ("void_width", 0.5, 2.0),
+)
+
+
+def _production_design_space(
+    nominal_parameters: FingertipParameters | None = None,
+) -> DesignSpace:
+    nominal = FingertipParameters() if nominal_parameters is None else nominal_parameters
+    bounds = {name: (lower, upper) for name, lower, upper in PRODUCTION_SEARCH_BOUNDS}
+    variables = tuple(
+        DesignVariable(
+            name,
+            True,
+            bounds[name][0],
+            bounds[name][1],
+        )
+        for name in OPTIMIZABLE_PARAMETER_NAMES
+    )
+    return DesignSpace(nominal, variables)
 
 
 @dataclass(frozen=True)
@@ -107,4 +137,28 @@ class OptimizationStudy:
         )
 
 
-__all__ = ["OptimizationStudy"]
+def create_production_study(
+    *,
+    nominal_parameters: FingertipParameters | None = None,
+) -> OptimizationStudy:
+    """Build the frozen four-variable production optimization configuration."""
+    return OptimizationStudy(
+        design_space=_production_design_space(nominal_parameters),
+        scenario_grid=ScenarioGrid(),
+        mesh_settings=mesh_settings_for_level("medium"),
+        trace_settings=Transport3DSettings(mode="planar"),
+        led=LED(),
+        optical=OpticalMaterial(),
+        indenter_optics=IndenterOptics("absorber"),
+        fem_steps=48,
+        internal_contact="sides_separate",
+        basal_interface="bonded",
+    )
+
+
+__all__ = [
+    "OptimizationStudy",
+    "PRODUCTION_FIXED_FLAT_PAD_WIDTH_MM",
+    "PRODUCTION_SEARCH_BOUNDS",
+    "create_production_study",
+]

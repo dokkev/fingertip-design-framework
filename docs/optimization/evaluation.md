@@ -28,11 +28,17 @@ internal_contact = sides_separate
 The loading grid is:
 
 ```text
-diameters:       6, 10, 20, 40 mm
-radii:           3, 5, 10, 20 mm
+diameters:       6, 10, 14, 20 mm
+radii:           3, 5, 7, 10 mm
 locations:       x = 0, 4.5, 9.0 mm
 depth captures:  0.5, 1.0, 1.5, 2.0 mm
 ```
+
+The production contact object is an explicit ideal absorbing boundary,
+`IndenterOptics("absorber")`, representing a smooth bulk-black rigid polymer
+cylindrical probe. This is a transport abstraction rather than a claim of
+exactly zero physical reflectance; all physical probes should share the same
+material and smooth contact finish.
 
 Locations are one side of the symmetric fingertip. Opposite-side cases are a
 separate symmetry check, not additional production optimization variables.
@@ -73,7 +79,9 @@ The search backend maximizes `minimum_auc`; a minimization backend must use the
 explicit cost `-minimum_auc`.
 
 All 48 raw state metrics and all 12 AUC values are retained in the neutral
-`DesignEvaluation`, together with the limiting diameter, location, and depth.
+`DesignEvaluation`. `limiting_trajectory` identifies the trajectory with the
+minimum AUC; `minimum_raw_contact_state` independently identifies the state
+with the minimum raw `J_contact`.
 
 ## Exact-state provenance
 

@@ -192,21 +192,25 @@ For a 2 mm / 48-step trajectory:
 
 ## 7. Object Curvature Protocol
 
-Initial proposed indenter diameters:
+The frozen production indenter diameters are:
 
 \[
-D\in\{6,10,20,40\}\ \mathrm{mm}
+D\in\{6,10,14,20\}\ \mathrm{mm}
 \]
 
 equivalently:
 
 \[
-R\in\{3,5,10,20\}\ \mathrm{mm}
+R\in\{3,5,7,10\}\ \mathrm{mm}
 \]
 
-The purpose is to span localized/high-curvature through broad/low-curvature contact.
-
-These values may be replaced by the final physical indenter set if needed.
+The set spans localized/high-curvature through broad/low-curvature contact.
+The corresponding production optical boundary is the explicit ideal absorber
+`IndenterOptics("absorber")`, interpreted as a smooth bulk-black rigid polymer
+cylindrical indenter. A bulk-black material is preferred to a painted contact
+surface; matte paint or soft optical coatings can change roughness, friction,
+compliance, wear, and contact mechanics. The ideal absorber is a modeling
+abstraction, not a physical claim of exactly zero reflectance.
 
 ## 8. Contact Location Protocol
 
@@ -370,7 +374,7 @@ median depth-AUC
 
 limiting diameter
 limiting location
-limiting depth
+minimum raw contact state and depth
 
 reaction force at each depth
 contact width / active contact patch
@@ -409,7 +413,7 @@ MECHANICS
 
 CONTACT STATES
     depths    = 0.5, 1.0, 1.5, 2.0 mm
-    diameters = 6, 10, 20, 40 mm
+    diameters = 6, 10, 14, 20 mm
     locations = xi = 0, 0.3, 0.6
 
 OPTICS

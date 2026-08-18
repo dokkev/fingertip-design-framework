@@ -17,7 +17,12 @@ from optimization.scenarios import (
     ScenarioGrid,
     TrajectoryScenario,
 )
-from optimization.study import OptimizationStudy
+from optimization.study import (
+    OptimizationStudy,
+    PRODUCTION_FIXED_FLAT_PAD_WIDTH_MM,
+    PRODUCTION_SEARCH_BOUNDS,
+    create_production_study,
+)
 
 __all__ = [
     "ContactScenario",
@@ -28,8 +33,11 @@ __all__ = [
     "OPTIMIZABLE_PARAMETER_NAMES",
     "OptimizationStudy",
     "OptimizableParameterName",
+    "PRODUCTION_FIXED_FLAT_PAD_WIDTH_MM",
+    "PRODUCTION_SEARCH_BOUNDS",
     "StateEvaluation",
     "TrajectoryEvaluation",
     "ScenarioGrid",
     "TrajectoryScenario",
+    "create_production_study",
 ]

@@ -20,5 +20,12 @@ each of the 12 diameter/location pairs, capturing depths 0.5, 1.0, 1.5, and
 states. The optimization objective is the minimum across the 12 depth-AUC
 values of lateral `J_contact`; minimization callers use its negative.
 
+The frozen production indenter set is 6, 10, 14, and 20 mm diameter (radii
+3, 5, 7, and 10 mm). Loaded states use the explicit ideal boundary
+`IndenterOptics("absorber")`, representing a smooth bulk-black rigid polymer
+cylindrical probe. This is a modeling approximation; the physical probes
+should use one common bulk-black material and smooth finish, without soft or
+matte optical coatings on the contact surface.
+
 See [optimized-morphology-parameters.md](optimized-morphology-parameters.md)
 for the full protocol and [evaluation.md](evaluation.md) for the metric.
