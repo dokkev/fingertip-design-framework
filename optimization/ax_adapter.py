@@ -98,16 +98,19 @@ class AxRunResult:
 
     @property
     def ax_proposal_count(self) -> int:
-        """Return current-campaign nominal plus generated Ax proposals."""
-        return len(self.records)
+        """Return only trials created by ``get_next_trials``."""
+        return sum(record.phase != "nominal" for record in self.records)
 
     @property
     def duplicate_proposal_count(self) -> int:
-        return sum(record.status == "duplicate_skipped" for record in self.records)
+        return sum(
+            record.phase != "nominal" and record.status == "duplicate_skipped"
+            for record in self.records
+        )
 
     @property
     def new_evaluation_count(self) -> int:
-        return self.ax_proposal_count - self.duplicate_proposal_count
+        return sum(record.status != "duplicate_skipped" for record in self.records)
 
     @property
     def unique_success_count(self) -> int:
@@ -316,17 +319,52 @@ def _evaluate_trial(
 
 def _next_candidate(
     client: Client,
-    phase: AxTrialPhase,
     attempt: int,
-) -> tuple[int, Mapping[str, float]]:
-    """Request exactly one candidate through the public Ax client API."""
+) -> tuple[int, Mapping[str, float], AxTrialPhase]:
+    """Request one candidate and derive its phase from Ax's generation node."""
     generated = client.get_next_trials(max_trials=1)
     if len(generated) != 1:
         raise RuntimeError(
-            f"Ax returned {len(generated)} candidates for {phase} trial {attempt}; "
+            f"Ax returned {len(generated)} candidates for proposal {attempt}; "
             "expected exactly one"
         )
-    return next(iter(generated.items()))
+    trial_index, parameters = next(iter(generated.items()))
+    experiment = getattr(client, "_experiment", None)
+    trial = None if experiment is None else experiment.trials.get(trial_index)
+    generator_run = None if trial is None else trial.generator_run
+    node_name = (
+        None
+        if generator_run is None
+        else getattr(generator_run, "_generation_node_name", None)
+    )
+    if node_name is None:
+        node_name = getattr(client, "last_generation_node_name", None)
+    if node_name == "Sobol":
+        phase: AxTrialPhase = "initialization"
+    elif node_name == "MBM":
+        phase = "search"
+    else:
+        raise RuntimeError(
+            f"Ax proposal {attempt} has unsupported generation node {node_name!r}; "
+            "expected Sobol or MBM"
+        )
+    return trial_index, parameters, phase
+
+
+def _ax_ready_for_search(client: Client) -> bool:
+    """Return whether Ax has completed Sobol and is ready for MBM."""
+    generation_strategy = getattr(client, "_generation_strategy", None)
+    if generation_strategy is None:
+        return False
+    if getattr(generation_strategy, "current_node_name", None) == "MBM":
+        return True
+    current_node = getattr(generation_strategy, "current_node", None)
+    if current_node is None:
+        return False
+    should_transition, next_node = current_node.should_transition_to_next_node(
+        raise_data_required_error=False
+    )
+    return should_transition and next_node == "MBM"
 
 
 def run_ax_optimization(
@@ -432,6 +470,10 @@ def run_ax_optimization(
             record,
             wall_time_seconds=time.perf_counter() - started,
         )
+        records.append(record)
+        if on_record is not None:
+            on_record(client, tuple(records))
+
         if evaluation_registry is not None:
             evaluation = record.evaluation
             registry_record = evaluation_registry.register(
@@ -454,9 +496,9 @@ def run_ax_optimization(
                 evaluation_wall_time_seconds=record.wall_time_seconds,
             )
             record = replace(record, registry_key=registry_record.key)
-        records.append(record)
-        if on_record is not None:
-            on_record(client, tuple(records))
+            records[-1] = record
+            if on_record is not None:
+                on_record(client, tuple(records))
         return True
 
     nominal_values = {
@@ -476,42 +518,50 @@ def run_ax_optimization(
         nominal_values,
     )
 
-    consecutive_known = 0 if nominal_is_new else 1
+    # Nominal is a manually attached baseline, not an Ax proposal. A cached
+    # nominal therefore does not contribute to the generated-proposal stall
+    # counter or duplicate-proposal budget.
+    del nominal_is_new
+    consecutive_known = 0
     proposal_count = 0
 
-    def run_phase(phase: AxTrialPhase, target: int) -> bool:
-        nonlocal consecutive_known, proposal_count
-        completed_new = 0
-        while completed_new < target:
-            proposal_count += 1
-            trial_index, candidate = _next_candidate(
-                client,
-                phase,
-                proposal_count,
-            )
-            is_new = evaluate_and_record(trial_index, phase, candidate)
-            if is_new:
-                completed_new += 1
-                consecutive_known = 0
-                continue
+    # Ax owns the Sobol -> MBM transition. Failed/abandoned Sobol trials do
+    # not satisfy Ax's initialization criterion, so keep requesting candidates
+    # while Ax reports Sobol. Only NEW candidates generated by MBM consume the
+    # requested search budget.
+    search_evaluations = 0
+    while True:
+        proposal_count += 1
+        trial_index, candidate, phase = _next_candidate(
+            client,
+            proposal_count,
+        )
+        is_new = evaluate_and_record(trial_index, phase, candidate)
+        if not is_new:
             consecutive_known += 1
             if (
                 evaluation_registry is not None
                 and consecutive_known >= max_consecutive_known_proposals
             ):
-                return False
-        return True
+                return result(
+                    status="optimizer_stalled_on_known_evaluations",
+                    consecutive_known_proposals=consecutive_known,
+                )
+            continue
 
-    if not run_phase("initialization", settings.initialization_trials):
-        return result(
-            status="optimizer_stalled_on_known_evaluations",
-            consecutive_known_proposals=consecutive_known,
-        )
-    if not run_phase("search", settings.search_trials):
-        return result(
-            status="optimizer_stalled_on_known_evaluations",
-            consecutive_known_proposals=consecutive_known,
-        )
+        consecutive_known = 0
+        if (
+            settings.search_trials == 0
+            and phase == "initialization"
+            and _ax_ready_for_search(client)
+        ):
+            break
+        if phase == "search":
+            search_evaluations += 1
+            if search_evaluations >= settings.search_trials:
+                break
+        # A Sobol evaluation, including a failure, does not consume the MBM
+        # search budget. The next Ax request observes the real node transition.
 
     return result(
         consecutive_known_proposals=consecutive_known,

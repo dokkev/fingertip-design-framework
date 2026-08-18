@@ -7,6 +7,7 @@ from validation.optimization.bo_campaign import (
     _configuration,
     _import_historical_checkpoint,
     _plateau_assessment,
+    _write_summary,
 )
 from optimization.ax_adapter import AxSettings
 from optimization.evaluation_registry import EvaluationRegistry
@@ -109,3 +110,66 @@ def test_historical_checkpoint_imports_each_exact_result_once(tmp_path) -> None:
     assert len(records) == 2
     assert {record.status for record in records} == {"success", "optics_failure"}
     assert sum(record.minimum_auc is not None for record in records) == 1
+
+
+def test_summary_restores_known_nominal_and_overall_best(tmp_path) -> None:
+    study = create_production_study()
+    configuration = _configuration(
+        study,
+        AxSettings(initialization_trials=1, search_trials=1, seed=5),
+    )
+    registry = EvaluationRegistry(tmp_path / "registry.json")
+    nominal_parameters = {
+        "flat_pad_height": 5.0,
+        "stem_width": 7.6,
+        "stem_height": 6.0,
+        "void_width": 1.0,
+    }
+    historical_best_parameters = {
+        **nominal_parameters,
+        "flat_pad_height": 5.4,
+    }
+    for parameters, value, trial in (
+        (nominal_parameters, 0.4, 0),
+        (historical_best_parameters, 0.9, 8),
+    ):
+        registry.register(
+            PRODUCTION_EVALUATION_CONTRACT_ID,
+            parameters,
+            status="success",
+            first_trial_index=trial,
+            first_campaign_id="old-campaign",
+            result_artifact_path="output/old-campaign/checkpoint.json",
+            minimum_auc=value,
+            failure_category=None,
+            failure_message=None,
+            failure_scenario=None,
+            evaluation_wall_time_seconds=1.0,
+        )
+
+    nominal = _record(0, status="duplicate_skipped", value=None)
+    nominal["phase"] = "nominal"
+    nominal["parameters"] = nominal_parameters
+    current_best = _record(1, value=0.6)
+    state = {
+        "status": "COMPLETE",
+        "configuration": configuration,
+        "records": [nominal, current_best],
+        "ax_proposal_count": 1,
+        "new_evaluation_count": 1,
+        "duplicate_proposal_count": 0,
+        "unique_success_count": 1,
+        "unique_failure_count": 0,
+    }
+
+    _write_summary(
+        tmp_path,
+        state,
+        total_wall_time_seconds=2.0,
+        evaluation_registry=registry,
+    )
+    summary = (tmp_path / "summary.md").read_text(encoding="utf-8")
+    assert "Nominal baseline minimum_auc: 0.4" in summary
+    assert "Campaign new best minimum_auc: 0.6" in summary
+    assert "Overall known best minimum_auc: 0.9" in summary
+    assert "Overall known best source: ('old-campaign', 8)" in summary

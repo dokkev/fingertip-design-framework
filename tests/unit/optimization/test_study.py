@@ -80,8 +80,12 @@ def test_contract_id_fingerprints_the_frozen_production_inputs() -> None:
         "basal_interface": "bonded",
         "internal_contact": "sides_separate",
     }
-    assert PRODUCTION_EVALUATION_CONTRACT["objective"] == (
-        "maximize minimum depth-AUC of J_contact"
-    )
+    assert PRODUCTION_EVALUATION_CONTRACT["objective"] == {
+        "direction": "maximize",
+        "metric": "minimum_auc",
+        "state_metric": "lateral-L1/launched-v1",
+        "trajectory_aggregation": "trapz-J0-normalized-2mm-v1",
+        "study_aggregation": "min-trajectory-v1",
+    }
     assert PRODUCTION_EVALUATION_CONTRACT_ID.startswith("production-evaluation-v1-")
     assert len(PRODUCTION_EVALUATION_CONTRACT_ID.rsplit("-", 1)[1]) == 16

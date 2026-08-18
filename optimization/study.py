@@ -47,7 +47,13 @@ PRODUCTION_EVALUATION_CONTRACT: dict[str, object] = {
     "led": asdict(LED()),
     "optical_material": asdict(OpticalMaterial()),
     "indenter_optics": asdict(IndenterOptics("absorber")),
-    "objective": "maximize minimum depth-AUC of J_contact",
+    "objective": {
+        "direction": "maximize",
+        "metric": "minimum_auc",
+        "state_metric": "lateral-L1/launched-v1",
+        "trajectory_aggregation": "trapz-J0-normalized-2mm-v1",
+        "study_aggregation": "min-trajectory-v1",
+    },
 }
 PRODUCTION_EVALUATION_CONTRACT_ID = (
     "production-evaluation-v1-"

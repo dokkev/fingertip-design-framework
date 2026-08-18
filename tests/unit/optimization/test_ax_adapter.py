@@ -90,8 +90,17 @@ class _Trial:
 
 
 class _ClientDouble:
-    def __init__(self, candidates: list[Mapping[str, float]]) -> None:
+    def __init__(
+        self,
+        candidates: list[Mapping[str, float]],
+        generation_nodes: list[str] | None = None,
+    ) -> None:
         self._candidates = iter(candidates)
+        self._generation_nodes = iter(
+            generation_nodes
+            if generation_nodes is not None
+            else ["Sobol"] * len(candidates)
+        )
         self.trials: dict[int, _Trial] = {}
 
     def attach_trial(self, parameters, arm_name=None) -> int:
@@ -101,6 +110,7 @@ class _ClientDouble:
 
     def get_next_trials(self, max_trials: int):
         assert max_trials == 1
+        self.last_generation_node_name = next(self._generation_nodes)
         trial_index = self.attach_trial(next(self._candidates))
         return {trial_index: self.trials[trial_index].parameters}
 
@@ -182,7 +192,8 @@ def test_history_bootstrap_duplicate_abandon_and_unique_evaluation_budgets(
         minimum_auc=None,
     )
     client = _ClientDouble(
-        [KNOWN_FAILURE, NEW_INITIALIZATION, NOMINAL, NEW_SEARCH]
+        [KNOWN_FAILURE, NEW_INITIALIZATION, NOMINAL, NEW_SEARCH],
+        generation_nodes=["Sobol", "Sobol", "MBM", "MBM"],
     )
     evaluator = _CountingEvaluator(
         [_evaluation("success", 0.5), _evaluation("fea_failure")]
@@ -214,14 +225,21 @@ def test_history_bootstrap_duplicate_abandon_and_unique_evaluation_budgets(
     assert evaluator.calls == [NEW_INITIALIZATION, NEW_SEARCH]
     assert result.historical_success_count == 1
     assert result.historical_failure_count == 1
-    assert result.ax_proposal_count == 5
-    assert result.duplicate_proposal_count == 3
+    assert result.ax_proposal_count == 4
+    assert result.duplicate_proposal_count == 2
     assert result.new_evaluation_count == 2
     assert result.unique_success_count == 1
     assert result.unique_failure_count == 1
     assert [trial.status for trial in client.trials.values()].count("COMPLETED") == 2
     assert [trial.status for trial in client.trials.values()].count("FAILED") == 1
     assert [trial.status for trial in client.trials.values()].count("ABANDONED") == 4
+    assert [record.phase for record in result.records] == [
+        "nominal",
+        "initialization",
+        "initialization",
+        "search",
+        "search",
+    ]
     assert registry.lookup(
         PRODUCTION_EVALUATION_CONTRACT_ID, NEW_INITIALIZATION
     ).status == "success"
@@ -243,7 +261,10 @@ def test_known_proposals_do_not_consume_budget_and_trigger_stall_guard(
         trial_index=1,
         minimum_auc=None,
     )
-    client = _ClientDouble([KNOWN_FAILURE, NOMINAL, KNOWN_FAILURE])
+    client = _ClientDouble(
+        [KNOWN_FAILURE, NOMINAL, KNOWN_FAILURE],
+        generation_nodes=["Sobol", "Sobol", "Sobol"],
+    )
     evaluator = _CountingEvaluator([])
     study = create_production_study()
     monkeypatch.setattr(ax_adapter, "create_ax_client", lambda *_: client)
@@ -274,27 +295,83 @@ def test_known_proposals_do_not_consume_budget_and_trigger_stall_guard(
     )
 
 
+def test_checkpoint_hook_precedes_then_follows_registry_registration(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    client = _ClientDouble(
+        [NEW_INITIALIZATION, NEW_SEARCH],
+        generation_nodes=["Sobol", "MBM"],
+    )
+    evaluator = _CountingEvaluator(
+        [_evaluation("success", 0.4), _evaluation("success", 0.5), _evaluation("success", 0.6)]
+    )
+    registry = EvaluationRegistry(tmp_path / "registry.json")
+    events: list[tuple[str, str | None, bool]] = []
+
+    def on_record(_client, records) -> None:
+        record = records[-1]
+        known = registry.lookup(
+            PRODUCTION_EVALUATION_CONTRACT_ID,
+            record.parameters,
+        )
+        events.append((record.phase, record.registry_key, known is not None))
+
+    study = create_production_study()
+    monkeypatch.setattr(ax_adapter, "create_ax_client", lambda *_: client)
+    monkeypatch.setattr(
+        OptimizationStudy,
+        "create_evaluator",
+        lambda self: evaluator,
+    )
+    run_ax_optimization(
+        study,
+        AxSettings(1, 1, seed=3),
+        on_record=on_record,
+        evaluation_registry=registry,
+        evaluation_contract_id=PRODUCTION_EVALUATION_CONTRACT_ID,
+        campaign_id="checkpoint-ordering",
+        result_artifact_path="output/checkpoint-ordering/checkpoint.json",
+    )
+
+    assert events == [
+        ("nominal", None, False),
+        ("nominal", events[1][1], True),
+        ("initialization", None, False),
+        ("initialization", events[3][1], True),
+        ("search", None, False),
+        ("search", events[5][1], True),
+    ]
+
+
 def test_real_ax_accepts_historical_nominal_then_abandons_nominal_duplicate(
     monkeypatch,
     tmp_path,
 ) -> None:
     study = create_production_study()
-    settings = AxSettings(1, 0, seed=23)
+    settings = AxSettings(1, 1, seed=23)
     registry = EvaluationRegistry(tmp_path / "registry.json")
     _register(registry, NOMINAL, status="success", trial_index=0, minimum_auc=0.4)
     real_client = ax_adapter.create_ax_client(study, settings)
+    generated_calls = 0
 
     class _ForcedClient:
         def __getattr__(self, name):
             return getattr(real_client, name)
 
         def get_next_trials(self, max_trials: int):
+            nonlocal generated_calls
+            generated_calls += 1
             return real_client.get_next_trials(
                 max_trials=max_trials,
-                fixed_parameters=NEW_INITIALIZATION,
+                fixed_parameters=(
+                    NEW_INITIALIZATION if generated_calls == 1 else NEW_SEARCH
+                ),
             )
 
-    evaluator = _CountingEvaluator([_evaluation("success", 0.5)])
+    evaluator = _CountingEvaluator(
+        [_evaluation("success", 0.5), _evaluation("success", 0.6)]
+    )
     monkeypatch.setattr(ax_adapter, "create_ax_client", lambda *_: _ForcedClient())
     monkeypatch.setattr(
         OptimizationStudy,
@@ -314,8 +391,9 @@ def test_real_ax_accepts_historical_nominal_then_abandons_nominal_duplicate(
     assert [record.status for record in result.records] == [
         "duplicate_skipped",
         "success",
+        "success",
     ]
-    assert evaluator.calls == [NEW_INITIALIZATION]
+    assert evaluator.calls == [NEW_INITIALIZATION, NEW_SEARCH]
     assert result.historical_success_count == 1
     nominal = result.records[0]
     assert real_client._experiment.trials[nominal.trial_index].status.name == (
@@ -331,7 +409,7 @@ def test_real_ax_failed_point_can_be_reproposed_then_registry_abandons_it(
     study = create_production_study()
     settings = AxSettings(1, 1, seed=29)
     real_client = ax_adapter.create_ax_client(study, settings)
-    forced = iter((KNOWN_FAILURE, KNOWN_FAILURE, NEW_SEARCH))
+    forced = iter((KNOWN_FAILURE, KNOWN_FAILURE, NEW_INITIALIZATION, NEW_SEARCH))
 
     class _ForcedClient:
         def __getattr__(self, name):
@@ -347,6 +425,7 @@ def test_real_ax_failed_point_can_be_reproposed_then_registry_abandons_it(
         [
             _evaluation("success", 0.4),
             _evaluation("optics_failure"),
+            _evaluation("success", 0.5),
             _evaluation("success", 0.6),
         ]
     )
@@ -371,13 +450,31 @@ def test_real_ax_failed_point_can_be_reproposed_then_registry_abandons_it(
         "optics_failure",
         "duplicate_skipped",
         "success",
+        "success",
     ]
-    assert evaluator.calls == [NOMINAL, KNOWN_FAILURE, NEW_SEARCH]
+    assert [record.phase for record in result.records] == [
+        "nominal",
+        "initialization",
+        "initialization",
+        "initialization",
+        "search",
+    ]
+    assert evaluator.calls == [
+        NOMINAL,
+        KNOWN_FAILURE,
+        NEW_INITIALIZATION,
+        NEW_SEARCH,
+    ]
+    assert [
+        real_client._experiment.trials[record.trial_index]
+        .generator_run._generation_node_name
+        for record in result.records[1:]
+    ] == ["Sobol", "Sobol", "Sobol", "MBM"]
     failed, duplicate = result.records[1:3]
     assert real_client._experiment.trials[failed.trial_index].status.name == "FAILED"
     assert (
         real_client._experiment.trials[duplicate.trial_index].status.name
         == "ABANDONED"
     )
-    assert result.new_evaluation_count == 3
+    assert result.new_evaluation_count == 4
     assert result.duplicate_proposal_count == 1

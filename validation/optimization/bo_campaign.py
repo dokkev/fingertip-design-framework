@@ -24,6 +24,7 @@ from optimization.ax_adapter import (
 )
 from optimization.evaluation_registry import (
     EvaluationRegistry,
+    EvaluationRegistryRecord,
     SUPPORTED_EVALUATION_STATUSES,
 )
 from optimization.study import OptimizationStudy
@@ -41,7 +42,6 @@ HISTORICAL_CAMPAIGN_CHECKPOINTS = (
 CAMPAIGN_SEED = 20260818
 INITIALIZATION_TRIALS = 8
 SEARCH_TRIALS = 18
-TOTAL_ATTEMPTS = 1 + INITIALIZATION_TRIALS + SEARCH_TRIALS
 NEAR_BOUND_FRACTION = 0.05
 
 
@@ -108,11 +108,15 @@ def _configuration(
                 "search_trials": settings.search_trials,
                 "seed": settings.seed,
             },
-            "expected_attempts": {
+            "evaluation_budgets": {
                 "nominal": 1,
-                "initialization": settings.initialization_trials,
-                "search": settings.search_trials,
-                "total": TOTAL_ATTEMPTS,
+                "sobol_successful_evaluations": settings.initialization_trials,
+                "mbm_new_evaluations": settings.search_trials,
+                "minimum_new_evaluations": (
+                    1
+                    + settings.initialization_trials
+                    + settings.search_trials
+                ),
             },
             "production_search_bounds_mm": active_bounds,
             "scenario_grid": _scenario_configuration(study),
@@ -276,12 +280,15 @@ def _persist_checkpoint(
         for record in records
     ]
     state["records"] = payloads
+    generated = [record for record in payloads if record["phase"] != "nominal"]
     duplicate_count = sum(
-        record["status"] == "duplicate_skipped" for record in payloads
+        record["status"] == "duplicate_skipped" for record in generated
     )
-    new_count = len(payloads) - duplicate_count
+    new_count = sum(
+        record["status"] != "duplicate_skipped" for record in payloads
+    )
     state["completed_attempts"] = new_count
-    state["ax_proposal_count"] = len(payloads)
+    state["ax_proposal_count"] = len(generated)
     state["new_evaluation_count"] = new_count
     state["duplicate_proposal_count"] = duplicate_count
     state["unique_success_count"] = sum(
@@ -296,7 +303,7 @@ def _persist_checkpoint(
     atomic_write_json(output / "checkpoint.json", state)
     _print_progress(
         payloads[-1],
-        ax_proposal_count=len(payloads),
+        ax_proposal_count=len(generated),
         new_evaluation_count=new_count,
     )
 
@@ -310,6 +317,31 @@ def _successful_records(
         if record.get("status") == "success"
         and record.get("minimum_auc") is not None
     ]
+
+
+def _registry_morphology(record: EvaluationRegistryRecord) -> dict[str, float]:
+    morphology = {
+        name: float(value) for name, value in record.morphology.items()
+    }
+    morphology["semielliptical_pad_height"] = (
+        14.0 - morphology["flat_pad_height"]
+    )
+    return morphology
+
+
+def _registry_best(
+    records: Sequence[EvaluationRegistryRecord],
+) -> EvaluationRegistryRecord | None:
+    successful = [
+        record
+        for record in records
+        if record.status == "success" and record.minimum_auc is not None
+    ]
+    return (
+        max(successful, key=lambda record: float(record.minimum_auc))
+        if successful
+        else None
+    )
 
 
 def _near_bound_names(parameters: Mapping[str, float]) -> list[str]:
@@ -451,15 +483,27 @@ def _write_summary(
     state: Mapping[str, Any],
     *,
     total_wall_time_seconds: float,
+    evaluation_registry: EvaluationRegistry | None = None,
 ) -> None:
     records = list(state["records"])
     successful = _successful_records(records)
     nominal = next(record for record in records if record["phase"] == "nominal")
-    best = (
+    campaign_best = (
         max(successful, key=lambda record: float(record["minimum_auc"]))
         if successful
         else None
     )
+    contract_id = str(
+        state["configuration"].get(
+            "evaluation_contract_id", PRODUCTION_EVALUATION_CONTRACT_ID
+        )
+    )
+    known_records = (
+        ()
+        if evaluation_registry is None
+        else evaluation_registry.records_for_contract(contract_id)
+    )
+    overall_known_best = _registry_best(known_records)
     top = sorted(
         successful,
         key=lambda record: float(record["minimum_auc"]),
@@ -471,19 +515,48 @@ def _write_summary(
         if record["status"] not in ("success", "duplicate_skipped")
     ]
     duplicates = [
-        record for record in records if record["status"] == "duplicate_skipped"
+        record
+        for record in records
+        if record["phase"] != "nominal"
+        and record["status"] == "duplicate_skipped"
     ]
-    nominal_auc = nominal.get("minimum_auc")
-    best_auc = None if best is None else best.get("minimum_auc")
+    known_nominal = (
+        None
+        if evaluation_registry is None
+        else evaluation_registry.lookup(contract_id, nominal["parameters"])
+    )
+    nominal_auc = (
+        None
+        if known_nominal is None or known_nominal.status != "success"
+        else known_nominal.minimum_auc
+    )
+    campaign_best_auc = (
+        None if campaign_best is None else campaign_best.get("minimum_auc")
+    )
+    overall_best_auc = (
+        None
+        if overall_known_best is None
+        else overall_known_best.minimum_auc
+    )
     absolute_improvement = (
         None
-        if best_auc is None or nominal_auc is None
-        else best_auc - nominal_auc
+        if campaign_best_auc is None or nominal_auc is None
+        else campaign_best_auc - nominal_auc
     )
     relative_improvement = (
         None
         if absolute_improvement is None or nominal_auc in (None, 0)
         else absolute_improvement / nominal_auc
+    )
+    overall_absolute_improvement = (
+        None
+        if overall_best_auc is None or nominal_auc is None
+        else overall_best_auc - nominal_auc
+    )
+    overall_relative_improvement = (
+        None
+        if overall_absolute_improvement is None or nominal_auc in (None, 0)
+        else overall_absolute_improvement / nominal_auc
     )
 
     cumulative: list[float | None] = []
@@ -530,12 +603,23 @@ def _write_summary(
         "",
         "## Objective results",
         "",
-        f"- Nominal minimum_auc: {nominal_auc}",
-        f"- Best minimum_auc: {best_auc}",
+        f"- Nominal baseline minimum_auc: {nominal_auc}",
+        f"- Campaign new best minimum_auc: {campaign_best_auc}",
+        f"- Overall known best minimum_auc: {overall_best_auc}",
         f"- Absolute improvement over nominal: {absolute_improvement}",
         f"- Relative improvement over nominal: {relative_improvement}",
-        f"- Best phase: {None if best is None else best['phase']}",
-        f"- Best morphology: {None if best is None else best['morphology']}",
+        f"- Overall known absolute improvement over nominal: "
+        f"{overall_absolute_improvement}",
+        f"- Overall known relative improvement over nominal: "
+        f"{overall_relative_improvement}",
+        f"- Campaign new best phase: "
+        f"{None if campaign_best is None else campaign_best['phase']}",
+        f"- Campaign new best morphology: "
+        f"{None if campaign_best is None else campaign_best.get('morphology', campaign_best['parameters'])}",
+        f"- Overall known best morphology: "
+        f"{None if overall_known_best is None else _registry_morphology(overall_known_best)}",
+        f"- Overall known best source: "
+        f"{None if overall_known_best is None else (overall_known_best.first_campaign_id, overall_known_best.first_trial_index)}",
         "",
         "## Top five successful morphologies",
         "",
@@ -543,7 +627,7 @@ def _write_summary(
         "|---:|---:|---|---:|---:|---:|---:|---:|",
     ]
     for rank, record in enumerate(top, start=1):
-        parameters = record["morphology"]
+        parameters = record.get("morphology", record["parameters"])
         lines.append(
             f"| {rank} | {record['trial_index']} | {record['phase']} | "
             f"{record['minimum_auc']:.12g} | "
@@ -556,7 +640,7 @@ def _write_summary(
         [
             "",
             f"Near-bound convention: a variable is near a bound when within {NEAR_BOUND_FRACTION:.0%} of its search span.",
-            f"Best near-bound variables: {[] if best is None else _near_bound_names(best['parameters'])}.",
+            f"Best near-bound variables: {[] if campaign_best is None else _near_bound_names(campaign_best['parameters'])}.",
             f"Top-five near-bound variables: {sorted({name for record in top for name in _near_bound_names(record['parameters'])})}.",
             "",
             "## Trial progression",
@@ -712,6 +796,7 @@ def run_campaign(
         output,
         state,
         total_wall_time_seconds=total_wall_time_seconds,
+        evaluation_registry=registry,
     )
     return result
 

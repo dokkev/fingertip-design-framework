@@ -107,3 +107,10 @@ abandoned without adding another objective observation; nearby morphologies
 remain valid candidates. Changing the scientific evaluation contract produces
 a different registry key. The registry is an index to the existing campaign
 artifact, not a copy of the 48-state result.
+
+The campaign checkpoint is persisted before a newly completed or failed
+evaluation is registered, then persisted once more with the registry key.
+This preserves the full scientific result if the process stops between the
+expensive evaluation and registry update. Ax proposal counts exclude the
+manually attached nominal baseline; initialization/search phase labels come
+from the actual Ax Sobol/MBM generation node.
