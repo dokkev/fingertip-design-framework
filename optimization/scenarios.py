@@ -71,12 +71,12 @@ class ScenarioGrid:
     """The production 12-trajectory, 48-state loading protocol.
 
     Defaults are diameters ``6, 10, 14, 20`` mm, one-sided locations
-    ``0, 4.5, 9`` mm, and captures at ``0.5, 1, 1.5, 2`` mm. Custom levels
+    ``0, 1.5, 3`` mm, and captures at ``0.5, 1, 1.5, 2`` mm. Custom levels
     remain useful for focused synthetic tests; production evaluation rejects
     a grid that is not the complete protocol.
     """
 
-    locations_x_mm: tuple[float, ...] = (0.0, 4.5, 9.0)
+    locations_x_mm: tuple[float, ...] = (0.0, 1.5, 3.0)
     indenter_radii_mm: tuple[float, ...] = (3.0, 5.0, 7.0, 10.0)
     captured_depths_mm: tuple[float, ...] = (0.5, 1.0, 1.5, 2.0)
     maximum_indentation_mm: float = 2.0
@@ -144,7 +144,7 @@ class ScenarioGrid:
     @property
     def is_production_protocol(self) -> bool:
         return (
-            self.locations_x_mm == (0.0, 4.5, 9.0)
+            self.locations_x_mm == (0.0, 1.5, 3.0)
             and self.indenter_radii_mm == (3.0, 5.0, 7.0, 10.0)
             and self.captured_depths_mm == (0.5, 1.0, 1.5, 2.0)
             and self.maximum_indentation_mm == 2.0

@@ -223,13 +223,13 @@ Because `flat_pad_width` is fixed at 30 mm, contact locations can be defined in 
 Recommended:
 
 \[
-\xi\in\{0,0.3,0.6\}
+\xi\in\{0,0.1,0.2\}
 \]
 
 For \(w_{fp}=30\) mm:
 
 \[
-x\in\{0,4.5,9.0\}\ \mathrm{mm}
+x\in\{0,1.5,3.0\}\ \mathrm{mm}
 \]
 
 Only one side is required during optimization if geometry and illumination remain symmetric. Opposite-side locations can be used later as a symmetry validation check.
@@ -414,7 +414,7 @@ MECHANICS
 CONTACT STATES
     depths    = 0.5, 1.0, 1.5, 2.0 mm
     diameters = 6, 10, 14, 20 mm
-    locations = xi = 0, 0.3, 0.6
+    locations = xi = 0, 0.1, 0.2
 
 OPTICS
     PLANAR_2D OptiX

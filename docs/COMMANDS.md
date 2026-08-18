@@ -160,6 +160,35 @@ python -m optics.optix.doctor --json
 `OPTIX_INCLUDE_DIR` / `CUDA_INCLUDE_DIR`, `OptiX_INSTALL_DIR` or `OPTIX_ROOT`
 (root and `include`), then the documented conventional CUDA/OptiX locations.
 
+On the `lit` environment used for this workspace, configure the checked-out
+OptiX SDK before running any OptiX-backed command:
+
+```bash
+conda activate lit
+export OPTIX_INCLUDE_DIR=/home/dk/workspace/optix-dev/include
+python -m optics.optix.doctor --json
+```
+
+The directory must contain both required headers:
+
+```bash
+test -f "$OPTIX_INCLUDE_DIR/optix.h"
+test -f "$OPTIX_INCLUDE_DIR/optix_device.h"
+```
+
+The equivalent root-based setting is:
+
+```bash
+export OptiX_INSTALL_DIR=/home/dk/workspace/optix-dev
+```
+
+For a one-off command without exporting the variable into the shell:
+
+```bash
+OPTIX_INCLUDE_DIR=/home/dk/workspace/optix-dev/include \
+python -m optics.optix.doctor --json
+```
+
 The focused NVIDIA OptiX transport validator uses the externally managed
 CUDA/OptiX environment documented in `README.md`:
 

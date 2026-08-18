@@ -30,7 +30,7 @@ The loading grid is:
 ```text
 diameters:       6, 10, 14, 20 mm
 radii:           3, 5, 7, 10 mm
-locations:       x = 0, 4.5, 9.0 mm
+locations:       x = 0, 1.5, 3.0 mm
 depth captures:  0.5, 1.0, 1.5, 2.0 mm
 ```
 
