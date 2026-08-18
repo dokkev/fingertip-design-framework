@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+import hashlib
+import json
 
 from fem.kratos_settings import validate_basal_interface_configuration
 from mesh import MeshSettings, mesh_settings_for_level
@@ -25,6 +27,37 @@ PRODUCTION_SEARCH_BOUNDS: tuple[tuple[str, float, float], ...] = (
     ("stem_width", 6.5, 9.0),
     ("stem_height", 5.0, 7.5),
     ("void_width", 0.5, 2.0),
+)
+
+PRODUCTION_EVALUATION_CONTRACT: dict[str, object] = {
+    "schema": "production-evaluation-v1",
+    "bounds_mm": PRODUCTION_SEARCH_BOUNDS,
+    "scenario_grid": {
+        "diameters_mm": (6.0, 10.0, 14.0, 20.0),
+        "locations_x_mm": (0.0, 1.5, 3.0),
+        "depths_mm": (0.5, 1.0, 1.5, 2.0),
+    },
+    "mesh_settings": asdict(mesh_settings_for_level("medium")),
+    "fem": {
+        "steps": 48,
+        "basal_interface": "bonded",
+        "internal_contact": "sides_separate",
+    },
+    "trace_settings": asdict(Transport3DSettings(mode="planar")),
+    "led": asdict(LED()),
+    "optical_material": asdict(OpticalMaterial()),
+    "indenter_optics": asdict(IndenterOptics("absorber")),
+    "objective": "maximize minimum depth-AUC of J_contact",
+}
+PRODUCTION_EVALUATION_CONTRACT_ID = (
+    "production-evaluation-v1-"
+    + hashlib.sha256(
+        json.dumps(
+            PRODUCTION_EVALUATION_CONTRACT,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()[:16]
 )
 
 
@@ -159,6 +192,8 @@ def create_production_study(
 __all__ = [
     "OptimizationStudy",
     "PRODUCTION_FIXED_FLAT_PAD_WIDTH_MM",
+    "PRODUCTION_EVALUATION_CONTRACT",
+    "PRODUCTION_EVALUATION_CONTRACT_ID",
     "PRODUCTION_SEARCH_BOUNDS",
     "create_production_study",
 ]

@@ -94,3 +94,16 @@ diagnostics from that converged FEM step. The evaluator passes that state to
 The transport result exposes `lateral_outgoing_profiles()` as display/metric
 post-processing of raw escaped events. It does not alter transport physics or
 the arrays used by mechanics.
+
+## Persistent production evaluation registry
+
+Production optimization keeps a persistent JSON `EvaluationRegistry` at
+`output/validation/optimization/evaluation_registry.json`. It keys the exact
+four-field morphology representation together with the versioned production
+evaluation contract, using lossless `float.hex()` values rather than rounded
+coordinates. Both successful and failed evaluations are registered. An exact
+duplicate is skipped before mesh, FEA, or OptiX work and its Ax trial is
+abandoned without adding another objective observation; nearby morphologies
+remain valid candidates. Changing the scientific evaluation contract produces
+a different registry key. The registry is an index to the existing campaign
+artifact, not a copy of the 48-state result.

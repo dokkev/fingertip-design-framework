@@ -10,19 +10,34 @@ import time
 from typing import Any, Mapping, Sequence
 
 from optics import IndenterOptics
-from optimization import PRODUCTION_SEARCH_BOUNDS, create_production_study
+from optimization import (
+    PRODUCTION_EVALUATION_CONTRACT_ID,
+    PRODUCTION_SEARCH_BOUNDS,
+    create_production_study,
+)
 from optimization.ax_adapter import (
     AxRunResult,
     AxSettings,
     AxTrialRecord,
+    MAX_CONSECUTIVE_KNOWN_PROPOSALS,
     run_ax_optimization,
 )
+from optimization.evaluation_registry import (
+    EvaluationRegistry,
+    SUPPORTED_EVALUATION_STATUSES,
+)
 from optimization.study import OptimizationStudy
-from validation.common.io import atomic_write_json
+from validation.common.io import atomic_write_json, strict_read_json
 from validation.optimization.dry_run import _evaluation_to_dict
 
 
 DEFAULT_OUTPUT = Path("output/validation/optimization/production_bo_20260818")
+DEFAULT_EVALUATION_REGISTRY = Path(
+    "output/validation/optimization/evaluation_registry.json"
+)
+HISTORICAL_CAMPAIGN_CHECKPOINTS = (
+    DEFAULT_OUTPUT / "checkpoint.json",
+)
 CAMPAIGN_SEED = 20260818
 INITIALIZATION_TRIALS = 8
 SEARCH_TRIALS = 18
@@ -109,9 +124,11 @@ def _configuration(
             "internal_contact": study.internal_contact,
             "basal_interface": study.basal_interface,
             "objective": "minimum_auc",
+            "evaluation_contract_id": PRODUCTION_EVALUATION_CONTRACT_ID,
+            "max_consecutive_known_proposals": MAX_CONSECUTIVE_KNOWN_PROPOSALS,
             "protocol": (
                 "one nominal, 8 Sobol initialization, "
-                "18 Ax search attempts"
+                "18 Ax search evaluations"
             ),
         }
     )
@@ -163,9 +180,7 @@ def _record_payload(
             total_states=total_states,
         )
     status = (
-        record.evaluation.status
-        if record.evaluation is not None
-        else "invalid_design"
+        record.status
     )
     limiting = (
         None
@@ -208,15 +223,25 @@ def _record_payload(
         ),
         "minimum_raw_contact_state": raw_minimum,
         "evaluation": evaluation_payload,
+        "registry_key": record.registry_key,
+        "duplicate_of_trial_index": record.duplicate_of_trial_index,
+        "duplicate_of_campaign_id": record.duplicate_of_campaign_id,
+        "duplicate_of_artifact_path": record.duplicate_of_artifact_path,
     }
 
 
-def _print_progress(record: Mapping[str, Any], completed: int) -> None:
+def _print_progress(
+    record: Mapping[str, Any],
+    *,
+    ax_proposal_count: int,
+    new_evaluation_count: int,
+) -> None:
     value = record.get("minimum_auc")
     value_text = "—" if value is None else f"{float(value):.12g}"
     wall = record.get("wall_time_seconds") or 0.0
     print(
-        f"[{completed:02d}/{TOTAL_ATTEMPTS}] {record['phase']} "
+        f"[Ax {ax_proposal_count:02d}; NEW {new_evaluation_count:02d}] "
+        f"{record['phase']} "
         f"trial={record['trial_index']} status={record['status']} "
         f"minimum_auc={value_text} wall={wall:.2f}s",
         flush=True,
@@ -232,6 +257,11 @@ def _initial_state(configuration: Mapping[str, Any]) -> dict[str, Any]:
         "configuration": dict(configuration),
         "records": [],
         "completed_attempts": 0,
+        "ax_proposal_count": 0,
+        "new_evaluation_count": 0,
+        "duplicate_proposal_count": 0,
+        "unique_success_count": 0,
+        "unique_failure_count": 0,
     }
 
 
@@ -246,11 +276,29 @@ def _persist_checkpoint(
         for record in records
     ]
     state["records"] = payloads
-    state["completed_attempts"] = len(payloads)
+    duplicate_count = sum(
+        record["status"] == "duplicate_skipped" for record in payloads
+    )
+    new_count = len(payloads) - duplicate_count
+    state["completed_attempts"] = new_count
+    state["ax_proposal_count"] = len(payloads)
+    state["new_evaluation_count"] = new_count
+    state["duplicate_proposal_count"] = duplicate_count
+    state["unique_success_count"] = sum(
+        record["status"] == "success" for record in payloads
+    )
+    state["unique_failure_count"] = sum(
+        record["status"] not in ("success", "duplicate_skipped")
+        for record in payloads
+    )
     state["updated_at"] = _now()
     atomic_write_json(output / "ax_client.json", client._to_json_snapshot())
     atomic_write_json(output / "checkpoint.json", state)
-    _print_progress(payloads[-1], len(payloads))
+    _print_progress(
+        payloads[-1],
+        ax_proposal_count=len(payloads),
+        new_evaluation_count=new_count,
+    )
 
 
 def _successful_records(
@@ -277,6 +325,127 @@ def _near_bound_names(parameters: Mapping[str, float]) -> list[str]:
     return names
 
 
+def _record_identity(record: Mapping[str, Any]) -> str:
+    registry_key = record.get("registry_key")
+    if isinstance(registry_key, str) and registry_key:
+        return registry_key
+    parameters = record["parameters"]
+    return ";".join(
+        f"{name}={float(parameters[name]).hex()}"
+        for name, _, _ in PRODUCTION_SEARCH_BOUNDS
+    )
+
+
+def _plateau_assessment(
+    records: Sequence[Mapping[str, Any]],
+    *,
+    window: int = 5,
+) -> str:
+    """Assess only unique successful search evaluations."""
+    unique: list[Mapping[str, Any]] = []
+    seen: set[str] = set()
+    for record in records:
+        if (
+            record.get("phase") != "search"
+            or record.get("status") != "success"
+            or record.get("minimum_auc") is None
+        ):
+            continue
+        identity = _record_identity(record)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        unique.append(record)
+    if len(unique) < window:
+        return "insufficient_data"
+
+    recent = unique[-window:]
+    earlier = unique[:-window]
+    if earlier:
+        baseline = max(float(record["minimum_auc"]) for record in earlier)
+        improved = any(
+            float(record["minimum_auc"]) > baseline for record in recent
+        )
+    else:
+        baseline = float(recent[0]["minimum_auc"])
+        improved = any(
+            float(record["minimum_auc"]) > baseline for record in recent[1:]
+        )
+    return "improved" if improved else "plateau"
+
+
+def _historical_configuration_matches(
+    configuration: Mapping[str, Any],
+    expected: Mapping[str, Any],
+) -> bool:
+    contract_fields = (
+        "production_search_bounds_mm",
+        "scenario_grid",
+        "mesh_settings",
+        "trace_settings",
+        "optical_mode",
+        "indenter_optics",
+        "fem_steps",
+        "internal_contact",
+        "basal_interface",
+        "objective",
+    )
+    return all(configuration.get(name) == expected.get(name) for name in contract_fields)
+
+
+def _import_historical_checkpoint(
+    registry: EvaluationRegistry,
+    checkpoint: Path,
+    *,
+    expected_configuration: Mapping[str, Any],
+) -> int:
+    """Index unique results from one matching completed campaign artifact."""
+    if not checkpoint.exists():
+        return 0
+    payload = strict_read_json(checkpoint)
+    configuration = payload.get("configuration")
+    if not isinstance(configuration, Mapping) or not _historical_configuration_matches(
+        configuration,
+        expected_configuration,
+    ):
+        raise RuntimeError(
+            f"historical campaign does not match production contract: {checkpoint}"
+        )
+    records = payload.get("records")
+    if not isinstance(records, list):
+        raise ValueError(f"historical campaign records must be a list: {checkpoint}")
+
+    imported = 0
+    for record in records:
+        if not isinstance(record, Mapping):
+            raise ValueError(f"historical campaign record is not an object: {checkpoint}")
+        status = record.get("status")
+        if status == "duplicate_skipped":
+            continue
+        if status not in SUPPORTED_EVALUATION_STATUSES:
+            raise ValueError(f"unsupported historical status {status!r}: {checkpoint}")
+        parameters = record.get("parameters")
+        if not isinstance(parameters, Mapping):
+            raise ValueError(f"historical record has no parameters: {checkpoint}")
+        if registry.lookup(PRODUCTION_EVALUATION_CONTRACT_ID, parameters) is not None:
+            continue
+        registry.register(
+            PRODUCTION_EVALUATION_CONTRACT_ID,
+            parameters,
+            status=str(status),
+            first_trial_index=int(record["trial_index"]),
+            first_campaign_id=checkpoint.parent.name,
+            result_artifact_path=str(checkpoint.resolve()),
+            minimum_auc=record.get("minimum_auc"),
+            failure_category=None if status == "success" else str(status),
+            failure_message=record.get("failure_message"),
+            failure_scenario=record.get("failure_scenario"),
+            evaluation_wall_time_seconds=record.get("wall_time_seconds"),
+        )
+        imported += 1
+    return imported
+
+
 def _write_summary(
     output: Path,
     state: Mapping[str, Any],
@@ -296,7 +465,14 @@ def _write_summary(
         key=lambda record: float(record["minimum_auc"]),
         reverse=True,
     )[:5]
-    failures = [record for record in records if record["status"] != "success"]
+    failures = [
+        record
+        for record in records
+        if record["status"] not in ("success", "duplicate_skipped")
+    ]
+    duplicates = [
+        record for record in records if record["status"] == "duplicate_skipped"
+    ]
     nominal_auc = nominal.get("minimum_auc")
     best_auc = None if best is None else best.get("minimum_auc")
     absolute_improvement = (
@@ -318,26 +494,7 @@ def _write_summary(
             current = float(value)
         cumulative.append(current)
 
-    search_records = [
-        record for record in records if record["phase"] == "search"
-    ]
-    late_records = search_records[-5:]
-    prior_late_best = max(
-        (
-            float(record["minimum_auc"])
-            for record in search_records[:-5]
-            if record.get("minimum_auc") is not None
-        ),
-        default=None,
-    )
-    late_improved = any(
-        record.get("minimum_auc") is not None
-        and (
-            prior_late_best is None
-            or float(record["minimum_auc"]) > prior_late_best
-        )
-        for record in late_records
-    )
+    plateau_assessment = _plateau_assessment(records)
 
     limiting_counts: dict[str, int] = {}
     for record in successful:
@@ -356,8 +513,19 @@ def _write_summary(
         f"- Status: {state['status']}",
         f"- Total wall time: {total_wall_time_seconds:.6f} s",
         f"- Seed: {state['configuration']['settings']['seed']}",
-        "- Budget: nominal 1, initialization 8, search 18, total 27 attempts",
-        f"- Successful / failed: {len(successful)} / {len(failures)}",
+        "- Budget: nominal 1, initialization 8, search 18 new evaluations; "
+        "duplicate proposals may add Ax trials",
+        f"- Successful / failed / duplicates skipped: "
+        f"{len(successful)} / {len(failures)} / {len(duplicates)}",
+        f"- Total Ax proposals: {state.get('ax_proposal_count', len(records))}",
+        f"- New expensive evaluations: "
+        f"{state.get('new_evaluation_count', len(records) - len(duplicates))}",
+        f"- Duplicate proposals: "
+        f"{state.get('duplicate_proposal_count', len(duplicates))}",
+        f"- Unique successes: {state.get('unique_success_count', len(successful))}",
+        f"- Unique failures: {state.get('unique_failure_count', len(failures))}",
+        f"- Stall status: "
+        f"{state['status'] == 'optimizer_stalled_on_known_evaluations'}",
         "- Protocol: diameters 6/10/14/20 mm, locations 0/1.5/3 mm, depths 0.5/1/1.5/2 mm, medium mesh, 48 steps, bonded+sides_separate, PLANAR_2D absorber",
         "",
         "## Objective results",
@@ -408,8 +576,8 @@ def _write_summary(
     lines.extend(
         [
             "",
-            f"Final five search trials improved the cumulative best: {late_improved}.",
-            f"Campaign-local plateau assessment: {not late_improved} (no global convergence claim).",
+            f"plateau_assessment = \"{plateau_assessment}\"",
+            "Plateau uses only the last five unique successful search evaluations.",
             "",
             "## Failure summary",
             "",
@@ -430,6 +598,16 @@ def _write_summary(
             )
     else:
         lines.append("No candidate failed.")
+    if duplicates:
+        lines.extend(
+            [
+                "",
+                "## Duplicate proposals skipped",
+                "",
+                f"{len(duplicates)} Ax proposals were abandoned without a "
+                "second scientific observation.",
+            ]
+        )
     lines.extend(
         [
             "",
@@ -461,7 +639,12 @@ def _write_summary(
     )
 
 
-def run_campaign(output: Path) -> AxRunResult:
+def run_campaign(
+    output: Path,
+    *,
+    registry_path: Path = DEFAULT_EVALUATION_REGISTRY,
+    historical_checkpoints: Sequence[Path] = HISTORICAL_CAMPAIGN_CHECKPOINTS,
+) -> AxRunResult:
     if output.exists() and any(output.iterdir()):
         raise FileExistsError(
             f"refusing to start a second campaign in {output}"
@@ -474,7 +657,18 @@ def run_campaign(output: Path) -> AxRunResult:
     )
     study = create_production_study()
     configuration = _configuration(study, settings)
+    registry = EvaluationRegistry(registry_path)
+    historical_import_count = sum(
+        _import_historical_checkpoint(
+            registry,
+            checkpoint,
+            expected_configuration=configuration,
+        )
+        for checkpoint in historical_checkpoints
+    )
     state = _initial_state(configuration)
+    state["evaluation_registry_path"] = str(registry.path)
+    state["historical_registry_records_imported"] = historical_import_count
     atomic_write_json(output / "checkpoint.json", state)
     started = time.perf_counter()
 
@@ -482,7 +676,16 @@ def run_campaign(output: Path) -> AxRunResult:
         _persist_checkpoint(output, state, client, records)
 
     try:
-        result = run_ax_optimization(study, settings, on_record=persist)
+        result = run_ax_optimization(
+            study,
+            settings,
+            on_record=persist,
+            evaluation_registry=registry,
+            evaluation_contract_id=PRODUCTION_EVALUATION_CONTRACT_ID,
+            campaign_id=output.name,
+            result_artifact_path=str((output / "checkpoint.json").resolve()),
+            max_consecutive_known_proposals=MAX_CONSECUTIVE_KNOWN_PROPOSALS,
+        )
     except Exception as exc:
         state["status"] = "ERROR"
         state["error"] = f"{type(exc).__name__}: {exc}"
@@ -492,7 +695,15 @@ def run_campaign(output: Path) -> AxRunResult:
         raise
 
     total_wall_time_seconds = time.perf_counter() - started
-    state["status"] = "COMPLETE"
+    state["status"] = result.status
+    state["consecutive_known_proposals"] = result.consecutive_known_proposals
+    state["ax_proposal_count"] = result.ax_proposal_count
+    state["new_evaluation_count"] = result.new_evaluation_count
+    state["duplicate_proposal_count"] = result.duplicate_proposal_count
+    state["unique_success_count"] = result.unique_success_count
+    state["unique_failure_count"] = result.unique_failure_count
+    state["historical_success_count"] = result.historical_success_count
+    state["historical_failure_count"] = result.historical_failure_count
     state["completed_at"] = _now()
     state["total_wall_time_seconds"] = total_wall_time_seconds
     state["updated_at"] = _now()
@@ -508,8 +719,16 @@ def run_campaign(output: Path) -> AxRunResult:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
+    parser.add_argument(
+        "--evaluation-registry",
+        type=Path,
+        default=DEFAULT_EVALUATION_REGISTRY,
+    )
     arguments = parser.parse_args(argv)
-    run_campaign(arguments.output)
+    run_campaign(
+        arguments.output,
+        registry_path=arguments.evaluation_registry,
+    )
     return 0
 
 
