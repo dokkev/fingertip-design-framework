@@ -171,9 +171,9 @@ Mitsuba remains an independent optional rendering check.
 ```bash
 LIT_PYTHON=/home/dk/miniconda3/envs/lit/bin/python
 
-$LIT_PYTHON -m pytest tests/unit -q
-$LIT_PYTHON -m pytest tests/smoke -q -m "not kratos"
-$LIT_PYTHON -m pytest tests/smoke -q -m kratos
+./scripts/pytest_lit tests/unit -q
+./scripts/pytest_lit tests/smoke -q -m "not kratos"
+./scripts/pytest_lit tests/smoke -q -m kratos
 
 $LIT_PYTHON -m validation.fingertip.geometry \
   --output-directory output/validation/fingertip/geometry

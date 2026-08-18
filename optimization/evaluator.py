@@ -406,7 +406,7 @@ class DesignEvaluator:
         trace_settings: Transport3DSettings,
         led: LED | None = None,
         optical: OpticalMaterial | None = None,
-        indenter_optics: IndenterOptics | None = None,
+        indenter_optics: IndenterOptics,
         fem_steps: int = 48,
         internal_contact: str = "sides_separate",
         basal_interface: str = "bonded",
@@ -428,10 +428,12 @@ class DesignEvaluator:
             raise TypeError("led must be an LED or None")
         if optical is not None and not isinstance(optical, OpticalMaterial):
             raise TypeError("optical must be an OpticalMaterial or None")
-        if indenter_optics is not None and not isinstance(
-            indenter_optics, IndenterOptics
-        ):
-            raise TypeError("indenter_optics must be an IndenterOptics or None")
+        if indenter_optics is None:
+            raise ValueError(
+                "production morphology evaluation requires explicit indenter_optics"
+            )
+        if not isinstance(indenter_optics, IndenterOptics):
+            raise TypeError("indenter_optics must be an IndenterOptics")
         if fem_steps != 48:
             raise ValueError("production morphology evaluation requires fem_steps=48")
         try:
@@ -517,18 +519,13 @@ class DesignEvaluator:
                 )
                 try:
                     captured = fea.captured_state(depth)
-                    loaded_kwargs: dict[str, Any] = {}
-                    if self.indenter_optics is not None:
-                        loaded_kwargs = {
-                            "indenter_pose": captured.indenter_pose,
-                            "indenter_optics": self.indenter_optics,
-                        }
                     loaded = trace_3d(
                         tip,
                         captured.deformed_mesh,
                         reference_mesh=mesh,
                         settings=self.trace_settings,
-                        **loaded_kwargs,
+                        indenter_pose=captured.indenter_pose,
+                        indenter_optics=self.indenter_optics,
                     )
                     metric = _contact_metric(reference, loaded)
                 except KeyError as exc:
@@ -560,6 +557,9 @@ class DesignEvaluator:
                         "active_external_node_ids": captured.active_external_node_ids,
                         "active_internal_node_ids": captured.active_internal_node_ids,
                         "contact_groups": captured.contact,
+                        "external_contact_width": captured.details[
+                            "external_contact_width"
+                        ],
                         "depth_mm": captured.depth_mm,
                         "exact_indenter_pose": captured.indenter_pose,
                     },

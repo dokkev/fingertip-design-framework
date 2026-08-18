@@ -39,10 +39,15 @@ It has no CLI or GUI entry point in this iteration.
 
 ## Tests
 
+Use the repository wrapper below for pytest.  It disables third-party plugin
+autoloading because ROS/ament pytest plugins can be exposed through the
+development shell even though this repository does not use ROS.  The raw
+arrays and project test configuration are unaffected.
+
 ```bash
-python -m pytest tests/unit -q
-python -m pytest tests/smoke -q -m "smoke and not kratos"
-python -m pytest tests/smoke -q -m kratos
+./scripts/pytest_lit tests/unit -q
+./scripts/pytest_lit tests/smoke -q -m "smoke and not kratos"
+./scripts/pytest_lit tests/smoke -q -m kratos
 ```
 
 ## Validation
@@ -174,12 +179,10 @@ machine-readable generated artifacts below
 `output/validation/optics/transport3d/`.
 
 The dependency-light focused contracts can be run without the optional GPU
-runtime (the environment here disables unrelated auto-loaded ROS pytest
-plugins):
+runtime:
 
 ```bash
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
-python -m pytest tests/unit/test_transport3d_contracts.py -q
+./scripts/pytest_lit tests/unit/test_transport3d_contracts.py -q
 ```
 
 All generated validation artifacts and figures are written below `output/`.

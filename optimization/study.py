@@ -25,7 +25,7 @@ class OptimizationStudy:
     trace_settings: Transport3DSettings
     led: LED
     optical: OpticalMaterial
-    indenter_optics: IndenterOptics | None = None
+    indenter_optics: IndenterOptics
     fem_steps: int = 48
     internal_contact: str = "sides_separate"
     basal_interface: str = "bonded"
@@ -43,10 +43,12 @@ class OptimizationStudy:
             raise TypeError("led must be an LED")
         if not isinstance(self.optical, OpticalMaterial):
             raise TypeError("optical must be an OpticalMaterial")
-        if self.indenter_optics is not None and not isinstance(
-            self.indenter_optics, IndenterOptics
-        ):
-            raise TypeError("indenter_optics must be an IndenterOptics or None")
+        if self.indenter_optics is None:
+            raise ValueError(
+                "production OptimizationStudy requires explicit indenter_optics"
+            )
+        if not isinstance(self.indenter_optics, IndenterOptics):
+            raise TypeError("indenter_optics must be an IndenterOptics")
         if (
             not isinstance(self.fem_steps, int)
             or isinstance(self.fem_steps, bool)
