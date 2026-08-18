@@ -3,8 +3,8 @@
 from optimization.evaluator import (
     DesignEvaluation,
     DesignEvaluator,
-    PairEvaluation,
-    ScenarioEvaluation,
+    StateEvaluation,
+    TrajectoryEvaluation,
 )
 from optimization.design_space import (
     DesignSpace,
@@ -15,7 +15,7 @@ from optimization.design_space import (
 from optimization.scenarios import (
     ContactScenario,
     ScenarioGrid,
-    ScenarioPair,
+    TrajectoryScenario,
 )
 from optimization.study import OptimizationStudy
 
@@ -28,8 +28,8 @@ __all__ = [
     "OPTIMIZABLE_PARAMETER_NAMES",
     "OptimizationStudy",
     "OptimizableParameterName",
-    "PairEvaluation",
-    "ScenarioEvaluation",
+    "StateEvaluation",
+    "TrajectoryEvaluation",
     "ScenarioGrid",
-    "ScenarioPair",
+    "TrajectoryScenario",
 ]

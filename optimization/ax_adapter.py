@@ -15,7 +15,7 @@ from optimization.evaluator import DesignEvaluation
 from optimization.study import OptimizationStudy
 
 
-AX_OBJECTIVE_NAME = "minimum_separability"
+AX_OBJECTIVE_NAME = "minimum_auc"
 AxTrialPhase = Literal["nominal", "initialization", "search"]
 
 
@@ -80,10 +80,10 @@ class AxRunResult:
             if (
                 evaluation is None
                 or evaluation.status != "success"
-                or evaluation.minimum_separability is None
+                or evaluation.minimum_auc is None
             ):
                 continue
-            value = evaluation.minimum_separability
+            value = evaluation.minimum_auc
             if best is None or best_value is None or value > best_value:
                 best = record
                 best_value = value
@@ -172,10 +172,10 @@ def _evaluate_trial(
                 failure_message=message,
             )
 
-        value = evaluation.minimum_separability
+        value = evaluation.minimum_auc
         if value is None:
             raise ValueError(
-                "successful DesignEvaluation has no minimum_separability"
+                "successful DesignEvaluation has no minimum_auc"
             )
         client.complete_trial(
             trial_index=trial_index,

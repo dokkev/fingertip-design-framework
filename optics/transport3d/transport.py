@@ -1115,6 +1115,8 @@ def trace_3d(
     reference_mesh: Any | None = None,
     settings: Transport3DSettings | None = None,
     runtime: Any | None = None,
+    indenter_pose: Any | None = None,
+    indenter_optics: Any | None = None,
 ) -> Transport3DResult:
     """Trace one neutral fingertip state through an OptiX periodic cell.
 
@@ -1141,6 +1143,8 @@ def trace_3d(
         full_mesh,
         depth_mm=trace_settings.extrusion_depth_mm,
         source_epsilon_mm=trace_settings.source_epsilon_mm,
+        indenter_pose=indenter_pose,
+        indenter_optics=indenter_optics,
     )
     return trace_geometry(tip, geometry, settings=trace_settings, runtime=runtime)
 

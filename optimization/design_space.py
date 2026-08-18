@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from itertools import product
+import math
 from math import isfinite
 from numbers import Real
 from typing import Literal, Mapping
@@ -12,23 +13,21 @@ from model import FingertipParameters, validate_silicone_ligament
 
 
 OptimizableParameterName = Literal[
-    "flat_pad_width",
     "flat_pad_height",
-    "semielliptical_pad_height",
     "stem_width",
     "stem_height",
     "void_width",
 ]
 
 OPTIMIZABLE_PARAMETER_NAMES: tuple[OptimizableParameterName, ...] = (
-    "flat_pad_width",
     "flat_pad_height",
-    "semielliptical_pad_height",
     "stem_width",
     "stem_height",
     "void_width",
 )
 _OPTIMIZABLE_PARAMETER_SET = frozenset(OPTIMIZABLE_PARAMETER_NAMES)
+_FIXED_FLAT_PAD_WIDTH_MM = 30.0
+_TOTAL_PAD_DEPTH_MM = 14.0
 
 
 def _finite_real(name: str, value: object) -> float:
@@ -67,11 +66,11 @@ class DesignVariable:
 
 @dataclass(frozen=True)
 class DesignSpace:
-    """Immutable nominal parameters plus the six-variable production contract.
+    """Immutable nominal parameters plus the four-variable production contract.
 
-    ``FingertipParameters.void_height`` remains a supported physical geometry
-    parameter, but production morphology search freezes it at zero so the
-    bonded basal stem/pad interface is not changed by candidate generation.
+    Production search varies only the four active morphology fields.  The
+    width, total pad depth, and zero-height basal clearance are fixed by the
+    protocol; the semi-elliptical height is derived from the flat height.
     """
 
     nominal_parameters: FingertipParameters
@@ -86,11 +85,26 @@ class DesignSpace:
                 "use FingertipParameters directly for historical or diagnostic "
                 "nonzero bottom clearance"
             )
+        if self.nominal_parameters.flat_pad_width != _FIXED_FLAT_PAD_WIDTH_MM:
+            raise ValueError(
+                "production DesignSpace requires flat_pad_width=30.0"
+            )
+        if not math.isclose(
+            self.nominal_parameters.flat_pad_height
+            + self.nominal_parameters.semielliptical_pad_height,
+            _TOTAL_PAD_DEPTH_MM,
+            rel_tol=0.0,
+            abs_tol=1.0e-12,
+        ):
+            raise ValueError(
+                "production DesignSpace requires flat_pad_height + "
+                "semielliptical_pad_height=14.0"
+            )
 
         variables = tuple(self.variables)
         if len(variables) != len(OPTIMIZABLE_PARAMETER_NAMES):
             raise ValueError(
-                "DesignSpace must contain exactly one entry for each of the six "
+                "DesignSpace must contain exactly one entry for each of the four "
                 "optimizable parameters"
             )
         if any(not isinstance(variable, DesignVariable) for variable in variables):
@@ -105,8 +119,13 @@ class DesignSpace:
             missing = _OPTIMIZABLE_PARAMETER_SET - set(by_name)
             unknown = set(by_name) - _OPTIMIZABLE_PARAMETER_SET
             raise ValueError(
-                "DesignSpace variables must contain exactly the six supported "
+                "DesignSpace variables must contain exactly the four supported "
                 f"parameters; missing={sorted(missing)!r}, unknown={sorted(unknown)!r}"
+            )
+        if any(not variable.optimize for variable in by_name.values()):
+            raise ValueError(
+                "production DesignSpace requires all four morphology variables "
+                "to be active"
             )
 
         object.__setattr__(
@@ -155,10 +174,22 @@ class DesignSpace:
             updates[variable.name] = value
 
         # FingertipParameters remains the authority for physical constraints;
-        # the optimization-only coupled ligament rule is enforced here.
-        candidate = replace(self.nominal_parameters, **updates)
-        if candidate.void_height != 0.0:
-            raise ValueError("production candidates must have void_height=0.0")
+        # fixed/derived fields are set explicitly rather than repaired after
+        # validation.  An infeasible candidate therefore raises immediately.
+        flat_height = updates.get(
+            "flat_pad_height", self.nominal_parameters.flat_pad_height
+        )
+        candidate = replace(
+            self.nominal_parameters,
+            **updates,
+            flat_pad_width=_FIXED_FLAT_PAD_WIDTH_MM,
+            semielliptical_pad_height=_TOTAL_PAD_DEPTH_MM - flat_height,
+            void_height=0.0,
+        )
+        if candidate.semielliptical_pad_height <= 0.0:
+            raise ValueError(
+                "flat_pad_height must leave a positive semielliptical height"
+            )
         validate_silicone_ligament(candidate)
         return candidate
 

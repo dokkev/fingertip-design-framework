@@ -451,5 +451,34 @@ class Transport3DResult:
         object.__setattr__(self, "geometry_metadata", _freeze_metadata(self.geometry_metadata))
         object.__setattr__(self, "timings_seconds", MappingProxyType({key: float(value) for key, value in self.timings_seconds.items()}))
 
+    def lateral_outgoing_profiles(
+        self,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Return common-edge outgoing profiles for the two lateral surfaces.
+
+        Profiles integrate escaped ray weights over the extrusion coordinate
+        and histogram only the semantic ``pad_outer_left`` and
+        ``pad_outer_right`` surfaces.  This is a neutral post-processing view;
+        the raw escape events and transport physics are unchanged.
+        """
+        left = np.asarray(self.escape_surface_tags, dtype=object) == "pad_outer_left"
+        right = np.asarray(self.escape_surface_tags, dtype=object) == "pad_outer_right"
+        left_profile = np.histogram(
+            self.escape_surface_u[left],
+            bins=self.surface_u_edges,
+            weights=self.escape_weights[left],
+        )[0].astype(float, copy=False)
+        right_profile = np.histogram(
+            self.escape_surface_u[right],
+            bins=self.surface_u_edges,
+            weights=self.escape_weights[right],
+        )[0].astype(float, copy=False)
+        edges = np.array(self.surface_u_edges, dtype=float, copy=True)
+        left_profile = np.array(left_profile, dtype=float, copy=True)
+        right_profile = np.array(right_profile, dtype=float, copy=True)
+        for array in (edges, left_profile, right_profile):
+            array.setflags(write=False)
+        return edges, left_profile, right_profile
+
 
 __all__ = ["Transport3DResult", "Transport3DResultError"]

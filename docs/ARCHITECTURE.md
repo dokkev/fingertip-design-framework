@@ -77,12 +77,11 @@ It does not replace mesh-based reference/loaded comparisons.
   `FEAResult.reference_mesh`. Case identity is derived from physical and
   numerical configuration, not free-form provenance.
 - `optics/` owns deterministic ray transport and adapters from neutral meshes
-  and displacement fields. Its public transport surface is `TraceSettings`,
-  `RaySegment`, `ExitEvent`, `TransportResult`, `trace()`, and `evaluate()`.
-  `optics.cross_section.trace()` remains a dependency-light NumPy-only reduced
-  2D path. The production `case.run_case()` path uses PLANAR_2D OptiX and
-  therefore requires the optional CUDA, CuPy, PyOptiX, and OptiX-header
-  environment.
+  and displacement fields. `optics.cross_section` remains the dependency-
+  light NumPy reduced 2D path; production morphology evaluation uses the
+  `optics.transport3d` `Transport3DSettings`, `Transport3DResult`, and
+  `trace_3d()` boundary in `PLANAR_2D` mode and therefore requires the optional
+  CUDA, CuPy, PyOptiX, and OptiX-header environment.
 - `mesh.indenter.IndenterPose2D` is the neutral mechanical-to-optical pose
   contract. A converged explicit-contact 2D solve carries the exact fixture,
   final prescribed travel, and mechanically identified active contact patch;
@@ -126,12 +125,13 @@ It does not replace mesh-based reference/loaded comparisons.
   it does not alter production defaults, constitutive/contact formulation, or
   downstream optical physics; generated reports remain under `output/`.
 - `optimization/design_space.py` owns algorithm-independent study geometry
-  variable and bound definitions. The production search has six active
-  morphology variables and freezes `FingertipParameters.void_height` at zero;
+  variable and bound definitions. The production search has four active
+  morphology variables, fixes the 30 mm/14 mm outer envelope, and freezes
+  `FingertipParameters.void_height` at zero;
   the generic parameter object still supports nonzero historical/diagnostic
   geometry. It does not import NiceGUI or an optimizer.
-- `OptimizationStudy` uses the validated 12-step FEM tier for production
-  search by default. Validation/reference callers explicitly request 48 steps;
+- `OptimizationStudy` and `DesignEvaluator` use one 48-step FEM trajectory per
+  diameter/location pair and four exact captured depth states per trajectory;
   low-level FEM defaults remain unchanged.
 - `gui/` is a top-level interactive consumer. It owns parameter editing,
   design-space presentation, validation feedback, and embedded visualization
@@ -139,11 +139,10 @@ It does not replace mesh-based reference/loaded comparisons.
   transport, or optimization algorithms.
 - `optimization/` is a top-level consumer of neutral `model`, `mesh`, `fem`,
   and `optics` APIs. It owns the algorithm-independent morphology design
-  space, fixed optimization-study configuration, contact-scenario protocols,
-  required adjacent scenario transitions, and aggregation of scientific
-  design scores. It does not own fingertip geometry, meshing, FEM, optical
-  transport, camera rendering, GUI code, optimizer algorithms, or
-  Ax/BoTorch models.
+  space, fixed optimization-study configuration, diameter/location loading
+  trajectories, captured-state aggregation, and scientific design scores. It
+  does not own fingertip geometry, meshing, FEM, optical transport, camera
+  rendering, GUI code, optimizer algorithms, or Ax/BoTorch models.
 
 - `case.ContactState` is the neutral physical location/indentation/radius
   contract. `optimization.scenarios.ContactScenario` specializes that state

@@ -4,12 +4,13 @@ Kratos is loaded lazily by the concrete adapter and solve modules so importing
 this package does not require the external Kratos environment.
 """
 
-from fem.solve import FEAResult, solve
+from fem.solve import FEACapturedState, FEAResult, solve
 from fem.solid3d import SolidFEAError, SolidFEAResult, SolidFEASettings, solve_solid_3d
 from mesh.indenter import IndenterPose2D, IndenterSettings
 
 __all__ = [
     "FEAResult",
+    "FEACapturedState",
     "IndenterSettings",
     "IndenterPose2D",
     "SolidFEAError",

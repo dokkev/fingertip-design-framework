@@ -1,16 +1,12 @@
-"""Immutable contact scenarios and their required Cartesian transitions."""
+"""Fixed morphology-search loading trajectories and captured contact states."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 import math
 from numbers import Real
-from typing import Literal
 
 from case.state import ContactState
-
-
-ScenarioAxis = Literal["location", "indentation", "radius"]
 
 
 def _finite_value(name: str, value: object) -> float:
@@ -23,7 +19,32 @@ def _finite_value(name: str, value: object) -> float:
 
 
 class ContactScenario(ContactState):
-    """Optimization-facing specialization of the neutral contact state."""
+    """One captured loaded state, retained for neutral optics provenance."""
+
+
+@dataclass(frozen=True, order=True)
+class TrajectoryScenario:
+    """One monotonic displacement-controlled trajectory."""
+
+    location_x_mm: float
+    indenter_radius_mm: float
+    maximum_indentation_mm: float = 2.0
+
+    def __post_init__(self) -> None:
+        location = _finite_value("location_x_mm", self.location_x_mm)
+        radius = _finite_value("indenter_radius_mm", self.indenter_radius_mm)
+        maximum = _finite_value(
+            "maximum_indentation_mm", self.maximum_indentation_mm
+        )
+        if radius <= 0.0 or maximum <= 0.0:
+            raise ValueError("trajectory radius and maximum indentation must be positive")
+        object.__setattr__(self, "location_x_mm", location)
+        object.__setattr__(self, "indenter_radius_mm", radius)
+        object.__setattr__(self, "maximum_indentation_mm", maximum)
+
+    @property
+    def diameter_mm(self) -> float:
+        return 2.0 * self.indenter_radius_mm
 
 
 def _validated_levels(
@@ -34,7 +55,10 @@ def _validated_levels(
 ) -> tuple[float, ...]:
     if not isinstance(values, tuple) or not values:
         raise ValueError(f"{name} must be a non-empty tuple")
-    resolved = tuple(_finite_value(f"{name}[{index}]", value) for index, value in enumerate(values))
+    resolved = tuple(
+        _finite_value(f"{name}[{index}]", value)
+        for index, value in enumerate(values)
+    )
     if positive and any(value <= 0.0 for value in resolved):
         raise ValueError(f"{name} values must be positive")
     if any(first >= second for first, second in zip(resolved, resolved[1:])):
@@ -44,119 +68,87 @@ def _validated_levels(
 
 @dataclass(frozen=True)
 class ScenarioGrid:
-    """Cartesian scenario levels with deterministic scenario/pair ordering.
+    """The production 12-trajectory, 48-state loading protocol.
 
-    Scenarios are ordered by radius, then indentation, then location. Required
-    pairs are ordered by axis (location, indentation, radius), then by the
-    unchanged outer levels and the adjacent level index within that axis.
+    Defaults are diameters ``6, 10, 20, 40`` mm, one-sided locations
+    ``0, 4.5, 9`` mm, and captures at ``0.5, 1, 1.5, 2`` mm. Custom levels
+    remain useful for focused synthetic tests; production evaluation rejects
+    a grid that is not the complete protocol.
     """
 
-    locations_x_mm: tuple[float, ...]
-    indentations_mm: tuple[float, ...]
-    indenter_radii_mm: tuple[float, ...]
+    locations_x_mm: tuple[float, ...] = (0.0, 4.5, 9.0)
+    indenter_radii_mm: tuple[float, ...] = (3.0, 5.0, 10.0, 20.0)
+    captured_depths_mm: tuple[float, ...] = (0.5, 1.0, 1.5, 2.0)
+    maximum_indentation_mm: float = 2.0
 
     def __post_init__(self) -> None:
-        object.__setattr__(
-            self,
-            "locations_x_mm",
-            _validated_levels("locations_x_mm", self.locations_x_mm, positive=False),
+        locations = _validated_levels(
+            "locations_x_mm", self.locations_x_mm, positive=False
         )
-        object.__setattr__(
-            self,
-            "indentations_mm",
-            _validated_levels("indentations_mm", self.indentations_mm, positive=True),
+        radii = _validated_levels(
+            "indenter_radii_mm", self.indenter_radii_mm, positive=True
         )
-        object.__setattr__(
-            self,
-            "indenter_radii_mm",
-            _validated_levels("indenter_radii_mm", self.indenter_radii_mm, positive=True),
+        depths = _validated_levels(
+            "captured_depths_mm", self.captured_depths_mm, positive=True
         )
+        maximum = _finite_value(
+            "maximum_indentation_mm", self.maximum_indentation_mm
+        )
+        if maximum <= 0.0:
+            raise ValueError("maximum_indentation_mm must be positive")
+        if depths[-1] > maximum + 1.0e-12:
+            raise ValueError("captured depths cannot exceed maximum indentation")
+        if abs(depths[-1] - maximum) > 1.0e-12:
+            raise ValueError(
+                "the final captured depth must equal maximum_indentation_mm"
+            )
+        object.__setattr__(self, "locations_x_mm", locations)
+        object.__setattr__(self, "indenter_radii_mm", radii)
+        object.__setattr__(self, "captured_depths_mm", depths)
+        object.__setattr__(self, "maximum_indentation_mm", maximum)
 
     @property
-    def scenarios(self) -> tuple[ContactScenario, ...]:
-        """Return scenarios in radius, indentation, location order."""
+    def trajectories(self) -> tuple[TrajectoryScenario, ...]:
+        """Return one trajectory for every radius/location combination."""
         return tuple(
-            ContactScenario(location, indentation, radius)
+            TrajectoryScenario(
+                location_x_mm=location,
+                indenter_radius_mm=radius,
+                maximum_indentation_mm=self.maximum_indentation_mm,
+            )
             for radius in self.indenter_radii_mm
-            for indentation in self.indentations_mm
             for location in self.locations_x_mm
         )
 
     @property
-    def adjacent_pairs(self) -> tuple[ScenarioPair, ...]:
-        """Return only adjacent transitions along one scenario axis."""
-        pairs: list[ScenarioPair] = []
-        for radius in self.indenter_radii_mm:
-            for indentation in self.indentations_mm:
-                for index in range(len(self.locations_x_mm) - 1):
-                    pairs.append(
-                        ScenarioPair(
-                            ContactScenario(
-                                self.locations_x_mm[index], indentation, radius
-                            ),
-                            ContactScenario(
-                                self.locations_x_mm[index + 1], indentation, radius
-                            ),
-                            "location",
-                        )
-                    )
-        for radius in self.indenter_radii_mm:
-            for location in self.locations_x_mm:
-                for index in range(len(self.indentations_mm) - 1):
-                    pairs.append(
-                        ScenarioPair(
-                            ContactScenario(
-                                location, self.indentations_mm[index], radius
-                            ),
-                            ContactScenario(
-                                location, self.indentations_mm[index + 1], radius
-                            ),
-                            "indentation",
-                        )
-                    )
-        for indentation in self.indentations_mm:
-            for location in self.locations_x_mm:
-                for index in range(len(self.indenter_radii_mm) - 1):
-                    pairs.append(
-                        ScenarioPair(
-                            ContactScenario(
-                                location, indentation, self.indenter_radii_mm[index]
-                            ),
-                            ContactScenario(
-                                location,
-                                indentation,
-                                self.indenter_radii_mm[index + 1],
-                            ),
-                            "radius",
-                        )
-                    )
-        return tuple(pairs)
-
-
-@dataclass(frozen=True)
-class ScenarioPair:
-    """One required adjacent transition along exactly one scenario axis."""
-
-    first: ContactScenario
-    second: ContactScenario
-    axis: ScenarioAxis
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.first, ContactScenario) or not isinstance(
-            self.second, ContactScenario
-        ):
-            raise TypeError("first and second must be ContactScenario values")
-        if self.axis not in ("location", "indentation", "radius"):
-            raise ValueError(f"unsupported scenario axis: {self.axis!r}")
-        differences = {
-            "location": self.first.location_x_mm != self.second.location_x_mm,
-            "indentation": self.first.indentation_mm != self.second.indentation_mm,
-            "radius": self.first.indenter_radius_mm != self.second.indenter_radius_mm,
-        }
-        if sum(differences.values()) != 1 or not differences[self.axis]:
-            raise ValueError(
-                "scenario pair must differ along exactly its declared axis"
+    def captured_states(self) -> tuple[ContactScenario, ...]:
+        """Return the captured state labels in trajectory/depth order."""
+        return tuple(
+            ContactScenario(
+                trajectory.location_x_mm,
+                depth,
+                trajectory.indenter_radius_mm,
             )
+            for trajectory in self.trajectories
+            for depth in self.captured_depths_mm
+        )
+
+    @property
+    def trajectory_count(self) -> int:
+        return len(self.trajectories)
+
+    @property
+    def captured_state_count(self) -> int:
+        return self.trajectory_count * len(self.captured_depths_mm)
+
+    @property
+    def is_production_protocol(self) -> bool:
+        return (
+            self.locations_x_mm == (0.0, 4.5, 9.0)
+            and self.indenter_radii_mm == (3.0, 5.0, 10.0, 20.0)
+            and self.captured_depths_mm == (0.5, 1.0, 1.5, 2.0)
+            and self.maximum_indentation_mm == 2.0
+        )
 
 
-__all__ = ["ContactScenario", "ScenarioAxis", "ScenarioGrid", "ScenarioPair"]
+__all__ = ["ContactScenario", "ScenarioGrid", "TrajectoryScenario"]

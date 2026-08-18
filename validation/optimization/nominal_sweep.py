@@ -22,7 +22,7 @@ from model import (
     silicone_ligament_measures,
     validate_silicone_ligament,
 )
-from optics import TraceSettings
+from optics.transport3d import Transport3DSettings
 from optimization.evaluator import DesignEvaluation, DesignEvaluator
 from optimization.scenarios import ScenarioGrid
 from validation.common.io import atomic_write_json, strict_read_json
@@ -39,21 +39,17 @@ DESIGN_TIMEOUT_SECONDS = 1800.0
 FIXED_FLAT_PAD_WIDTH_MM = 30.0
 SWEPT_RANGES: tuple[tuple[str, float, float], ...] = (
     ("flat_pad_height", 3.5, 6.5),
-    ("semielliptical_pad_height", 7.0, 11.0),
     ("stem_width", 6.5, 9.0),
     ("stem_height", 5.0, 7.5),
     ("void_width", 0.5, 2.0),
-    ("void_height", 0.0, 1.5),
 )
 OBJECTIVE_FIELDS = (
     "score",
-    "minimum_separability",
-    "mean_separability",
-    "median_separability",
-    "minimum_location_separability",
-    "minimum_indentation_separability",
-    "minimum_radius_separability",
-    "minimum_reference_field_difference",
+    "minimum_auc",
+    "mean_auc",
+    "median_auc",
+    "minimum_raw_contact_metric",
+    "mean_raw_contact_metric",
 )
 
 
@@ -68,10 +64,10 @@ def _now() -> str:
 def _scenario_configuration(grid: ScenarioGrid) -> dict[str, Any]:
     return {
         "locations_x_mm": list(grid.locations_x_mm),
-        "indentations_mm": list(grid.indentations_mm),
         "indenter_radii_mm": list(grid.indenter_radii_mm),
-        "scenario_count": len(grid.scenarios),
-        "pair_count": len(grid.adjacent_pairs),
+        "captured_depths_mm": list(grid.captured_depths_mm),
+        "trajectory_count": grid.trajectory_count,
+        "captured_state_count": grid.captured_state_count,
     }
 
 
@@ -84,20 +80,16 @@ def _jsonable(value: Any) -> Any:
 
 
 def _create_evaluator() -> DesignEvaluator:
-    scenario_grid = ScenarioGrid(
-        locations_x_mm=(-3.0, 3.0),
-        indentations_mm=(0.5, 1.0),
-        indenter_radii_mm=(4.0,),
-    )
+    scenario_grid = ScenarioGrid()
     return DesignEvaluator(
         scenario_grid,
         mesh_settings=mesh_settings_for_level("medium"),
-        trace_settings=TraceSettings(),
+        trace_settings=Transport3DSettings(mode="planar"),
         led=LED(),
         optical=OpticalMaterial(),
         fem_steps=48,
-        internal_contact="three_pairs",
-        basal_interface="explicit_contact",
+        internal_contact="sides_separate",
+        basal_interface="bonded",
     )
 
 
@@ -156,6 +148,9 @@ def _decoded_parameter_values(normalized_point: list[float]) -> dict[str, float]
         strict=True,
     ):
         updates[name] = lower + normalized * (upper - lower)
+    updates["flat_pad_width"] = FIXED_FLAT_PAD_WIDTH_MM
+    updates["semielliptical_pad_height"] = 14.0 - updates["flat_pad_height"]
+    updates["void_height"] = 0.0
     return updates
 
 
@@ -183,13 +178,13 @@ def _evaluation_record(
     evaluation: DesignEvaluation,
     *,
     wall_time_seconds: float,
-    total_scenarios: int,
+    total_states: int,
 ) -> dict[str, Any]:
     return _strip_failed_objectives(
         _evaluation_to_dict(
             evaluation,
             wall_time_seconds=wall_time_seconds,
-            total_scenarios=total_scenarios,
+            total_states=total_states,
         )
     )
 
@@ -251,7 +246,7 @@ def _run_child(arguments: argparse.Namespace) -> int:
         "evaluation": _evaluation_record(
             evaluation,
             wall_time_seconds=elapsed,
-            total_scenarios=len(evaluator.scenario_grid.scenarios),
+            total_states=evaluator.scenario_grid.captured_state_count,
         ),
     }
     atomic_write_json(arguments.result_path, result)
@@ -475,9 +470,8 @@ def _print_progress(
     nominal_objective: float | None,
 ) -> None:
     evaluation = record.get("evaluation") or {}
-    limiting_pair = evaluation.get("limiting_pair")
-    axis = limiting_pair.get("axis") if isinstance(limiting_pair, Mapping) else None
-    minimum = evaluation.get("minimum_separability")
+    limiting = evaluation.get("limiting_trajectory")
+    minimum = evaluation.get("minimum_auc")
     delta = (
         float(minimum) - nominal_objective
         if minimum is not None and nominal_objective is not None
@@ -488,9 +482,9 @@ def _print_progress(
         f"status={record.get('status')} "
         f"wall_s={_format(record.get('wall_time_seconds'))} "
         f"min_ligament_mm={_format(record.get('minimum_silicone_ligament_mm'))} "
-        f"min_sep={_format(minimum)} "
+        f"min_auc={_format(minimum)} "
         f"delta={_format(delta)} "
-        f"axis={axis or 'n/a'}"
+        f"limiting={limiting or 'n/a'}"
         + (
             f" failure={record['failure_message']}"
             if record.get("failure_message")
@@ -506,7 +500,7 @@ def _print_progress(
 
 def _nominal_objective(nominal_result: Mapping[str, Any]) -> float | None:
     evaluation = nominal_result.get("evaluation") or {}
-    value = evaluation.get("minimum_separability")
+    value = evaluation.get("minimum_auc")
     return None if value is None else float(value)
 
 
@@ -525,14 +519,14 @@ def _summary(
         and isinstance(candidate.get("evaluation"), Mapping)
     ]
     objectives = sorted(
-        float(candidate["evaluation"]["minimum_separability"])
+        float(candidate["evaluation"]["minimum_auc"])
         for candidate in successful
     )
     nominal_result = state.get("nominal_result") or {}
     nominal_objective = _nominal_objective(nominal_result)
     better_than_nominal = (
         sum(
-            float(candidate["evaluation"]["minimum_separability"])
+            float(candidate["evaluation"]["minimum_auc"])
             > nominal_objective
             for candidate in successful
         )
@@ -541,27 +535,25 @@ def _summary(
     )
     limiting_axis_counts: dict[str, int] = {}
     for candidate in successful:
-        pair = candidate["evaluation"].get("limiting_pair")
-        axis = pair.get("axis") if isinstance(pair, Mapping) else None
-        if axis is not None:
-            limiting_axis_counts[axis] = limiting_axis_counts.get(axis, 0) + 1
+        limiting = candidate["evaluation"].get("limiting_trajectory")
+        if limiting is not None:
+            key = str(limiting)
+            limiting_axis_counts[key] = limiting_axis_counts.get(key, 0) + 1
     top_candidates = sorted(
         successful,
         key=lambda candidate: float(
-            candidate["evaluation"]["minimum_separability"]
+            candidate["evaluation"]["minimum_auc"]
         ),
         reverse=True,
     )[:10]
     top_table = [
         {
             "candidate_index": candidate["candidate_index"],
-            "minimum_separability": candidate["evaluation"][
-                "minimum_separability"
-            ],
-            "mean_separability": candidate["evaluation"]["mean_separability"],
-            "limiting_axis": (
-                candidate["evaluation"].get("limiting_pair") or {}
-            ).get("axis"),
+            "minimum_auc": candidate["evaluation"]["minimum_auc"],
+            "mean_auc": candidate["evaluation"]["mean_auc"],
+            "limiting_trajectory": candidate["evaluation"].get(
+                "limiting_trajectory"
+            ),
             "parameters": candidate["parameters"],
             "side_ligament_mm": candidate["side_ligament_mm"],
             "distal_ligament_mm": candidate["distal_ligament_mm"],
@@ -590,7 +582,7 @@ def _summary(
         "process_failures": counts["process_failure"],
         "total_wall_time_seconds": sum(wall_times),
         "nominal_result": nominal_result,
-        "nominal_minimum_separability": nominal_objective,
+        "nominal_minimum_auc": nominal_objective,
         "objective_distribution": {
             "minimum": objectives[0] if objectives else None,
             "maximum": objectives[-1] if objectives else None,
@@ -618,7 +610,7 @@ def _print_nominal(result: Mapping[str, Any]) -> None:
         "nominal "
         f"status={result.get('status')} "
         f"wall_s={_format(result.get('wall_time_seconds'))} "
-        f"minimum_separability={_format(evaluation.get('minimum_separability'))}"
+        f"minimum_auc={_format(evaluation.get('minimum_auc'))}"
         + (
             f" failure={result['failure_message']}"
             if result.get("failure_message")

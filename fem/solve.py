@@ -28,6 +28,69 @@ from model import Fingertip
 
 
 @dataclass(frozen=True)
+class FEACapturedState:
+    """Neutral exact state captured during one monotonic indentation solve."""
+
+    depth_mm: float
+    mesh: PadMesh
+    reference_mesh: FingertipMesh
+    displacement: np.ndarray
+    reaction_force_n: float | None
+    contact: Mapping[str, Any]
+    indenter_pose: IndenterPose2D
+    active_external_node_ids: tuple[int, ...]
+    active_internal_node_ids: Mapping[str, tuple[int, ...]]
+    details: Mapping[str, Any]
+
+    def __post_init__(self) -> None:
+        depth = float(self.depth_mm)
+        if not math.isfinite(depth) or depth <= 0.0:
+            raise ValueError("captured depth must be a positive finite value")
+        if not isinstance(self.mesh, PadMesh):
+            raise TypeError("captured state mesh must be a PadMesh")
+        if not isinstance(self.reference_mesh, FingertipMesh):
+            raise TypeError("captured state reference_mesh must be a FingertipMesh")
+        if not isinstance(self.indenter_pose, IndenterPose2D):
+            raise TypeError("captured state indenter_pose must be IndenterPose2D")
+        values = np.array(self.displacement, dtype=float, copy=True)
+        if values.shape != self.mesh.coordinates.shape:
+            raise ValueError("captured displacement must have shape (N, 2)")
+        if not np.all(np.isfinite(values)):
+            raise ValueError("captured displacement must be finite")
+        values.setflags(write=False)
+        object.__setattr__(self, "depth_mm", depth)
+        object.__setattr__(self, "displacement", values)
+        if self.reaction_force_n is not None:
+            reaction = float(self.reaction_force_n)
+            if not math.isfinite(reaction):
+                raise ValueError("captured reaction force must be finite")
+            object.__setattr__(self, "reaction_force_n", reaction)
+        object.__setattr__(
+            self,
+            "active_external_node_ids",
+            tuple(int(node_id) for node_id in self.active_external_node_ids),
+        )
+        object.__setattr__(
+            self,
+            "active_internal_node_ids",
+            MappingProxyType(
+                {
+                    str(name): tuple(int(node_id) for node_id in node_ids)
+                    for name, node_ids in self.active_internal_node_ids.items()
+                }
+            ),
+        )
+
+    @property
+    def deformed_mesh(self) -> Any:
+        """Return this captured pad geometry without changing raw FEA data."""
+        return self.mesh.deformed(
+            self.displacement,
+            metadata={"condition": "loaded", "depth_mm": self.depth_mm},
+        )
+
+
+@dataclass(frozen=True)
 class FEAResult:
     """Neutral final state of one displacement-controlled indentation solve."""
 
@@ -40,6 +103,7 @@ class FEAResult:
     indenter_pose: IndenterPose2D | None = None
     reference_mesh: FingertipMesh | None = None
     element_von_mises_stress_mpa: Mapping[int, float] | None = None
+    captured_states: tuple[FEACapturedState, ...] = ()
 
     def __post_init__(self) -> None:
         if self.reaction_force is not None and not math.isfinite(
@@ -58,6 +122,30 @@ class FEAResult:
                 self.mesh.triangles,
             ):
                 raise ValueError("reference_mesh pad elements do not match mesh")
+        states = tuple(self.captured_states)
+        if any(not isinstance(state, FEACapturedState) for state in states):
+            raise TypeError("captured_states must contain FEACapturedState values")
+        if len({state.depth_mm for state in states}) != len(states):
+            raise ValueError("captured state depths must be unique")
+        if self.reference_mesh is not None:
+            for state in states:
+                if state.reference_mesh is not self.reference_mesh:
+                    if not (
+                        np.array_equal(
+                            state.reference_mesh.pad.node_ids,
+                            self.reference_mesh.pad.node_ids,
+                        )
+                        and np.array_equal(
+                            state.reference_mesh.pad.triangles,
+                            self.reference_mesh.pad.triangles,
+                        )
+                    ):
+                        raise ValueError(
+                            "captured state reference mesh does not match result"
+                        )
+                if not np.array_equal(state.mesh.node_ids, self.mesh.node_ids):
+                    raise ValueError("captured state pad topology does not match result")
+        object.__setattr__(self, "captured_states", tuple(sorted(states, key=lambda state: state.depth_mm)))
         if self.element_von_mises_stress_mpa is not None:
             stress = {
                 int(element_id): float(value)
@@ -99,6 +187,14 @@ class FEAResult:
             metadata={"condition": "loaded"},
         )
 
+    def captured_state(self, depth_mm: float) -> FEACapturedState:
+        """Return the exact state captured at ``depth_mm``."""
+        target = float(depth_mm)
+        for state in self.captured_states:
+            if math.isclose(state.depth_mm, target, rel_tol=0.0, abs_tol=1.0e-12):
+                return state
+        raise KeyError(f"no captured state at depth {target:g} mm")
+
 
 def solve(
     tip: Fingertip,
@@ -120,6 +216,66 @@ def solve(
         raise ValueError("mesh parameters do not match the fingertip")
 
     final_displacements: dict[int, tuple[float, float]] | None = None
+    captured_states: dict[float, FEACapturedState] = {}
+
+    def capture_state(step: ConvergedIndentationStep, depth: float) -> FEACapturedState:
+        pad_mesh = step.mesh.pad
+        displacement = np.asarray(
+            [step.displacements[int(node_id)] for node_id in pad_mesh.node_ids],
+            dtype=float,
+        )
+        external = step.result_point.get("contact_groups", {}).get(
+            "external_pad_indenter", {}
+        )
+        active_external = tuple(
+            int(node_id) for node_id in external.get("active_slave_node_ids", [])
+        )
+        active = set(active_external)
+        deformed_coordinates = pad_mesh.coordinates + displacement
+        patch_segments = [
+            LineString(
+                [
+                    deformed_coordinates[int(first)],
+                    deformed_coordinates[int(second)],
+                ]
+            )
+            for first, second in pad_mesh.boundaries.get("pad_outer_arc", ())
+            if int(pad_mesh.node_ids[int(first)]) in active
+            and int(pad_mesh.node_ids[int(second)]) in active
+        ]
+        contact_patch = None
+        if patch_segments:
+            merged = unary_union(patch_segments)
+            if isinstance(merged, LineString | MultiLineString):
+                contact_patch = merged
+        pose = pose_from_fixture(
+            step.fixture,
+            float(step.result_point["prescribed_indenter_travel_mm"]),
+            contact_patch=contact_patch,
+            active_contact_node_ids=active_external,
+        )
+        groups = step.result_point.get("contact_groups", {})
+        active_internal = {
+            str(name): tuple(
+                int(node_id)
+                for node_id in data.get("active_slave_node_ids", [])
+            )
+            for name, data in groups.items()
+            if name != "external_pad_indenter"
+        }
+        reaction = step.result_point.get("indenter_normal_reaction_n")
+        return FEACapturedState(
+            depth_mm=depth,
+            mesh=pad_mesh,
+            reference_mesh=step.mesh,
+            displacement=displacement,
+            reaction_force_n=None if reaction is None else float(reaction),
+            contact=dict(groups),
+            indenter_pose=pose,
+            active_external_node_ids=active_external,
+            active_internal_node_ids=active_internal,
+            details=dict(step.result_point),
+        )
 
     def capture(step: ConvergedIndentationStep) -> None:
         nonlocal final_displacements
@@ -127,6 +283,12 @@ def solve(
             int(node_id): (float(value[0]), float(value[1]))
             for node_id, value in step.displacements.items()
         }
+        depth = float(step.result_point["prescribed_indenter_travel_mm"])
+        if any(
+            math.isclose(depth, requested, rel_tol=0.0, abs_tol=1.0e-12)
+            for requested in step.settings.capture_depths_mm
+        ):
+            captured_states[depth] = capture_state(step, depth)
 
     fixture = build_normal_indenter_fixture_at_x(
         tip.geometry,
@@ -202,7 +364,8 @@ def solve(
         indenter_pose=indenter_pose,
         reference_mesh=mesh,
         element_von_mises_stress_mpa=stress,
+        captured_states=tuple(captured_states.values()),
     )
 
 
-__all__ = ["FEAResult", "solve"]
+__all__ = ["FEACapturedState", "FEAResult", "solve"]

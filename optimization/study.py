@@ -7,7 +7,8 @@ from dataclasses import dataclass
 from fem.kratos_settings import validate_basal_interface_configuration
 from mesh import MeshSettings
 from model import Fingertip, LED, OpticalMaterial
-from optics import IndenterOptics, TraceSettings
+from optics import IndenterOptics
+from optics.transport3d import Transport3DSettings
 
 from optimization.design_space import DesignSpace
 from optimization.evaluator import DesignEvaluator
@@ -21,13 +22,11 @@ class OptimizationStudy:
     design_space: DesignSpace
     scenario_grid: ScenarioGrid
     mesh_settings: MeshSettings
-    trace_settings: TraceSettings
+    trace_settings: Transport3DSettings
     led: LED
     optical: OpticalMaterial
     indenter_optics: IndenterOptics | None = None
-    # Production morphology search uses the validated fast tier.  Validation
-    # and finalist/reference callers pass 48 explicitly.
-    fem_steps: int = 12
+    fem_steps: int = 48
     internal_contact: str = "sides_separate"
     basal_interface: str = "bonded"
 
@@ -36,14 +35,10 @@ class OptimizationStudy:
             raise TypeError("design_space must be a DesignSpace")
         if not isinstance(self.scenario_grid, ScenarioGrid):
             raise TypeError("scenario_grid must be a ScenarioGrid")
-        if not self.scenario_grid.adjacent_pairs:
-            raise ValueError(
-                "scenario_grid must contain at least one required adjacent pair"
-            )
         if not isinstance(self.mesh_settings, MeshSettings):
             raise TypeError("mesh_settings must be MeshSettings")
-        if not isinstance(self.trace_settings, TraceSettings):
-            raise TypeError("trace_settings must be TraceSettings")
+        if not isinstance(self.trace_settings, Transport3DSettings):
+            raise TypeError("trace_settings must be Transport3DSettings")
         if not isinstance(self.led, LED):
             raise TypeError("led must be an LED")
         if not isinstance(self.optical, OpticalMaterial):
@@ -55,9 +50,9 @@ class OptimizationStudy:
         if (
             not isinstance(self.fem_steps, int)
             or isinstance(self.fem_steps, bool)
-            or self.fem_steps <= 0
+            or self.fem_steps != 48
         ):
-            raise ValueError("fem_steps must be a positive integer")
+            raise ValueError("production OptimizationStudy requires fem_steps=48")
         if not isinstance(self.internal_contact, str) or not self.internal_contact:
             raise ValueError("internal_contact must be a non-empty string")
         if not isinstance(self.basal_interface, str) or not self.basal_interface:
@@ -103,6 +98,7 @@ class OptimizationStudy:
             trace_settings=self.trace_settings,
             led=self.led,
             optical=self.optical,
+            indenter_optics=self.indenter_optics,
             fem_steps=self.fem_steps,
             internal_contact=self.internal_contact,
             basal_interface=self.basal_interface,
