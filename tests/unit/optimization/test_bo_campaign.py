@@ -16,7 +16,7 @@ from validation.optimization.registry_cleanup import (
     ABORTED_OPTIX_HEADER_FAILURE_SIGNATURE,
     cleanup_aborted_infrastructure_records,
 )
-from optics.transport3d.optix_backend import Transport3DDependencyError
+from optics.optix.smoke import ProductionOptixSmokeError
 from optimization.ax_adapter import (
     AxRunResult,
     AxSettings,
@@ -206,26 +206,28 @@ def _failed_preflight(message: str) -> dict[str, object]:
 
 
 @pytest.mark.parametrize(
-    "message",
+    ("message", "stage"),
     [
-        "Could not find a valid OptiX include directory",
-        "OptiX runtime setup failed: NVRTC compilation failed",
+        ("Could not find a valid OptiX include directory", "optix_header_resolution"),
+        ("NVRTC compilation failed", "nvrtc_compile"),
     ],
 )
 def test_optix_preflight_classifies_runtime_initialization_failure(
     monkeypatch,
     message: str,
+    stage: str,
 ) -> None:
     def fail_runtime():
-        raise Transport3DDependencyError(message)
+        raise ProductionOptixSmokeError(stage, message)
 
-    monkeypatch.setattr(bo_campaign, "create_runtime", fail_runtime)
+    monkeypatch.setattr(bo_campaign, "run_production_optix_smoke", fail_runtime)
 
     result = bo_campaign._optix_preflight()
 
     assert result["status"] == "FAIL"
     assert result["failure_category"] == "infrastructure_failure"
     assert result["failure_signature"] == "optix-runtime-initialization"
+    assert result["failure_stage"] == stage
     assert message in result["error"]
 
 

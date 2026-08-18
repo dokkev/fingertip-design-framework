@@ -10,9 +10,9 @@ import time
 from typing import Any, Mapping, Sequence
 
 from optics import IndenterOptics
-from optics.transport3d.optix_backend import (
-    Transport3DDependencyError,
-    create_runtime,
+from optics.optix.smoke import (
+    ProductionOptixSmokeError,
+    run_production_optix_smoke,
 )
 from optimization import (
     PRODUCTION_EVALUATION_CONTRACT_ID,
@@ -56,22 +56,34 @@ def _now() -> str:
 
 
 def _optix_preflight() -> dict[str, Any]:
-    """Validate the full OptiX setup before Ax creates any trial."""
+    """Run the same real OptiX smoke contract used by the operator CLI."""
     try:
-        runtime = create_runtime()
-    except Transport3DDependencyError as exc:
+        result = run_production_optix_smoke()
+    except ProductionOptixSmokeError as exc:
         return {
             "status": "FAIL",
             "failure_category": "infrastructure_failure",
             "failure_signature": OPTIX_RUNTIME_FAILURE_SIGNATURE,
+            "failure_stage": exc.stage,
             "error": f"{type(exc).__name__}: {exc}",
         }
+    except Exception as exc:  # pragma: no cover - defensive infrastructure boundary
+        return {
+            "status": "FAIL",
+            "failure_category": "infrastructure_failure",
+            "failure_signature": OPTIX_RUNTIME_FAILURE_SIGNATURE,
+            "failure_stage": "optix_runtime_initialization",
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+    evidence = result.to_dict()
     return {
         "status": "PASS",
         "failure_category": None,
         "failure_signature": None,
+        "failure_stage": None,
         "error": None,
-        "runtime_metadata": _jsonable(runtime.metadata),
+        "runtime_metadata": _jsonable(result.metadata),
+        "smoke": _jsonable(evidence),
     }
 
 

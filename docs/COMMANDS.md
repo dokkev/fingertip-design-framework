@@ -214,4 +214,25 @@ runtime:
 ./scripts/pytest_lit tests/unit/test_transport3d_contracts.py -q
 ```
 
+Before an unattended production BO campaign, run both environment diagnosis
+and the real runtime gate. The doctor is dependency diagnosis only: it checks
+imports, headers, and device visibility without compiling or launching a
+kernel. `production_optix_smoke` uses the production OptiX runtime to compile,
+construct a GAS/SBT, launch hit and miss rays, copy results back, and validate
+them. The BO preflight calls that same smoke function in-process; it does not
+shell out to the CLI.
+
+```bash
+conda run -n lit python -m optics.optix.doctor --json
+conda run -n lit python -m validation.optics.production_optix_smoke
+```
+
+Only after both commands report `PASS` should the production campaign be
+started:
+
+```bash
+conda run -n lit python -m validation.optimization.bo_campaign \
+  --output output/validation/optimization/production_bo_20260818
+```
+
 All generated validation artifacts and figures are written below `output/`.

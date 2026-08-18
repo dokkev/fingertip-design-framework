@@ -14,6 +14,15 @@ from optics.optix.paths import discover_paths
 class OptixRuntimeError(RuntimeError):
     """Raised when the optional CUDA/OptiX runtime cannot be created."""
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        stage: str = "optix_runtime_initialization",
+    ) -> None:
+        super().__init__(message)
+        self.stage = stage
+
 
 def _require_cuda_result(result: tuple[Any, ...], operation: str) -> tuple[Any, ...]:
     if int(result[0]) != 0:
@@ -61,20 +70,26 @@ class OptixRuntime:
         num_attribute_values: int,
     ) -> "OptixRuntime":
         started = time.perf_counter()
+        stage = "dependency_import"
         try:
             import cupy as cp
             import optix
             from cuda.bindings import nvrtc
         except Exception as exc:  # pragma: no cover - optional environment
             raise OptixRuntimeError(
-                "OptiX runtime requires CuPy, PyOptiX, and cuda-python"
+                "OptiX runtime requires CuPy, PyOptiX, and cuda-python: "
+                f"{type(exc).__name__}: {exc}",
+                stage=stage,
             ) from exc
         try:
+            stage = "optix_header_resolution"
             paths = discover_paths()
+            stage = "cuda_device"
             device = cp.cuda.Device()
             device.use()
             properties = cp.cuda.runtime.getDeviceProperties(device.id)
             compute_capability = f"{properties['major']}{properties['minor']}"
+            stage = "nvrtc_compile"
             (program,) = _require_cuda_result(
                 nvrtc.nvrtcCreateProgram(
                     device_source.encode(),
@@ -95,7 +110,8 @@ class OptixRuntime:
             if int(compiled[0]) != 0:
                 raise OptixRuntimeError(
                     f"NVRTC compilation failed: {compiled[0]}; "
-                    f"log: {_nvrtc_log(nvrtc, program)}"
+                    f"log: {_nvrtc_log(nvrtc, program)}",
+                    stage=stage,
                 )
             (ptx_size,) = _require_cuda_result(
                 nvrtc.nvrtcGetPTXSize(program), "nvrtcGetPTXSize"
@@ -106,7 +122,9 @@ class OptixRuntime:
                 nvrtc.nvrtcDestroyProgram(program), "nvrtcDestroyProgram"
             )
 
+            stage = "optix_context"
             context = optix.deviceContextCreate(0, optix.DeviceContextOptions())
+            stage = "optix_pipeline"
             module_options = optix.ModuleCompileOptions()
             pipeline_options = optix.PipelineCompileOptions()
             pipeline_options.traversableGraphFlags = (
@@ -145,6 +163,7 @@ class OptixRuntime:
                 max(size.cssCH for size in stack_sizes),
                 1,
             )
+            stage = "sbt_setup"
             sbt, sbt_records = cls._make_sbt(optix, cp, groups)
             metadata = {
                 "optix_version": ".".join(map(str, optix.version())),
@@ -172,10 +191,18 @@ class OptixRuntime:
                 metadata,
                 np.dtype(params_dtype),
             )
-        except OptixRuntimeError:
+        except OptixRuntimeError as exc:
+            if exc.stage == "optix_runtime_initialization":
+                raise OptixRuntimeError(str(exc), stage=stage) from exc
             raise
         except Exception as exc:  # pragma: no cover - optional API failure
-            raise OptixRuntimeError(f"OptiX runtime setup failed: {exc}") from exc
+            if stage == "optix_header_resolution":
+                message = str(exc)
+                if "CUDA" in message or "cuda" in message:
+                    stage = "cuda_header_resolution"
+            raise OptixRuntimeError(
+                f"OptiX runtime setup failed: {exc}", stage=stage
+            ) from exc
 
     @staticmethod
     def _make_sbt(optix: Any, cp: Any, groups: list[Any]) -> tuple[Any, list[Any]]:
