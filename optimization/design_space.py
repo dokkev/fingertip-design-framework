@@ -4,16 +4,20 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from itertools import product
-import math
 from math import isfinite
 from numbers import Real
 from typing import Literal, Mapping
 
-from model import FingertipParameters, validate_silicone_ligament
+from model import (
+    FingertipParameters,
+    validate_minimum_silicone_thickness,
+    validate_silicone_ligament,
+)
 
 
 OptimizableParameterName = Literal[
     "flat_pad_height",
+    "semielliptical_pad_height",
     "stem_width",
     "stem_height",
     "void_width",
@@ -22,6 +26,7 @@ OptimizableParameterName = Literal[
 
 OPTIMIZABLE_PARAMETER_NAMES: tuple[OptimizableParameterName, ...] = (
     "flat_pad_height",
+    "semielliptical_pad_height",
     "stem_width",
     "stem_height",
     "void_width",
@@ -29,13 +34,13 @@ OPTIMIZABLE_PARAMETER_NAMES: tuple[OptimizableParameterName, ...] = (
 )
 _OPTIMIZABLE_PARAMETER_SET = frozenset(OPTIMIZABLE_PARAMETER_NAMES)
 _FIXED_FLAT_PAD_WIDTH_MM = 30.0
-_TOTAL_PAD_DEPTH_MM = 14.0
 PRODUCTION_NOMINAL_VOID_HEIGHT_MM = 0.25
 PRODUCTION_SEARCH_BOUNDS: tuple[tuple[str, float, float], ...] = (
-    ("flat_pad_height", 3.5, 6.5),
-    ("stem_width", 6.5, 9.0),
-    ("stem_height", 5.0, 7.5),
-    ("void_width", 0.5, 2.0),
+    ("flat_pad_height", 3.0, 8.0),
+    ("semielliptical_pad_height", 5.0, 12.0),
+    ("stem_width", 5.0, 10.0),
+    ("stem_height", 4.0, 9.0),
+    ("void_width", 0.5, 4.0),
     ("void_height", 0.25, 3.0),
 )
 
@@ -76,12 +81,11 @@ class DesignVariable:
 
 @dataclass(frozen=True)
 class DesignSpace:
-    """Immutable nominal parameters plus the five-variable production contract.
+    """Immutable nominal parameters plus the six-variable production contract.
 
-    Production search varies the four established morphology fields plus the
-    validated positive basal clearance.  Width and total pad depth remain
-    fixed by the protocol; the semi-elliptical height is derived from the flat
-    height.
+    Flat and semi-elliptical pad heights are independent.  Candidate feasibility
+    is enforced by the authoritative fingertip validation plus the explicit
+    minimum-silicone-thickness rule; total pad depth is therefore free to vary.
     """
 
     nominal_parameters: FingertipParameters
@@ -91,25 +95,12 @@ class DesignSpace:
         if not isinstance(self.nominal_parameters, FingertipParameters):
             raise TypeError("nominal_parameters must be FingertipParameters")
         if self.nominal_parameters.flat_pad_width != _FIXED_FLAT_PAD_WIDTH_MM:
-            raise ValueError(
-                "production DesignSpace requires flat_pad_width=30.0"
-            )
-        if not math.isclose(
-            self.nominal_parameters.flat_pad_height
-            + self.nominal_parameters.semielliptical_pad_height,
-            _TOTAL_PAD_DEPTH_MM,
-            rel_tol=0.0,
-            abs_tol=1.0e-12,
-        ):
-            raise ValueError(
-                "production DesignSpace requires flat_pad_height + "
-                "semielliptical_pad_height=14.0"
-            )
+            raise ValueError("production DesignSpace requires flat_pad_width=30.0")
 
         variables = tuple(self.variables)
         if len(variables) != len(OPTIMIZABLE_PARAMETER_NAMES):
             raise ValueError(
-                "DesignSpace must contain exactly one entry for each of the five "
+                "DesignSpace must contain exactly one entry for each of the six "
                 "optimizable parameters"
             )
         if any(not isinstance(variable, DesignVariable) for variable in variables):
@@ -124,12 +115,12 @@ class DesignSpace:
             missing = _OPTIMIZABLE_PARAMETER_SET - set(by_name)
             unknown = set(by_name) - _OPTIMIZABLE_PARAMETER_SET
             raise ValueError(
-                "DesignSpace variables must contain exactly the five supported "
+                "DesignSpace variables must contain exactly the six supported "
                 f"parameters; missing={sorted(missing)!r}, unknown={sorted(unknown)!r}"
             )
         if any(not variable.optimize for variable in by_name.values()):
             raise ValueError(
-                "production DesignSpace requires all five morphology variables "
+                "production DesignSpace requires all six morphology variables "
                 "to be active"
             )
 
@@ -145,16 +136,10 @@ class DesignSpace:
         return tuple(variable for variable in self.variables if variable.optimize)
 
     def lower_corner_values(self) -> dict[str, float]:
-        """Return active-variable values for the all-lower box corner."""
-        return {
-            variable.name: variable.lower for variable in self.active_variables
-        }
+        return {variable.name: variable.lower for variable in self.active_variables}
 
     def upper_corner_values(self) -> dict[str, float]:
-        """Return active-variable values for the all-upper box corner."""
-        return {
-            variable.name: variable.upper for variable in self.active_variables
-        }
+        return {variable.name: variable.upper for variable in self.active_variables}
 
     def decode(self, values: Mapping[str, float]) -> FingertipParameters:
         """Decode exactly one named active candidate without repairing it."""
@@ -178,27 +163,19 @@ class DesignSpace:
                 )
             updates[variable.name] = value
 
-        # FingertipParameters remains the authority for physical constraints;
-        # fixed/derived fields are set explicitly rather than repaired after
-        # validation.  An infeasible candidate therefore raises immediately.
-        flat_height = updates.get(
-            "flat_pad_height", self.nominal_parameters.flat_pad_height
-        )
         candidate = replace(
             self.nominal_parameters,
             **updates,
             flat_pad_width=_FIXED_FLAT_PAD_WIDTH_MM,
-            semielliptical_pad_height=_TOTAL_PAD_DEPTH_MM - flat_height,
         )
-        if candidate.semielliptical_pad_height <= 0.0:
-            raise ValueError(
-                "flat_pad_height must leave a positive semielliptical height"
-            )
+        # Retain the established conservative diagnostics and add the true
+        # Euclidean corner-to-ellipse wall-thickness gate.  Invalid candidates
+        # fail here, before meshing/mechanics/optics.
         validate_silicone_ligament(candidate)
+        validate_minimum_silicone_thickness(candidate)
         return candidate
 
     def corner_values(self) -> tuple[dict[str, float], ...]:
-        """Enumerate every active lower/upper corner deterministically."""
         active = self.active_variables
         if not active:
             return ({},)
