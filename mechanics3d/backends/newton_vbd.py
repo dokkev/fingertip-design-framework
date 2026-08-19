@@ -17,20 +17,24 @@ def solve_newton_vbd(
     """Solve a neutral tetrahedral mesh using Newton's supported VBD API."""
 
     wp.init()
-    if not settings.device.startswith("cuda:"):
-        raise ValueError("mechanics3d requires a CUDA device, for example cuda:0")
-    if settings.device not in wp.get_cuda_devices():
+    if not wp.is_device_available(settings.device):
         raise RuntimeError(f"CUDA device {settings.device!r} is not available")
+    device = wp.get_device(settings.device)
+    if not device.is_cuda:
+        raise ValueError("mechanics3d requires a CUDA device, for example cuda:0")
     if any(index >= mesh.vertices.shape[0] for index in settings.fixed_vertex_indices):
         raise ValueError("fixed_vertex_indices contain an out-of-range vertex")
 
+    # The repository-facing neutral geometry uses millimetres. Newton uses SI
+    # metres for particle positions, so convert only at this backend boundary.
+    vertices_m = np.asarray(mesh.vertices, dtype=np.float32) * 1.0e-3
     builder = newton.ModelBuilder(gravity=settings.gravity)
     builder.add_soft_mesh(
         pos=(0.0, 0.0, 0.0),
         rot=wp.quat_identity(),
         scale=1.0,
         vel=(0.0, 0.0, 0.0),
-        vertices=mesh.vertices.tolist(),
+        vertices=vertices_m.tolist(),
         indices=mesh.tetrahedra.reshape(-1).tolist(),
         density=settings.density,
         k_mu=settings.k_mu,
@@ -38,12 +42,12 @@ def solve_newton_vbd(
         k_damp=settings.k_damp,
     )
     builder.color()
-    model = builder.finalize(device=settings.device)
+    model = builder.finalize(device=device)
 
     if settings.fixed_vertex_indices:
         flags = np.asarray(model.particle_flags.numpy(), dtype=np.int32)
         flags[list(settings.fixed_vertex_indices)] &= ~int(newton.ParticleFlags.ACTIVE)
-        model.particle_flags = wp.array(flags, dtype=wp.int32, device=settings.device)
+        model.particle_flags = wp.array(flags, dtype=wp.int32, device=device)
 
     solver = newton.solvers.SolverVBD(
         model=model,
@@ -63,8 +67,11 @@ def solve_newton_vbd(
         solver.step(state_in, state_out, control, contacts, settings.dt)
         state_in, state_out = state_out, state_in
 
-    wp.synchronize_device(settings.device)
-    deformed_vertices = np.asarray(state_in.particle_q.numpy(), dtype=np.float32).copy()
+    wp.synchronize_device(device)
+    deformed_vertices = (
+        np.asarray(state_in.particle_q.numpy(), dtype=np.float32).copy() * 1.0e3
+    )
+    rest_vertices *= 1.0e3
     return Mechanics3DResult(
         rest_vertices=rest_vertices,
         deformed_vertices=deformed_vertices,

@@ -66,8 +66,10 @@ It does not replace mesh-based reference/loaded comparisons.
 - `mechanics3d/` owns the optional NVIDIA Warp/Newton tetrahedral VBD
   prototype. Its public boundary is NumPy-only `TetMeshData`,
   `Mechanics3DSettings`, and `Mechanics3DResult`; the Newton model, CUDA
-  arrays, and solver objects remain inside `mechanics3d.backends`. It is a
-  fast mechanics surrogate and is not a replacement for `fem/` or Kratos.
+  arrays, and solver objects remain inside `mechanics3d.backends`. Neutral
+  coordinates use the repository's millimetre convention; the backend converts
+  to/from Newton's metre convention. It is a fast mechanics surrogate and is
+  not a replacement for `fem/` or Kratos.
 - `case/` is the thin top-level research-case aggregate. `FingertipCase`
   owns one physical `Fingertip`, one `FEA2D` mechanics experiment, and one
   `RayTracing2D` optics experiment. `FEA2D` owns mesh/indenter/contact/solver

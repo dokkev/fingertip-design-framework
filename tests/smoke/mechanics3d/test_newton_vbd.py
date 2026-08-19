@@ -16,7 +16,7 @@ from mechanics3d import Mechanics3DSettings, TetMeshData, solve
 @pytest.mark.smoke
 @pytest.mark.mechanics3d
 def test_newton_vbd_deforms_tiny_tet_block_on_cuda() -> None:
-    if "cuda:0" not in wp.get_cuda_devices():
+    if not wp.is_device_available("cuda:0"):
         pytest.skip("mechanics3d smoke requires cuda:0")
 
     vertices = np.array(
@@ -43,6 +43,9 @@ def test_newton_vbd_deforms_tiny_tet_block_on_cuda() -> None:
         dtype=np.int32,
     )
 
+    fixed = np.array([0, 1, 2, 3])
+    free = np.array([4, 5, 6, 7])
+
     result = solve(
         TetMeshData(vertices, tetrahedra),
         settings=Mechanics3DSettings(
@@ -57,4 +60,10 @@ def test_newton_vbd_deforms_tiny_tet_block_on_cuda() -> None:
     assert result.tetrahedra.shape == tetrahedra.shape
     assert np.all(np.isfinite(result.deformed_vertices))
     assert np.all(np.isfinite(result.displacement))
-    assert np.max(np.abs(result.displacement)) > 0.0
+    np.testing.assert_allclose(
+        result.deformed_vertices[fixed],
+        vertices[fixed],
+        atol=1.0e-6,
+        rtol=0.0,
+    )
+    assert np.max(np.linalg.norm(result.displacement[free], axis=1)) > 1.0e-6

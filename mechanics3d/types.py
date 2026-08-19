@@ -15,7 +15,11 @@ def _readonly_array(value: np.ndarray, *, dtype: np.dtype) -> np.ndarray:
 
 @dataclass(frozen=True)
 class TetMeshData:
-    """A validated tetrahedral mesh represented only by NumPy arrays."""
+    """A validated tetrahedral mesh represented only by NumPy arrays.
+
+    Coordinates use the repository's millimetre convention. The optional
+    Newton backend converts them to metres at its solver boundary.
+    """
 
     vertices: np.ndarray
     tetrahedra: np.ndarray
