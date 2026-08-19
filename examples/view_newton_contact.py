@@ -139,7 +139,6 @@ def main() -> int:
                 soft_contact_margin_mm=0.02,
                 soft_contact_ke=1.0e3,
                 soft_contact_kd=10.0,
-                rigid_body_particle_contact_buffer_size=8192,
             ),
             viewer=viewer,
         )

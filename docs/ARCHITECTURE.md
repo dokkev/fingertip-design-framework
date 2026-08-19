@@ -253,11 +253,13 @@ constructs `newton.Mesh`, the kinematic body, SDF, collision pipeline, and
 authoritative: an optional `Mechanics3DSettings.fixed_vertex_indices` value
 must be empty or exactly match them; it is never silently substituted. The
 rigid SDF uses an explicit contact-scale voxel setting in millimetres rather
-than a fraction of total object extent. The backend checks both configured
-contact capacities and Newton's overflow counters, reports
-`contact_buffer_safe`, and fails without returning a result if a buffer is
-insufficient. The existing prescribed-vertex function remains a timing-only,
-non-contact benchmark.
+than a fraction of total object extent. The backend reports the actual soft
+contact record count separately from Newton's per-body overflow counters.
+Those counters are the only buffer-safety signal; the per-body lists skip the
+kinematic indenter in Newton 1.4, so their status is explicitly marked
+not-applicable for this scene. A nonzero overflow counter still fails without
+returning a result. The existing prescribed-vertex function remains a
+timing-only, non-contact benchmark.
 
 The intended later arbitrary-object path is:
 

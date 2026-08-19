@@ -17,6 +17,13 @@ from mechanics3d.fingertip import FingertipMechanicsMesh
 from mechanics3d.indentation import IndentationResult, IndentationSettings, RigidIndenter3D
 
 
+# These are Newton implementation capacities for the current single
+# kinematic-indenter scene, not public indentation physics settings.  The
+# corresponding per-body lists skip kinematic bodies in Newton 1.4.
+_RIGID_BODY_PARTICLE_CONTACT_BUFFER_SIZE = 1024
+_RIGID_CONTACT_BUFFER_SIZE = 64
+
+
 @wp.kernel
 def _apply_prescribed_displacement(
     particle_q: wp.array(dtype=wp.vec3f),
@@ -350,7 +357,7 @@ def _build_indentation_context(
         model,
         broad_phase="nxn",
         soft_contact_margin=indentation_settings.soft_contact_margin_mm * 1.0e-3,
-        rigid_contact_max=indentation_settings.rigid_contact_buffer_size,
+        rigid_contact_max=_RIGID_CONTACT_BUFFER_SIZE,
         enable_rigid_soft_full_surface_contact=True,
         deterministic=True,
     )
@@ -360,9 +367,7 @@ def _build_indentation_context(
         particle_enable_self_contact=False,
         particle_enable_tile_solve=False,
         rigid_contact_hard=True,
-        rigid_body_particle_contact_buffer_size=(
-            indentation_settings.rigid_body_particle_contact_buffer_size
-        ),
+        rigid_body_particle_contact_buffer_size=_RIGID_BODY_PARTICLE_CONTACT_BUFFER_SIZE,
     )
     state_in = model.state()
     state_out = model.state()
@@ -503,33 +508,20 @@ def solve_newton_vbd_indentation(
                 max_rigid_contact_count,
                 int(context.contacts.rigid_contact_count.numpy()[0]),
             )
-        # This path has one kinematic rigid indenter, so the global soft
-        # contact count is a conservative upper bound for its per-body VBD
-        # particle/edge/face list.  Never return a potentially truncated state.
-        if max_soft_contact_count > indentation_settings.rigid_body_particle_contact_buffer_size:
-            raise RuntimeError(
-                "rigid body particle contact buffer is insufficient for the "
-                f"single-indenter scene: observed at least {max_soft_contact_count} "
-                "soft contacts, configured capacity is "
-                f"{indentation_settings.rigid_body_particle_contact_buffer_size}"
-            )
-        if max_rigid_contact_count > indentation_settings.rigid_contact_buffer_size:
-            raise RuntimeError(
-                "rigid contact buffer is insufficient: observed at least "
-                f"{max_rigid_contact_count} contacts, configured capacity is "
-                f"{indentation_settings.rigid_contact_buffer_size}"
-            )
-        if max_soft_contact_overflow > indentation_settings.rigid_body_particle_contact_buffer_size:
+        # Newton's counters are the only valid overflow signal here.  The
+        # per-body lists skip static/kinematic bodies, so total soft-contact
+        # records must not be compared with their capacities.
+        if max_soft_contact_overflow > _RIGID_BODY_PARTICLE_CONTACT_BUFFER_SIZE:
             raise RuntimeError(
                 "Newton reported rigid body particle contact buffer overflow: "
                 f"{max_soft_contact_overflow} > "
-                f"{indentation_settings.rigid_body_particle_contact_buffer_size}"
+                f"{_RIGID_BODY_PARTICLE_CONTACT_BUFFER_SIZE}"
             )
-        if max_rigid_contact_overflow > indentation_settings.rigid_contact_buffer_size:
+        if max_rigid_contact_overflow > _RIGID_CONTACT_BUFFER_SIZE:
             raise RuntimeError(
                 "Newton reported rigid contact buffer overflow: "
                 f"{max_rigid_contact_overflow} > "
-                f"{indentation_settings.rigid_contact_buffer_size}"
+                f"{_RIGID_CONTACT_BUFFER_SIZE}"
             )
         context.state_in, context.state_out = context.state_out, context.state_in
         previous_pose = target_pose
@@ -558,19 +550,15 @@ def solve_newton_vbd_indentation(
         diagnostics={
             "device": mechanics_settings.device,
             "full_surface_contact": True,
-            "contact_buffer_safe": True,
-            "soft_contact_buffer_safe": True,
-            "rigid_contact_buffer_safe": True,
+            "contact_buffer_status": "not_applicable_for_kinematic_indenter",
             "load_steps": indentation_settings.load_steps,
             "rigid_sdf_target_voxel_mm": indentation_settings.rigid_sdf_target_voxel_mm,
             "max_soft_contact_count": max_soft_contact_count,
             "max_rigid_contact_count": max_rigid_contact_count,
             "max_soft_contact_overflow": max_soft_contact_overflow,
             "max_rigid_contact_overflow": max_rigid_contact_overflow,
-            "rigid_body_particle_contact_buffer_size": (
-                indentation_settings.rigid_body_particle_contact_buffer_size
-            ),
-            "rigid_contact_buffer_size": indentation_settings.rigid_contact_buffer_size,
+            "rigid_body_particle_contact_buffer_size": _RIGID_BODY_PARTICLE_CONTACT_BUFFER_SIZE,
+            "rigid_contact_buffer_size": _RIGID_CONTACT_BUFFER_SIZE,
             "final_body_x_mm": float(final_body_translation_mm[0]),
             "final_body_y_mm": float(final_body_translation_mm[1]),
             "final_body_z_mm": float(final_body_translation_mm[2]),

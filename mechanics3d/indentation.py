@@ -109,10 +109,6 @@ class IndentationSettings:
     soft_contact_ke: float = 1.0e3
     soft_contact_kd: float = 10.0
     soft_contact_mu: float = 0.0
-    rigid_body_particle_contact_buffer_size: int = 1024
-    """Per-indenter VBD particle/edge/face contact-list capacity."""
-    rigid_contact_buffer_size: int = 64
-    """CollisionPipeline rigid contact capacity for body-body contacts."""
 
     def __post_init__(self) -> None:
         travel = float(self.travel_mm)
@@ -132,13 +128,6 @@ class IndentationSettings:
             if not np.isfinite(value) or value < lower_bound:
                 qualifier = "positive" if name == "rigid_sdf_target_voxel_mm" else "finite and non-negative"
                 raise ValueError(f"{name} must be {qualifier}")
-        for name in (
-            "rigid_body_particle_contact_buffer_size",
-            "rigid_contact_buffer_size",
-        ):
-            value = int(getattr(self, name))
-            if value != getattr(self, name) or value < 1:
-                raise ValueError(f"{name} must be a positive integer")
         object.__setattr__(self, "travel_mm", travel)
         object.__setattr__(self, "load_steps", int(self.load_steps))
         object.__setattr__(self, "soft_contact_margin_mm", float(self.soft_contact_margin_mm))
@@ -146,12 +135,6 @@ class IndentationSettings:
         object.__setattr__(self, "soft_contact_ke", float(self.soft_contact_ke))
         object.__setattr__(self, "soft_contact_kd", float(self.soft_contact_kd))
         object.__setattr__(self, "soft_contact_mu", float(self.soft_contact_mu))
-        object.__setattr__(
-            self,
-            "rigid_body_particle_contact_buffer_size",
-            int(self.rigid_body_particle_contact_buffer_size),
-        )
-        object.__setattr__(self, "rigid_contact_buffer_size", int(self.rigid_contact_buffer_size))
 
 
 @dataclass(frozen=True)
