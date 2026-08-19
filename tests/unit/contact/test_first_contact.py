@@ -68,7 +68,9 @@ def test_first_contact_preserves_clear_hit_and_spawn_contract(contact_case, sear
     assert intersects(surface, sphere, result.hit_pose)
     assert result.bracket_width_mm <= search_settings.tolerance_mm
     assert not intersects(surface, sphere, result.spawn_pose)
-    assert np.isclose(result.travel_to_contact_mm, alignment.initial_gap_mm, atol=0.01)
+    assert abs(result.travel_to_contact_mm - alignment.initial_gap_mm) <= (
+        search_settings.tolerance_mm
+    )
 
 
 def test_first_contact_is_deterministic(contact_case, search_settings) -> None:

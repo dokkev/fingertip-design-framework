@@ -194,8 +194,14 @@ def test_sphere_first_contact_normalization_is_start_distance_invariant() -> Non
     contact_settings = FirstContactSettings(
         coarse_step_mm=0.25,
         tolerance_mm=1.0e-5,
-        spawn_clearance_mm=0.05,
+        spawn_clearance_mm=0.02,
         max_travel_mm=20.0,
+    )
+    far_spawn_settings = FirstContactSettings(
+        coarse_step_mm=contact_settings.coarse_step_mm,
+        tolerance_mm=contact_settings.tolerance_mm,
+        spawn_clearance_mm=0.10,
+        max_travel_mm=contact_settings.max_travel_mm,
     )
     alignments = tuple(
         canonical_sphere_alignment(model, object_mesh, initial_gap_mm=gap)
@@ -207,9 +213,13 @@ def test_sphere_first_contact_normalization_is_start_distance_invariant() -> Non
             object_mesh,
             alignment.nominal_pose,
             alignment.approach_direction,
-            contact_settings,
+            settings,
         )
-        for alignment in alignments
+        for alignment, settings in zip(
+            alignments,
+            (contact_settings, far_spawn_settings),
+            strict=True,
+        )
     )
     for result in first_contacts:
         assert not intersects(surface, object_mesh, result.spawn_pose)
@@ -263,17 +273,52 @@ def test_sphere_first_contact_normalization_is_start_distance_invariant() -> Non
     # freshly built contexts.  Compare the actual deformation fields at a
     # tight 0.02 mm mesh-scale tolerance, while requiring the same normalized
     # prescribed pose and contact/load signature above.
+    max_abs_difference_mm = float(
+        np.max(
+            np.abs(
+                near_result.mechanics_result.deformed_vertices
+                - far_result.mechanics_result.deformed_vertices
+            )
+        )
+    )
+    rms_difference_mm = float(
+        np.sqrt(
+            np.mean(
+                np.square(
+                    near_result.mechanics_result.deformed_vertices
+                    - far_result.mechanics_result.deformed_vertices
+                )
+            )
+        )
+    )
+    max_displacement_difference_mm = abs(
+        float(
+            np.max(np.linalg.norm(near_result.mechanics_result.displacement, axis=1))
+        )
+        - float(
+            np.max(np.linalg.norm(far_result.mechanics_result.displacement, axis=1))
+        )
+    )
+    comparison_diagnostic = (
+        "spawn-clearance invariance diagnostics: "
+        f"max_abs_difference_mm={max_abs_difference_mm:.6g}, "
+        f"rms_difference_mm={rms_difference_mm:.6g}, "
+        f"max_displacement_difference_mm={max_displacement_difference_mm:.6g}"
+    )
+    print(comparison_diagnostic)
     np.testing.assert_allclose(
         near_result.mechanics_result.deformed_vertices,
         far_result.mechanics_result.deformed_vertices,
         atol=2.0e-2,
         rtol=0.0,
+        err_msg=comparison_diagnostic,
     )
     np.testing.assert_allclose(
         near_result.mechanics_result.displacement,
         far_result.mechanics_result.displacement,
         atol=2.0e-2,
         rtol=0.0,
+        err_msg=comparison_diagnostic,
     )
     for result in (near_result, far_result):
         assert np.all(np.isfinite(result.mechanics_result.deformed_vertices))

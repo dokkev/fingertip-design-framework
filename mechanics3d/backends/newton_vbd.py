@@ -498,7 +498,14 @@ def solve_newton_vbd_indentation(
     )
     if viewer is not None:
         viewer.set_model(context.model)
-    previous_pose = initial_pose
+    # T_spawn is the actual initialized body state.  It is intentionally not
+    # used as the physical velocity reference for the first positive load:
+    # spawn clearance is a numerical safeguard, not prescribed indentation.
+    previous_pose_for_velocity = (
+        first_contact.contact_pose
+        if first_contact is not None
+        else initial_pose
+    )
     max_soft_contact_count = 0
     max_rigid_contact_count = 0
     max_soft_contact_overflow = 0
@@ -514,7 +521,9 @@ def solve_newton_vbd_indentation(
             target_pose = first_contact.pose_at_post_contact_travel(
                 fraction * indentation_settings.travel_mm
             )
-        delta_mm = np.asarray(target_pose.translation_mm) - np.asarray(previous_pose.translation_mm)
+        delta_mm = np.asarray(target_pose.translation_mm) - np.asarray(
+            previous_pose_for_velocity.translation_mm
+        )
         velocity_m = delta_mm * 1.0e-3 / timestep_s
         pose = _warp_pose(target_pose, device=context.device)
         velocity = wp.spatial_vector(
@@ -606,7 +615,7 @@ def solve_newton_vbd_indentation(
                 f"{_RIGID_CONTACT_BUFFER_SIZE}"
             )
         context.state_in, context.state_out = context.state_out, context.state_in
-        previous_pose = target_pose
+        previous_pose_for_velocity = target_pose
 
     wp.synchronize_device(context.device)
     deformed_vertices = (
