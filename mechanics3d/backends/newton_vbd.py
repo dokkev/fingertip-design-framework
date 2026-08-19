@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from typing import Sequence
+from typing import TYPE_CHECKING, Sequence
 
 import numpy as np
 import warp as wp
@@ -14,7 +14,16 @@ from mechanics3d.solve import Mechanics3DSettings
 from mechanics3d.load import ParticleLoad
 from mechanics3d.types import Mechanics3DResult, TetMeshData
 from mechanics3d.fingertip import FingertipMechanicsMesh
-from mechanics3d.indentation import IndentationResult, IndentationSettings, RigidIndenter3D
+from mechanics3d.indentation import (
+    IndentationResult,
+    IndentationSettings,
+    RigidIndenter3D,
+    RigidPose3D,
+)
+from mesh.rigid_object import RigidObjectMesh
+
+if TYPE_CHECKING:
+    from contact.first_contact import FirstContactResult
 
 
 # These are Newton implementation capacities for the current single
@@ -250,8 +259,18 @@ def _build_indentation_context(
     indenter: RigidIndenter3D,
     mechanics_settings: Mechanics3DSettings,
     indentation_settings: IndentationSettings,
+    *,
+    initial_pose: RigidPose3D | None = None,
+    visual_carrier_mesh: RigidObjectMesh | None = None,
 ) -> _IndentationContext:
     """Build one soft-tet plus kinematic triangle-mesh contact scene."""
+
+    if visual_carrier_mesh is not None and not isinstance(visual_carrier_mesh, RigidObjectMesh):
+        raise TypeError("visual_carrier_mesh must be a RigidObjectMesh or None")
+    if initial_pose is None:
+        initial_pose = indenter.initial_pose
+    if not isinstance(initial_pose, RigidPose3D):
+        raise TypeError("initial_pose must be RigidPose3D or None")
 
     wp.init()
     if not wp.is_device_available(mechanics_settings.device):
@@ -325,8 +344,34 @@ def _build_indentation_context(
         # spurious contact shell around a millimetre-scale fingertip.
         particle_radius=0.0,
     )
+    if visual_carrier_mesh is not None:
+        carrier_vertices_m = (
+            np.asarray(visual_carrier_mesh.vertices_mm, dtype=np.float32) * 1.0e-3
+        )
+        carrier_mesh = newton.Mesh(
+            carrier_vertices_m,
+            np.asarray(visual_carrier_mesh.faces, dtype=np.int32).reshape(-1),
+            compute_inertia=False,
+            is_solid=True,
+        )
+        carrier_cfg = newton.ModelBuilder.ShapeConfig(
+            density=0.0,
+            has_shape_collision=False,
+            has_particle_collision=False,
+            collision_group=0,
+            is_visible=True,
+        )
+        # Newton body -1 is static world geometry.  The collision flags are
+        # explicitly disabled so this shape can only be rendered by a viewer.
+        builder.add_shape_mesh(
+            body=-1,
+            mesh=carrier_mesh,
+            cfg=carrier_cfg,
+            color=wp.vec3(0.68, 0.70, 0.74),
+            label="distal_phalanx_carrier_render_only",
+        )
     indenter_body = builder.add_body(
-        xform=_warp_pose(indenter.initial_pose, device=device),
+        xform=_warp_pose(initial_pose, device=device),
         # Kinematic bodies still need valid inertial data for Newton's model
         # validation.  This placeholder is locked and never participates in
         # the prescribed trajectory dynamics.
@@ -406,6 +451,8 @@ def solve_newton_vbd_indentation(
     indentation_settings: IndentationSettings,
     *,
     viewer: object | None = None,
+    visual_carrier_mesh: RigidObjectMesh | None = None,
+    first_contact: FirstContactResult | None = None,
 ) -> IndentationResult:
     """Run translation-only kinematic rigid-mesh contact with standalone VBD.
 
@@ -413,17 +460,45 @@ def solve_newton_vbd_indentation(
     or application.  It is deliberately kept out of the neutral public
     indentation contract; when supplied, each accepted solver state and its
     contacts are sent to the viewer after the VBD step.
+
+    ``visual_carrier_mesh`` is an optional backend/example-local neutral mesh.
+    When supplied, it is added as visible static world geometry with collision
+    disabled; it does not enter the indentation mechanics state.
     """
+
+    if first_contact is not None:
+        from contact.first_contact import FirstContactResult
+
+        if not isinstance(first_contact, FirstContactResult):
+            raise TypeError("first_contact must be FirstContactResult or None")
+        if not np.allclose(
+            np.asarray(first_contact.approach_direction, dtype=float),
+            np.asarray(indenter.approach_direction, dtype=float),
+            rtol=0.0,
+            atol=1.0e-12,
+        ):
+            raise ValueError(
+                "first_contact.approach_direction must match the indenter "
+                "approach_direction"
+            )
+
+    initial_pose = (
+        first_contact.spawn_pose
+        if first_contact is not None
+        else indenter.initial_pose
+    )
 
     context = _build_indentation_context(
         prepared_fingertip,
         indenter,
         mechanics_settings,
         indentation_settings,
+        initial_pose=initial_pose,
+        visual_carrier_mesh=visual_carrier_mesh,
     )
     if viewer is not None:
         viewer.set_model(context.model)
-    previous_pose = indenter.initial_pose
+    previous_pose = initial_pose
     max_soft_contact_count = 0
     max_rigid_contact_count = 0
     max_soft_contact_overflow = 0
@@ -431,7 +506,14 @@ def solve_newton_vbd_indentation(
     timestep_s = float(mechanics_settings.dt)
     for step in range(indentation_settings.load_steps):
         fraction = float(step + 1) / indentation_settings.load_steps
-        target_pose = indenter.pose_at_travel(fraction * indentation_settings.travel_mm)
+        if first_contact is None:
+            target_pose = indenter.pose_at_travel(fraction * indentation_settings.travel_mm)
+        else:
+            # Free-space motion to contact has already been normalized by the
+            # geometry-only search. The VBD schedule is post-contact only.
+            target_pose = first_contact.pose_at_post_contact_travel(
+                fraction * indentation_settings.travel_mm
+            )
         delta_mm = np.asarray(target_pose.translation_mm) - np.asarray(previous_pose.translation_mm)
         velocity_m = delta_mm * 1.0e-3 / timestep_s
         pose = _warp_pose(target_pose, device=context.device)
@@ -544,26 +626,44 @@ def solve_newton_vbd_indentation(
         tetrahedra=prepared_fingertip.tet_mesh.tetrahedra,
         steps=indentation_settings.load_steps,
     )
+    final_pose = (
+        first_contact.pose_at_post_contact_travel(indentation_settings.travel_mm)
+        if first_contact is not None
+        else indenter.pose_at_travel(indentation_settings.travel_mm)
+    )
+    diagnostics: dict[str, float | int | str | bool] = {
+        "device": mechanics_settings.device,
+        "full_surface_contact": True,
+        "contact_buffer_status": "not_applicable_for_kinematic_indenter",
+        "first_contact_normalized": first_contact is not None,
+        "post_contact_travel_mm": indentation_settings.travel_mm,
+        "load_steps": indentation_settings.load_steps,
+        "rigid_sdf_target_voxel_mm": indentation_settings.rigid_sdf_target_voxel_mm,
+        "max_soft_contact_count": max_soft_contact_count,
+        "max_rigid_contact_count": max_rigid_contact_count,
+        "max_soft_contact_overflow": max_soft_contact_overflow,
+        "max_rigid_contact_overflow": max_rigid_contact_overflow,
+        "rigid_body_particle_contact_buffer_size": _RIGID_BODY_PARTICLE_CONTACT_BUFFER_SIZE,
+        "rigid_contact_buffer_size": _RIGID_CONTACT_BUFFER_SIZE,
+        "final_body_x_mm": float(final_body_translation_mm[0]),
+        "final_body_y_mm": float(final_body_translation_mm[1]),
+        "final_body_z_mm": float(final_body_translation_mm[2]),
+        "max_displacement_mm": float(np.max(np.linalg.norm(mechanics_result.displacement, axis=1))),
+    }
+    if first_contact is not None:
+        diagnostics.update(
+            {
+                "first_contact_travel_mm": first_contact.travel_to_contact_mm,
+                "first_contact_bracket_width_mm": first_contact.bracket_width_mm,
+                "spawn_clearance_mm": first_contact.spawn_clearance_mm,
+                "reference_pose_collision_free": True,
+                "spawn_pose_collision_free": True,
+            }
+        )
     return IndentationResult(
         mechanics_result=mechanics_result,
-        final_indenter_pose=indenter.pose_at_travel(indentation_settings.travel_mm),
-        diagnostics={
-            "device": mechanics_settings.device,
-            "full_surface_contact": True,
-            "contact_buffer_status": "not_applicable_for_kinematic_indenter",
-            "load_steps": indentation_settings.load_steps,
-            "rigid_sdf_target_voxel_mm": indentation_settings.rigid_sdf_target_voxel_mm,
-            "max_soft_contact_count": max_soft_contact_count,
-            "max_rigid_contact_count": max_rigid_contact_count,
-            "max_soft_contact_overflow": max_soft_contact_overflow,
-            "max_rigid_contact_overflow": max_rigid_contact_overflow,
-            "rigid_body_particle_contact_buffer_size": _RIGID_BODY_PARTICLE_CONTACT_BUFFER_SIZE,
-            "rigid_contact_buffer_size": _RIGID_CONTACT_BUFFER_SIZE,
-            "final_body_x_mm": float(final_body_translation_mm[0]),
-            "final_body_y_mm": float(final_body_translation_mm[1]),
-            "final_body_z_mm": float(final_body_translation_mm[2]),
-            "max_displacement_mm": float(np.max(np.linalg.norm(mechanics_result.displacement, axis=1))),
-        },
+        final_indenter_pose=final_pose,
+        diagnostics=diagnostics,
     )
 
 

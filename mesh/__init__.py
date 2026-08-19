@@ -31,6 +31,7 @@ from mesh.rigid_object import (
     make_cylinder_mesh,
     make_sphere_mesh,
 )
+from mesh.rigid_carrier import make_distal_phalanx_mesh
 
 __all__ = [
     "FingertipMesh",
@@ -57,5 +58,6 @@ __all__ = [
     "make_box_mesh",
     "make_cube_mesh",
     "make_cylinder_mesh",
+    "make_distal_phalanx_mesh",
     "make_sphere_mesh",
 ]

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Mapping
+from typing import TYPE_CHECKING, Mapping
 
 import numpy as np
 
@@ -13,6 +13,9 @@ from mesh.rigid_object import RigidObjectMesh
 from .fingertip import FingertipMechanicsMesh
 from .solve import Mechanics3DSettings
 from .types import Mechanics3DResult
+
+if TYPE_CHECKING:
+    from contact.first_contact import FirstContactResult
 
 
 _QUATERNION_NORM_TOLERANCE = 1.0e-12
@@ -160,8 +163,16 @@ def solve_fingertip_indentation(
     indenter: RigidIndenter3D,
     mechanics_settings: Mechanics3DSettings | None = None,
     indentation_settings: IndentationSettings | None = None,
+    *,
+    first_contact: FirstContactResult | None = None,
 ) -> IndentationResult:
-    """Run one Newton VBD rigid-soft indentation through the neutral boundary."""
+    """Run one Newton VBD rigid-soft indentation through the neutral boundary.
+
+    When ``first_contact`` is supplied, the backend starts from its verified
+    collision-free ``spawn_pose`` and schedules loading relative to
+    ``contact_pose``.  The first-contact object is solver-neutral and is only
+    used to define the mechanical initialization convention.
+    """
 
     if not isinstance(prepared_fingertip, FingertipMechanicsMesh):
         raise TypeError("prepared_fingertip must be a FingertipMechanicsMesh")
@@ -175,6 +186,21 @@ def solve_fingertip_indentation(
         raise TypeError("indentation_settings must be provided")
     if not isinstance(indentation_settings, IndentationSettings):
         raise TypeError("indentation_settings must be IndentationSettings")
+    if first_contact is not None:
+        from contact.first_contact import FirstContactResult
+
+        if not isinstance(first_contact, FirstContactResult):
+            raise TypeError("first_contact must be FirstContactResult or None")
+        if not np.allclose(
+            np.asarray(first_contact.approach_direction, dtype=float),
+            np.asarray(indenter.approach_direction, dtype=float),
+            rtol=0.0,
+            atol=1.0e-12,
+        ):
+            raise ValueError(
+                "first_contact.approach_direction must match the indenter "
+                "approach_direction"
+            )
     configured_support = tuple(sorted(mechanics_settings.fixed_vertex_indices))
     authoritative_support = tuple(sorted(prepared_fingertip.support_vertex_indices))
     if configured_support and configured_support != authoritative_support:
@@ -191,6 +217,7 @@ def solve_fingertip_indentation(
         indenter,
         mechanics_settings,
         indentation_settings,
+        first_contact=first_contact,
     )
 
 

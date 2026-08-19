@@ -58,6 +58,10 @@ It does not replace mesh-based reference/loaded comparisons.
 - `mesh/` owns discrete topology, coordinates, semantic boundary groups, Gmsh
   conversion, settings, and quality. A `PadMesh` is a neutral view of the
   compliant-pad topology used across subsystem boundaries.
+- `contact/` owns solver-neutral geometric contact initialization. The current
+  implementation is deliberately limited to one canonical sphere target,
+  clear/hit bracketing, `T_first`, and collision-free `T_spawn`; it does not
+  import Newton, Warp, CUDA, or OptiX runtime state.
 - `fem/` owns Kratos assembly, constitutive models, contact, constraints,
   nonlinear solves, and extraction of `FEAResult`. The pad's Young's modulus
   and Poisson ratio come from `FingertipMesh.parameters`; its public surface is
@@ -260,6 +264,38 @@ kinematic indenter in Newton 1.4, so their status is explicitly marked
 not-applicable for this scene. A nonzero overflow counter still fails without
 returning a result. The existing prescribed-vertex function remains a
 timing-only, non-contact benchmark.
+
+The current contact-initialization MVP is the solver-neutral Sphere
+First-Contact Normalization path: the canonical `outer_compliant_arc` crown
+defines one center target and approach direction for a 2 mm sphere, a
+geometry-only clear/hit search refines `T_first`, and Newton starts from
+collision-free `T_spawn` before applying post-contact travel. Real-object patch
+alignment, curvature analysis, box/cylinder objects, and Collision-RT
+first-contact classification remain future work.
+
+The fingertip's rigid carrier is a separate visualization surface in the
+Newton indentation example:
+
+```text
+FingertipSolid
+├── compliant pad geometry
+│      └── TET4 volume mesh -> Newton deformable body
+│
+└── rigid carrier geometry
+       └── closed 11 mm triangle surface
+              └── Newton render-only static shape
+```
+
+The carrier surface is generated from the authoritative
+`FingertipSolid.rigid_geometry` through `mesh.make_distal_phalanx_mesh`; it is
+not tetrahedralized and is not merged into the compliant TET mesh. The current
+bonded support remains the fixed soft vertices in
+`prepared_fingertip.support_vertex_indices`. The Newton carrier shape uses
+`body=-1`, zero density, and both shape/particle collision flags disabled, so
+it contributes no particles, contacts, forces, mass, or deformation. Soft-pad
+/ carrier collision and object / carrier collision are deferred. Future
+Collision-RT may consume the same authoritative carrier geometry to classify
+whether an approach reaches the compliant surface or the rigid carrier first.
 
 The intended later arbitrary-object path is:
 

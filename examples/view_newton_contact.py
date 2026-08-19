@@ -7,7 +7,6 @@ kinematic triangle-mesh indenter, and the contacts reported by Newton.
 Examples::
 
     conda run -n lit python examples/view_newton_contact.py
-    conda run -n lit python examples/view_newton_contact.py --object cylinder
     conda run -n lit python examples/view_newton_contact.py --no-viewer
     conda run -n lit python examples/view_newton_contact.py --usd output/contact.usda
 """
@@ -24,15 +23,24 @@ ensure_repository_root()
 import numpy as np
 import warp as wp
 
+from contact import (
+    FirstContactSettings,
+    canonical_sphere_alignment,
+    find_first_contact,
+    intersects,
+    make_outer_compliant_surface,
+)
 from mechanics3d import (
     IndentationSettings,
     Mechanics3DSettings,
     RigidIndenter3D,
-    RigidPose3D,
     prepare_fingertip_mechanics_mesh,
 )
 from mechanics3d.backends.newton_vbd import solve_newton_vbd_indentation
-from mesh import make_box_mesh, make_cylinder_mesh, make_sphere_mesh
+from mesh import (
+    make_distal_phalanx_mesh,
+    make_sphere_mesh,
+)
 from mesh.volume3d import generate_volume_mesh
 from mesh.volume_types import volume_mesh_settings_for_tier
 from model import Fingertip, FingertipParameters
@@ -47,12 +55,17 @@ from util.newton_viewer import (
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--object",
-        choices=("sphere", "cylinder", "box"),
-        default="sphere",
-        help="triangle-mesh rigid object used for contact",
+        "--travel",
+        type=float,
+        default=0.6,
+        help="post-contact sphere travel in mm",
     )
-    parser.add_argument("--travel", type=float, default=0.6, help="indentation travel in mm")
+    parser.add_argument(
+        "--initial-gap",
+        type=float,
+        default=0.25,
+        help="free-space placement gap used before geometric first-contact search",
+    )
     parser.add_argument("--load-steps", type=int, default=8)
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument(
@@ -68,14 +81,6 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _make_object(kind: str):
-    if kind == "sphere":
-        return make_sphere_mesh(2.0, subdivisions=1)
-    if kind == "cylinder":
-        return make_cylinder_mesh(1.8, 3.0, radial_segments=16)
-    return make_box_mesh(3.0, 3.0, 3.0)
-
-
 def _build_scene():
     fingertip = Fingertip(
         FingertipParameters(
@@ -89,24 +94,7 @@ def _build_scene():
         volume_mesh_settings_for_tier("search"),
     )
     prepared = prepare_fingertip_mechanics_mesh(volume_mesh)
-    return volume_mesh, prepared
-
-
-def _make_indenter(prepared, object_mesh):
-    surface_candidates = np.unique(prepared.surface_triangles["outer_compliant_arc"])
-    local_surface = surface_candidates[
-        np.abs(prepared.tet_mesh.vertices[surface_candidates, 0] - 10.0) < 1.0
-    ]
-    contact_y_mm = float(prepared.tet_mesh.vertices[local_surface, 1].max())
-    object_top_mm = float(object_mesh.vertices_mm[:, 1].max())
-    return RigidIndenter3D(
-        object_mesh,
-        RigidPose3D(
-            (10.0, contact_y_mm + object_top_mm + 0.5, 0.0),
-            (0.0, 0.0, 0.0, 1.0),
-        ),
-        (0.0, -1.0, 0.0),
-    )
+    return fingertip, volume_mesh, prepared
 
 
 def _rigid_vertices_world_mm(object_mesh, pose) -> np.ndarray:
@@ -125,14 +113,17 @@ def _rigid_vertices_world_mm(object_mesh, pose) -> np.ndarray:
     return np.asarray(object_mesh.vertices_mm, dtype=float) @ rotation.T + translation
 
 
-def _scene_bounds_m(prepared, object_mesh, indenter, travel_mm: float) -> tuple[np.ndarray, np.ndarray]:
+def _scene_bounds_m(
+    prepared,
+    object_mesh,
+    poses,
+) -> tuple[np.ndarray, np.ndarray]:
     """Compute fingertip plus swept indenter bounds in Newton metres."""
 
     fingertip_vertices_mm = np.asarray(prepared.tet_mesh.vertices, dtype=float)
     rigid_vertices_mm = np.concatenate(
         [
-            _rigid_vertices_world_mm(object_mesh, indenter.initial_pose),
-            _rigid_vertices_world_mm(object_mesh, indenter.pose_at_travel(travel_mm)),
+            *(_rigid_vertices_world_mm(object_mesh, pose) for pose in poses),
         ],
         axis=0,
     )
@@ -148,14 +139,47 @@ def main() -> int:
     if not wp.is_device_available(args.device):
         raise RuntimeError(f"CUDA device {args.device!r} is not available")
 
-    _, prepared = _build_scene()
-    object_mesh = _make_object(args.object)
-    indenter = _make_indenter(prepared, object_mesh)
-    scene_bounds_m = _scene_bounds_m(prepared, object_mesh, indenter, args.travel)
+    fingertip, volume_mesh, prepared = _build_scene()
+    object_mesh = make_sphere_mesh(2.0, subdivisions=1)
+    alignment = canonical_sphere_alignment(
+        fingertip.geometry,
+        object_mesh,
+        initial_gap_mm=args.initial_gap,
+    )
+    contact_surface = make_outer_compliant_surface(volume_mesh.solid)
+    first_contact_settings = FirstContactSettings(
+        coarse_step_mm=0.25,
+        tolerance_mm=1.0e-3,
+        spawn_clearance_mm=0.05,
+        max_travel_mm=20.0,
+    )
+    if intersects(contact_surface, object_mesh, alignment.nominal_pose):
+        raise RuntimeError("canonical sphere nominal pose is not collision-free")
+    first_contact = find_first_contact(
+        contact_surface,
+        object_mesh,
+        alignment.nominal_pose,
+        alignment.approach_direction,
+        first_contact_settings,
+    )
+    indenter = RigidIndenter3D(
+        object_mesh,
+        alignment.nominal_pose,
+        alignment.approach_direction,
+    )
+    final_pose = first_contact.pose_at_post_contact_travel(args.travel)
+    scene_bounds_m = _scene_bounds_m(
+        prepared,
+        object_mesh,
+        (first_contact.spawn_pose, final_pose),
+    )
     viewer = make_newton_viewer(
         no_viewer=args.no_viewer,
         usd_path=args.usd,
         num_frames=args.load_steps,
+    )
+    visual_carrier_mesh = (
+        make_distal_phalanx_mesh(volume_mesh.solid) if viewer is not None else None
     )
     try:
         result = solve_newton_vbd_indentation(
@@ -177,6 +201,8 @@ def main() -> int:
                 soft_contact_kd=10.0,
             ),
             viewer=viewer,
+            visual_carrier_mesh=visual_carrier_mesh,
+            first_contact=first_contact,
         )
         if viewer is not None and args.usd is None:
             frame_newton_viewer(
@@ -189,7 +215,16 @@ def main() -> int:
     finally:
         close_newton_viewer(viewer)
 
-    print(f"object: {object_mesh.name}")
+    print(f"object: {object_mesh.name} (radius_mm={alignment.radius_mm:g})")
+    print(f"target_point_mm: {alignment.target_point_mm}")
+    print(f"approach_direction: {alignment.approach_direction}")
+    print(f"reference_pose_collision_free: {not intersects(contact_surface, object_mesh, alignment.nominal_pose)}")
+    print(f"first_contact_travel_mm: {first_contact.travel_to_contact_mm:.6g}")
+    print(f"first_contact_bracket_width_mm: {first_contact.bracket_width_mm:.6g}")
+    print(f"first_contact_tolerance_mm: {first_contact_settings.tolerance_mm:g}")
+    print(f"spawn_clearance_mm: {first_contact.spawn_clearance_mm:g}")
+    print(f"spawn_pose_collision_free: {not intersects(contact_surface, object_mesh, first_contact.spawn_pose)}")
+    print(f"post_contact_travel_mm: {args.travel:g}")
     print(f"full_surface_contact: {result.diagnostics['full_surface_contact']}")
     print(f"soft_contacts: {result.diagnostics['max_soft_contact_count']}")
     print(f"rigid_contacts: {result.diagnostics['max_rigid_contact_count']}")

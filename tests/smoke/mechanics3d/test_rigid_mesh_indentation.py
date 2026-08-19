@@ -11,6 +11,13 @@ pytest.importorskip("newton")
 
 import warp as wp
 
+from contact import (
+    FirstContactSettings,
+    canonical_sphere_alignment,
+    find_first_contact,
+    intersects,
+    make_outer_compliant_surface,
+)
 from mechanics3d import (
     IndentationSettings,
     Mechanics3DSettings,
@@ -20,6 +27,8 @@ from mechanics3d import (
     prepare_fingertip_mechanics_mesh,
     solve_fingertip_indentation,
 )
+from mechanics3d.backends.newton_vbd import solve_newton_vbd_indentation
+from mesh.rigid_carrier import make_distal_phalanx_mesh
 from mesh.rigid_object import make_box_mesh, make_cylinder_mesh, make_sphere_mesh
 from mesh.volume3d import generate_volume_mesh
 from mesh.volume_types import volume_mesh_settings_for_tier
@@ -108,6 +117,19 @@ def test_nominal_triangle_mesh_indenter_deforms_and_promotes_volume_state() -> N
     )
     smaller = run(0.5)
     loaded = run(0.6)
+    loaded_with_visual_carrier = solve_newton_vbd_indentation(
+        prepared,
+        indenter,
+        mechanics_settings,
+        IndentationSettings(
+            travel_mm=0.6,
+            load_steps=4,
+            soft_contact_margin_mm=0.02,
+            soft_contact_ke=1.0e3,
+            soft_contact_kd=10.0,
+        ),
+        visual_carrier_mesh=make_distal_phalanx_mesh(volume_mesh.solid),
+    )
 
     np.testing.assert_allclose(
         reference.mechanics_result.rest_vertices,
@@ -133,10 +155,147 @@ def test_nominal_triangle_mesh_indenter_deforms_and_promotes_volume_state() -> N
         np.linalg.norm(smaller.mechanics_result.displacement, axis=1)
     )
     assert np.min(_six_volumes(loaded.mechanics_result.deformed_vertices, loaded.mechanics_result.tetrahedra)) > 0.0
+    np.testing.assert_allclose(
+        loaded_with_visual_carrier.mechanics_result.deformed_vertices,
+        loaded.mechanics_result.deformed_vertices,
+        atol=1.0e-7,
+        rtol=0.0,
+    )
+    np.testing.assert_allclose(
+        loaded_with_visual_carrier.mechanics_result.displacement,
+        loaded.mechanics_result.displacement,
+        atol=1.0e-7,
+        rtol=0.0,
+    )
+    assert loaded_with_visual_carrier.diagnostics["max_soft_contact_count"] == loaded.diagnostics[
+        "max_soft_contact_count"
+    ]
 
     state = make_fingertip_volume_state(volume_mesh, prepared, loaded.mechanics_result)
     assert state.morphology_fingerprint == volume_mesh.morphology_fingerprint
     assert state.deformed_coordinates_mm.shape == prepared.tet_mesh.vertices.shape
+
+
+@pytest.mark.smoke
+@pytest.mark.mechanics3d
+def test_sphere_first_contact_normalization_is_start_distance_invariant() -> None:
+    if not wp.is_device_available("cuda:0"):
+        pytest.skip("sphere first-contact normalization smoke requires cuda:0")
+
+    model = FingertipModel(FingertipParameters())
+    solid = build_fingertip_solid(model)
+    volume_mesh = generate_volume_mesh(
+        solid,
+        volume_mesh_settings_for_tier("search"),
+    )
+    prepared = prepare_fingertip_mechanics_mesh(volume_mesh)
+    object_mesh = make_sphere_mesh(2.0, subdivisions=1)
+    surface = make_outer_compliant_surface(solid)
+    contact_settings = FirstContactSettings(
+        coarse_step_mm=0.25,
+        tolerance_mm=1.0e-5,
+        spawn_clearance_mm=0.05,
+        max_travel_mm=20.0,
+    )
+    alignments = tuple(
+        canonical_sphere_alignment(model, object_mesh, initial_gap_mm=gap)
+        for gap in (1.0, 10.0)
+    )
+    first_contacts = tuple(
+        find_first_contact(
+            surface,
+            object_mesh,
+            alignment.nominal_pose,
+            alignment.approach_direction,
+            contact_settings,
+        )
+        for alignment in alignments
+    )
+    for result in first_contacts:
+        assert not intersects(surface, object_mesh, result.spawn_pose)
+
+    mechanics_settings = Mechanics3DSettings(
+        device="cuda:0",
+        gravity=0.0,
+        dt=1.0e-3,
+        steps=1,
+        iterations=5,
+        fixed_vertex_indices=prepared.support_vertex_indices,
+    )
+
+    def run(alignment, first_contact):
+        return solve_fingertip_indentation(
+            prepared,
+            RigidIndenter3D(
+                object_mesh,
+                alignment.nominal_pose,
+                alignment.approach_direction,
+            ),
+            mechanics_settings,
+            IndentationSettings(
+                travel_mm=0.6,
+                load_steps=4,
+                soft_contact_margin_mm=0.02,
+                soft_contact_ke=1.0e3,
+                soft_contact_kd=10.0,
+            ),
+            first_contact=first_contact,
+        )
+
+    near_result = run(alignments[0], first_contacts[0])
+    far_result = run(alignments[1], first_contacts[1])
+
+    np.testing.assert_allclose(
+        first_contacts[0].contact_pose.translation_mm,
+        first_contacts[1].contact_pose.translation_mm,
+        atol=contact_settings.tolerance_mm,
+        rtol=0.0,
+    )
+    np.testing.assert_allclose(
+        near_result.final_indenter_pose.translation_mm,
+        far_result.final_indenter_pose.translation_mm,
+        atol=contact_settings.tolerance_mm,
+        rtol=0.0,
+    )
+    assert near_result.diagnostics["first_contact_normalized"] is True
+    assert far_result.diagnostics["first_contact_normalized"] is True
+    # Newton's GPU contact reduction is not bitwise deterministic across two
+    # freshly built contexts.  Compare the actual deformation fields at a
+    # tight 0.02 mm mesh-scale tolerance, while requiring the same normalized
+    # prescribed pose and contact/load signature above.
+    np.testing.assert_allclose(
+        near_result.mechanics_result.deformed_vertices,
+        far_result.mechanics_result.deformed_vertices,
+        atol=2.0e-2,
+        rtol=0.0,
+    )
+    np.testing.assert_allclose(
+        near_result.mechanics_result.displacement,
+        far_result.mechanics_result.displacement,
+        atol=2.0e-2,
+        rtol=0.0,
+    )
+    for result in (near_result, far_result):
+        assert np.all(np.isfinite(result.mechanics_result.deformed_vertices))
+        assert np.min(
+            _six_volumes(
+                result.mechanics_result.deformed_vertices,
+                result.mechanics_result.tetrahedra,
+            )
+        ) > 0.0
+        assert int(result.diagnostics["max_soft_contact_count"]) > 0
+    near_displacement_mm = float(
+        np.max(np.linalg.norm(near_result.mechanics_result.displacement, axis=1))
+    )
+    far_displacement_mm = float(
+        np.max(np.linalg.norm(far_result.mechanics_result.displacement, axis=1))
+    )
+    assert near_displacement_mm > 0.0
+    assert far_displacement_mm > 0.0
+    assert abs(near_displacement_mm - far_displacement_mm) <= 0.05 * max(
+        near_displacement_mm,
+        far_displacement_mm,
+    )
 
 
 @pytest.mark.parametrize(
