@@ -50,8 +50,10 @@ Run its focused real-device smoke test with:
 ```
 
 This checks the current Newton VBD API, CUDA device selection, one actual
-tetrahedral VBD step, and finite nonzero deformation. It is a small surrogate
-mechanics prototype, not the Kratos FEA workflow.
+tetrahedral VBD step, and finite deformation. It includes both the synthetic
+bootstrap body and the nominal existing search-tier fingertip volume mesh.
+The latter uses the shared `FingertipSolid`/`FingertipVolumeMesh` path and is a
+small surrogate mechanics prototype, not the Kratos FEA workflow.
 
 ## Tests
 

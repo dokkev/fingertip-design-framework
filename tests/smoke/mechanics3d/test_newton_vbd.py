@@ -49,6 +49,7 @@ def test_newton_vbd_deforms_tiny_tet_block_on_cuda() -> None:
     result = solve(
         TetMeshData(vertices, tetrahedra),
         settings=Mechanics3DSettings(
+            # Wiring-smoke parameters only; not a calibrated silicone baseline.
             device="cuda:0",
             steps=1,
             iterations=5,
@@ -60,6 +61,12 @@ def test_newton_vbd_deforms_tiny_tet_block_on_cuda() -> None:
     assert result.tetrahedra.shape == tetrahedra.shape
     assert np.all(np.isfinite(result.deformed_vertices))
     assert np.all(np.isfinite(result.displacement))
+    np.testing.assert_allclose(
+        result.rest_vertices,
+        vertices,
+        atol=1.0e-6,
+        rtol=0.0,
+    )
     np.testing.assert_allclose(
         result.deformed_vertices[fixed],
         vertices[fixed],

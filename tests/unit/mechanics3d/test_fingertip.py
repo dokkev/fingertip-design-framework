@@ -1,0 +1,68 @@
+"""Contracts for preserving the authoritative volume-mesh topology."""
+
+from __future__ import annotations
+
+from dataclasses import replace
+
+import numpy as np
+import pytest
+
+pytest.importorskip("gmsh")
+
+from mesh.volume3d import generate_volume_mesh
+from mesh.volume_types import VolumeMeshValidation, volume_mesh_settings_for_tier
+from model.fingertip_model import FingertipModel
+from model.fingertip_parameters import FingertipParameters
+from model.solid import build_fingertip_solid
+from mechanics3d import prepare_fingertip_mechanics_mesh
+
+
+@pytest.fixture(scope="module")
+def volume_mesh():
+    model = FingertipModel(FingertipParameters())
+    solid = build_fingertip_solid(model)
+    return generate_volume_mesh(solid, volume_mesh_settings_for_tier("search"))
+
+
+def test_adapter_preserves_fea_node_order_and_surface_provenance(volume_mesh) -> None:
+    prepared = prepare_fingertip_mechanics_mesh(volume_mesh)
+
+    assert tuple(prepared.source_node_ids) == tuple(sorted(volume_mesh.nodes))
+    assert prepared.morphology_fingerprint == volume_mesh.morphology_fingerprint
+    assert set(prepared.surface_triangles) == set(volume_mesh.surface_triangles)
+    assert prepared.tet_mesh.vertices.shape[0] == len(volume_mesh.nodes)
+    assert prepared.tet_mesh.tetrahedra.shape[0] == len(volume_mesh.tetrahedra)
+
+
+def test_adapter_translates_all_connectivity_through_one_local_mapping(volume_mesh) -> None:
+    prepared = prepare_fingertip_mechanics_mesh(volume_mesh)
+    local = {node_id: index for index, node_id in enumerate(sorted(volume_mesh.nodes))}
+
+    expected_tetrahedra = np.asarray(
+        [[local[node_id] for node_id in tetrahedron.node_ids] for tetrahedron in volume_mesh.tetrahedra],
+        dtype=np.int32,
+    )
+    np.testing.assert_array_equal(prepared.tet_mesh.tetrahedra, expected_tetrahedra)
+    for tag, triangles in volume_mesh.surface_triangles.items():
+        expected = np.asarray(
+            [[local[node_id] for node_id in triangle.node_ids] for triangle in triangles],
+            dtype=np.int32,
+        )
+        np.testing.assert_array_equal(prepared.surface_triangles[tag], expected)
+
+    support_source_ids = {
+        node_id
+        for tag in ("support_bond_left", "support_bond_right")
+        for triangle in volume_mesh.surface_triangles[tag]
+        for node_id in triangle.node_ids
+    }
+    assert prepared.support_vertex_indices == tuple(sorted(local[node_id] for node_id in support_source_ids))
+
+
+def test_adapter_rejects_invalid_source_volume_mesh(volume_mesh) -> None:
+    invalid = replace(
+        volume_mesh,
+        validation=VolumeMeshValidation(False, {"synthetic_failure": False}, ("synthetic_failure",)),
+    )
+    with pytest.raises(ValueError, match="invalid FingertipVolumeMesh"):
+        prepare_fingertip_mechanics_mesh(invalid)

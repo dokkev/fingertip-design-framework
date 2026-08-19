@@ -175,6 +175,23 @@ It does not replace mesh-based reference/loaded comparisons.
       -> DesignEvaluator
   ```
 
+### Shared 3D geometry and mesh contract
+
+The nominal 3D mechanics paths share one authoritative geometry and TET4 mesh:
+
+```text
+FingertipModel -> FingertipSolid -> FingertipVolumeMesh
+                                      ├── fem.solid3d
+                                      └── mechanics3d.fingertip
+```
+
+`model.solid` owns the fixed 11 mm semantic extrusion and `mesh.volume3d`
+owns Gmsh tetrahedralization. The fingertip mechanics adapter does not create
+geometry or remesh; it preserves the source Gmsh node order and semantic
+surface triangles while converting to the generic NumPy contract. Kratos and
+Newton therefore consume the same volume-mesh topology, with no second 3D
+geometry implementation.
+
 ## Fingertip and mesh state
 
 `Fingertip` is the physical root:

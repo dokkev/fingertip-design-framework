@@ -60,6 +60,10 @@ def test_fem_has_no_plotting_dependency() -> None:
     _assert_no_prefix("fem", ("visualization", "matplotlib"))
 
 
+def test_mechanics3d_has_no_fem_or_optics_dependency() -> None:
+    _assert_no_prefix("mechanics3d", ("fem", "optics", "validation", "tests"))
+
+
 def test_full_field_producer_uses_active_python_interpreter() -> None:
     path = (
         REPOSITORY_ROOT
