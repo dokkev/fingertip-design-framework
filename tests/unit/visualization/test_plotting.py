@@ -12,10 +12,8 @@ import matplotlib
 
 matplotlib.use("Agg", force=True)
 import matplotlib.pyplot as plt
-from matplotlib.collections import PathCollection, PolyCollection
-from matplotlib.collections import QuadMesh
-from matplotlib.colors import PowerNorm
-from matplotlib.image import AxesImage
+from matplotlib.collections import LineCollection, PathCollection, PolyCollection, QuadMesh
+from matplotlib.colors import to_rgb
 from matplotlib.quiver import Quiver
 import numpy as np
 import pytest
@@ -23,6 +21,7 @@ from shapely.geometry import LineString, MultiLineString, Polygon
 
 import visualization
 import visualization.case as visualization_case
+import visualization.optics as visualization_optics
 from mesh import PadMesh
 from model import Fingertip, FingertipParameters, LED, OpticalMaterial
 from model.fingertip_model import FingertipModel
@@ -36,6 +35,7 @@ from visualization import (
     plot_mesh,
     plot_transport,
 )
+from visualization._style import STYLE
 
 
 def _square_mesh() -> PadMesh:
@@ -169,7 +169,7 @@ def test_plot_case_comparison_builds_unloaded_loaded_2x2_without_execution() -> 
     )
     pose = SimpleNamespace(
         carrier_geometry=Polygon(
-            [(0.25, -0.4), (0.75, -0.4), (0.75, -0.1), (0.25, -0.1)]
+            [(-100.0, -100.0), (100.0, -100.0), (100.0, 100.0), (-100.0, 100.0)]
         ),
         contact_patch=MultiLineString(
             [[(0.4, 0.0), (0.5, 0.0)], [(0.5, 0.0), (0.6, 0.0)]]
@@ -179,7 +179,35 @@ def test_plot_case_comparison_builds_unloaded_loaded_2x2_without_execution() -> 
     loaded_domain_mask = np.ones_like(loaded_field, dtype=bool)
     loaded_domain_mask[1, 2] = False
 
-    def raw(field: np.ndarray, mask: np.ndarray | None = None) -> SimpleNamespace:
+    def raw(field: np.ndarray, mask: np.ndarray | None = None, *, loaded: bool = False) -> SimpleNamespace:
+        starts = np.asarray(
+            [
+                [-1.0, 0.0, 0.0],
+                [-0.8, 0.1, 0.0],
+                [-0.6, 0.2, 0.0],
+                [-0.4, 0.3, 0.0],
+                [-0.2, 0.4, 0.0],
+                [0.0, 0.5, 0.0],
+            ],
+            dtype=float,
+        )
+        ends = starts + np.asarray([0.0, 3.0, 0.0])
+        if loaded:
+            ends[:, 0] += np.asarray([0.7, 0.5, 0.3, 0.1, -0.1, -0.3])
+        primary = np.arange(len(starts), dtype=np.int64)
+        left_profile = np.asarray([0.8, 0.5, 0.2, 0.1, 0.05, 0.02], dtype=float)
+        right_profile = np.asarray([0.02, 0.05, 0.1, 0.2, 0.5, 0.8], dtype=float)
+        if loaded:
+            left_profile *= 0.7
+            right_profile *= 1.2
+
+        def lateral_outgoing_profiles() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+            return (
+                np.linspace(0.0, 1.0, len(left_profile) + 1),
+                left_profile.copy(),
+                right_profile.copy(),
+            )
+
         return SimpleNamespace(
             projected_x_edges_mm=np.arange(4, dtype=float),
             projected_y_edges_mm=np.arange(3, dtype=float),
@@ -190,6 +218,15 @@ def test_plot_case_comparison_builds_unloaded_loaded_2x2_without_execution() -> 
             escape_positions_mm=np.asarray([[0.5, 1.0, 0.0]]),
             escape_directions=np.asarray([[0.0, 1.0, 0.0]]),
             escape_weights=np.asarray([1.0]),
+            retained_segment_lengths_mm=np.linalg.norm(ends - starts, axis=1),
+            retained_segment_primary_ray_indices=primary,
+            retained_segment_interaction_counts=np.zeros(len(starts), dtype=np.int64),
+            retained_segment_starts_mm=starts,
+            retained_segment_ends_mm=ends,
+            retained_segment_media=np.ones(len(starts), dtype=np.uint8),
+            retained_segment_start_weights=np.ones(len(starts), dtype=float),
+            retained_segment_end_weights=np.ones(len(starts), dtype=float),
+            lateral_outgoing_profiles=lateral_outgoing_profiles,
         )
 
     case = SimpleNamespace(
@@ -209,7 +246,7 @@ def test_plot_case_comparison_builds_unloaded_loaded_2x2_without_execution() -> 
             ),
         ),
         raytracing=SimpleNamespace(
-            raw=raw(loaded_field, loaded_domain_mask),
+            raw=raw(loaded_field, loaded_domain_mask, loaded=True),
         ),
     )
 
@@ -223,31 +260,54 @@ def test_plot_case_comparison_builds_unloaded_loaded_2x2_without_execution() -> 
     assert {axis.get_title() for axis in panel_axes} == {
         "FEA — unloaded reference (zero stress)",
         "FEA — loaded",
-        "PLANAR_2D OptiX — unloaded",
-        "PLANAR_2D OptiX — loaded",
+        "PLANAR_2D OptiX — unloaded (sampled ray paths)",
+        "PLANAR_2D OptiX — loaded (sampled ray paths)",
     }
-    optical_axes = [axis for axis in panel_axes if "OptiX" in axis.get_title()]
-    optical_collections = [
-        image
-        for axis in optical_axes
-        for image in axis.collections
-        if isinstance(image, QuadMesh)
-    ]
-    assert len(optical_collections) == 2
-    assert optical_collections[0].norm is optical_collections[1].norm
-    assert isinstance(optical_collections[0].norm, PowerNorm)
-    assert optical_collections[0].norm.gamma == pytest.approx(0.45)
-    assert optical_collections[0].norm.vmin == pytest.approx(0.0)
-    assert optical_collections[0].norm.vmax < 4.0e-1
-    assert any(np.ma.getmaskarray(collection.get_array()).any() for collection in optical_collections)
-    loaded_display_mask = np.ma.getmaskarray(optical_collections[1].get_array()).reshape(-1)
-    assert not loaded_display_mask[0]
-    assert loaded_display_mask[-1]
-    assert not any(isinstance(collection, Quiver) for axis in optical_axes for collection in axis.collections)
-    assert any(
-        axis.get_ylabel() == "Weighted optical path density"
-        for axis in figure.axes
+    expected_bounds = visualization_case.fingertip_plot_limits(
+        case.fingertip.parameters
     )
+    assert all(
+        axis.get_xlim() == pytest.approx(expected_bounds[:2])
+        and axis.get_ylim() == pytest.approx(expected_bounds[2:])
+        for axis in panel_axes
+    )
+    optical_axes = [axis for axis in panel_axes if "OptiX" in axis.get_title()]
+    rigid_patches = [
+        patch
+        for axis in optical_axes
+        for patch in axis.patches
+        if patch.get_label() == "Rigid link / stem"
+    ]
+    assert len(rigid_patches) == 2
+    assert all(patch.get_zorder() < 4 for patch in rigid_patches)
+    default_ray_layers = [
+        collection
+        for axis in optical_axes
+        for collection in axis.collections
+        if isinstance(collection, LineCollection) and collection.get_zorder() < 5.0
+    ]
+    assert len(default_ray_layers) == 14
+    assert all(
+        np.allclose(collection.get_colors()[:, :3], to_rgb(STYLE.silicone_ray))
+        for collection in default_ray_layers
+    )
+    assert all(
+        axis.get_facecolor()[:3] == pytest.approx(to_rgb(STYLE.optical_background))
+        for axis in optical_axes
+    )
+    assert not any(
+        isinstance(collection, QuadMesh)
+        for axis in optical_axes
+        for collection in axis.collections
+    )
+    assert not any(
+        isinstance(collection, LineCollection)
+        and "Outgoing optical flux" in collection.get_label()
+        for axis in optical_axes
+        for collection in axis.collections
+    )
+    assert not any(line.get_zorder() == 4 for axis in optical_axes for line in axis.lines)
+    assert not any(isinstance(collection, Quiver) for axis in optical_axes for collection in axis.collections)
     fea_axes = [axis for axis in panel_axes if axis.get_title().startswith("FEA")]
     stress_collections = [
         collection
@@ -270,6 +330,27 @@ def test_plot_case_comparison_builds_unloaded_loaded_2x2_without_execution() -> 
     debug_optical_axes = [
         axis for axis in debug_figure.axes if "OptiX" in axis.get_title()
     ]
+    ray_glow_layers = [
+        collection
+        for axis in debug_optical_axes
+        for collection in axis.collections
+        if isinstance(collection, LineCollection) and collection.get_zorder() < 5.0
+    ]
+    assert len(ray_glow_layers) == 14
+    for axis in debug_optical_axes:
+        axis_layers = [
+            collection
+            for collection in axis.collections
+            if isinstance(collection, LineCollection)
+            and collection.get_zorder() < 5.0
+        ]
+        assert sorted(float(collection.get_linewidths()[0]) for collection in axis_layers) == pytest.approx(
+            [0.245, 0.35, 0.49, 0.77, 1.12, 1.575, 2.10]
+        )
+    assert all(
+        np.max(collection.get_colors()[:, 3]) <= 0.070 + 1.0e-12
+        for collection in ray_glow_layers
+    )
     assert any(
         isinstance(collection, Quiver)
         for axis in debug_optical_axes
@@ -310,7 +391,7 @@ def test_display_smoothing_is_optional_and_does_not_mutate_raw_field() -> None:
         dtype=float,
     )
     before = field.copy()
-    smoothed = visualization_case._smooth_display_field(
+    smoothed = visualization_optics._smooth_display_field(
         field,
         np.ones_like(field, dtype=bool),
         radius_cells=1,

@@ -53,6 +53,7 @@ def draw_rigid_structure(
     tip: Fingertip,
     *,
     label: str = "Rigid link / stem",
+    zorder: int = 5,
 ) -> None:
     """Draw the rigid link plate and stem."""
     model = tip.geometry
@@ -63,7 +64,7 @@ def draw_rigid_structure(
         edgecolor=STYLE.rigid_edge,
         linewidth=1.5,
         label=label,
-        zorder=5,
+        zorder=zorder,
     )
     add_polygonal_patches(
         ax,
@@ -72,7 +73,7 @@ def draw_rigid_structure(
         edgecolor=STYLE.rigid_edge,
         linewidth=1.5,
         label="_nolegend_",
-        zorder=6,
+        zorder=zorder + 1,
     )
 
 

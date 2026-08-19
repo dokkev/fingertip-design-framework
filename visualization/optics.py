@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Sequence
 
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.axes import Axes
-from matplotlib.colors import PowerNorm
+from matplotlib.collections import LineCollection
+from matplotlib.colors import PowerNorm, to_rgb
 from matplotlib.patches import Rectangle
 
 from optics import RaySegment, TransportResult
@@ -21,8 +22,25 @@ OPTICAL_DISPLAY_GAMMA = 0.45
 OPTICAL_UPPER_PERCENTILE = 99.5
 OPTICAL_SMOOTHING_RADIUS_CELLS = 1
 OPTICAL_DISPLAY_FLOOR_FRACTION = 1.0e-4
-MAX_REPRESENTATIVE_PATHS = 100
+MAX_REPRESENTATIVE_PATHS = 240
 MAX_DEBUG_PATHS = 600
+RAY_PATH_LINEWIDTH = 0.35
+# Presentation-only controls; these do not represent transport attenuation.
+RAY_PATH_FADE_FRACTION = 0.4
+RAY_PATH_SUBDIVISIONS = 8
+# Fixed display-space layers approximate a narrow Gaussian transverse glow.
+# Values are (linewidth multiplier, absolute alpha); they are not a physical
+# scattering width or an irradiance model.
+RAY_GLOW_LAYERS = (
+    (6.0, 0.006),
+    (4.5, 0.010),
+    (3.2, 0.016),
+    (2.2, 0.025),
+    (1.4, 0.040),
+    (1.0, 0.070),
+)
+RAY_CENTERLINE_WIDTH_MULTIPLIER = 0.70
+RAY_CENTERLINE_ALPHA = 0.070
 
 
 def _optical_grid(result: Any) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
@@ -156,8 +174,12 @@ def draw_optical_field(
     cmap: Any,
     smoothing_radius_cells: int = OPTICAL_SMOOTHING_RADIUS_CELLS,
     floor_fraction: float = OPTICAL_DISPLAY_FLOOR_FRACTION,
+    alpha: float = 1.0,
 ) -> Any:
     """Draw only the scalar optical field; no geometry, rays, or colorbar."""
+    if not np.isfinite(alpha) or not 0.0 < alpha <= 1.0:
+        raise ValueError("alpha must be finite and lie in (0, 1]")
+    ax.set_facecolor(STYLE.optical_background)
     x_edges, y_edges, _, _ = _optical_grid(result)
     image = ax.pcolormesh(
         x_edges,
@@ -172,6 +194,7 @@ def draw_optical_field(
         cmap=cmap,
         norm=norm,
         rasterized=True,
+        alpha=alpha,
         zorder=0,
     )
     return image
@@ -181,7 +204,7 @@ def _legacy_segments(result: TransportResult) -> tuple[RaySegment, ...]:
     return tuple(result.segments)
 
 
-def _production_segments(result: Transport3DResult) -> tuple[tuple[np.ndarray, np.ndarray, int, float, float, int], ...]:
+def _production_segments(result: Any) -> tuple[tuple[np.ndarray, np.ndarray, int, float, float, int], ...]:
     values = (
         result.retained_segment_starts_mm,
         result.retained_segment_ends_mm,
@@ -206,19 +229,9 @@ def _production_segments(result: Transport3DResult) -> tuple[tuple[np.ndarray, n
     )
 
 
-def draw_ray_paths(
-    ax: Axes,
-    result: Any,
-    *,
-    maximum_display_paths: int = MAX_REPRESENTATIVE_PATHS,
-    weight_floor_fraction: float = OPTICAL_DISPLAY_FLOOR_FRACTION,
-) -> int:
-    """Draw deterministic, bounded representative paths for debug figures."""
-    if maximum_display_paths < 1:
-        raise ValueError("maximum_display_paths must be positive")
-    if weight_floor_fraction < 0.0 or not np.isfinite(weight_floor_fraction):
-        raise ValueError("weight_floor_fraction must be finite and nonnegative")
-    records = []
+def _ray_path_records(result: Any) -> list[tuple[np.ndarray, np.ndarray, int, float, float, int]]:
+    """Return display-only segment records without changing the transport result."""
+    records: list[tuple[np.ndarray, np.ndarray, int, float, float, int]] = []
     if isinstance(result, TransportResult):
         for segment in _legacy_segments(result):
             records.append(
@@ -231,36 +244,193 @@ def draw_ray_paths(
                     int(segment.ray_index),
                 )
             )
-    elif isinstance(result, Transport3DResult):
-        records = list(_production_segments(result))
+    elif isinstance(result, Transport3DResult) or hasattr(
+        result, "retained_segment_starts_mm"
+    ):
+        records.extend(_production_segments(result))
     else:
-        raise TypeError("result must be a TransportResult or Transport3DResult")
+        raise TypeError("result must be a TransportResult or retained-segment transport result")
+    return records
+
+
+def _eligible_primary_ray_ids(
+    records: Sequence[tuple[np.ndarray, np.ndarray, int, float, float, int]],
+    *,
+    weight_floor_fraction: float,
+) -> set[int]:
     if not records:
-        return 0
+        return set()
     maximum_weight = max(max(record[3], record[4]) for record in records)
     floor = maximum_weight * weight_floor_fraction
-    records = [record for record in records if max(record[3], record[4]) >= floor]
-    primary_ids = np.asarray(sorted({record[5] for record in records}), dtype=np.int64)
-    if len(primary_ids) > maximum_display_paths:
-        selected = np.linspace(0, len(primary_ids) - 1, maximum_display_paths, dtype=int)
-        primary_ids = primary_ids[selected]
-    selected_ids = set(int(value) for value in primary_ids)
-    labels: set[int] = set()
-    for start, end, medium, _, _, primary in records:
-        if primary not in selected_ids:
-            continue
-        color = STYLE.silicone_ray if medium else STYLE.air_ray
-        label = medium if medium not in labels else "_nolegend_"
-        ax.plot(
-            [start[0], end[0]],
-            [start[1], end[1]],
-            color=color,
-            linewidth=0.55,
-            alpha=0.62,
-            label=("Silicone ray" if medium else "Air ray") if label != "_nolegend_" else label,
-            zorder=4,
+    return {
+        record[5]
+        for record in records
+        if max(record[3], record[4]) >= floor
+    }
+
+
+def _sample_primary_ray_ids(
+    primary_ids: Sequence[int],
+    *,
+    maximum_display_paths: int,
+) -> tuple[int, ...]:
+    """Select evenly spaced sorted ray IDs for a deterministic display sample."""
+    ordered = np.asarray(sorted(set(int(value) for value in primary_ids)), dtype=np.int64)
+    if len(ordered) > maximum_display_paths:
+        ordered = ordered[
+            np.linspace(0, len(ordered) - 1, maximum_display_paths, dtype=int)
+        ]
+    return tuple(int(value) for value in ordered)
+
+
+def shared_ray_sample_ids(
+    results: Sequence[Any],
+    *,
+    maximum_display_paths: int = MAX_REPRESENTATIVE_PATHS,
+    weight_floor_fraction: float = OPTICAL_DISPLAY_FLOOR_FRACTION,
+) -> tuple[int, ...]:
+    """Return one deterministic primary-ray sample shared by multiple views."""
+    if not results:
+        raise ValueError("at least one transport result is required")
+    if maximum_display_paths < 1:
+        raise ValueError("maximum_display_paths must be positive")
+    if weight_floor_fraction < 0.0 or not np.isfinite(weight_floor_fraction):
+        raise ValueError("weight_floor_fraction must be finite and nonnegative")
+    eligible = [
+        _eligible_primary_ray_ids(
+            _ray_path_records(result),
+            weight_floor_fraction=weight_floor_fraction,
         )
-        labels.add(medium)
+        for result in results
+    ]
+    shared = set.intersection(*eligible) if eligible else set()
+    return _sample_primary_ray_ids(
+        tuple(shared),
+        maximum_display_paths=maximum_display_paths,
+    )
+
+
+def draw_ray_paths(
+    ax: Axes,
+    result: Any,
+    *,
+    maximum_display_paths: int = MAX_REPRESENTATIVE_PATHS,
+    weight_floor_fraction: float = OPTICAL_DISPLAY_FLOOR_FRACTION,
+    selected_primary_ray_indices: Sequence[int] | None = None,
+) -> int:
+    """Draw deterministic ray centerlines with a display-only soft glow.
+
+    Retained transport segments are grouped by primary ray, subdivided for
+    display, and emitted as layered ``LineCollection`` entries with
+    per-segment RGBA. The layers are a narrow transverse presentation effect;
+    the centerline remains the actual retained trajectory. Alpha is
+    intentionally independent of transport weight: every selected ray remains
+    visible and receives only a mild presentation-only distance fade from the
+    source. This is not an attenuation or irradiance model and never changes
+    the result-owned transport arrays.
+    """
+    if maximum_display_paths < 1:
+        raise ValueError("maximum_display_paths must be positive")
+    if weight_floor_fraction < 0.0 or not np.isfinite(weight_floor_fraction):
+        raise ValueError("weight_floor_fraction must be finite and nonnegative")
+    records = _ray_path_records(result)
+    if not records:
+        return 0
+    eligible_ids = _eligible_primary_ray_ids(
+        records,
+        weight_floor_fraction=weight_floor_fraction,
+    )
+    if selected_primary_ray_indices is None:
+        selected_ids = set(
+            _sample_primary_ray_ids(
+                tuple(eligible_ids),
+                maximum_display_paths=maximum_display_paths,
+            )
+        )
+    else:
+        selected_ids = {
+            int(value) for value in selected_primary_ray_indices
+        } & eligible_ids
+    selected_records = [
+        record for record in records if record[5] in selected_ids
+    ]
+    records_by_primary: dict[
+        int, list[tuple[np.ndarray, np.ndarray, int, float, float, int]]
+    ] = {}
+    for record in selected_records:
+        records_by_primary.setdefault(record[5], []).append(record)
+
+    display_segments: list[np.ndarray] = []
+    display_path_fades: list[float] = []
+    for ray_records in records_by_primary.values():
+        lengths = np.asarray(
+            [
+                np.linalg.norm(record[1][:2] - record[0][:2])
+                for record in ray_records
+            ],
+            dtype=float,
+        )
+        total_length = float(np.sum(lengths))
+        if not np.isfinite(total_length) or total_length <= 0.0:
+            continue
+        distance_at_start = np.concatenate(([0.0], np.cumsum(lengths[:-1])))
+        for record, length, distance in zip(
+            ray_records, lengths, distance_at_start, strict=True
+        ):
+            if length <= 0.0:
+                continue
+            start, end, medium, _, _, _ = record
+            fractions = np.linspace(0.0, 1.0, RAY_PATH_SUBDIVISIONS + 1)
+            start_xy = np.asarray(start[:2], dtype=float)
+            end_xy = np.asarray(end[:2], dtype=float)
+            for fraction_start, fraction_end in zip(
+                fractions[:-1], fractions[1:], strict=True
+            ):
+                small_start = start_xy + fraction_start * (end_xy - start_xy)
+                small_end = start_xy + fraction_end * (end_xy - start_xy)
+                midpoint_s = (
+                    float(distance)
+                    + 0.5 * float(length) * (fraction_start + fraction_end)
+                ) / total_length
+                path_fade = 1.0 - RAY_PATH_FADE_FRACTION * midpoint_s
+                display_segments.append(
+                    np.asarray([small_start, small_end], dtype=float)
+                )
+                display_path_fades.append(path_fade)
+
+    if not display_segments:
+        return len(selected_ids)
+    segments = np.asarray(display_segments, dtype=float)
+    path_fades = np.asarray(display_path_fades, dtype=float)
+    base_colors = np.ones((len(segments), 4), dtype=float)
+    base_colors[:, :3] = to_rgb(STYLE.silicone_ray)
+    for layer_index, (linewidth_multiplier, layer_alpha) in enumerate(
+        RAY_GLOW_LAYERS
+    ):
+        layer_colors = base_colors.copy()
+        layer_colors[:, 3] = layer_alpha * path_fades
+        ax.add_collection(
+            LineCollection(
+                segments,
+                colors=layer_colors,
+                linewidths=RAY_PATH_LINEWIDTH * linewidth_multiplier,
+                label="Ray glow" if layer_index == 0 else "_nolegend_",
+                zorder=3.0 + 0.12 * layer_index,
+                rasterized=True,
+            )
+        )
+    centerline_colors = base_colors.copy()
+    centerline_colors[:, 3] = RAY_CENTERLINE_ALPHA * path_fades
+    ax.add_collection(
+        LineCollection(
+            segments,
+            colors=centerline_colors,
+            linewidths=RAY_PATH_LINEWIDTH * RAY_CENTERLINE_WIDTH_MULTIPLIER,
+            label="Ray centerline",
+            zorder=4.0,
+            rasterized=True,
+        )
+    )
     return len(selected_ids)
 
 
@@ -393,5 +563,6 @@ __all__ = [
     "draw_ray_paths",
     "display_optical_field",
     "plot_transport",
+    "shared_ray_sample_ids",
     "shared_optical_normalization",
 ]

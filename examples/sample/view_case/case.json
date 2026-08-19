@@ -1,0 +1,103 @@
+{
+  "basal_interface": "bonded",
+  "case_id": "case-6a598b5ee74a623ed821dad8",
+  "configuration_fingerprint": "a9d5b0b1efd5a77d9b9ee18f4acea7f8aab9faedcc755774d8115e4fbef2d41d",
+  "contact_state": {
+    "indentation_mm": 1.0,
+    "indenter_radius_mm": 4.0,
+    "location_x_mm": 0.0
+  },
+  "fem_steps": 12,
+  "fingertip_parameters": {
+    "arc_resolution": 128,
+    "bond_extension_height": 2.0,
+    "bond_extension_width": 4.0,
+    "flat_pad_height": 5.0,
+    "flat_pad_width": 30.0,
+    "geometry_tolerance": 1e-09,
+    "link_thickness": 3.5,
+    "poisson_ratio": 0.49,
+    "semielliptical_pad_height": 9.0,
+    "stem_height": 6.0,
+    "stem_width": 7.6,
+    "void_height": 0.0,
+    "void_width": 1.0,
+    "young_modulus_mpa": 0.55
+  },
+  "fingertip_parameters_fingerprint": "8597383475a67b3825c2712db464e0060b50199988f3b01588a944c55bc67d8e",
+  "indenter_optics": {
+    "boundary_model": "dielectric",
+    "refractive_index": 2.0
+  },
+  "indenter_parameters": {
+    "contact_half_angle_degrees": 60.0,
+    "geometry_resolution": 128,
+    "initial_gap_mm": 0.0,
+    "radius_mm": 4.0,
+    "thickness_mm": 1.0
+  },
+  "indenter_pose_fingerprint": "57eac6f34042e8f15b7603c503fb22cd6be999610c870590376549d4bef77b26",
+  "internal_contact": "sides_separate",
+  "led": {
+    "emission_half_angle_deg": 80.0,
+    "emission_rgb": [
+      1.0,
+      1.0,
+      1.0
+    ],
+    "height_mm": 2.0,
+    "relative_radiant_power": 1.0,
+    "width_mm": 4.0
+  },
+  "mechanics": {
+    "artifact": "mechanics/fea.json",
+    "artifact_sha256": "45f6d3ecc7872fa689c88f0d63c41fd0b2fb6d55f24711bf23f693010446a78b"
+  },
+  "mesh_settings": {
+    "bulk_target_size_mm": 0.75,
+    "classification_tolerance_mm": 1e-07,
+    "contact_boundary_target_size_mm": 0.35,
+    "contact_refinement_distance_mm": 1.5,
+    "level": "medium",
+    "minimum_angle_target_degrees": 15.0
+  },
+  "optical": {
+    "artifact": "optics/raytrace.json",
+    "artifact_sha256": "f41a85e3ed0efe849f29626d40c83c0f611f262b1a783e75dbc3b8ac615ff015"
+  },
+  "optical_material": {
+    "absorption_per_mm": 0.02,
+    "anisotropy_g": 0.0,
+    "refractive_index_air": 1.0,
+    "refractive_index_silicone": 1.41,
+    "scattering_per_mm": 0.23
+  },
+  "optical_mode": "PLANAR_2D",
+  "provenance": {},
+  "schema": "fingertip-case-v3",
+  "trace_settings": {
+    "energy_balance_tolerance": 1e-05,
+    "extrusion_depth_mm": 11.0,
+    "internal_grid_height": 240,
+    "internal_grid_width": 240,
+    "internal_z_bins": 32,
+    "intersection_epsilon_mm": 1e-06,
+    "max_interactions": 10,
+    "maximum_periodic_wraps": 32,
+    "maximum_segment_count": 20000,
+    "minimum_ray_weight": 0.0001,
+    "mode": "planar",
+    "projected_grid_height": 240,
+    "projected_grid_width": 240,
+    "ray_count": 4096,
+    "retain_internal_path_field": false,
+    "retain_projected_segments": true,
+    "source_epsilon_mm": 1e-05,
+    "surface_u_bins": 128,
+    "surface_z_bins": 64,
+    "terminate_on_no_event": false,
+    "terminate_on_periodic_wrap_limit": false,
+    "x_bounds_mm": null,
+    "y_bounds_mm": null
+  }
+}
