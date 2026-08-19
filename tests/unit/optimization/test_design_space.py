@@ -1,4 +1,4 @@
-"""Current five-variable production design-space contracts."""
+"""Current six-variable production design-space contracts."""
 
 from __future__ import annotations
 
@@ -7,8 +7,7 @@ import math
 
 import pytest
 
-from model import FingertipParameters
-from model import Fingertip
+from model import Fingertip, FingertipParameters
 from optimization import (
     DesignSpace,
     DesignVariable,
@@ -29,9 +28,10 @@ def _space(
     )
 
 
-def test_supported_variables_are_exactly_the_current_five() -> None:
+def test_supported_variables_are_exactly_the_current_six() -> None:
     assert OPTIMIZABLE_PARAMETER_NAMES == (
         "flat_pad_height",
+        "semielliptical_pad_height",
         "stem_width",
         "stem_height",
         "void_width",
@@ -54,7 +54,7 @@ def test_design_variable_rejects_invalid_metadata() -> None:
         DesignVariable("stem_height", 1, 5.0, 7.0)  # type: ignore[arg-type]
 
 
-def test_space_requires_all_five_active_variables_once() -> None:
+def test_space_requires_all_six_active_variables_once() -> None:
     variables = tuple(
         DesignVariable(name, True, lower, upper)
         for name, lower, upper in PRODUCTION_SEARCH_BOUNDS
@@ -72,15 +72,16 @@ def test_space_requires_all_five_active_variables_once() -> None:
         )
         for variable in variables
     )
-    with pytest.raises(ValueError, match="all five"):
+    with pytest.raises(ValueError, match="all six"):
         DesignSpace(FingertipParameters(), inactive)
 
 
-def test_decode_uses_exact_names_bounds_and_derived_height() -> None:
+def test_decode_uses_independent_flat_and_semielliptical_heights() -> None:
     space = _space()
     values = {
         "flat_pad_height": 6.25,
-        "stem_width": 8.25,
+        "semielliptical_pad_height": 10.5,
+        "stem_width": 7.0,
         "stem_height": 7.0,
         "void_width": 1.5,
         "void_height": 1.25,
@@ -89,16 +90,17 @@ def test_decode_uses_exact_names_bounds_and_derived_height() -> None:
 
     assert decoded.flat_pad_width == 30.0
     assert decoded.flat_pad_height == 6.25
-    assert decoded.semielliptical_pad_height == 7.75
+    assert decoded.semielliptical_pad_height == 10.5
+    assert decoded.total_pad_depth == 16.75
     assert decoded.void_height == 1.25
     with pytest.raises(ValueError, match="missing"):
         space.decode(
             {name: value for name, value in values.items() if name != "void_width"}
         )
     with pytest.raises(ValueError, match="unknown"):
-        space.decode({**values, "semielliptical_pad_height": 8.0})
+        space.decode({**values, "flat_pad_width": 31.0})
     with pytest.raises(ValueError, match="outside"):
-        space.decode({**values, "void_width": 2.1})
+        space.decode({**values, "void_width": 4.1})
 
 
 def test_decode_preserves_fixed_material_and_link_fields() -> None:
@@ -109,14 +111,16 @@ def test_decode_preserves_fixed_material_and_link_fields() -> None:
         young_modulus_mpa=0.8,
         poisson_ratio=0.2,
         arc_resolution=64,
+        void_height=0.25,
     )
     decoded = _space(nominal).decode(
         {
             "flat_pad_height": 5.5,
+            "semielliptical_pad_height": 9.5,
             "stem_width": 8.0,
-        "stem_height": 6.5,
-        "void_width": 1.25,
-        "void_height": 0.75,
+            "stem_height": 6.5,
+            "void_width": 1.25,
+            "void_height": 0.75,
         }
     )
     before = asdict(nominal)
@@ -136,10 +140,10 @@ def test_production_study_rejects_zero_nominal_void_height() -> None:
         create_production_study(nominal_parameters=FingertipParameters())
 
 
-def test_corner_values_are_deterministic_for_five_variables() -> None:
+def test_corner_values_are_deterministic_for_six_variables() -> None:
     space = _space()
     corners = space.corner_values()
-    assert len(corners) == 32
+    assert len(corners) == 64
     assert corners[0] == space.lower_corner_values()
     assert corners[-1] == space.upper_corner_values()
     assert corners == space.corner_values()
@@ -152,7 +156,7 @@ def test_void_height_decodes_into_authoritative_geometry(void_height: float) -> 
         variable.name: (
             void_height
             if variable.name == "void_height"
-            else (variable.lower + variable.upper) / 2.0
+            else getattr(space.nominal_parameters, variable.name)
         )
         for variable in space.active_variables
     }
