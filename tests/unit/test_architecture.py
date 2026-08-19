@@ -45,7 +45,16 @@ def test_case_does_not_depend_on_optimization() -> None:
 def test_model_is_geometry_only() -> None:
     _assert_no_prefix(
         "model",
-        ("mesh", "fem", "visualization", "gmsh", "matplotlib", "KratosMultiphysics"),
+        (
+            "mesh",
+            "fem",
+            "mechanics3d",
+            "optics",
+            "visualization",
+            "gmsh",
+            "matplotlib",
+            "KratosMultiphysics",
+        ),
     )
 
 

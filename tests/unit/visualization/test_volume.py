@@ -14,6 +14,7 @@ pytest.importorskip("gmsh")
 from mesh import FingertipVolumeState, volume_mesh_settings_for_tier
 from model import Fingertip
 from visualization import plot_volume_mesh, plot_volume_state
+from visualization.volume import draw_volume_mesh
 
 
 @pytest.fixture(scope="module")
@@ -49,6 +50,26 @@ def test_plot_volume_mesh_renders_selected_semantic_shell_and_rejects_unknown_ta
     plt.close(figure)
 
 
+def test_draw_volume_mesh_preserves_existing_axes_policy(nominal_volume_state) -> None:
+    volume_mesh, _ = nominal_volume_state
+    figure = plt.figure()
+    axis = figure.add_subplot(111, projection="3d")
+    axis.set_xlim(-1.0, 1.0)
+    axis.set_ylim(-2.0, 2.0)
+    axis.set_zlim(-3.0, 3.0)
+    axis.view_init(elev=7.0, azim=11.0)
+    axis.set_xlabel("existing x")
+    draw_volume_mesh(axis, volume_mesh, surface_tags=("outer_compliant_arc",))
+
+    np.testing.assert_allclose(axis.get_xlim(), (-1.0, 1.0))
+    np.testing.assert_allclose(axis.get_ylim(), (-2.0, 2.0))
+    np.testing.assert_allclose(axis.get_zlim(), (-3.0, 3.0))
+    assert axis.get_xlabel() == "existing x"
+    assert axis.elev == pytest.approx(7.0)
+    assert axis.azim == pytest.approx(11.0)
+    plt.close(figure)
+
+
 def test_plot_volume_state_displacement_uses_neutral_field_and_shared_norm(
     nominal_volume_state,
 ) -> None:
@@ -78,7 +99,23 @@ def test_plot_volume_state_displacement_uses_neutral_field_and_shared_norm(
     assert surface.norm is norm
     np.testing.assert_allclose(surface.get_array(), 0.025)
     assert any(isinstance(collection, Line3DCollection) for collection in axis.collections)
+    assert len(axis.figure.axes) == 2
+    assert axis.figure.axes[1].get_ylabel() == "displacement magnitude [mm]"
     assert np.array_equal(state.deformed_coordinates_mm, before)
+    plt.close(figure)
+
+
+def test_plot_volume_state_can_defer_colorbar_for_shared_composition(nominal_volume_state) -> None:
+    volume_mesh, state = nominal_volume_state
+    figure = plt.figure()
+    axis = plot_volume_state(
+        state,
+        colorbar=False,
+        ax=figure.add_subplot(111, projection="3d"),
+    )
+    figure.canvas.draw()
+    assert axis.name == "3d"
+    assert len(figure.axes) == 1
     plt.close(figure)
 
 

@@ -274,16 +274,12 @@ def draw_volume_mesh(
     show_edges: bool = True,
     show_nodes: bool = False,
     show_support: bool = False,
-    elev: float = _DEFAULT_ELEVATION,
-    azim: float = _DEFAULT_AZIMUTH,
-    title: str = "Fingertip volume mesh",
 ) -> None:
     """Draw selected semantic surfaces of a canonical undeformed volume mesh."""
     if not isinstance(volume_mesh, FingertipVolumeMesh):
         raise TypeError("volume_mesh must be FingertipVolumeMesh")
     tags = _selected_surface_tags(volume_mesh, surface_tags, show_support=show_support)
     definitions = _surface_definitions(volume_mesh)
-    elev, azim = _validate_view(elev, azim)
     _, coordinates = _canonical_coordinates(volume_mesh)
     vertices, faces, face_tags = _surface_arrays(volume_mesh, tags, coordinates)
     _draw_surface(
@@ -304,13 +300,6 @@ def draw_volume_mesh(
             color=STYLE.node_face,
             size=5.0,
         )
-    _apply_3d_axes(
-        ax,
-        (coordinates,),
-        elev=elev,
-        azim=azim,
-        title=title,
-    )
 
 
 def _validate_state_field(field: str) -> None:
@@ -332,10 +321,8 @@ def _state_face_values(state: FingertipVolumeState, face_tags: tuple[str, ...], 
             }
         )
     )
-    surface_index = {node_id: index for index, node_id in enumerate(surface_node_ids)}
     values: list[float] = []
     for tag, face in zip(face_tags, faces):
-        triangle = state.surface_triangles[tag]
         # The selected semantic rows are emitted in the same deterministic
         # order as _surface_arrays; use the face's source-local nodes only for
         # the nodal scalar lookup, never to define geometry coordinates.
@@ -359,15 +346,11 @@ def draw_volume_state(
     highlight_vertex_indices: Iterable[int] | None = None,
     norm: Normalize | None = None,
     cmap: Any = None,
-    elev: float = _DEFAULT_ELEVATION,
-    azim: float = _DEFAULT_AZIMUTH,
-    title: str = "Fingertip volume state",
-) -> None:
+) -> Poly3DCollection | None:
     """Draw one neutral deformed volume state without solver inspection."""
     if not isinstance(state, FingertipVolumeState):
         raise TypeError("state must be FingertipVolumeState")
     _validate_state_field(field)
-    elev, azim = _validate_view(elev, azim)
     if not np.isfinite(deformation_scale) or deformation_scale <= 0.0:
         raise ValueError("deformation_scale must be finite and positive")
     tags = _selected_surface_tags(state.volume_mesh, surface_tags, show_support=show_support)
@@ -435,13 +418,7 @@ def draw_volume_state(
             color=STYLE.contact_edge,
             size=24.0,
         )
-    _apply_3d_axes(
-        ax,
-        (reference_coordinates, display_coordinates),
-        elev=elev,
-        azim=azim,
-        title=title,
-    )
+    return collection if field == "displacement" else None
 
 
 def plot_volume_mesh(
@@ -458,6 +435,7 @@ def plot_volume_mesh(
 ) -> Axes:
     """Plot the semantic exterior shell of one canonical volume mesh."""
     axis = _new_3d_axes(ax)
+    elev, azim = _validate_view(elev, azim)
     draw_volume_mesh(
         axis,
         volume_mesh,
@@ -465,6 +443,11 @@ def plot_volume_mesh(
         show_edges=show_edges,
         show_nodes=show_nodes,
         show_support=show_support,
+    )
+    _, coordinates = _canonical_coordinates(volume_mesh)
+    _apply_3d_axes(
+        axis,
+        (coordinates,),
         elev=elev,
         azim=azim,
         title=title or "Fingertip volume mesh",
@@ -485,13 +468,15 @@ def plot_volume_state(
     norm: Normalize | None = None,
     cmap: Any = None,
     ax: Axes | None = None,
+    colorbar: bool = True,
     elev: float = _DEFAULT_ELEVATION,
     azim: float = _DEFAULT_AZIMUTH,
     title: str | None = None,
 ) -> Axes:
     """Plot one canonical deformed volume state with optional reference overlay."""
     axis = _new_3d_axes(ax)
-    draw_volume_state(
+    elev, azim = _validate_view(elev, azim)
+    collection = draw_volume_state(
         axis,
         state,
         field=field,
@@ -503,10 +488,21 @@ def plot_volume_state(
         highlight_vertex_indices=highlight_vertex_indices,
         norm=norm,
         cmap=cmap,
+    )
+    _, reference_coordinates = _canonical_coordinates(state.volume_mesh)
+    display_coordinates = reference_coordinates + deformation_scale * state.displacement_mm
+    _apply_3d_axes(
+        axis,
+        (reference_coordinates, display_coordinates),
         elev=elev,
         azim=azim,
         title=title or "Fingertip volume state",
     )
+    if colorbar and field == "displacement":
+        if collection is None:
+            raise RuntimeError("displacement plotting did not create a scalar mappable")
+        colorbar_artist = axis.figure.colorbar(collection, ax=axis, pad=0.08)
+        colorbar_artist.set_label("displacement magnitude [mm]")
     return axis
 
 
