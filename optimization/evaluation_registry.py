@@ -14,7 +14,7 @@ from typing import Any, Mapping
 from optimization.design_space import OPTIMIZABLE_PARAMETER_NAMES
 
 
-REGISTRY_SCHEMA_VERSION = 1
+REGISTRY_SCHEMA_VERSION = 2
 SUPPORTED_EVALUATION_STATUSES = frozenset(
     {
         "success",
@@ -43,12 +43,12 @@ def _finite_float(name: str, value: object) -> float:
 
 
 def canonical_morphology(parameters: Mapping[str, object]) -> dict[str, str]:
-    """Return a lossless, deterministic representation of the five fields."""
+    """Return a lossless, deterministic representation of the six fields."""
     expected = set(OPTIMIZABLE_PARAMETER_NAMES)
     supplied = set(parameters)
     if supplied != expected:
         raise ValueError(
-            "registry morphology must contain exactly the five production "
+            "registry morphology must contain exactly the six production "
             f"parameters; missing={sorted(expected - supplied)!r}, "
             f"unknown={sorted(supplied - expected)!r}"
         )

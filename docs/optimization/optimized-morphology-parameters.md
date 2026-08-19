@@ -8,9 +8,10 @@ The optimization goal is **not** to enlarge the fingertip or maximize brightness
 
 The primary contact metric remains the contact/no-contact lateral state separation defined in `docs/optimization/evaluation.md`.
 
-## 2. Fixed Outer Envelope
+## 2. Fixed Maximum Outer Envelope
 
-To prevent the optimizer from winning simply by increasing sensor size, the overall fingertip envelope is fixed.
+To prevent the optimizer from winning simply by increasing sensor size, the
+width is fixed and the accepted total depth has a fixed maximum.
 
 ### Fixed width
 
@@ -22,36 +23,28 @@ w_{fp}=30\ \mathrm{mm}
 flat_pad_width = 30 mm
 ```
 
-### Fixed distal depth
+### Variable distal depth
 
-\[
-h_{fp}+h_{ep}=14\ \mathrm{mm}
-\]
-
-Thus:
-
-\[
-h_{ep}=14-h_{fp}
-\]
-
-`flat_pad_height` and `semielliptical_pad_height` are therefore **not independent optimization variables**.
+`flat_pad_height` and `semielliptical_pad_height` are independent. The
+production geometry constraint is (h_{fp}>0), (h_{ep}>0), and
+(h_{fp}+h_{ep}\le30\ \mathrm{mm}). The accepted envelope is not a fixed
+14 mm depth.
 
 ### Fixed basal morphology
 
 ```text
-void_height = 0 mm
+void_height >= 0 mm (active production variable)
 basal_interface = bonded
 ```
 
-`void_height` is not an optimization variable.
 
 ## 3. Optimization Variables
 
-The production optimization is a **4-variable morphology search**:
+The production optimization is a **6-variable morphology search**:
 
 \[
 \boxed{
-\mathbf q=[h_{fp},w_s,h_s,w_v]
+\mathbf q=[h_{fp},h_{ep},w_s,h_s,w_v,h_v]
 }
 \]
 
@@ -64,17 +57,22 @@ nominal:   5.0 mm
 
 Controls the relative amount of straight sidewall versus distal semielliptical morphology.
 
-\[
-h_{ep}=14-h_{fp}
-\]
-
 Primary effects:
 
 - external contact morphology,
 - deformation distribution,
 - optical path redistribution near the distal pad.
 
-### 3.2 Stem width — \(w_s\)
+### 3.2 Semielliptical pad height — \(h_{ep}\)
+
+```text
+parameter: semielliptical_pad_height
+nominal:   9.0 mm
+```
+
+Controls the distal compliant envelope independently of the flat sidewall.
+
+### 3.3 Stem width — \(w_s\)
 
 ```text
 parameter: stem_width
@@ -88,7 +86,7 @@ Primary effects:
 - lateral deformation pathways,
 - internal optical transport geometry.
 
-### 3.3 Stem height — \(h_s\)
+### 3.4 Stem height — \(h_s\)
 
 ```text
 parameter: stem_height
@@ -102,7 +100,7 @@ Primary effects:
 - side-contact engagement,
 - optical transport around the internal structure.
 
-### 3.4 Lateral void width — \(w_v\)
+### 3.5 Lateral void width — \(w_v\)
 
 ```text
 parameter: void_width
@@ -116,17 +114,28 @@ Primary effects:
 - internal optical path geometry,
 - timing and extent of side-contact engagement.
 
+### 3.6 Void height — \(h_v\)
+
+```text
+parameter: void_height
+nominal:   0.25 mm
+```
+
+Controls the nonnegative clearance below the stem. Geometry and the global
+minimum-thickness constraint determine feasibility rather than a tight
+scientific upper bound.
+
 ## 4. Derived / Fixed Parameters
 
 | Parameter | Production treatment |
 |---|---|
 | `flat_pad_width` | fixed at 30 mm |
 | `flat_pad_height` | optimized |
-| `semielliptical_pad_height` | derived as `14 - flat_pad_height` |
+| `semielliptical_pad_height` | optimized independently |
 | `stem_width` | optimized |
 | `stem_height` | optimized |
 | `void_width` | optimized |
-| `void_height` | fixed at 0 mm |
+| `void_height` | optimized |
 | `link_thickness` | fixed |
 | `bond_extension_width` | fixed |
 | `bond_extension_height` | fixed |
@@ -144,9 +153,10 @@ At minimum:
 - valid non-self-intersecting geometry,
 - no material overlap,
 - connected compliant pad,
-- `void_height = 0`,
+- `void_height >= 0`,
 - bonded basal interface preserved,
-- minimum silicone ligament requirement,
+- global relevant-boundary `d_min >= 5 mm`; this is a fabrication/reliability
+  design margin, not a measured failure threshold,
 - valid mesh generation,
 - valid FEA initialization,
 - converged contact solve,
@@ -156,7 +166,9 @@ At minimum:
 
 Invalid candidates are treated as **infeasible**, not repaired with penalty weights.
 
-Optimization bounds for the four active variables should be defined separately and must respect these constraints.
+The broad six-variable Ax envelopes are numerical domains only; these
+constraints remain authoritative and invalid candidates are rejected before
+meshing.
 
 ## 6. Mechanical Evaluation Protocol
 
@@ -396,15 +408,25 @@ These are diagnostics and interpretation aids, not weighted objective terms.
 ```text
 DESIGN VARIABLES
     flat_pad_height
+    semielliptical_pad_height
     stem_width
     stem_height
     void_width
+    void_height
 
-FIXED / DERIVED
+FIXED
     flat_pad_width = 30 mm
-    flat_pad_height + semielliptical_pad_height = 14 mm
-    void_height = 0 mm
     basal_interface = bonded
+    internal_contact = sides_separate
+
+GEOMETRIC FEASIBILITY
+    flat_pad_height > 0
+    semielliptical_pad_height > 0
+    flat_pad_height + semielliptical_pad_height <= 30 mm
+    stem_width/2 + void_width <= 10 mm
+    global relevant-boundary d_min >= 5 mm
+    5 mm is a fabrication/reliability design margin, not a measured
+    silicone failure threshold
 
 MECHANICS
     48 steps
@@ -414,7 +436,7 @@ MECHANICS
 CONTACT STATES
     depths    = 0.5, 1.0, 1.5, 2.0 mm
     diameters = 6, 10, 14, 20 mm
-    locations = xi = 0, 0.1, 0.2
+    locations = x = 0.0, 1.5, 3.0 mm
 
 OPTICS
     PLANAR_2D OptiX

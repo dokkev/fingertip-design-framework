@@ -29,6 +29,7 @@ from model import (
     InvalidFingertipParameters,
     LED,
     OpticalMaterial,
+    validate_minimum_silicone_thickness,
 )
 from model.fingertip_model import InvalidFingertipGeometry
 from optics import IndenterOptics
@@ -476,6 +477,7 @@ class DesignEvaluator:
     def evaluate(self, parameters: FingertipParameters) -> DesignEvaluation:
         """Trace one unloaded state, then all exact captured loaded states."""
         try:
+            validate_minimum_silicone_thickness(parameters)
             tip = Fingertip(parameters, led=self.led, optical=self.optical)
         except _DESIGN_ERRORS as exc:
             return _failure("invalid_design", f"{type(exc).__name__}: {exc}")

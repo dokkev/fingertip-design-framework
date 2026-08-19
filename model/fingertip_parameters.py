@@ -14,6 +14,7 @@ class InvalidFingertipParameters(ValueError):
 
 
 MINIMUM_SILICONE_LIGAMENT_MM = 2.0
+MAX_TOTAL_PAD_DEPTH_MM = 30.0
 
 
 @dataclass(frozen=True)
@@ -210,6 +211,17 @@ class FingertipParameters:
         if self.void_width < 0.0 or self.void_height < 0.0:
             raise InvalidFingertipParameters(
                 "void_width and void_height must be nonnegative"
+            )
+        if (
+            self.flat_pad_height + self.semielliptical_pad_height
+            > MAX_TOTAL_PAD_DEPTH_MM + self.geometry_tolerance
+        ):
+            raise InvalidFingertipParameters(
+                "total pad depth must not exceed 30 mm: "
+                f"flat_pad_height={self.flat_pad_height:g}, "
+                "semielliptical_pad_height="
+                f"{self.semielliptical_pad_height:g}, "
+                f"total={self.total_pad_depth:g}"
             )
         if self.young_modulus_mpa <= 0.0:
             raise InvalidFingertipParameters(

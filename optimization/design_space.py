@@ -10,8 +10,9 @@ from typing import Literal, Mapping
 
 from model import (
     FingertipParameters,
+    MAX_TOTAL_PAD_DEPTH_MM,
+    PRODUCTION_MINIMUM_SILICONE_THICKNESS_MM,
     validate_minimum_silicone_thickness,
-    validate_silicone_ligament,
 )
 
 
@@ -34,14 +35,19 @@ OPTIMIZABLE_PARAMETER_NAMES: tuple[OptimizableParameterName, ...] = (
 )
 _OPTIMIZABLE_PARAMETER_SET = frozenset(OPTIMIZABLE_PARAMETER_NAMES)
 _FIXED_FLAT_PAD_WIDTH_MM = 30.0
+PRODUCTION_MAX_TOTAL_PAD_DEPTH_MM = MAX_TOTAL_PAD_DEPTH_MM
 PRODUCTION_NOMINAL_VOID_HEIGHT_MM = 0.25
 PRODUCTION_SEARCH_BOUNDS: tuple[tuple[str, float, float], ...] = (
-    ("flat_pad_height", 3.0, 8.0),
-    ("semielliptical_pad_height", 5.0, 12.0),
-    ("stem_width", 5.0, 10.0),
-    ("stem_height", 4.0, 9.0),
-    ("void_width", 0.5, 4.0),
-    ("void_height", 0.25, 3.0),
+    ("flat_pad_height", 0.5, 29.5),
+    ("semielliptical_pad_height", 0.5, 29.5),
+    ("stem_width", 1.0, 20.0),
+    ("stem_height", 1.0, 25.0),
+    ("void_width", 0.0, 10.0),
+    ("void_height", 0.0, 25.0),
+)
+PRODUCTION_LINEAR_PARAMETER_CONSTRAINTS: tuple[str, ...] = (
+    "flat_pad_height + semielliptical_pad_height <= 30.0",
+    "stem_width + 2*void_width <= 20.0",
 )
 
 
@@ -83,9 +89,10 @@ class DesignVariable:
 class DesignSpace:
     """Immutable nominal parameters plus the six-variable production contract.
 
-    Flat and semi-elliptical pad heights are independent.  Candidate feasibility
-    is enforced by the authoritative fingertip validation plus the explicit
-    minimum-silicone-thickness rule; total pad depth is therefore free to vary.
+    Flat and semi-elliptical pad heights are independent. Candidate feasibility
+    is enforced by authoritative fingertip validation plus the production
+    minimum-silicone-thickness rule. The finite ranges are numerical envelopes
+    for Ax, not scientific morphology limits.
     """
 
     nominal_parameters: FingertipParameters
@@ -168,11 +175,13 @@ class DesignSpace:
             **updates,
             flat_pad_width=_FIXED_FLAT_PAD_WIDTH_MM,
         )
-        # Retain the established conservative diagnostics and add the true
-        # Euclidean corner-to-ellipse wall-thickness gate.  Invalid candidates
-        # fail here, before meshing/mechanics/optics.
-        validate_silicone_ligament(candidate)
-        validate_minimum_silicone_thickness(candidate)
+        # Invalid candidates fail here, before meshing/mechanics/optics. The
+        # Legacy side/distal ligament measures remain diagnostics; they are not
+        # allowed to replace or silently tighten the production d_min contract.
+        validate_minimum_silicone_thickness(
+            candidate,
+            minimum_mm=PRODUCTION_MINIMUM_SILICONE_THICKNESS_MM,
+        )
         return candidate
 
     def corner_values(self) -> tuple[dict[str, float], ...]:
@@ -195,6 +204,8 @@ __all__ = [
     "DesignVariable",
     "OPTIMIZABLE_PARAMETER_NAMES",
     "PRODUCTION_SEARCH_BOUNDS",
+    "PRODUCTION_LINEAR_PARAMETER_CONSTRAINTS",
+    "PRODUCTION_MAX_TOTAL_PAD_DEPTH_MM",
     "PRODUCTION_NOMINAL_VOID_HEIGHT_MM",
     "OptimizableParameterName",
 ]

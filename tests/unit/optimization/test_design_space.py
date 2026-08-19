@@ -100,7 +100,7 @@ def test_decode_uses_independent_flat_and_semielliptical_heights() -> None:
     with pytest.raises(ValueError, match="unknown"):
         space.decode({**values, "flat_pad_width": 31.0})
     with pytest.raises(ValueError, match="outside"):
-        space.decode({**values, "void_width": 4.1})
+        space.decode({**values, "void_width": 10.1})
 
 
 def test_decode_preserves_fixed_material_and_link_fields() -> None:
@@ -135,9 +135,9 @@ def test_decode_preserves_fixed_material_and_link_fields() -> None:
         assert getattr(decoded, name) == before[name]
 
 
-def test_production_study_rejects_zero_nominal_void_height() -> None:
-    with pytest.raises(ValueError, match="nominal void_height"):
-        create_production_study(nominal_parameters=FingertipParameters())
+def test_production_study_accepts_zero_nominal_void_height() -> None:
+    study = create_production_study(nominal_parameters=FingertipParameters())
+    assert study.design_space.nominal_parameters.void_height == 0.0
 
 
 def test_corner_values_are_deterministic_for_six_variables() -> None:
@@ -149,7 +149,7 @@ def test_corner_values_are_deterministic_for_six_variables() -> None:
     assert corners == space.corner_values()
 
 
-@pytest.mark.parametrize("void_height", (0.25, 1.5, 3.0))
+@pytest.mark.parametrize("void_height", (0.25, 1.5, 2.0))
 def test_void_height_decodes_into_authoritative_geometry(void_height: float) -> None:
     space = create_production_study().design_space
     values = {

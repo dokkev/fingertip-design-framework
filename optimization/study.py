@@ -15,6 +15,8 @@ from optics.transport3d import Transport3DSettings
 from optimization.design_space import (
     OPTIMIZABLE_PARAMETER_NAMES,
     PRODUCTION_SEARCH_BOUNDS,
+    PRODUCTION_LINEAR_PARAMETER_CONSTRAINTS,
+    PRODUCTION_MAX_TOTAL_PAD_DEPTH_MM,
     DesignSpace,
     DesignVariable,
     PRODUCTION_NOMINAL_VOID_HEIGHT_MM,
@@ -27,6 +29,13 @@ PRODUCTION_FIXED_FLAT_PAD_WIDTH_MM = 30.0
 PRODUCTION_EVALUATION_CONTRACT: dict[str, object] = {
     "schema": "production-evaluation-v1",
     "bounds_mm": PRODUCTION_SEARCH_BOUNDS,
+    "numerical_envelope": "broad finite Ax envelope; not scientific feasibility",
+    "linear_parameter_constraints": PRODUCTION_LINEAR_PARAMETER_CONSTRAINTS,
+    "scientific_constraints": {
+        "total_pad_depth_mm_max": PRODUCTION_MAX_TOTAL_PAD_DEPTH_MM,
+        "minimum_silicone_thickness_mm_min": 5.0,
+        "flat_pad_width_mm": PRODUCTION_FIXED_FLAT_PAD_WIDTH_MM,
+    },
     "scenario_grid": {
         "diameters_mm": (6.0, 10.0, 14.0, 20.0),
         "locations_x_mm": (0.0, 1.5, 3.0),
@@ -179,7 +188,7 @@ def create_production_study(
     *,
     nominal_parameters: FingertipParameters | None = None,
 ) -> OptimizationStudy:
-    """Build the frozen five-variable production optimization configuration."""
+    """Build the frozen six-variable production optimization configuration."""
     return OptimizationStudy(
         design_space=_production_design_space(nominal_parameters),
         scenario_grid=ScenarioGrid(),
@@ -200,5 +209,6 @@ __all__ = [
     "PRODUCTION_EVALUATION_CONTRACT",
     "PRODUCTION_EVALUATION_CONTRACT_ID",
     "PRODUCTION_SEARCH_BOUNDS",
+    "PRODUCTION_LINEAR_PARAMETER_CONSTRAINTS",
     "create_production_study",
 ]

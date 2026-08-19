@@ -26,10 +26,11 @@ def test_lumo3d_contract_is_explicitly_three_state_and_maximize_oriented() -> No
     assert LUMO3D_EVALUATION_CONTRACT_ID.startswith("lumo3d-multi-contact-v1-")
 
 
-def test_lumo3d_study_reuses_all_five_active_production_variables(tmp_path: Path) -> None:
+def test_lumo3d_study_reuses_all_six_active_production_variables(tmp_path: Path) -> None:
     study = create_lumo3d_study(tmp_path)
     assert [variable.name for variable in study.design_space.active_variables] == [
         "flat_pad_height",
+        "semielliptical_pad_height",
         "stem_width",
         "stem_height",
         "void_width",

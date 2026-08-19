@@ -17,6 +17,7 @@ from scipy.stats import qmc
 from model import (
     FingertipParameters,
     silicone_ligament_measures,
+    silicone_thickness_measures,
     validate_silicone_ligament,
 )
 from optimization import (
@@ -140,7 +141,6 @@ def _decoded_parameter_values(normalized_point: list[float]) -> dict[str, float]
     ):
         updates[name] = lower + normalized * (upper - lower)
     updates["flat_pad_width"] = FIXED_FLAT_PAD_WIDTH_MM
-    updates["semielliptical_pad_height"] = 14.0 - updates["flat_pad_height"]
     return updates
 
 
@@ -148,11 +148,16 @@ def _ligament_fields(
     parameters: FingertipParameters | Mapping[str, float],
 ) -> dict[str, float]:
     measures = silicone_ligament_measures(parameters)
+    production = silicone_thickness_measures(
+        parameters if isinstance(parameters, FingertipParameters) else FingertipParameters(**parameters)
+    )
     return {
         "side_ligament_mm": measures.side_ligament_mm,
         "ellipse_depth_at_cutout_mm": measures.ellipse_depth_at_cutout_mm,
         "distal_ligament_mm": measures.distal_ligament_mm,
         "minimum_silicone_ligament_mm": measures.minimum_silicone_ligament_mm,
+        "minimum_silicone_thickness_mm": production.minimum_silicone_thickness_mm,
+        "shortest_boundary_pair": production.shortest_boundary_pair,
     }
 
 

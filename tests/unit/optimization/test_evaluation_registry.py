@@ -16,9 +16,11 @@ from optimization.evaluation_registry import (
 CONTRACT = "production-contract-a"
 MORPHOLOGY = {
     "flat_pad_height": 5.0,
+    "semielliptical_pad_height": 9.0,
     "stem_width": 7.6,
     "stem_height": 6.0,
     "void_width": 1.0,
+    "void_height": 0.25,
 }
 
 
@@ -81,7 +83,7 @@ def test_registry_persists_success_failure_and_duplicate_provenance(tmp_path) ->
         failed.key,
     }
     payload = json.loads(path.read_text(encoding="utf-8"))
-    assert payload["schema_version"] == 1
+    assert payload["schema_version"] == 2
 
 
 def test_exact_key_uses_lossless_float_hex_without_nearby_deduplication(

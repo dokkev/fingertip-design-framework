@@ -20,6 +20,7 @@ from optimization.study import (
 
 NOMINAL = {
     "flat_pad_height": 5.0,
+    "semielliptical_pad_height": 9.0,
     "stem_width": 7.6,
     "stem_height": 6.0,
     "void_width": 1.0,
@@ -27,6 +28,7 @@ NOMINAL = {
 }
 KNOWN_FAILURE = {
     "flat_pad_height": 5.1,
+    "semielliptical_pad_height": 8.9,
     "stem_width": 7.7,
     "stem_height": 6.1,
     "void_width": 1.1,
@@ -34,6 +36,7 @@ KNOWN_FAILURE = {
 }
 NEW_INITIALIZATION = {
     "flat_pad_height": 5.2,
+    "semielliptical_pad_height": 9.1,
     "stem_width": 7.8,
     "stem_height": 6.2,
     "void_width": 1.2,
@@ -41,6 +44,7 @@ NEW_INITIALIZATION = {
 }
 NEW_SEARCH = {
     "flat_pad_height": 5.3,
+    "semielliptical_pad_height": 8.8,
     "stem_width": 7.9,
     "stem_height": 6.3,
     "void_width": 1.3,
@@ -463,12 +467,12 @@ def test_real_ax_failed_point_can_be_reproposed_then_registry_abandons_it(
         "initialization",
         "search",
     ]
-    assert evaluator.calls == [
-        NOMINAL,
-        KNOWN_FAILURE,
-        NEW_INITIALIZATION,
-        NEW_SEARCH,
-    ]
+    for actual, expected in zip(
+        evaluator.calls,
+        [NOMINAL, KNOWN_FAILURE, NEW_INITIALIZATION, NEW_SEARCH],
+        strict=True,
+    ):
+        assert actual == pytest.approx(expected)
     assert [
         real_client._experiment.trials[record.trial_index]
         .generator_run._generation_node_name

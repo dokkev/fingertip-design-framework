@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import hashlib
 import json
 from pathlib import Path
+import time
 from typing import Any, Literal, Mapping
 
 import numpy as np
@@ -13,7 +14,13 @@ import numpy as np
 from mechanics3d import prepare_fingertip_mechanics_mesh
 from mesh import volume_mesh_settings_for_tier
 from mesh.volume3d import VolumeMeshingError
-from model import Fingertip, FingertipParameters, InvalidFingertip, InvalidFingertipParameters
+from model import (
+    Fingertip,
+    FingertipParameters,
+    InvalidFingertip,
+    InvalidFingertipParameters,
+    validate_minimum_silicone_thickness,
+)
 from optics.contact_object import CarrierOptics
 from optics.transport3d import (
     OptiXTransport,
@@ -53,7 +60,7 @@ from validation.mechanics3d.multi_location_sphere_contact import (
 LUMO3D_OBSERVATION_LEVEL = "FULL_3D native internal transport redistribution proxy"
 CONTACT_STATE_SEPARATION_OBJECTIVE_NAME = "contact_state_separation"
 LUMO3D_OPTICAL_X_BOUNDS_MM = (-16.0, 16.0)
-LUMO3D_OPTICAL_Y_BOUNDS_MM = (-15.0, 4.5)
+LUMO3D_OPTICAL_Y_BOUNDS_MM = (-31.0, 4.5)
 LUMO3D_EVALUATION_CONTRACT: dict[str, Any] = {
     "schema": "lumo3d-multi-contact-evaluation-v1",
     "bounds_mm": PRODUCTION_SEARCH_BOUNDS,
@@ -74,6 +81,7 @@ LUMO3D_EVALUATION_CONTRACT: dict[str, Any] = {
         "y_bounds_mm": LUMO3D_OPTICAL_Y_BOUNDS_MM,
         "carrier_boundary_model": "absorber",
         "carrier_mapping": "exact_semantic_surface_triangle_any_contact_vertex",
+        "common_domain_covers_max_total_pad_depth_mm": True,
     },
     "objective": {
         "name": CONTACT_STATE_SEPARATION_OBJECTIVE_NAME,
@@ -128,6 +136,7 @@ def _candidate_id(parameters: FingertipParameters) -> str:
         name: float(getattr(parameters, name))
         for name in (
             "flat_pad_height",
+            "semielliptical_pad_height",
             "stem_width",
             "stem_height",
             "void_width",
@@ -310,7 +319,11 @@ class Lumo3DEvaluator:
 
     def evaluate(self, parameters: FingertipParameters) -> Lumo3DEvaluation:
         stage = "mechanics"
+        evaluation_started = time.perf_counter()
+        mechanics_runtime_s: float | None = None
+        optics_started: float | None = None
         try:
+            validate_minimum_silicone_thickness(parameters)
             tip = Fingertip(parameters)
             candidate_id = _candidate_id(parameters)
             candidate_root = self.artifact_root / "candidates" / candidate_id
@@ -329,6 +342,7 @@ class Lumo3DEvaluator:
             )
             mechanics_records = tuple(case.to_dict() for case in contact.locations)
             self._validate_mechanics(mechanics_records)
+            mechanics_runtime_s = time.perf_counter() - evaluation_started
 
             volume_mesh = tip.volume_mesh(volume_mesh_settings_for_tier("search"))
             prepared = prepare_fingertip_mechanics_mesh(volume_mesh)
@@ -343,6 +357,7 @@ class Lumo3DEvaluator:
             optical_records: list[dict[str, Any]] = []
             results: list[Any] = []
             stage = "optics"
+            optics_started = time.perf_counter()
             for case in contact.locations:
                 contact_state = _contact_state(
                     case,
@@ -387,6 +402,7 @@ class Lumo3DEvaluator:
                         name: float(getattr(parameters, name))
                         for name in (
                             "flat_pad_height",
+                            "semielliptical_pad_height",
                             "stem_width",
                             "stem_height",
                             "void_width",
@@ -455,6 +471,9 @@ class Lumo3DEvaluator:
                 "pairwise_distance_matrix": pairwise,
                 "mechanics_contract": contact.to_dict()["search_contract"],
                 "mechanics_mode": self.mechanics_mode,
+                "mechanics_runtime_s": mechanics_runtime_s,
+                "optics_runtime_s": time.perf_counter() - optics_started,
+                "total_runtime_s": time.perf_counter() - evaluation_started,
                 "morphology_fingerprint": volume_mesh.morphology_fingerprint,
                 "transport_configuration_fingerprint": fingerprint_mapping(configuration),
             }
@@ -526,7 +545,7 @@ class Lumo3DEvaluator:
 
 @dataclass(frozen=True)
 class Lumo3DStudy:
-    """Small Ax study adapter that reuses the production five-variable space."""
+    """Small Ax study adapter that reuses the production six-variable space."""
 
     design_space: DesignSpace
     artifact_root: Path

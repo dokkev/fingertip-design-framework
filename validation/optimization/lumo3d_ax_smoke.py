@@ -47,6 +47,7 @@ class _SyntheticEvaluator:
             name: float(getattr(parameters, name))
             for name in (
                 "flat_pad_height",
+                "semielliptical_pad_height",
                 "stem_width",
                 "stem_height",
                 "void_width",

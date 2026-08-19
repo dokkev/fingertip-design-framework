@@ -12,7 +12,10 @@ from ax.api.configs import RangeParameterConfig
 
 from model import InvalidFingertipParameters
 from optics.transport3d import Transport3DDependencyError
-from optimization.design_space import DesignSpace
+from optimization.design_space import (
+    DesignSpace,
+    PRODUCTION_LINEAR_PARAMETER_CONSTRAINTS,
+)
 from optimization.evaluation_registry import (
     EvaluationRegistry,
     EvaluationRegistryRecord,
@@ -102,9 +105,11 @@ class AxRunResult:
     """Observed trial records from one Ax-backed study run."""
 
     records: tuple[AxTrialRecord, ...]
-    status: Literal["COMPLETE", "optimizer_stalled_on_known_evaluations"] = (
-        "COMPLETE"
-    )
+    status: Literal[
+        "COMPLETE",
+        "optimizer_stalled_on_known_evaluations",
+        "proposal_budget_exhausted",
+    ] = "COMPLETE"
     consecutive_known_proposals: int = 0
     historical_success_count: int = 0
     historical_failure_count: int = 0
@@ -174,7 +179,10 @@ def create_ax_client(study: OptimizationStudy, settings: AxSettings) -> Client:
         for variable in study.design_space.active_variables
     ]
     client = Client(random_seed=settings.seed)
-    client.configure_experiment(parameters=parameters)
+    client.configure_experiment(
+        parameters=parameters,
+        parameter_constraints=PRODUCTION_LINEAR_PARAMETER_CONSTRAINTS,
+    )
     client.configure_optimization(objective=settings.objective_name)
     client.configure_generation_strategy(
         initialization_budget=settings.initialization_trials,
@@ -420,6 +428,7 @@ def run_ax_optimization(
     campaign_id: str | None = None,
     result_artifact_path: str | None = None,
     max_consecutive_known_proposals: int = MAX_CONSECUTIVE_KNOWN_PROPOSALS,
+    max_proposals: int | None = None,
 ) -> AxRunResult:
     """Evaluate nominal, initialization, and search attempts in order.
 
@@ -444,6 +453,12 @@ def run_ax_optimization(
             or max_consecutive_known_proposals < 1
         ):
             raise ValueError("max_consecutive_known_proposals must be positive")
+    if max_proposals is not None and (
+        not isinstance(max_proposals, int)
+        or isinstance(max_proposals, bool)
+        or max_proposals < 1
+    ):
+        raise ValueError("max_proposals must be a positive integer or None")
 
     client = create_ax_client(study, settings)
     historical_success_count = 0
@@ -463,7 +478,9 @@ def run_ax_optimization(
     def result(
         *,
         status: Literal[
-            "COMPLETE", "optimizer_stalled_on_known_evaluations"
+            "COMPLETE",
+            "optimizer_stalled_on_known_evaluations",
+            "proposal_budget_exhausted",
         ] = "COMPLETE",
         consecutive_known_proposals: int = 0,
     ) -> AxRunResult:
@@ -589,6 +606,8 @@ def run_ax_optimization(
     # requested search budget.
     search_evaluations = 0
     while True:
+        if max_proposals is not None and proposal_count >= max_proposals:
+            return result(status="proposal_budget_exhausted")
         proposal_count += 1
         trial_index, candidate, phase = _next_candidate(
             client,

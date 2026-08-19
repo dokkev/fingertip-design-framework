@@ -211,9 +211,6 @@ def _record_payload(
         name: float(value) for name, value in record.parameters.items()
     }
     morphology = dict(active_parameters)
-    morphology["semielliptical_pad_height"] = (
-        14.0 - morphology["flat_pad_height"]
-    )
     evaluation_payload = None
     if record.evaluation is not None:
         evaluation_payload = _evaluation_to_dict(
@@ -358,13 +355,9 @@ def _successful_records(
 
 
 def _registry_morphology(record: EvaluationRegistryRecord) -> dict[str, float]:
-    morphology = {
+    return {
         name: float(value) for name, value in record.morphology.items()
     }
-    morphology["semielliptical_pad_height"] = (
-        14.0 - morphology["flat_pad_height"]
-    )
-    return morphology
 
 
 def _registry_best(
@@ -661,8 +654,8 @@ def _write_summary(
         "",
         "## Top five successful morphologies",
         "",
-        "| Rank | Trial | Phase | minimum_auc | flat_pad_height | stem_width | stem_height | void_width |",
-        "|---:|---:|---|---:|---:|---:|---:|---:|",
+        "| Rank | Trial | Phase | minimum_auc | flat_pad_height | semielliptical_pad_height | stem_width | stem_height | void_width | void_height |",
+        "|---:|---:|---|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for rank, record in enumerate(top, start=1):
         parameters = record.get("morphology", record["parameters"])
@@ -670,9 +663,11 @@ def _write_summary(
             f"| {rank} | {record['trial_index']} | {record['phase']} | "
             f"{record['minimum_auc']:.12g} | "
             f"{parameters['flat_pad_height']:.8g} | "
+            f"{parameters['semielliptical_pad_height']:.8g} | "
             f"{parameters['stem_width']:.8g} | "
             f"{parameters['stem_height']:.8g} | "
-            f"{parameters['void_width']:.8g} |"
+            f"{parameters['void_width']:.8g} | "
+            f"{parameters['void_height']:.8g} |"
         )
     lines.extend(
         [

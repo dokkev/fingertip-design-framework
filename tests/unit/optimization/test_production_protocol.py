@@ -76,12 +76,13 @@ class _FakeFEA:
         return self.states[depth]
 
 
-def test_design_space_has_five_active_variables_and_derived_height() -> None:
+def test_design_space_has_six_independent_active_variables() -> None:
     nominal = FingertipParameters(void_height=0.25)
     variables = tuple(
         DesignVariable(name, True, getattr(nominal, name), getattr(nominal, name))
         for name in (
             "flat_pad_height",
+            "semielliptical_pad_height",
             "stem_width",
             "stem_height",
             "void_width",
@@ -92,6 +93,7 @@ def test_design_space_has_five_active_variables_and_derived_height() -> None:
     decoded = space.decode(
         {
             "flat_pad_height": nominal.flat_pad_height,
+            "semielliptical_pad_height": nominal.semielliptical_pad_height,
             "stem_width": nominal.stem_width,
             "stem_height": nominal.stem_height,
             "void_width": nominal.void_width,
@@ -100,6 +102,7 @@ def test_design_space_has_five_active_variables_and_derived_height() -> None:
     )
     assert tuple(variable.name for variable in space.variables) == (
         "flat_pad_height",
+        "semielliptical_pad_height",
         "stem_width",
         "stem_height",
         "void_width",
@@ -162,6 +165,7 @@ def _production_study(*, indenter_optics: IndenterOptics | None) -> Optimization
         )
         for name in (
             "flat_pad_height",
+            "semielliptical_pad_height",
             "stem_width",
             "stem_height",
             "void_width",

@@ -17,9 +17,8 @@ def test_nominal_thickness_is_finite_and_above_constraint() -> None:
     measures = silicone_thickness_measures(parameters)
     assert measures.side_ligament_mm > 2.0
     assert measures.diagonal_ellipse_ligament_mm > 2.0
-    assert measures.minimum_silicone_thickness_mm == min(
-        measures.side_ligament_mm,
-        measures.diagonal_ellipse_ligament_mm,
+    assert measures.minimum_silicone_thickness_mm == pytest.approx(
+        min(measures.side_ligament_mm, measures.diagonal_ellipse_ligament_mm)
     )
     assert validate_minimum_silicone_thickness(parameters) == measures
 

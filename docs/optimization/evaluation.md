@@ -11,19 +11,28 @@ states. The protocol therefore has 12 trajectories and 48 loaded states.
 The active morphology vector is
 
 ```text
-q = (flat_pad_height, stem_width, stem_height, void_width)
+q = (flat_pad_height, semielliptical_pad_height, stem_width,
+     stem_height, void_width, void_height)
 ```
 
 The fixed envelope and interface condition are:
 
 ```text
 flat_pad_width = 30 mm
-flat_pad_height + semielliptical_pad_height = 14 mm
-semielliptical_pad_height = 14 - flat_pad_height
-void_height = 0 mm
+flat_pad_height > 0 mm
+semielliptical_pad_height > 0 mm
+flat_pad_height + semielliptical_pad_height <= 30 mm
+stem_width/2 + void_width <= 10 mm
+d_min >= 5 mm (production fabrication/reliability margin)
 basal_interface = bonded
 internal_contact = sides_separate
 ```
+
+The six variables have broad finite numerical envelopes for Ax; those
+envelopes are not scientific upper bounds. Candidates failing the authoritative
+geometry or global relevant-boundary thickness checks are rejected before
+meshing, mechanics, or OptiX. The 5 mm value is not a measured silicone
+failure threshold.
 
 The loading grid is:
 

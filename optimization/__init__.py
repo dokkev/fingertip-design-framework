@@ -14,6 +14,8 @@ from optimization.design_space import (
     OPTIMIZABLE_PARAMETER_NAMES,
     PRODUCTION_NOMINAL_VOID_HEIGHT_MM,
     PRODUCTION_SEARCH_BOUNDS,
+    PRODUCTION_LINEAR_PARAMETER_CONSTRAINTS,
+    PRODUCTION_MAX_TOTAL_PAD_DEPTH_MM,
     OptimizableParameterName,
 )
 from optimization.evaluation_registry import (
@@ -74,6 +76,8 @@ __all__ = [
     "PRODUCTION_EVALUATION_CONTRACT_ID",
     "PRODUCTION_NOMINAL_VOID_HEIGHT_MM",
     "PRODUCTION_SEARCH_BOUNDS",
+    "PRODUCTION_LINEAR_PARAMETER_CONSTRAINTS",
+    "PRODUCTION_MAX_TOTAL_PAD_DEPTH_MM",
     "StateEvaluation",
     "TrajectoryEvaluation",
     "ScenarioGrid",
