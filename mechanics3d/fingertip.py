@@ -17,6 +17,10 @@ from mesh.volume_state import (
 from .types import Mechanics3DResult, TetMeshData
 
 
+class InvalidFingertipMechanicsMesh(ValueError):
+    """Raised when a volume mesh fails the pre-Newton mechanics contract."""
+
+
 def _readonly_array(value: np.ndarray, *, dtype: np.dtype) -> np.ndarray:
     array = np.array(value, dtype=dtype, copy=True)
     array.setflags(write=False)
@@ -139,7 +143,7 @@ def prepare_fingertip_mechanics_mesh(
     if not isinstance(volume_mesh, FingertipVolumeMesh):
         raise TypeError("volume_mesh must be FingertipVolumeMesh")
     if not volume_mesh.validation.passed:
-        raise ValueError(
+        raise InvalidFingertipMechanicsMesh(
             "refusing invalid FingertipVolumeMesh: "
             + ", ".join(volume_mesh.validation.errors)
         )

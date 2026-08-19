@@ -11,9 +11,12 @@ from typing import Any, Literal, Mapping
 
 import numpy as np
 
-from mechanics3d import prepare_fingertip_mechanics_mesh
+from mechanics3d import (
+    InvalidFingertipMechanicsMesh,
+    prepare_fingertip_mechanics_mesh,
+)
 from mesh import volume_mesh_settings_for_tier
-from mesh.volume3d import VolumeMeshingError
+from mesh.volume3d import VolumeMeshDependencyError, VolumeMeshingError
 from model import (
     Fingertip,
     FingertipParameters,
@@ -511,7 +514,11 @@ class Lumo3DEvaluator:
             raise
         except (InvalidFingertip, InvalidFingertipParameters) as exc:
             return _failure("invalid_design", f"{type(exc).__name__}: {exc}")
-        except VolumeMeshingError as exc:
+        except (
+            VolumeMeshDependencyError,
+            VolumeMeshingError,
+            InvalidFingertipMechanicsMesh,
+        ) as exc:
             return _failure("mesh_failure", f"{type(exc).__name__}: {exc}")
         except (
             Transport3DGeometryError,

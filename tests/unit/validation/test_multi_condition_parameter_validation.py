@@ -2,17 +2,26 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import numpy as np
+import pytest
 
 from contact import sphere_alignment_at_normalized_location
+from mechanics3d import InvalidFingertipMechanicsMesh
 from mesh.rigid_object import make_sphere_mesh
+from mesh.volume3d import VolumeMeshingError
 from model import Fingertip
+from validation.optimization import lumo3d_evaluator as lumo3d_evaluator_module
 from validation.contact.multi_condition_parameter_validation import (
     COMPATIBLE_RADII_MM,
     ContactCondition,
     NORMALIZED_LOCATIONS,
     POST_CONTACT_DEPTHS_MM,
     _contact_geometry,
+    _classify_mechanics_exception,
+    _condition_record_for_depth,
+    _contact_state,
     _morphology_fingerprint,
     cell_end_clearance_mm,
     condition_identity,
@@ -123,3 +132,55 @@ def test_alignment_center_uses_radius_plus_gap() -> None:
     normal = np.asarray(alignment.outward_normal)
     np.testing.assert_allclose(center - target, 4.25 * normal, atol=1.0e-10, rtol=0.0)
 
+
+def test_depth_specific_records_do_not_mutate_geometry_provenance() -> None:
+    base = _geometry("production_nominal", 0.5, 4.0, 0.75)
+    shallow = _condition_record_for_depth(base, 0.75)
+    deep = _condition_record_for_depth(base, 1.50)
+    assert base["post_contact_travel_mm"] == 0.75
+    assert shallow["post_contact_travel_mm"] == 0.75
+    assert deep["post_contact_travel_mm"] == 1.50
+    assert shallow["condition_identity"] != deep["condition_identity"]
+    assert shallow is not base
+    assert deep is not base
+
+
+def test_contact_state_reports_actual_carrier_activity() -> None:
+    row = _geometry("production_nominal", 0.5, 4.0)
+    case = SimpleNamespace(
+        indentation=SimpleNamespace(
+            diagnostics={"carrier_contact_vertex_indices": (), "carrier_contact_active": False}
+        )
+    )
+    state = _contact_state(row, case, np.asarray([], dtype=np.int64))
+    assert state["carrier_contact_active"] is False
+    case.indentation.diagnostics["carrier_contact_active"] = True
+    assert _contact_state(row, case, np.asarray([], dtype=np.int64))["carrier_contact_active"] is True
+
+
+@pytest.mark.parametrize("exception", [
+    InvalidFingertipMechanicsMesh("minimum_quality"),
+    VolumeMeshingError("invalid volume mesh"),
+])
+def test_pre_newton_mesh_failures_are_not_solver_failures(exception) -> None:
+    assert _classify_mechanics_exception(exception) == ("mesh_failure", "mesh_failure")
+    assert _classify_mechanics_exception(RuntimeError("vbd failed")) == (
+        "solver_failed",
+        "solver_failed",
+    )
+
+
+def test_production_evaluator_classifies_invalid_volume_mesh_as_mesh_failure(monkeypatch, tmp_path) -> None:
+    def fail_before_newton(**_kwargs):
+        raise InvalidFingertipMechanicsMesh("minimum_quality")
+
+    monkeypatch.setattr(
+        lumo3d_evaluator_module,
+        "run_multi_location_sphere_contact",
+        fail_before_newton,
+    )
+    result = lumo3d_evaluator_module.Lumo3DEvaluator(tmp_path).evaluate(
+        validation_morphologies()["production_nominal"]
+    )
+    assert result.status == "mesh_failure"
+    assert "minimum_quality" in (result.failure_message or "")

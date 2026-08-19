@@ -2,6 +2,7 @@
 
 from .fingertip import (
     FingertipMechanicsMesh,
+    InvalidFingertipMechanicsMesh,
     PrescribedVertexDisplacement,
     outer_compliant_timing_patch,
     make_fingertip_volume_state,
@@ -27,6 +28,7 @@ __all__ = [
     "IndentationResult",
     "IndentationSettings",
     "FingertipMechanicsMesh",
+    "InvalidFingertipMechanicsMesh",
     "PrescribedVertexDisplacement",
     "ParticleLoad",
     "RigidIndenter3D",

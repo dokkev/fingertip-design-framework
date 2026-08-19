@@ -28,9 +28,13 @@ from contact import (
     make_outer_compliant_surface,
     sphere_alignment_at_normalized_location,
 )
-from mechanics3d import prepare_fingertip_mechanics_mesh
+from mechanics3d import (
+    InvalidFingertipMechanicsMesh,
+    prepare_fingertip_mechanics_mesh,
+)
 from mechanics3d.indentation import RigidPose3D
 from mesh.rigid_object import RigidObjectMesh, make_sphere_mesh
+from mesh.volume3d import VolumeMeshDependencyError, VolumeMeshingError
 from mesh.volume_types import volume_mesh_settings_for_tier
 from model import Fingertip, FingertipParameters
 from optics.contact_object import CarrierOptics
@@ -403,6 +407,43 @@ def _apply_mechanics_record(
         record["failure_message"] = "one or more frozen mechanics checks failed"
 
 
+def _condition_record_for_depth(
+    base_record: Mapping[str, Any], depth_mm: float
+) -> dict[str, Any]:
+    """Copy geometry provenance before attaching depth-specific metadata."""
+
+    depth = float(depth_mm)
+    record = dict(base_record)
+    record["post_contact_travel_mm"] = depth
+    record["load_steps"] = load_steps_for_increment(
+        depth, max_increment_mm=SEARCH_MAX_LOAD_INCREMENT_MM
+    )
+    record["condition_identity"] = condition_identity(
+        record["morphology_fingerprint"],
+        ContactCondition(
+            float(record["normalized_location"]),
+            float(record["sphere_radius_mm"]),
+            depth,
+        ),
+    )
+    return record
+
+
+def _classify_mechanics_exception(exc: Exception) -> tuple[str, str]:
+    """Separate pre-Newton mesh rejection from an actual solver failure."""
+
+    if isinstance(
+        exc,
+        (
+            VolumeMeshDependencyError,
+            VolumeMeshingError,
+            InvalidFingertipMechanicsMesh,
+        ),
+    ):
+        return "mesh_failure", "mesh_failure"
+    return "solver_failed", "solver_failed"
+
+
 def _run_mechanics(
     output: Path,
     morphologies: Mapping[str, FingertipParameters],
@@ -416,20 +457,11 @@ def _run_mechanics(
         for radius in COMPATIBLE_RADII_MM:
             for depth in POST_CONTACT_DEPTHS_MM:
                 selected = [
-                    geometry_records[(morphology_id, location, radius)]
+                    _condition_record_for_depth(
+                        geometry_records[(morphology_id, location, radius)], depth
+                    )
                     for location in NORMALIZED_LOCATIONS
                 ]
-                for item in selected:
-                    item["post_contact_travel_mm"] = depth
-                    item["load_steps"] = load_steps_for_increment(
-                        depth, max_increment_mm=SEARCH_MAX_LOAD_INCREMENT_MM
-                    )
-                    item["condition_identity"] = condition_identity(
-                        item["morphology_fingerprint"],
-                        ContactCondition(
-                            float(item["normalized_location"]), radius, depth
-                        ),
-                    )
                 if not all(item["contact_valid"] for item in selected):
                     for item in selected:
                         item["mechanics_status"] = "not_run_contact_invalid"
@@ -471,11 +503,12 @@ def _run_mechanics(
                         ] = case
                         records.append(_public_record(item))
                 except Exception as exc:
+                    status, failure_class = _classify_mechanics_exception(exc)
                     for item in selected:
                         item.update(
                             {
-                                "mechanics_status": "solver_failed",
-                                "failure_class": "solver_failed",
+                                "mechanics_status": status,
+                                "failure_class": failure_class,
                                 "failure_message": f"{type(exc).__name__}: {exc}",
                             }
                         )
@@ -567,7 +600,9 @@ def _contact_state(record: Mapping[str, Any], case: Any, source_node_ids: np.nda
         "first_contact_travel_mm": float(record["first_contact_travel_mm"]),
         "post_contact_travel_mm": float(record["post_contact_travel_mm"]),
         "spawn_clearance_mm": float(record["spawn_clearance_mm"]),
-        "carrier_contact_active": True,
+        "carrier_contact_active": bool(
+            case.indentation.diagnostics.get("carrier_contact_active", False)
+        ),
         "carrier_contact_source_node_ids": list(source_ids),
     }
 
@@ -621,7 +656,9 @@ def _run_optics(
         for location, radius, depth in selected_conditions:
             key = (morphology_id, location, radius, depth)
             case = cases.get(key)
-            geometry = geometry_records[(morphology_id, location, radius)]
+            geometry = _condition_record_for_depth(
+                geometry_records[(morphology_id, location, radius)], depth
+            )
             record: dict[str, Any] = {
                 "condition_identity": condition_identity(
                     geometry["morphology_fingerprint"],
