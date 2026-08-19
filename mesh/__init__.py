@@ -24,6 +24,13 @@ from mesh.volume_types import (
     volume_mesh_settings_for_tier,
 )
 from mesh.volume_state import FingertipVolumeState, make_fingertip_volume_state
+from mesh.rigid_object import (
+    RigidObjectMesh,
+    make_box_mesh,
+    make_cube_mesh,
+    make_cylinder_mesh,
+    make_sphere_mesh,
+)
 
 __all__ = [
     "FingertipMesh",
@@ -46,4 +53,9 @@ __all__ = [
     "volume_mesh_settings_for_tier",
     "FingertipVolumeState",
     "make_fingertip_volume_state",
+    "RigidObjectMesh",
+    "make_box_mesh",
+    "make_cube_mesh",
+    "make_cylinder_mesh",
+    "make_sphere_mesh",
 ]

@@ -67,7 +67,10 @@ It does not replace mesh-based reference/loaded comparisons.
   prototype. Its public boundary is NumPy-only `TetMeshData`,
   `Mechanics3DSettings`, `ParticleLoad`, `Mechanics3DSession`, and
   `Mechanics3DResult`; the Newton model, CUDA arrays, and solver objects remain
-  inside `mechanics3d.backends`. `ParticleLoad` is the neutral external-force
+  inside `mechanics3d.backends`. Its solver-neutral rigid-object boundary is
+  `RigidIndenter3D`, `RigidPose3D`, `IndentationSettings`, and
+  `IndentationResult`; the Newton path uses a kinematic triangle-mesh body and
+  full-surface rigid-soft contact. `ParticleLoad` is the neutral external-force
   contract: local zero-based particle indices, finite Newton-valued forces, and
   an explicit deterministic ramp count. Neutral coordinates use the
   repository's millimetre convention; the backend converts to/from Newton's
@@ -222,6 +225,51 @@ validation rejects non-finite coordinates, unknown source IDs, degenerate or
 orientation-flipped surfaces, and inverted/degenerate tetrahedra. Mechanics
 backends do not own morphology geometry, and `optics.transport3d` does not
 know which backend produced the state.
+
+Rigid-object indentation follows the same neutral-boundary rule:
+
+```text
+RigidObjectMesh
+      ↓
+RigidIndenter3D + RigidPose3D
+      ↓
+Newton kinematic triangle-mesh body
+      ↓
+full-surface rigid-soft contact
+      ↓
+SolverVBD fingertip deformation
+      ↓
+Mechanics3DResult
+      ↓
+FingertipVolumeState
+```
+
+`mesh.RigidObjectMesh` owns immutable millimetre triangle geometry and
+parametric primitives; it contains no Newton, Warp, CUDA, or mechanics state.
+`mechanics3d.indentation` owns pose and translation-only indentation contracts.
+Only `mechanics3d.backends.newton_vbd` converts millimetres to metres and
+constructs `newton.Mesh`, the kinematic body, SDF, collision pipeline, and
+`SolverVBD`. The existing prescribed-vertex function remains a timing-only,
+non-contact benchmark.
+
+The intended later arbitrary-object path is:
+
+```text
+future OBJ/STL/PLY
+      ↓
+explicit preparation and provenance
+      ↓
+RigidObjectMesh
+      ↓
+future Collision-RT first-contact pose
+      ↓
+RigidPose3D
+      ↓
+the same Newton full-surface contact path
+```
+
+Collision-RT and real-object conversion are future work. Primitive meshes are
+generated in memory and are not an implicit asset-file dependency.
 
 The production full-3D optical adapter builds the compliant surface directly
 from `FingertipVolumeState` and uses one shared fixed rigid-carrier/virtual-

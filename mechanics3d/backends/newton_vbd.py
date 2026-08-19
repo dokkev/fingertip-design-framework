@@ -13,6 +13,8 @@ import newton
 from mechanics3d.solve import Mechanics3DSettings
 from mechanics3d.load import ParticleLoad
 from mechanics3d.types import Mechanics3DResult, TetMeshData
+from mechanics3d.fingertip import FingertipMechanicsMesh
+from mechanics3d.indentation import IndentationResult, IndentationSettings, RigidIndenter3D
 
 
 @wp.kernel
@@ -41,6 +43,21 @@ def _add_particle_forces(
     particle_f[index] += forces_n[wp.tid()] * scale
 
 
+@wp.kernel
+def _set_kinematic_body_state(
+    body_q: wp.array(dtype=wp.transform),
+    body_qd: wp.array(dtype=wp.spatial_vector),
+    body_index: int,
+    pose: wp.transform,
+    velocity: wp.spatial_vector,
+) -> None:
+    """Set one prescribed translation and spatial velocity on a kinematic body."""
+
+    if wp.tid() == 0:
+        body_q[body_index] = pose
+        body_qd[body_index] = velocity
+
+
 @dataclass
 class _VBDContext:
     mesh: TetMeshData
@@ -53,6 +70,24 @@ class _VBDContext:
     rest_state: object
     control: object
     contacts: object
+    rest_vertices_m: np.ndarray
+
+
+@dataclass
+class _IndentationContext:
+    prepared: FingertipMechanicsMesh
+    indenter: RigidIndenter3D
+    mechanics_settings: Mechanics3DSettings
+    indentation_settings: IndentationSettings
+    device: object
+    model: object
+    solver: object
+    pipeline: object
+    state_in: object
+    state_out: object
+    control: object
+    contacts: object
+    indenter_body: int
     rest_vertices_m: np.ndarray
 
 
@@ -193,6 +228,275 @@ def _solve_vbd_context(
         "per_solve_wall_s": float(total_wall_s),
         "load_steps": load.load_steps,
     }
+
+
+def _warp_pose(pose, *, device: object):
+    translation_m = np.asarray(pose.translation_mm, dtype=np.float32) * 1.0e-3
+    return wp.transform(
+        wp.vec3(float(translation_m[0]), float(translation_m[1]), float(translation_m[2])),
+        wp.quat(*pose.quaternion_xyzw),
+    )
+
+
+def _build_indentation_context(
+    prepared_fingertip: FingertipMechanicsMesh,
+    indenter: RigidIndenter3D,
+    mechanics_settings: Mechanics3DSettings,
+    indentation_settings: IndentationSettings,
+) -> _IndentationContext:
+    """Build one soft-tet plus kinematic triangle-mesh contact scene."""
+
+    wp.init()
+    if not wp.is_device_available(mechanics_settings.device):
+        raise RuntimeError(
+            f"CUDA device {mechanics_settings.device!r} is not available"
+        )
+    device = wp.get_device(mechanics_settings.device)
+    if not device.is_cuda:
+        raise ValueError("mechanics3d requires a CUDA device, for example cuda:0")
+
+    vertices_m = np.asarray(prepared_fingertip.tet_mesh.vertices, dtype=np.float32) * 1.0e-3
+    rigid_vertices_m = np.asarray(indenter.mesh.vertices_mm, dtype=np.float32) * 1.0e-3
+    rigid_mesh = newton.Mesh(
+        rigid_vertices_m,
+        np.asarray(indenter.mesh.faces, dtype=np.int32).reshape(-1),
+        compute_inertia=False,
+        is_solid=True,
+    )
+    rigid_cfg = newton.ModelBuilder.ShapeConfig(
+        density=1.0e3,
+        ke=indentation_settings.soft_contact_ke,
+        kd=indentation_settings.soft_contact_kd,
+        mu=indentation_settings.soft_contact_mu,
+        gap=0.0,
+    )
+    # The repository mesh is converted to metres above.  Newton's default SDF
+    # band is intentionally generous in SI units and is much too coarse for a
+    # millimetre-scale object, so cook a deterministic mesh-relative SDF with
+    # no additional world-space padding.  Mesh-backed shapes own their cooked
+    # SDF on ``newton.Mesh``; the shape config still opts into its use.
+    object_extent_m = float(np.max(np.ptp(rigid_vertices_m, axis=0)))
+    rigid_mesh.build_sdf(
+        device=device,
+        narrow_band_range=(-object_extent_m, object_extent_m),
+        target_voxel_size=max(object_extent_m / 32.0, 1.0e-8),
+        margin=0.0,
+    )
+    rigid_cfg.configure_sdf(
+        force_sdf=True,
+    )
+
+    builder = newton.ModelBuilder(gravity=mechanics_settings.gravity)
+    builder.add_soft_mesh(
+        pos=wp.vec3(0.0, 0.0, 0.0),
+        rot=wp.quat_identity(),
+        scale=1.0,
+        vel=wp.vec3(0.0, 0.0, 0.0),
+        vertices=vertices_m.tolist(),
+        indices=prepared_fingertip.tet_mesh.tetrahedra.reshape(-1).tolist(),
+        density=mechanics_settings.density,
+        k_mu=mechanics_settings.k_mu,
+        k_lambda=mechanics_settings.k_lambda,
+        k_damp=mechanics_settings.k_damp,
+        # The coarse tet mesh is handled by the full-surface edge/face path;
+        # do not let Newton's metre-scale default particle radius create a
+        # spurious contact shell around a millimetre-scale fingertip.
+        particle_radius=0.0,
+    )
+    indenter_body = builder.add_body(
+        xform=_warp_pose(indenter.initial_pose, device=device),
+        mass=0.0,
+        is_kinematic=True,
+        label=f"{indenter.mesh.name}_kinematic",
+    )
+    builder.add_shape_mesh(
+        body=indenter_body,
+        mesh=rigid_mesh,
+        cfg=rigid_cfg,
+        label=f"{indenter.mesh.name}_collision_mesh",
+    )
+    builder.color()
+    model = builder.finalize(device=device)
+
+    if prepared_fingertip.support_vertex_indices:
+        flags = np.asarray(model.particle_flags.numpy(), dtype=np.int32)
+        flags[list(prepared_fingertip.support_vertex_indices)] &= ~int(newton.ParticleFlags.ACTIVE)
+        model.particle_flags = wp.array(flags, dtype=wp.int32, device=device)
+
+    model.soft_contact_ke = indentation_settings.soft_contact_ke
+    model.soft_contact_kd = indentation_settings.soft_contact_kd
+    model.soft_contact_mu = indentation_settings.soft_contact_mu
+    pipeline = newton.CollisionPipeline(
+        model,
+        broad_phase="nxn",
+        soft_contact_margin=indentation_settings.soft_contact_margin_mm * 1.0e-3,
+        rigid_contact_max=indentation_settings.rigid_contact_buffer_size,
+        enable_rigid_soft_full_surface_contact=True,
+        deterministic=True,
+    )
+    solver = newton.solvers.SolverVBD(
+        model=model,
+        iterations=mechanics_settings.iterations,
+        particle_enable_self_contact=False,
+        particle_enable_tile_solve=False,
+        rigid_contact_hard=True,
+        rigid_body_particle_contact_buffer_size=(
+            indentation_settings.rigid_body_particle_contact_buffer_size
+        ),
+    )
+    state_in = model.state()
+    state_out = model.state()
+    control = model.control()
+    contacts = pipeline.contacts()
+    if (
+        state_in.body_q is None
+        or state_in.body_qd is None
+        or state_out.body_q is None
+        or state_out.body_qd is None
+    ):
+        raise RuntimeError("Newton state did not allocate kinematic body pose and velocity arrays")
+    rest_vertices_m = np.asarray(state_in.particle_q.numpy(), dtype=np.float32).copy()
+    return _IndentationContext(
+        prepared=prepared_fingertip,
+        indenter=indenter,
+        mechanics_settings=mechanics_settings,
+        indentation_settings=indentation_settings,
+        device=device,
+        model=model,
+        solver=solver,
+        pipeline=pipeline,
+        state_in=state_in,
+        state_out=state_out,
+        control=control,
+        contacts=contacts,
+        indenter_body=indenter_body,
+        rest_vertices_m=rest_vertices_m,
+    )
+
+
+def solve_newton_vbd_indentation(
+    prepared_fingertip: FingertipMechanicsMesh,
+    indenter: RigidIndenter3D,
+    mechanics_settings: Mechanics3DSettings,
+    indentation_settings: IndentationSettings,
+) -> IndentationResult:
+    """Run translation-only kinematic rigid-mesh contact with standalone VBD."""
+
+    context = _build_indentation_context(
+        prepared_fingertip,
+        indenter,
+        mechanics_settings,
+        indentation_settings,
+    )
+    previous_pose = indenter.initial_pose
+    max_soft_contact_count = 0
+    max_rigid_contact_count = 0
+    timestep_s = float(mechanics_settings.dt)
+    for step in range(indentation_settings.load_steps):
+        fraction = float(step + 1) / indentation_settings.load_steps
+        target_pose = indenter.pose_at_travel(fraction * indentation_settings.travel_mm)
+        delta_mm = np.asarray(target_pose.translation_mm) - np.asarray(previous_pose.translation_mm)
+        velocity_m = delta_mm * 1.0e-3 / timestep_s
+        pose = _warp_pose(target_pose, device=context.device)
+        velocity = wp.spatial_vector(
+            float(velocity_m[0]),
+            float(velocity_m[1]),
+            float(velocity_m[2]),
+            0.0,
+            0.0,
+            0.0,
+        )
+        wp.launch(
+            _set_kinematic_body_state,
+            dim=1,
+            inputs=[
+                context.state_in.body_q,
+                context.state_in.body_qd,
+                context.indenter_body,
+                pose,
+                velocity,
+            ],
+            device=context.device,
+        )
+        # SolverVBD writes the accepted kinematic pose to its output state.
+        # Seed both ping-pong states explicitly so every load step starts from
+        # the prescribed pose even when the solver has no rigid-body solve to
+        # perform for a kinematic body.
+        wp.launch(
+            _set_kinematic_body_state,
+            dim=1,
+            inputs=[
+                context.state_out.body_q,
+                context.state_out.body_qd,
+                context.indenter_body,
+                pose,
+                velocity,
+            ],
+            device=context.device,
+        )
+        context.state_in.clear_forces()
+        context.model.collide(
+            context.state_in,
+            context.contacts,
+            collision_pipeline=context.pipeline,
+            enable_rigid_soft_full_surface_contact=True,
+        )
+        context.solver.step(
+            context.state_in,
+            context.state_out,
+            context.control,
+            context.contacts,
+            timestep_s,
+        )
+        max_soft_contact_count = max(
+            max_soft_contact_count,
+            int(context.contacts.soft_contact_count.numpy()[0]),
+        )
+        if hasattr(context.contacts, "rigid_contact_count"):
+            max_rigid_contact_count = max(
+                max_rigid_contact_count,
+                int(context.contacts.rigid_contact_count.numpy()[0]),
+            )
+        context.state_in, context.state_out = context.state_out, context.state_in
+        previous_pose = target_pose
+
+    wp.synchronize_device(context.device)
+    deformed_vertices = (
+        np.asarray(context.state_in.particle_q.numpy(), dtype=np.float32).copy() * 1.0e3
+    )
+    rest_vertices = context.rest_vertices_m * 1.0e3
+    final_body_translation_mm = (
+        np.asarray(
+            context.state_in.body_q.numpy()[context.indenter_body][:3],
+            dtype=np.float32,
+        )
+        * 1.0e3
+    )
+    mechanics_result = Mechanics3DResult(
+        rest_vertices=rest_vertices,
+        deformed_vertices=deformed_vertices,
+        tetrahedra=prepared_fingertip.tet_mesh.tetrahedra,
+        steps=indentation_settings.load_steps,
+    )
+    return IndentationResult(
+        mechanics_result=mechanics_result,
+        final_indenter_pose=indenter.pose_at_travel(indentation_settings.travel_mm),
+        diagnostics={
+            "device": mechanics_settings.device,
+            "full_surface_contact": True,
+            "load_steps": indentation_settings.load_steps,
+            "max_soft_contact_count": max_soft_contact_count,
+            "max_rigid_contact_count": max_rigid_contact_count,
+            "rigid_body_particle_contact_buffer_size": (
+                indentation_settings.rigid_body_particle_contact_buffer_size
+            ),
+            "rigid_contact_buffer_size": indentation_settings.rigid_contact_buffer_size,
+            "final_body_x_mm": float(final_body_translation_mm[0]),
+            "final_body_y_mm": float(final_body_translation_mm[1]),
+            "final_body_z_mm": float(final_body_translation_mm[2]),
+            "max_displacement_mm": float(np.max(np.linalg.norm(mechanics_result.displacement, axis=1))),
+        },
+    )
 
 
 def solve_newton_vbd(
