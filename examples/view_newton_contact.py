@@ -38,6 +38,7 @@ from mesh.volume_types import volume_mesh_settings_for_tier
 from model import Fingertip, FingertipParameters
 from util.newton_viewer import (
     close_newton_viewer,
+    frame_newton_viewer,
     keep_newton_viewer_open,
     make_newton_viewer,
 )
@@ -108,6 +109,40 @@ def _make_indenter(prepared, object_mesh):
     )
 
 
+def _rigid_vertices_world_mm(object_mesh, pose) -> np.ndarray:
+    """Return rigid-object vertices in world millimetres for one pose."""
+
+    qx, qy, qz, qw = pose.quaternion_xyzw
+    rotation = np.array(
+        [
+            [1.0 - 2.0 * (qy * qy + qz * qz), 2.0 * (qx * qy - qz * qw), 2.0 * (qx * qz + qy * qw)],
+            [2.0 * (qx * qy + qz * qw), 1.0 - 2.0 * (qx * qx + qz * qz), 2.0 * (qy * qz - qx * qw)],
+            [2.0 * (qx * qz - qy * qw), 2.0 * (qy * qz + qx * qw), 1.0 - 2.0 * (qx * qx + qy * qy)],
+        ],
+        dtype=float,
+    )
+    translation = np.asarray(pose.translation_mm, dtype=float)
+    return np.asarray(object_mesh.vertices_mm, dtype=float) @ rotation.T + translation
+
+
+def _scene_bounds_m(prepared, object_mesh, indenter, travel_mm: float) -> tuple[np.ndarray, np.ndarray]:
+    """Compute fingertip plus swept indenter bounds in Newton metres."""
+
+    fingertip_vertices_mm = np.asarray(prepared.tet_mesh.vertices, dtype=float)
+    rigid_vertices_mm = np.concatenate(
+        [
+            _rigid_vertices_world_mm(object_mesh, indenter.initial_pose),
+            _rigid_vertices_world_mm(object_mesh, indenter.pose_at_travel(travel_mm)),
+        ],
+        axis=0,
+    )
+    scene_vertices_m = np.concatenate(
+        [fingertip_vertices_mm, rigid_vertices_mm],
+        axis=0,
+    ) * 1.0e-3
+    return scene_vertices_m.min(axis=0), scene_vertices_m.max(axis=0)
+
+
 def main() -> int:
     args = _parser().parse_args()
     if not wp.is_device_available(args.device):
@@ -116,6 +151,7 @@ def main() -> int:
     _, prepared = _build_scene()
     object_mesh = _make_object(args.object)
     indenter = _make_indenter(prepared, object_mesh)
+    scene_bounds_m = _scene_bounds_m(prepared, object_mesh, indenter, args.travel)
     viewer = make_newton_viewer(
         no_viewer=args.no_viewer,
         usd_path=args.usd,
@@ -143,6 +179,12 @@ def main() -> int:
             viewer=viewer,
         )
         if viewer is not None and args.usd is None:
+            frame_newton_viewer(
+                viewer,
+                *scene_bounds_m,
+                view_direction=(0.0, -1.0, 0.4),
+                padding=1.4,
+            )
             keep_newton_viewer_open(viewer)
     finally:
         close_newton_viewer(viewer)
