@@ -64,6 +64,20 @@ def test_mechanics3d_has_no_fem_or_optics_dependency() -> None:
     _assert_no_prefix("mechanics3d", ("fem", "optics", "validation", "tests"))
 
 
+def test_visualization_has_no_solver_or_validation_dependency() -> None:
+    _assert_no_prefix(
+        "visualization",
+        (
+            "mechanics3d",
+            "newton",
+            "warp",
+            "KratosMultiphysics",
+            "validation",
+            "tests",
+        ),
+    )
+
+
 def test_full_field_producer_uses_active_python_interpreter() -> None:
     path = (
         REPOSITORY_ROOT

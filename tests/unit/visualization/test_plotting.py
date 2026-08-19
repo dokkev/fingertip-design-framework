@@ -34,6 +34,8 @@ from visualization import (
     plot_fingertip,
     plot_mesh,
     plot_transport,
+    plot_volume_mesh,
+    plot_volume_state,
 )
 from visualization._style import STYLE
 
@@ -67,6 +69,8 @@ def test_public_exports_are_only_plot_helpers() -> None:
         "plot_fingertip",
         "plot_mesh",
         "plot_transport",
+        "plot_volume_mesh",
+        "plot_volume_state",
     }
 
 

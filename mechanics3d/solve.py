@@ -1,4 +1,9 @@
-"""Public solver boundary for the optional Newton VBD surrogate."""
+"""Public neutral solver boundary for the optional Newton VBD surrogate.
+
+The current backend/runtime is Newton and the selected solver is ``SolverVBD``.
+Those implementation identities remain private to the backend; callers receive
+only the repository-neutral NumPy result contract.
+"""
 
 from __future__ import annotations
 
@@ -48,7 +53,7 @@ def solve(
     *,
     settings: Mechanics3DSettings | None = None,
 ) -> Mechanics3DResult:
-    """Run one small Newton VBD solve and return neutral NumPy arrays.
+    """Run one small Newton ``SolverVBD`` solve and return neutral NumPy arrays.
 
     Importing :mod:`mechanics3d` does not import Warp or Newton.  The optional
     backend is loaded only when this function is called.

@@ -116,9 +116,10 @@ It does not replace mesh-based reference/loaded comparisons.
 - `optics.mitsuba` owns the optional camera validator. Its public surface is
   `Camera`, `RenderSettings`, `RenderResult`, and `MitsubaRenderer`; extrusion,
   scene construction, and persistent renderer state are implementation details.
-- `visualization/` is a thin Matplotlib layer. It exposes only
+- `visualization/` is a thin Matplotlib layer. It exposes
   `plot_fingertip`, `plot_mesh`, `plot_fea`, `plot_transport`, `plot_camera`,
-  and `plot_case_comparison`; these functions consume model/mesh/result
+  `plot_case_comparison`, `plot_volume_mesh`, and `plot_volume_state`; these
+  functions consume model/mesh/result
   objects and return an `Axes`, while `plot_case_comparison` returns one
   composed `Figure` from precomputed unloaded/loaded states. Private
   `draw_*` layers add geometry, mechanics, and optics to an existing Axes;
@@ -128,7 +129,9 @@ It does not replace mesh-based reference/loaded comparisons.
   shared layers. It does not own a second scientific data model, artifact
   loader, figure DSL, panel hierarchy, or export framework. Visualization
   consumes the result-owned optical domain mask and never reconstructs it from
-  deformed triangles.
+  deformed triangles. The volume helpers consume only the neutral
+  `FingertipVolumeMesh` and `FingertipVolumeState` contracts; they do not import
+  or inspect Newton, Warp, Kratos, or any mechanics solver.
 - `validation/` owns scientific baselines, Phase acceptance, provenance,
   checkpointing, reports, and generated artifact schemas.
 - `validation/mechanics3d/` owns read-only inspection of persisted native
@@ -193,19 +196,24 @@ The nominal 3D mechanics paths share one authoritative geometry and TET4 mesh:
 
 ```text
 FingertipModel -> FingertipSolid -> FingertipVolumeMesh
-                                      ├── fem.solid3d
-                                      └── mechanics3d.fingertip
+                                      ├── fem.solid3d / Kratos
+                                      ├── mechanics3d.fingertip
+                                      │      └── Newton runtime / SolverVBD
+                                      └── visualization.volume
                                       ↓
                              FingertipVolumeState
-                                      ↓
-                         optics.transport3d FULL_3D
+                           ├── visualization.volume
+                           └── optics.transport3d FULL_3D
 ```
 
 `FingertipVolumeMesh` is the canonical 3D mechanics input. `model.solid` owns
 the fixed 11 mm semantic extrusion and `mesh.volume3d` owns Gmsh
-tetrahedralization. Kratos and Newton consume that same volume mesh; neither
-backend defines a second fingertip geometry or remeshes during state
-promotion.
+tetrahedralization. Kratos and the current Newton `SolverVBD` backend consume
+that same volume mesh; neither backend defines a second fingertip geometry or
+remeshes during state promotion. `visualization.volume` is a solver-neutral
+consumer of the mesh and state, and `optics.transport3d` is likewise
+backend-independent. Collision RT and contact RT are deferred and are not part
+of this contract.
 
 `FingertipVolumeState` is the canonical solver-neutral deformed 3D output. It
 stores deformed coordinates in `tuple(sorted(volume_mesh.nodes))` order and

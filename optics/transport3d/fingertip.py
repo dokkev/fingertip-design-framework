@@ -22,13 +22,7 @@ from .geometry import (
 )
 
 
-_LATERAL_SURFACE_PREFIX = "longitudinal_end_"
-_EXTERNAL_VOLUME_TAGS = {
-    "outer_compliant_left",
-    "outer_compliant_arc",
-    "outer_compliant_other",
-    "outer_compliant_right",
-}
+_SURFACE_ORIENTATION_TOLERANCE_MM = 1.0e-9
 
 
 def _external_reference_path(tip: Fingertip) -> LineString:
@@ -60,8 +54,11 @@ def _surface_u_values(
     for node_id in node_ids:
         coordinate = state.reference_coordinates_mm[node_index[node_id], :2]
         point = Point(float(coordinate[0]), float(coordinate[1]))
-        if path.distance(point) <= tolerance:
-            result[node_id] = float(path.project(point, normalized=True))
+        if path.distance(point) > tolerance:
+            raise Transport3DGeometryError(
+                f"external compliant node {node_id} is not on the authoritative reference boundary"
+            )
+        result[node_id] = float(path.project(point, normalized=True))
     return result
 
 
@@ -69,18 +66,63 @@ def _oriented_surface_faces(
     state: FingertipVolumeState,
     rows: list[tuple[str, Any]],
 ) -> np.ndarray:
-    """Orient semantic lateral faces consistently without changing topology."""
-    node_ids = tuple(
+    """Orient semantic faces outward using canonical tetra boundary topology.
+
+    Face rows retain their exact source node IDs and ordering in ``rows``. Only
+    the local face winding used by the optical surface is changed. The
+    reference orientation is determined from the unique adjacent tetrahedron,
+    so it does not rely on global coordinate thresholds or a guessed center.
+    """
+    surface_node_ids = tuple(
         sorted({int(node_id) for _, triangle in rows for node_id in triangle.node_ids})
     )
-    node_index = {node_id: index for index, node_id in enumerate(node_ids)}
+    canonical_index = {
+        int(node_id): index for index, node_id in enumerate(state.source_node_ids)
+    }
+    surface_index = {
+        node_id: index for index, node_id in enumerate(surface_node_ids)
+    }
+    if any(node_id not in canonical_index for node_id in surface_node_ids):
+        raise Transport3DGeometryError(
+            "semantic optical surface references an unknown canonical volume node"
+        )
     faces = np.asarray(
         [
-            [node_index[int(node_id)] for node_id in triangle.node_ids]
+            [surface_index[int(node_id)] for node_id in triangle.node_ids]
             for _, triangle in rows
         ],
         dtype=np.int64,
     )
+    reference = state.reference_coordinates_mm
+    reference_surface = reference[
+        np.asarray([canonical_index[node_id] for node_id in surface_node_ids], dtype=np.int64)
+    ]
+
+    tetra_by_face: dict[tuple[int, int, int], list[tuple[int, ...]]] = {}
+    for tetrahedron in state.tetrahedra:
+        tetra_node_ids = tuple(int(node_id) for node_id in tetrahedron.node_ids)
+        for face in (
+            (tetra_node_ids[0], tetra_node_ids[1], tetra_node_ids[2]),
+            (tetra_node_ids[0], tetra_node_ids[1], tetra_node_ids[3]),
+            (tetra_node_ids[0], tetra_node_ids[2], tetra_node_ids[3]),
+            (tetra_node_ids[1], tetra_node_ids[2], tetra_node_ids[3]),
+        ):
+            tetra_by_face.setdefault(tuple(sorted(face)), []).append(tetra_node_ids)
+    row_face_keys = [
+        tuple(sorted(int(node_id) for node_id in triangle.node_ids))
+        for _, triangle in rows
+    ]
+    if len(set(row_face_keys)) != len(row_face_keys):
+        raise Transport3DGeometryError("semantic optical surface contains duplicate triangle faces")
+    adjacent_tetrahedra: list[tuple[int, ...]] = []
+    for key in row_face_keys:
+        candidates = tetra_by_face.get(key, [])
+        if len(candidates) != 1:
+            raise Transport3DGeometryError(
+                "semantic optical surface triangle is not a unique tetrahedral boundary face"
+            )
+        adjacent_tetrahedra.append(candidates[0])
+
     edge_records: dict[tuple[int, int], list[tuple[int, int]]] = {}
     for face_index, face in enumerate(faces):
         for first, second in (
@@ -100,8 +142,6 @@ def _oriented_surface_faces(
             adjacency[first].append((second, first_direction, second_direction))
             adjacency[second].append((first, second_direction, first_direction))
 
-    reference = state.reference_coordinates_mm
-    reference_center = np.mean(reference, axis=0)
     flips = np.full(len(faces), -1, dtype=np.int8)
     for start in range(len(faces)):
         if flips[start] >= 0:
@@ -121,23 +161,42 @@ def _oriented_surface_faces(
                     raise Transport3DGeometryError(
                         "semantic lateral surface cannot be consistently oriented"
                     )
-        component_faces = faces[component].copy()
-        component_faces[flips[component] == 1, 1], component_faces[flips[component] == 1, 2] = (
-            component_faces[flips[component] == 1, 2],
-            component_faces[flips[component] == 1, 1].copy(),
-        )
-        reference_surface = reference[
-            np.asarray([node_index[node_id] for node_id in node_ids], dtype=np.int64)
-        ]
-        points = reference_surface[component_faces]
-        normals = np.cross(points[:, 1] - points[:, 0], points[:, 2] - points[:, 0])
-        if np.any(np.linalg.norm(normals, axis=1) <= 1.0e-12):
-            raise Transport3DGeometryError("semantic lateral surface contains a degenerate triangle")
-        outward_votes = np.sum(
-            np.sum(normals * (np.mean(points, axis=1) - reference_center), axis=1) < 0.0
-        )
-        if int(outward_votes) > len(component) // 2:
+        def orientation_signs() -> np.ndarray:
+            signs: list[float] = []
+            for face_index in component:
+                face = faces[face_index].copy()
+                if flips[face_index] == 1:
+                    face[1], face[2] = face[2], face[1]
+                points = reference_surface[face]
+                cross = np.cross(points[1] - points[0], points[2] - points[0])
+                norm = float(np.linalg.norm(cross))
+                if not np.isfinite(norm) or norm <= 1.0e-12:
+                    raise Transport3DGeometryError(
+                        "semantic lateral surface contains a degenerate triangle"
+                    )
+                unit_normal = cross / norm
+                tetra_points = reference[
+                    np.asarray(
+                        [canonical_index[node_id] for node_id in adjacent_tetrahedra[face_index]],
+                        dtype=np.int64,
+                    )
+                ]
+                offset = np.mean(points, axis=0) - np.mean(tetra_points, axis=0)
+                sign = float(np.dot(unit_normal, offset))
+                if not np.isfinite(sign) or abs(sign) <= _SURFACE_ORIENTATION_TOLERANCE_MM:
+                    raise Transport3DGeometryError(
+                        "semantic lateral surface orientation is geometrically ambiguous"
+                    )
+                signs.append(sign)
+            return np.asarray(signs, dtype=float)
+
+        signs = orientation_signs()
+        if np.all(signs < 0.0):
             flips[component] ^= 1
+        elif not np.all(signs > 0.0):
+            raise Transport3DGeometryError(
+                "semantic lateral surface orientation is inconsistent with tetrahedral interior"
+            )
 
     faces[flips == 1, 1], faces[flips == 1, 2] = (
         faces[flips == 1, 2],
@@ -147,26 +206,58 @@ def _oriented_surface_faces(
 
 
 def _silicone_surface(tip: Fingertip, state: FingertipVolumeState) -> TriangleSurface:
-    node_index = {node_id: index for index, node_id in enumerate(state.source_node_ids)}
+    canonical_index = {
+        int(node_id): index for index, node_id in enumerate(state.source_node_ids)
+    }
+    surface_definitions = {
+        definition.name: definition for definition in state.volume_mesh.solid.surfaces
+    }
+    # The two longitudinal end caps close the finite extrusion in z, but they
+    # are not exposed silicone interfaces for the lateral transport scene.
+    # Only semantic lateral families enter the optical surface.
     rows = [
         (tag, triangle)
         for tag, triangles in sorted(state.surface_triangles.items())
-        if not tag.startswith(_LATERAL_SURFACE_PREFIX)
+        if tag in surface_definitions and surface_definitions[tag].kind != "longitudinal_end"
         for triangle in triangles
     ]
     if not rows:
         raise Transport3DGeometryError("FingertipVolumeState has no lateral optical surface triangles")
+    row_tags = {tag for tag, _ in rows}
+    unknown_tags = set(state.surface_triangles) - set(surface_definitions)
+    if unknown_tags:
+        raise Transport3DGeometryError(
+            f"FingertipVolumeState contains unknown semantic surface families: {sorted(unknown_tags)!r}"
+        )
+    unsupported_tags = {
+        tag
+        for tag in row_tags
+        if surface_definitions[tag].kind not in {"outer_compliant", "support", "void"}
+    }
+    if unsupported_tags:
+        raise Transport3DGeometryError(
+            f"FingertipVolumeState contains unsupported optical surface families: {sorted(unsupported_tags)!r}"
+        )
+    expected_tags = {
+        definition.name
+        for definition in state.volume_mesh.solid.surfaces
+        if definition.kind in {"outer_compliant", "support", "void"}
+    }
+    if row_tags != expected_tags:
+        raise Transport3DGeometryError(
+            "FingertipVolumeState semantic optical surface families do not match the authoritative solid"
+        )
     surface_node_ids = tuple(
         sorted({int(node_id) for _, triangle in rows for node_id in triangle.node_ids})
     )
     faces = _oriented_surface_faces(state, rows)
     vertices = np.asarray(
-        [state.deformed_coordinates_mm[node_index[node_id]] for node_id in surface_node_ids],
+        [state.deformed_coordinates_mm[canonical_index[node_id]] for node_id in surface_node_ids],
         dtype=np.float32,
     )
     semantic_tags = tuple(str(tag) for tag, _ in rows)
     external = np.asarray(
-        [tag in _EXTERNAL_VOLUME_TAGS for tag in semantic_tags],
+        [surface_definitions[tag].kind == "outer_compliant" for tag in semantic_tags],
         dtype=bool,
     )
     external_node_ids = tuple(
@@ -174,7 +265,10 @@ def _silicone_surface(tip: Fingertip, state: FingertipVolumeState) -> TriangleSu
             {
                 int(node_id)
                 for tag, triangle in rows
-                if tag in _EXTERNAL_VOLUME_TAGS
+                if (
+                    surface_definitions[tag].kind == "outer_compliant"
+                    and surface_definitions[tag].source_geometry is not None
+                )
                 for node_id in triangle.node_ids
             }
         )

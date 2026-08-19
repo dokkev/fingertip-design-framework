@@ -6,6 +6,7 @@ from visualization.geometry import plot_fingertip
 from visualization.mechanics import plot_fea
 from visualization.mesh import plot_mesh
 from visualization.optics import plot_transport
+from visualization.volume import plot_volume_mesh, plot_volume_state
 
 __all__ = [
     "plot_camera",
@@ -14,4 +15,6 @@ __all__ = [
     "plot_fingertip",
     "plot_mesh",
     "plot_transport",
+    "plot_volume_mesh",
+    "plot_volume_state",
 ]

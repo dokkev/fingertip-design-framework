@@ -302,6 +302,7 @@ def solve_prescribed_indentation(
 __all__ = [
     "FingertipMechanicsMesh",
     "PrescribedVertexDisplacement",
+    "make_fingertip_volume_state",
     "outer_compliant_timing_patch",
     "prepare_fingertip_mechanics_mesh",
     "solve_prescribed_indentation",
