@@ -37,6 +37,22 @@ python -m pip install -e ".[ax]"
 
 It has no CLI or GUI entry point in this iteration.
 
+The optional GPU mechanics surrogate can be installed with:
+
+```bash
+python -m pip install -e ".[mechanics3d]"
+```
+
+Run its focused real-device smoke test with:
+
+```bash
+./scripts/pytest_lit tests/smoke/mechanics3d -q -m "smoke and mechanics3d"
+```
+
+This checks the current Newton VBD API, CUDA device selection, one actual
+tetrahedral VBD step, and finite nonzero deformation. It is a small surrogate
+mechanics prototype, not the Kratos FEA workflow.
+
 ## Tests
 
 Use the repository wrapper below for pytest.  It disables third-party plugin
