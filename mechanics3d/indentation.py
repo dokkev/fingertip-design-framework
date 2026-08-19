@@ -102,12 +102,17 @@ class IndentationSettings:
     travel_mm: float
     load_steps: int = 8
     soft_contact_margin_mm: float = 0.05
+    """Soft contact detection margin in repository millimetres."""
+    rigid_sdf_target_voxel_mm: float = 0.125
+    """Explicit contact-scale voxel size for the rigid mesh SDF in mm."""
     # Newton VBD wiring defaults, not calibrated silicone properties.
     soft_contact_ke: float = 1.0e3
     soft_contact_kd: float = 10.0
     soft_contact_mu: float = 0.0
     rigid_body_particle_contact_buffer_size: int = 1024
+    """Per-indenter VBD particle/edge/face contact-list capacity."""
     rigid_contact_buffer_size: int = 64
+    """CollisionPipeline rigid contact capacity for body-body contacts."""
 
     def __post_init__(self) -> None:
         travel = float(self.travel_mm)
@@ -117,13 +122,16 @@ class IndentationSettings:
             raise ValueError("load_steps must be a positive integer")
         for name in (
             "soft_contact_margin_mm",
+            "rigid_sdf_target_voxel_mm",
             "soft_contact_ke",
             "soft_contact_kd",
             "soft_contact_mu",
         ):
             value = float(getattr(self, name))
-            if not np.isfinite(value) or value < 0.0:
-                raise ValueError(f"{name} must be finite and non-negative")
+            lower_bound = 0.0 if name != "rigid_sdf_target_voxel_mm" else 1.0e-12
+            if not np.isfinite(value) or value < lower_bound:
+                qualifier = "positive" if name == "rigid_sdf_target_voxel_mm" else "finite and non-negative"
+                raise ValueError(f"{name} must be {qualifier}")
         for name in (
             "rigid_body_particle_contact_buffer_size",
             "rigid_contact_buffer_size",
@@ -134,6 +142,7 @@ class IndentationSettings:
         object.__setattr__(self, "travel_mm", travel)
         object.__setattr__(self, "load_steps", int(self.load_steps))
         object.__setattr__(self, "soft_contact_margin_mm", float(self.soft_contact_margin_mm))
+        object.__setattr__(self, "rigid_sdf_target_voxel_mm", float(self.rigid_sdf_target_voxel_mm))
         object.__setattr__(self, "soft_contact_ke", float(self.soft_contact_ke))
         object.__setattr__(self, "soft_contact_kd", float(self.soft_contact_kd))
         object.__setattr__(self, "soft_contact_mu", float(self.soft_contact_mu))
@@ -183,6 +192,14 @@ def solve_fingertip_indentation(
         raise TypeError("indentation_settings must be provided")
     if not isinstance(indentation_settings, IndentationSettings):
         raise TypeError("indentation_settings must be IndentationSettings")
+    configured_support = tuple(sorted(mechanics_settings.fixed_vertex_indices))
+    authoritative_support = tuple(sorted(prepared_fingertip.support_vertex_indices))
+    if configured_support and configured_support != authoritative_support:
+        raise ValueError(
+            "mechanics3d indentation requires fixed_vertex_indices to be empty or "
+            "equal to prepared_fingertip.support_vertex_indices; the authoritative "
+            f"support is {authoritative_support!r}, received {configured_support!r}"
+        )
 
     from .backends.newton_vbd import solve_newton_vbd_indentation
 

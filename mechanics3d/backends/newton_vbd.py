@@ -255,6 +255,15 @@ def _build_indentation_context(
     if not device.is_cuda:
         raise ValueError("mechanics3d requires a CUDA device, for example cuda:0")
 
+    configured_support = tuple(sorted(mechanics_settings.fixed_vertex_indices))
+    authoritative_support = tuple(sorted(prepared_fingertip.support_vertex_indices))
+    if configured_support and configured_support != authoritative_support:
+        raise ValueError(
+            "mechanics3d indentation requires fixed_vertex_indices to be empty or "
+            "equal to prepared_fingertip.support_vertex_indices; the authoritative "
+            f"support is {authoritative_support!r}, received {configured_support!r}"
+        )
+
     vertices_m = np.asarray(prepared_fingertip.tet_mesh.vertices, dtype=np.float32) * 1.0e-3
     rigid_vertices_m = np.asarray(indenter.mesh.vertices_mm, dtype=np.float32) * 1.0e-3
     rigid_mesh = newton.Mesh(
@@ -264,24 +273,30 @@ def _build_indentation_context(
         is_solid=True,
     )
     rigid_cfg = newton.ModelBuilder.ShapeConfig(
-        density=1.0e3,
+        # The indenter is prescribed kinematic geometry, not a simulated mass.
+        # Keep collision material properties here while preventing shape mass
+        # accumulation into the kinematic body.
+        density=0.0,
         ke=indentation_settings.soft_contact_ke,
         kd=indentation_settings.soft_contact_kd,
         mu=indentation_settings.soft_contact_mu,
         gap=0.0,
     )
-    # The repository mesh is converted to metres above.  Newton's default SDF
-    # band is intentionally generous in SI units and is much too coarse for a
-    # millimetre-scale object, so cook a deterministic mesh-relative SDF with
-    # no additional world-space padding.  Mesh-backed shapes own their cooked
-    # SDF on ``newton.Mesh``; the shape config still opts into its use.
+    # The repository mesh is converted to metres above.  Use an explicit
+    # contact-scale voxel size rather than deriving resolution from total
+    # object size, so future large imported objects do not lose local contact
+    # features.  Mesh-backed shapes own their cooked SDF on ``newton.Mesh``.
     object_extent_m = float(np.max(np.ptp(rigid_vertices_m, axis=0)))
+    sdf_target_voxel_m = indentation_settings.rigid_sdf_target_voxel_mm * 1.0e-3
     rigid_mesh.build_sdf(
         device=device,
         narrow_band_range=(-object_extent_m, object_extent_m),
-        target_voxel_size=max(object_extent_m / 32.0, 1.0e-8),
+        target_voxel_size=sdf_target_voxel_m,
         margin=0.0,
     )
+    # Newton 1.4 rejects cfg.sdf_* resolution fields for mesh-backed shapes.
+    # Manual Mesh.build_sdf() is therefore authoritative; this flag requires
+    # the already-cooked mesh SDF for full-surface contact.
     rigid_cfg.configure_sdf(
         force_sdf=True,
     )
@@ -305,7 +320,12 @@ def _build_indentation_context(
     )
     indenter_body = builder.add_body(
         xform=_warp_pose(indenter.initial_pose, device=device),
-        mass=0.0,
+        # Kinematic bodies still need valid inertial data for Newton's model
+        # validation.  This placeholder is locked and never participates in
+        # the prescribed trajectory dynamics.
+        mass=1.0,
+        inertia=wp.mat33(np.eye(3, dtype=np.float32)),
+        lock_inertia=True,
         is_kinematic=True,
         label=f"{indenter.mesh.name}_kinematic",
     )
@@ -379,8 +399,16 @@ def solve_newton_vbd_indentation(
     indenter: RigidIndenter3D,
     mechanics_settings: Mechanics3DSettings,
     indentation_settings: IndentationSettings,
+    *,
+    viewer: object | None = None,
 ) -> IndentationResult:
-    """Run translation-only kinematic rigid-mesh contact with standalone VBD."""
+    """Run translation-only kinematic rigid-mesh contact with standalone VBD.
+
+    ``viewer`` is an optional Newton viewer owned by a Newton-specific example
+    or application.  It is deliberately kept out of the neutral public
+    indentation contract; when supplied, each accepted solver state and its
+    contacts are sent to the viewer after the VBD step.
+    """
 
     context = _build_indentation_context(
         prepared_fingertip,
@@ -388,9 +416,13 @@ def solve_newton_vbd_indentation(
         mechanics_settings,
         indentation_settings,
     )
+    if viewer is not None:
+        viewer.set_model(context.model)
     previous_pose = indenter.initial_pose
     max_soft_contact_count = 0
     max_rigid_contact_count = 0
+    max_soft_contact_overflow = 0
+    max_rigid_contact_overflow = 0
     timestep_s = float(mechanics_settings.dt)
     for step in range(indentation_settings.load_steps):
         fraction = float(step + 1) / indentation_settings.load_steps
@@ -448,6 +480,20 @@ def solve_newton_vbd_indentation(
             context.contacts,
             timestep_s,
         )
+        soft_contact_overflow = int(
+            context.solver.body_particle_contact_overflow_max.numpy()[0]
+        )
+        rigid_contact_overflow = int(
+            context.solver.body_body_contact_overflow_max.numpy()[0]
+        )
+        max_soft_contact_overflow = max(max_soft_contact_overflow, soft_contact_overflow)
+        max_rigid_contact_overflow = max(max_rigid_contact_overflow, rigid_contact_overflow)
+        accepted_state = context.state_out
+        if viewer is not None:
+            viewer.begin_frame((step + 1) * timestep_s)
+            viewer.log_state(accepted_state)
+            viewer.log_contacts(context.contacts, accepted_state)
+            viewer.end_frame()
         max_soft_contact_count = max(
             max_soft_contact_count,
             int(context.contacts.soft_contact_count.numpy()[0]),
@@ -456,6 +502,34 @@ def solve_newton_vbd_indentation(
             max_rigid_contact_count = max(
                 max_rigid_contact_count,
                 int(context.contacts.rigid_contact_count.numpy()[0]),
+            )
+        # This path has one kinematic rigid indenter, so the global soft
+        # contact count is a conservative upper bound for its per-body VBD
+        # particle/edge/face list.  Never return a potentially truncated state.
+        if max_soft_contact_count > indentation_settings.rigid_body_particle_contact_buffer_size:
+            raise RuntimeError(
+                "rigid body particle contact buffer is insufficient for the "
+                f"single-indenter scene: observed at least {max_soft_contact_count} "
+                "soft contacts, configured capacity is "
+                f"{indentation_settings.rigid_body_particle_contact_buffer_size}"
+            )
+        if max_rigid_contact_count > indentation_settings.rigid_contact_buffer_size:
+            raise RuntimeError(
+                "rigid contact buffer is insufficient: observed at least "
+                f"{max_rigid_contact_count} contacts, configured capacity is "
+                f"{indentation_settings.rigid_contact_buffer_size}"
+            )
+        if max_soft_contact_overflow > indentation_settings.rigid_body_particle_contact_buffer_size:
+            raise RuntimeError(
+                "Newton reported rigid body particle contact buffer overflow: "
+                f"{max_soft_contact_overflow} > "
+                f"{indentation_settings.rigid_body_particle_contact_buffer_size}"
+            )
+        if max_rigid_contact_overflow > indentation_settings.rigid_contact_buffer_size:
+            raise RuntimeError(
+                "Newton reported rigid contact buffer overflow: "
+                f"{max_rigid_contact_overflow} > "
+                f"{indentation_settings.rigid_contact_buffer_size}"
             )
         context.state_in, context.state_out = context.state_out, context.state_in
         previous_pose = target_pose
@@ -484,9 +558,15 @@ def solve_newton_vbd_indentation(
         diagnostics={
             "device": mechanics_settings.device,
             "full_surface_contact": True,
+            "contact_buffer_safe": True,
+            "soft_contact_buffer_safe": True,
+            "rigid_contact_buffer_safe": True,
             "load_steps": indentation_settings.load_steps,
+            "rigid_sdf_target_voxel_mm": indentation_settings.rigid_sdf_target_voxel_mm,
             "max_soft_contact_count": max_soft_contact_count,
             "max_rigid_contact_count": max_rigid_contact_count,
+            "max_soft_contact_overflow": max_soft_contact_overflow,
+            "max_rigid_contact_overflow": max_rigid_contact_overflow,
             "rigid_body_particle_contact_buffer_size": (
                 indentation_settings.rigid_body_particle_contact_buffer_size
             ),

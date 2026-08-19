@@ -8,10 +8,14 @@ import pytest
 from mechanics3d import (
     IndentationResult,
     IndentationSettings,
+    Mechanics3DSettings,
     Mechanics3DResult,
     RigidIndenter3D,
     RigidPose3D,
+    solve_fingertip_indentation,
 )
+from mechanics3d.fingertip import FingertipMechanicsMesh
+from mechanics3d.types import TetMeshData
 from mesh.rigid_object import make_cube_mesh
 
 
@@ -48,3 +52,32 @@ def test_indentation_settings_and_result_are_neutral() -> None:
     assert indentation.diagnostics["full_surface_contact"] is True
     with pytest.raises(ValueError):
         IndentationSettings(travel_mm=-0.1)
+    with pytest.raises(ValueError):
+        IndentationSettings(travel_mm=0.1, rigid_sdf_target_voxel_mm=0.0)
+
+
+def test_indentation_rejects_non_authoritative_fixed_vertices_before_backend_load() -> None:
+    prepared = FingertipMechanicsMesh(
+        TetMeshData(
+            np.array(
+                [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+                dtype=np.float32,
+            ),
+            np.array([[0, 1, 2, 3]], dtype=np.int32),
+        ),
+        np.arange(4, dtype=np.int64),
+        (0, 1),
+        {},
+        "support-contract",
+    )
+    with pytest.raises(ValueError, match="fixed_vertex_indices"):
+        solve_fingertip_indentation(
+            prepared,
+            RigidIndenter3D(
+                make_cube_mesh(1.0),
+                RigidPose3D((0.0, 2.0, 0.0), (0.0, 0.0, 0.0, 1.0)),
+                (0.0, -1.0, 0.0),
+            ),
+            Mechanics3DSettings(fixed_vertex_indices=(0, 2)),
+            IndentationSettings(travel_mm=0.1),
+        )

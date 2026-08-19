@@ -249,7 +249,14 @@ parametric primitives; it contains no Newton, Warp, CUDA, or mechanics state.
 `mechanics3d.indentation` owns pose and translation-only indentation contracts.
 Only `mechanics3d.backends.newton_vbd` converts millimetres to metres and
 constructs `newton.Mesh`, the kinematic body, SDF, collision pipeline, and
-`SolverVBD`. The existing prescribed-vertex function remains a timing-only,
+`SolverVBD`. The prepared fingertip's semantic support vertices are
+authoritative: an optional `Mechanics3DSettings.fixed_vertex_indices` value
+must be empty or exactly match them; it is never silently substituted. The
+rigid SDF uses an explicit contact-scale voxel setting in millimetres rather
+than a fraction of total object extent. The backend checks both configured
+contact capacities and Newton's overflow counters, reports
+`contact_buffer_safe`, and fails without returning a result if a buffer is
+insufficient. The existing prescribed-vertex function remains a timing-only,
 non-contact benchmark.
 
 The intended later arbitrary-object path is:

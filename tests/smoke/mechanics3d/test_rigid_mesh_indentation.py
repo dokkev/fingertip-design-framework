@@ -110,6 +110,20 @@ def test_nominal_triangle_mesh_indenter_deforms_and_promotes_volume_state() -> N
     )
     smaller = run(0.5)
     loaded = run(0.6)
+    with pytest.raises(RuntimeError, match="buffer"):
+        solve_fingertip_indentation(
+            prepared,
+            indenter,
+            mechanics_settings,
+            IndentationSettings(
+                travel_mm=0.6,
+                load_steps=4,
+                soft_contact_margin_mm=0.02,
+                soft_contact_ke=1.0e3,
+                soft_contact_kd=10.0,
+                rigid_body_particle_contact_buffer_size=1,
+            ),
+        )
 
     np.testing.assert_allclose(
         reference.mechanics_result.rest_vertices,
@@ -124,6 +138,8 @@ def test_nominal_triangle_mesh_indenter_deforms_and_promotes_volume_state() -> N
         rtol=0.0,
     )
     assert loaded.diagnostics["full_surface_contact"] is True
+    assert loaded.diagnostics["contact_buffer_safe"] is True
+    assert loaded.diagnostics["rigid_sdf_target_voxel_mm"] == 0.125
     assert int(loaded.diagnostics["max_soft_contact_count"]) > 0
     assert np.all(np.isfinite(loaded.mechanics_result.deformed_vertices))
     assert np.max(np.linalg.norm(loaded.mechanics_result.displacement, axis=1)) > 1.0e-5
