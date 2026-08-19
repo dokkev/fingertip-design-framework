@@ -23,6 +23,7 @@ from mesh.volume_types import (
     VolumeNode,
     volume_mesh_settings_for_tier,
 )
+from mesh.volume_state import FingertipVolumeState, make_fingertip_volume_state
 
 __all__ = [
     "FingertipMesh",
@@ -43,4 +44,6 @@ __all__ = [
     "VolumeNode",
     "generate_volume_mesh",
     "volume_mesh_settings_for_tier",
+    "FingertipVolumeState",
+    "make_fingertip_volume_state",
 ]

@@ -233,6 +233,7 @@ class OptiXTransport:
             if geometry_metadata.get("full3d_surface_provenance") not in {
                 "actual_deformed_3d_fea_surface",
                 "actual_deformed_3d_vbd_surface",
+                "actual_deformed_3d_volume_state",
             }:
                 raise ValueError(
                     "FULL_3D geometry lacks direct FEA/VBD-surface provenance"

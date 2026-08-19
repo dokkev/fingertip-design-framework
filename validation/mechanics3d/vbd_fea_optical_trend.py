@@ -27,6 +27,7 @@ from scipy.stats import kendalltau, rankdata, spearmanr
 from mechanics3d import (
     Mechanics3DSession,
     Mechanics3DSettings,
+    make_fingertip_volume_state as make_vbd_volume_state,
     prepare_fingertip_mechanics_mesh,
 )
 from mesh.volume3d import generate_volume_mesh
@@ -38,7 +39,7 @@ from model.solid import build_fingertip_solid
 from optics.transport3d import (
     OptiXTransport,
     UnifiedTransportResult,
-    build_full3d_transport_geometry,
+    build_fingertip_volume_state_geometry,
     fingerprint_mapping,
     load_case_artifact,
     load_full3d_surface_artifact,
@@ -46,11 +47,11 @@ from optics.transport3d import (
     save_case_artifact,
     transport_configuration,
 )
-from optics.transport3d.geometry import TriangleSurface
 from optics.transport3d.optix_backend import create_runtime
 from optics.transport3d.settings import Transport3DSettings
 from validation.common.io import atomic_write_json, strict_read_json
 from validation.common.provenance import sha256_file
+from mesh.volume_state import make_fingertip_volume_state as make_volume_state
 
 from .correspondence import (
     VBD_CORRESPONDENCE_DT,
@@ -263,68 +264,6 @@ def _vbd_settings(prepared: Any) -> Mechanics3DSettings:
     )
 
 
-def _normal_from_surface(vertices: np.ndarray, faces: np.ndarray) -> np.ndarray:
-    points = vertices[np.asarray(faces, dtype=np.int64)]
-    cross = np.cross(points[:, 1] - points[:, 0], points[:, 2] - points[:, 0])
-    lengths = np.linalg.norm(cross, axis=1)
-    if np.any(~np.isfinite(lengths)) or np.any(lengths <= 1.0e-12):
-        raise TrendValidationError("VBD optical surface contains a degenerate triangle")
-    return cross / lengths[:, None]
-
-
-def _vbd_geometry(
-    tip: Any,
-    prepared: Any,
-    result: Any,
-    fea_artifact: Any,
-    *,
-    side: str,
-    vbd_state_fingerprint: str,
-) -> Any:
-    source_to_local = {
-        int(source_id): index
-        for index, source_id in enumerate(np.asarray(prepared.source_node_ids, dtype=np.int64))
-    }
-    try:
-        local = np.asarray(
-            [source_to_local[int(source_id)] for source_id in fea_artifact.silicone_node_ids],
-            dtype=np.int64,
-        )
-    except KeyError as exc:
-        raise TrendValidationError("VBD surface topology references an unknown source node") from exc
-    vertices = np.asarray(result.deformed_vertices, dtype=float)[local]
-    silicone = fea_artifact.silicone
-    vbd_silicone = TriangleSurface(
-        vertices=vertices,
-        faces=silicone.faces,
-        normals=_normal_from_surface(vertices, silicone.faces),
-        external_surface=silicone.external_surface,
-        u_start=silicone.u_start,
-        u_end=silicone.u_end,
-        semantic_tags=silicone.semantic_tags,
-        interface_tags=silicone.interface_tags,
-    )
-    return build_full3d_transport_geometry(
-        tip,
-        silicone=vbd_silicone,
-        # The rigid carrier and periodic envelope are unchanged between the
-        # branches.  Only the compliant direct surface is replaced by VBD.
-        rigid=fea_artifact.rigid,
-        envelope=fea_artifact.envelope,
-        source_position_mm=fea_artifact.source_position_mm,
-        source_medium=fea_artifact.source_medium,
-        metadata={
-            "morphology_id": fea_artifact.morphology_id,
-            "morphology_fingerprint": fea_artifact.morphology_fingerprint,
-            "contact_state_fingerprint": vbd_state_fingerprint,
-            "mechanics_source": "mechanics3d.Mechanics3DSession",
-            "vbd_side": side,
-            "vbd_surface_source": "direct VBD deformed_vertices on FEA silicone topology",
-            "full3d_surface_provenance": "actual_deformed_3d_vbd_surface",
-        },
-    )
-
-
 def _bounds(geometries: Sequence[Any]) -> tuple[tuple[float, float], tuple[float, float]]:
     points = [
         np.asarray(surface.vertices, dtype=float)
@@ -442,6 +381,7 @@ def _prepare_candidate(group: Mapping[str, Any], morphology_id: str) -> dict[str
         volume_mesh_settings_for_tier("search"),
     )
     prepared = prepare_fingertip_mechanics_mesh(volume_mesh)
+    reference_mesh = tip.mesh()
     state: dict[str, Any] = {
         "morphology_id": morphology_id,
         "parameters": dict(sides["left"]["parameters"]),
@@ -449,6 +389,7 @@ def _prepare_candidate(group: Mapping[str, Any], morphology_id: str) -> dict[str
         "tip": tip,
         "volume_mesh": volume_mesh,
         "prepared": prepared,
+        "reference_mesh": reference_mesh,
         "sides": {},
     }
     for side in ("left", "right"):
@@ -469,6 +410,12 @@ def _prepare_candidate(group: Mapping[str, Any], morphology_id: str) -> dict[str
             expected_contact_state_fingerprint=contact_fp,
             repair_derived_normals=True,
         )
+        canonical_node_ids = tuple(sorted(volume_mesh.nodes))
+        if tuple(int(value) for value in artifact.node_ids) != canonical_node_ids:
+            raise TrendValidationError(
+                f"FEA native node order is not canonical for {case['case_id']}"
+            )
+        fea_state = make_volume_state(volume_mesh, artifact.deformed_nodes_xyz)
         if artifact.mesh_fingerprint != case["case_payload"].get("mesh", {}).get("fingerprint", artifact.mesh_fingerprint):
             # The case contract historically stores the authoritative mesh
             # fingerprint in the native manifest; the loader has already
@@ -479,6 +426,7 @@ def _prepare_candidate(group: Mapping[str, Any], morphology_id: str) -> dict[str
             "case": case,
             "reference": reference,
             "artifact": artifact,
+            "fea_state": fea_state,
             "correspondence": correspondence,
             "particle_load": particle_load,
             "load_construction": load_construction,
@@ -772,12 +720,45 @@ def run_comparison(
                         "deformed_vertices_sha256": hashlib.sha256(np.asarray(result.deformed_vertices).tobytes()).hexdigest(),
                     }
                 )
-                geometry = _vbd_geometry(
-                    state["tip"], state["prepared"], result, side_state["artifact"],
-                    side=side, vbd_state_fingerprint=vbd_fp,
+                vbd_state = make_vbd_volume_state(
+                    state["volume_mesh"],
+                    state["prepared"],
+                    result,
                 )
-                side_state.update({"vbd_result": result, "vbd_timing": timing, "vbd_fp": vbd_fp, "vbd_geometry": geometry})
-                all_geometries.extend((side_state["artifact"].geometry(state["tip"]), geometry))
+                fea_geometry = build_fingertip_volume_state_geometry(
+                    state["tip"],
+                    side_state["fea_state"],
+                    reference_mesh=state["reference_mesh"],
+                    metadata={
+                        "morphology_id": state["morphology_id"],
+                        "contact_state_fingerprint": side_state["artifact"].contact_state_fingerprint,
+                        "mechanics_source": str(side_state["artifact"].artifact_path),
+                        "full3d_surface_provenance": "actual_deformed_3d_volume_state",
+                    },
+                )
+                geometry = build_fingertip_volume_state_geometry(
+                    state["tip"],
+                    vbd_state,
+                    reference_mesh=state["reference_mesh"],
+                    metadata={
+                        "morphology_id": state["morphology_id"],
+                        "contact_state_fingerprint": vbd_fp,
+                        "mechanics_source": "mechanics3d.Mechanics3DSession",
+                        "vbd_side": side,
+                        "vbd_surface_source": "direct Mechanics3DResult deformed coordinates",
+                        "vbd_state_fingerprint": vbd_fp,
+                        "full3d_surface_provenance": "actual_deformed_3d_volume_state",
+                    },
+                )
+                side_state.update({
+                    "vbd_result": result,
+                    "vbd_state": vbd_state,
+                    "vbd_timing": timing,
+                    "vbd_fp": vbd_fp,
+                    "fea_geometry": fea_geometry,
+                    "vbd_geometry": geometry,
+                })
+                all_geometries.extend((fea_geometry, geometry))
                 side_state["mechanics_diagnostics"] = compare_mechanics_states(reference, state["prepared"], result)
             state["vbd_settings"] = settings
             prepared_candidates.append(state)
@@ -798,11 +779,11 @@ def run_comparison(
                 side_state = state["sides"][side]
                 artifact = side_state["artifact"]
                 tip = state["tip"]
-                fea_geometry = artifact.geometry(tip)
+                fea_geometry = side_state["fea_geometry"]
                 material = _material(tip)
                 source = {
-                    "position_mm": list(artifact.source_position_mm),
-                    "medium": artifact.source_medium,
+                    "position_mm": list(fea_geometry.source_position_mm),
+                    "medium": fea_geometry.source_medium,
                     "model": "existing Fingertip optical source",
                 }
                 config = transport_configuration(optix_settings, material=material, source=source)
@@ -816,8 +797,8 @@ def run_comparison(
                     "optical_mode": "FULL_3D",
                     "transport_configuration": config,
                     "transport_configuration_fingerprint": fingerprint_mapping(config),
-                    "source_position_mm": list(artifact.source_position_mm),
-                    "source_medium": artifact.source_medium,
+                    "source_position_mm": list(fea_geometry.source_position_mm),
+                    "source_medium": fea_geometry.source_medium,
                 }
                 fea_contract = {
                     **common_contract,

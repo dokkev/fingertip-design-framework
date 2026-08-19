@@ -347,6 +347,67 @@ def _surface_from_extrusion(
     )
 
 
+def build_fixed_transport_surfaces(
+    reference_mesh: FingertipMesh,
+    *,
+    depth_mm: float = 11.0,
+    envelope_coordinates: np.ndarray | None = None,
+) -> tuple[TriangleSurface, TriangleSurface]:
+    """Build the fixed rigid-carrier and virtual-envelope surfaces.
+
+    The fixed surfaces are independent of the mechanics backend.  Compliant
+    silicone triangles are supplied separately by the planar mesh path or the
+    direct ``FingertipVolumeState`` adapter.
+    """
+    if not isinstance(reference_mesh, FingertipMesh):
+        raise TypeError("reference_mesh must be FingertipMesh")
+    reference_pad = reference_mesh.pad
+    try:
+        rigid_pad = _rigid_pad_mesh(reference_mesh)
+        rigid_extrusion = _ExtrudedMesh.from_pad_mesh(rigid_pad, depth_mm=depth_mm)
+        rigid_faces = rigid_extrusion.faces_3d[2 * len(rigid_pad.triangles):]
+        rigid = _surface_from_extrusion(
+            rigid_extrusion,
+            rigid_pad.coordinates,
+            rigid_faces,
+        )
+
+        # The envelope is a virtual air boundary only at the cutout closure.
+        # It shares the semantic pad boundary vertices and does not invent a
+        # coordinate-based surface classifier.
+        full_outer_edges = np.asarray(
+            [
+                edge
+                for tag in (
+                    "pad_bond_left",
+                    *EXTERNAL_SURFACE_TAGS,
+                    "pad_bond_right",
+                )
+                for edge in reference_pad.boundary_edges_for(tag)
+            ],
+            dtype=np.int64,
+        )
+        full_chain = _ordered_chain(
+            full_outer_edges,
+            reference_pad.reference_coordinates_mm,
+        )
+        closure = np.asarray([[full_chain[-1], full_chain[0]]], dtype=np.int64)
+        envelope_extrusion = _ExtrudedMesh.from_pad_mesh(reference_pad, depth_mm=depth_mm)
+        envelope = _surface_from_extrusion(
+            envelope_extrusion,
+            np.asarray(
+                reference_pad.coordinates if envelope_coordinates is None else envelope_coordinates,
+                dtype=float,
+            ),
+            envelope_extrusion.side_faces_for_edges(
+                np.vstack((full_outer_edges, closure))
+            ),
+        )
+    except InvalidExtrudedOpticalMesh as exc:
+        raise Transport3DGeometryError(str(exc)) from exc
+    return rigid, envelope
+
+
 def build_transport_geometry(
     tip: Fingertip,
     pad_mesh: Any,
@@ -456,41 +517,10 @@ def build_transport_geometry(
         interface_tags=interface_tags,
     )
 
-    rigid_pad = _rigid_pad_mesh(reference_mesh)
-    rigid_extrusion = _ExtrudedMesh.from_pad_mesh(rigid_pad, depth_mm=depth_mm)
-    rigid_faces = rigid_extrusion.faces_3d[2 * len(rigid_pad.triangles):]
-    rigid = _surface_from_extrusion(
-        rigid_extrusion,
-        rigid_pad.coordinates,
-        rigid_faces,
-    )
-
-    # The envelope is a virtual air boundary only at its cutout closure.  It
-    # shares the semantic pad boundary vertices and therefore does not invent
-    # a coordinate-based surface classifier.
-    full_outer_edges = np.asarray(
-        [
-            edge
-            for tag in (
-                "pad_bond_left",
-                *EXTERNAL_SURFACE_TAGS,
-                "pad_bond_right",
-            )
-            for edge in pad_mesh.boundary_edges_for(tag)
-        ],
-        dtype=np.int64,
-    )
-    full_chain = _ordered_chain(full_outer_edges, reference_pad.reference_coordinates_mm)
-    closure = np.asarray([[full_chain[-1], full_chain[0]]], dtype=np.int64)
-    envelope_edges = np.vstack((
-        full_outer_edges,
-        closure,
-    ))
-    envelope_faces = extrusion.side_faces_for_edges(envelope_edges)
-    envelope = _surface_from_extrusion(
-        extrusion,
-        np.asarray(pad_mesh.coordinates, dtype=float),
-        envelope_faces,
+    rigid, envelope = build_fixed_transport_surfaces(
+        reference_mesh,
+        depth_mm=depth_mm,
+        envelope_coordinates=np.asarray(pad_mesh.coordinates, dtype=float),
     )
 
     source_xy = np.asarray(domain.source_position_mm, dtype=float)
@@ -580,6 +610,7 @@ def build_full3d_transport_geometry(
     if provenance not in {
         "actual_deformed_3d_fea_surface",
         "actual_deformed_3d_vbd_surface",
+        "actual_deformed_3d_volume_state",
     }:
         raise Transport3DGeometryError(
             "full 3D surface provenance must identify a direct FEA or VBD "
@@ -619,5 +650,6 @@ __all__ = [
     "TriangleSurface",
     "Transport3DGeometryError",
     "build_full3d_transport_geometry",
+    "build_fixed_transport_surfaces",
     "build_transport_geometry",
 ]

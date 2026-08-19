@@ -78,3 +78,15 @@ class Fingertip:
         """Build the independent semantic 3D representative cell."""
         builder = import_module("model.solid").build_fingertip_solid
         return builder(self.geometry, extrusion_depth_mm=extrusion_depth_mm)
+
+    def volume_mesh(self, settings: Any | None = None) -> Any:
+        """Generate the canonical 3D mechanics mesh for this morphology.
+
+        The established search-tier policy is used when settings are omitted.
+        A mesh is intentionally not cached so one physical design may be
+        discretized at multiple tiers.
+        """
+        volume_module = import_module("mesh.volume3d")
+        volume_types = import_module("mesh.volume_types")
+        selected = settings or volume_types.volume_mesh_settings_for_tier("search")
+        return volume_module.generate_volume_mesh(self.solid(), selected)

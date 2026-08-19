@@ -14,7 +14,11 @@ from mesh.volume_types import VolumeMeshValidation, volume_mesh_settings_for_tie
 from model.fingertip_model import FingertipModel
 from model.fingertip_parameters import FingertipParameters
 from model.solid import build_fingertip_solid
-from mechanics3d import prepare_fingertip_mechanics_mesh
+from mechanics3d import (
+    Mechanics3DResult,
+    make_fingertip_volume_state,
+    prepare_fingertip_mechanics_mesh,
+)
 
 
 @pytest.fixture(scope="module")
@@ -66,3 +70,42 @@ def test_adapter_rejects_invalid_source_volume_mesh(volume_mesh) -> None:
     )
     with pytest.raises(ValueError, match="invalid FingertipVolumeMesh"):
         prepare_fingertip_mechanics_mesh(invalid)
+
+
+def test_mechanics_result_promotes_without_reordering_or_remeshing(volume_mesh) -> None:
+    prepared = prepare_fingertip_mechanics_mesh(volume_mesh)
+    result = Mechanics3DResult(
+        rest_vertices=prepared.tet_mesh.vertices,
+        deformed_vertices=prepared.tet_mesh.vertices.copy(),
+        tetrahedra=prepared.tet_mesh.tetrahedra,
+        steps=1,
+    )
+
+    state = make_fingertip_volume_state(volume_mesh, prepared, result)
+
+    assert state.source_node_ids == tuple(prepared.source_node_ids.tolist())
+    np.testing.assert_array_equal(state.deformed_coordinates_mm, prepared.tet_mesh.vertices)
+    np.testing.assert_allclose(
+        state.reference_coordinates_mm,
+        prepared.tet_mesh.vertices,
+        rtol=0.0,
+        atol=1.0e-6,
+    )
+    assert state.tetrahedra == volume_mesh.tetrahedra
+    assert state.surface_triangles == volume_mesh.surface_triangles
+    assert state.morphology_fingerprint == volume_mesh.morphology_fingerprint
+
+
+def test_mechanics_result_promotion_rejects_topology_mismatch(volume_mesh) -> None:
+    prepared = prepare_fingertip_mechanics_mesh(volume_mesh)
+    mismatched = prepared.tet_mesh.tetrahedra.copy()
+    mismatched[0] = mismatched[0, ::-1]
+    result = Mechanics3DResult(
+        rest_vertices=prepared.tet_mesh.vertices,
+        deformed_vertices=prepared.tet_mesh.vertices,
+        tetrahedra=mismatched,
+        steps=1,
+    )
+
+    with pytest.raises(ValueError, match="topology"):
+        make_fingertip_volume_state(volume_mesh, prepared, result)

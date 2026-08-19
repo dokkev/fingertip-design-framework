@@ -4,6 +4,7 @@ from .fingertip import (
     FingertipMechanicsMesh,
     PrescribedVertexDisplacement,
     outer_compliant_timing_patch,
+    make_fingertip_volume_state,
     prepare_fingertip_mechanics_mesh,
     solve_prescribed_indentation,
 )
@@ -21,6 +22,7 @@ __all__ = [
     "ParticleLoad",
     "TetMeshData",
     "outer_compliant_timing_patch",
+    "make_fingertip_volume_state",
     "prepare_fingertip_mechanics_mesh",
     "solve_prescribed_indentation",
     "solve",

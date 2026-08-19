@@ -9,8 +9,12 @@ from typing import Mapping, Sequence
 import numpy as np
 
 from mesh.volume_types import FingertipVolumeMesh
+from mesh.volume_state import (
+    FingertipVolumeState,
+    make_fingertip_volume_state as make_volume_state,
+)
 
-from .types import TetMeshData
+from .types import Mechanics3DResult, TetMeshData
 
 
 def _readonly_array(value: np.ndarray, *, dtype: np.dtype) -> np.ndarray:
@@ -209,6 +213,43 @@ def prepare_fingertip_mechanics_mesh(
         surface_triangles=local_surfaces,
         morphology_fingerprint=volume_mesh.morphology_fingerprint,
     )
+
+
+def make_fingertip_volume_state(
+    volume_mesh: FingertipVolumeMesh,
+    prepared: FingertipMechanicsMesh,
+    result: Mechanics3DResult,
+) -> FingertipVolumeState:
+    """Promote one exact generic mechanics result to the neutral state.
+
+    The adapter accepts only the canonical local row order produced by
+    ``prepare_fingertip_mechanics_mesh``.  It never performs nearest-neighbor
+    matching or silently substitutes topology from another source.
+    """
+    if not isinstance(volume_mesh, FingertipVolumeMesh):
+        raise TypeError("volume_mesh must be FingertipVolumeMesh")
+    if not isinstance(prepared, FingertipMechanicsMesh):
+        raise TypeError("prepared must be FingertipMechanicsMesh")
+    if not isinstance(result, Mechanics3DResult):
+        raise TypeError("result must be Mechanics3DResult")
+    canonical_node_ids = tuple(sorted(volume_mesh.nodes))
+    if tuple(int(value) for value in prepared.source_node_ids) != canonical_node_ids:
+        raise ValueError("mechanics adapter source-node correspondence is not canonical")
+    if prepared.morphology_fingerprint != volume_mesh.morphology_fingerprint:
+        raise ValueError("mechanics adapter morphology fingerprint mismatch")
+    if result.tetrahedra.shape != prepared.tet_mesh.tetrahedra.shape or not np.array_equal(
+        result.tetrahedra,
+        prepared.tet_mesh.tetrahedra,
+    ):
+        raise ValueError("mechanics result tetrahedral topology does not match the prepared mesh")
+    if result.rest_vertices.shape != prepared.tet_mesh.vertices.shape or not np.allclose(
+        result.rest_vertices,
+        prepared.tet_mesh.vertices,
+        rtol=0.0,
+        atol=1.0e-5,
+    ):
+        raise ValueError("mechanics result reference vertices do not match canonical volume coordinates")
+    return make_volume_state(volume_mesh, result.deformed_vertices)
 
 
 def outer_compliant_timing_patch(

@@ -52,7 +52,7 @@ def test_model_is_geometry_only() -> None:
 def test_mesh_is_solver_and_plotting_independent() -> None:
     _assert_no_prefix(
         "mesh",
-        ("fem", "visualization", "matplotlib", "KratosMultiphysics"),
+        ("fem", "mechanics3d", "optics", "validation", "visualization", "matplotlib", "KratosMultiphysics"),
     )
 
 
@@ -75,3 +75,7 @@ def test_full_field_producer_uses_active_python_interpreter() -> None:
     source = path.read_text(encoding="utf-8")
     assert "PYTHON = Path(sys.executable).resolve()" in source
     assert "/home/dk/" not in source
+
+
+def test_optics_has_no_mechanics_or_validation_dependency() -> None:
+    _assert_no_prefix("optics", ("mechanics3d", "validation", "tests"))

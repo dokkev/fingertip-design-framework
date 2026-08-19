@@ -13,6 +13,7 @@ import numpy as np
 
 from mesh.indenter import IndenterFixture
 from mesh.volume_types import FingertipVolumeMesh, SurfaceTriangle
+from mesh.volume_state import FingertipVolumeState, make_fingertip_volume_state
 
 
 SolidFEAMode = Literal["3d_equivalent_reference", "production"]
@@ -85,6 +86,35 @@ class SolidFEAResult:
         displacement.setflags(write=False)
         object.__setattr__(self, "deformed_coordinates_mm", deformed)
         object.__setattr__(self, "displacement_mm", displacement)
+
+    @property
+    def volume_state(self) -> FingertipVolumeState:
+        """Promote a converged result through the shared mesh-layer factory."""
+        if not self.converged or self.deformed_coordinates_mm is None:
+            raise SolidFEAError("a failed 3D FEA result has no deformed volume state")
+        node_order = tuple(sorted(self.volume_mesh.nodes))
+        reference = np.asarray(
+            [
+                [
+                    self.volume_mesh.nodes[node_id].x_mm,
+                    self.volume_mesh.nodes[node_id].y_mm,
+                    self.volume_mesh.nodes[node_id].z_mm,
+                ]
+                for node_id in node_order
+            ],
+            dtype=float,
+        )
+        if not np.allclose(
+            self.reference_coordinates_mm,
+            reference,
+            rtol=0.0,
+            atol=1.0e-9,
+        ):
+            raise SolidFEAError("3D FEA reference coordinates do not match canonical volume-node order")
+        return make_fingertip_volume_state(
+            self.volume_mesh,
+            self.deformed_coordinates_mm,
+        )
 
 
 @dataclass(frozen=True)

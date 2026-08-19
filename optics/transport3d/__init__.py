@@ -9,8 +9,10 @@ from optics.transport3d.artifact import (
 )
 from optics.transport3d.geometry import (
     build_full3d_transport_geometry,
+    build_fixed_transport_surfaces,
     build_transport_geometry,
 )
+from optics.transport3d.fingertip import build_fingertip_volume_state_geometry
 from optics.transport3d.settings import Transport3DSettings
 from optics.transport3d.transport import (
     Transport3DDependencyError,
@@ -48,6 +50,8 @@ __all__ = [
     "LEGACY_UNIFIED_ARTIFACT_SCHEMA_V2",
     "UnifiedTransportResult",
     "build_full3d_transport_geometry",
+    "build_fixed_transport_surfaces",
+    "build_fingertip_volume_state_geometry",
     "build_transport_geometry",
     "fingerprint_mapping",
     "load_case_artifact",

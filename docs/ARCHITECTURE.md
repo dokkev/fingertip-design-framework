@@ -195,14 +195,31 @@ The nominal 3D mechanics paths share one authoritative geometry and TET4 mesh:
 FingertipModel -> FingertipSolid -> FingertipVolumeMesh
                                       ├── fem.solid3d
                                       └── mechanics3d.fingertip
+                                      ↓
+                             FingertipVolumeState
+                                      ↓
+                         optics.transport3d FULL_3D
 ```
 
-`model.solid` owns the fixed 11 mm semantic extrusion and `mesh.volume3d`
-owns Gmsh tetrahedralization. The fingertip mechanics adapter does not create
-geometry or remesh; it preserves the source Gmsh node order and semantic
-surface triangles while converting to the generic NumPy contract. Kratos and
-Newton therefore consume the same volume-mesh topology, with no second 3D
-geometry implementation.
+`FingertipVolumeMesh` is the canonical 3D mechanics input. `model.solid` owns
+the fixed 11 mm semantic extrusion and `mesh.volume3d` owns Gmsh
+tetrahedralization. Kratos and Newton consume that same volume mesh; neither
+backend defines a second fingertip geometry or remeshes during state
+promotion.
+
+`FingertipVolumeState` is the canonical solver-neutral deformed 3D output. It
+stores deformed coordinates in `tuple(sorted(volume_mesh.nodes))` order and
+borrows the volume mesh's tetrahedral and semantic surface topology. Its
+validation rejects non-finite coordinates, unknown source IDs, degenerate or
+orientation-flipped surfaces, and inverted/degenerate tetrahedra. Mechanics
+backends do not own morphology geometry, and `optics.transport3d` does not
+know which backend produced the state.
+
+The production full-3D optical adapter builds the compliant surface directly
+from `FingertipVolumeState` and uses one shared fixed rigid-carrier/virtual-
+envelope builder from authoritative fingertip geometry. Persisted FEA surface
+artifacts remain validation evidence and backward-compatible readers; they are
+not required to construct VBD full-3D geometry.
 
 ## Fingertip and mesh state
 
@@ -220,7 +237,9 @@ Fingertip
 ```
 
 It is a mesh factory, not the owner of one permanent mesh: a single design can
-be discretized at several resolutions. The returned mesh retains the rigid
+be discretized at several resolutions. `volume_mesh(settings)` is the lazy
+canonical 3D facade and defaults to the established search-tier policy; it
+does not cache one permanent mesh. The returned mesh retains the rigid
 carrier and contact information required by FEM while exposing the neutral pad
 contract through `node_ids`, `coordinates`, `triangles`, and `boundaries`.
 Its cached `.pad` view owns that neutral topology for optics.
