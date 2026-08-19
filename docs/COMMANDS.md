@@ -40,7 +40,7 @@ It has no CLI or GUI entry point in this iteration.
 The optional GPU mechanics surrogate can be installed with:
 
 ```bash
-python -m pip install -e ".[mechanics3d]"
+python -m pip install -e ".[mesh,mechanics3d]"
 ```
 
 Run its focused real-device smoke test with:
@@ -54,6 +54,60 @@ tetrahedral VBD step, and finite deformation. It includes both the synthetic
 bootstrap body and the nominal existing search-tier fingertip volume mesh.
 The latter uses the shared `FingertipSolid`/`FingertipVolumeMesh` path and is a
 small surrogate mechanics prototype, not the Kratos FEA workflow.
+
+Inspect the existing generated Kratos 3D reference states without rerunning
+FEA:
+
+```bash
+python -m validation.mechanics3d.inventory \
+  --output output/validation/mechanics3d/fea3d_reference_inventory.json
+```
+
+Run the prescribed-indentation Newton VBD timing gate on the nominal search
+mesh:
+
+```bash
+python -m validation.mechanics3d.benchmark \
+  --output output/validation/mechanics3d/vbd_nominal_indentation_timing.json
+```
+
+This benchmark applies a semantic `outer_compliant_arc` kinematic patch for
+0.5 mm over recorded load steps. It has no rigid indenter, collision/contact
+search, Kratos FEA, or OptiX, and is a timing result rather than an FEA/VBD
+fidelity validation.
+
+Run the first direct nominal FEA/VBD correspondence characterization from the
+existing persisted Kratos artifact. This does not rerun Kratos FEA or OptiX;
+it rebuilds the exact shared LUMO tetrahedral mesh, translates the persisted
+localized pressure load into neutral particle forces, and reports geometry
+descriptors plus persistent-session timing:
+
+```bash
+python -m validation.mechanics3d.correspondence \
+  --output output/validation/mechanics3d/nominal_fea_vbd_correspondence.json \
+  --report output/validation/mechanics3d/nominal_fea_vbd_correspondence.md \
+  --warm-repeats 5
+```
+
+This is a characterization report, not a VBD fidelity pass/fail gate. It
+separates numerical mesh/load correspondence and warm throughput from the
+scientific geometry comparison; stress, reaction, contact, and calibrated
+material fidelity remain unsupported.
+
+Run the matched morphology trend comparison from the persisted 3D FEA states:
+
+```bash
+conda run -n lit python -m validation.mechanics3d.vbd_fea_optical_trend
+```
+
+This command does not rerun Kratos. It reconstructs each exact saved FEA mesh,
+runs the frozen force-loaded Newton VBD configuration, and sends both FEA and
+VBD deformed surfaces through the same full-3D OptiX transport configuration.
+It writes `vbd_fea_optical_trend.json`, `.md`, and
+`vbd_fea_optical_ranking.csv` under `output/validation/mechanics3d/`.
+The established full-3D `J3` redistribution/separability scalar is reported;
+the production 2D `minimum_auc` objective is not substituted for this
+single localized-load corpus.
 
 ## Tests
 

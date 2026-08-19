@@ -65,11 +65,15 @@ It does not replace mesh-based reference/loaded comparisons.
   Kratos objects do not cross into optics or visualization.
 - `mechanics3d/` owns the optional NVIDIA Warp/Newton tetrahedral VBD
   prototype. Its public boundary is NumPy-only `TetMeshData`,
-  `Mechanics3DSettings`, and `Mechanics3DResult`; the Newton model, CUDA
-  arrays, and solver objects remain inside `mechanics3d.backends`. Neutral
-  coordinates use the repository's millimetre convention; the backend converts
-  to/from Newton's metre convention. It is a fast mechanics surrogate and is
-  not a replacement for `fem/` or Kratos.
+  `Mechanics3DSettings`, `ParticleLoad`, `Mechanics3DSession`, and
+  `Mechanics3DResult`; the Newton model, CUDA arrays, and solver objects remain
+  inside `mechanics3d.backends`. `ParticleLoad` is the neutral external-force
+  contract: local zero-based particle indices, finite Newton-valued forces, and
+  an explicit deterministic ramp count. Neutral coordinates use the
+  repository's millimetre convention; the backend converts to/from Newton's
+  metre convention. `Mechanics3DSession` owns one persistent model/solver and
+  restores a verified rest state before each independent solve. It is a fast
+  mechanics surrogate and is not a replacement for `fem/` or Kratos.
 - `case/` is the thin top-level research-case aggregate. `FingertipCase`
   owns one physical `Fingertip`, one `FEA2D` mechanics experiment, and one
   `RayTracing2D` optics experiment. `FEA2D` owns mesh/indenter/contact/solver
@@ -127,6 +131,14 @@ It does not replace mesh-based reference/loaded comparisons.
   deformed triangles.
 - `validation/` owns scientific baselines, Phase acceptance, provenance,
   checkpointing, reports, and generated artifact schemas.
+- `validation/mechanics3d/` owns read-only inspection of persisted native
+  Kratos 3D reference artifacts, the timing-only prescribed-indentation Newton
+  VBD benchmark, and the nominal FEA/VBD correspondence characterization. Its
+  loader produces neutral validation reference states and never runs Kratos;
+  its benchmark and correspondence runner call the independent `mechanics3d`
+  boundary without adding contact or collision behavior. FEA-specific surface
+  loading translation and geometry comparison descriptors remain in this
+  validation package rather than in the generic mechanics backend.
 - `validation/fem/throughput.py` owns the staged Kratos FEA throughput/fidelity
   study. It may request explicit benchmark-local mesh and solver settings, but
   it does not alter production defaults, constitutive/contact formulation, or

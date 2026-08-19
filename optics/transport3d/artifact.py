@@ -32,7 +32,13 @@ def _json_scalar(archive: Any, key: str) -> Any:
         raise ValueError(f"3D surface artifact has invalid JSON field {key}") from exc
 
 
-def _surface(archive: Any, prefix: str, *, semantic: bool) -> TriangleSurface:
+def _surface(
+    archive: Any,
+    prefix: str,
+    *,
+    semantic: bool,
+    repair_normals: bool = False,
+) -> TriangleSurface:
     required = ("vertices", "faces", "normals")
     arrays = {}
     for name in required:
@@ -67,6 +73,13 @@ def _surface(archive: Any, prefix: str, *, semantic: bool) -> TriangleSurface:
         raise ValueError(
             f"{prefix} full 3D surface must preserve external and material-coordinate metadata"
         )
+    if repair_normals:
+        faces = np.asarray(arrays["faces"], dtype=np.int64)
+        geometric_cross = np.cross(
+            arrays["vertices"][faces[:, 1]] - arrays["vertices"][faces[:, 0]],
+            arrays["vertices"][faces[:, 2]] - arrays["vertices"][faces[:, 0]],
+        )
+        arrays["normals"] = geometric_cross
     return TriangleSurface(
         vertices=arrays["vertices"],
         faces=arrays["faces"],
@@ -101,7 +114,11 @@ def _finite_array(archive: Any, key: str, *, shape: tuple[int, ...] | None = Non
     return result
 
 
-def _validate_native_state(archive: Any) -> dict[str, Any]:
+def _validate_native_state(
+    archive: Any,
+    *,
+    repair_derived_normals: bool = False,
+) -> dict[str, Any]:
     """Validate the persisted mechanics state before any optical promotion."""
     node_ids = _integer_array(archive, "node_ids", ndim=1)
     if len(node_ids) == 0 or len(np.unique(node_ids)) != len(node_ids):
@@ -156,10 +173,13 @@ def _validate_native_state(archive: Any) -> dict[str, Any]:
         np.linalg.norm(deformed_cross, axis=1) <= 1.0e-12
     ):
         raise ValueError("native 3D FEA surface contains a zero-area triangle")
-    if np.any(np.sum(reference_cross * reference_normals, axis=1) <= 0.0) or np.any(
-        np.sum(deformed_cross * deformed_normals, axis=1) <= 0.0
-    ):
-        raise ValueError("native 3D FEA surface orientation metadata is inconsistent")
+    reference_alignment = np.sum(reference_cross * reference_normals, axis=1)
+    deformed_alignment = np.sum(deformed_cross * deformed_normals, axis=1)
+    if np.any(reference_alignment <= 0.0) or np.any(deformed_alignment <= 0.0):
+        if not repair_derived_normals:
+            raise ValueError("native 3D FEA surface orientation metadata is inconsistent")
+        reference_normals = reference_cross / np.linalg.norm(reference_cross, axis=1)[:, None]
+        deformed_normals = deformed_cross / np.linalg.norm(deformed_cross, axis=1)[:, None]
     if np.any(np.sum(reference_cross * deformed_cross, axis=1) <= 0.0):
         raise ValueError("native 3D FEA surface orientation flipped after deformation")
     tetrahedra = _integer_array(archive, "tetrahedra_node_ids", ndim=2)
@@ -222,6 +242,7 @@ class Full3DSurfaceArtifact:
     surface_reference_normals: np.ndarray
     surface_deformed_normals: np.ndarray
     tetrahedra_node_ids: np.ndarray
+    silicone_node_ids: np.ndarray
     mesh_fingerprint: str
     mechanics_config_fingerprint: str
     tier: str
@@ -251,6 +272,7 @@ def load_full3d_surface_artifact(
     *,
     expected_morphology_fingerprint: str,
     expected_contact_state_fingerprint: str,
+    repair_derived_normals: bool = False,
 ) -> Full3DSurfaceArtifact:
     """Load a true 3D surface only when its complete provenance matches."""
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -284,8 +306,16 @@ def load_full3d_surface_artifact(
         ):
             if metadata.get(field) != manifest.get(field):
                 raise ValueError(f"native 3D FEA metadata mismatch for {field}")
-        native_state = _validate_native_state(archive)
-        silicone = _surface(archive, "silicone", semantic=True)
+        native_state = _validate_native_state(
+            archive,
+            repair_derived_normals=repair_derived_normals,
+        )
+        silicone = _surface(
+            archive,
+            "silicone",
+            semantic=True,
+            repair_normals=repair_derived_normals,
+        )
         rigid = _surface(archive, "rigid", semantic=False)
         envelope = _surface(archive, "envelope", semantic=False)
     required_manifest_fields = (
@@ -327,6 +357,7 @@ def load_full3d_surface_artifact(
         surface_reference_normals=native_state["surface_reference_normals"],
         surface_deformed_normals=native_state["surface_deformed_normals"],
         tetrahedra_node_ids=native_state["tetrahedra_node_ids"],
+        silicone_node_ids=native_state["silicone_node_ids"],
         mesh_fingerprint=str(manifest["mesh_fingerprint"]),
         mechanics_config_fingerprint=str(manifest["mechanics_config_fingerprint"]),
         tier=str(manifest["tier"]),

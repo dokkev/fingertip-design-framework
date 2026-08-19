@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Mapping
+from typing import Mapping, Sequence
 
 import numpy as np
 
@@ -28,6 +28,31 @@ def _positive_tet_orientation(vertices: np.ndarray, tetrahedra: np.ndarray) -> N
     )
     if np.any(~np.isfinite(six_volumes)) or np.any(six_volumes <= 1.0e-12):
         raise ValueError("volume mesh tetrahedra must retain positive orientation")
+
+
+@dataclass(frozen=True)
+class PrescribedVertexDisplacement:
+    """Timing-only kinematic patch; this is not a contact model."""
+
+    vertex_indices: tuple[int, ...]
+    displacement_mm: tuple[float, float, float]
+    load_steps: int
+    label: str = "timing-only prescribed indentation patch"
+
+    def __post_init__(self) -> None:
+        indices = tuple(sorted(int(index) for index in self.vertex_indices))
+        if not indices or len(set(indices)) != len(indices) or any(index < 0 for index in indices):
+            raise ValueError("vertex_indices must be unique, non-negative, and non-empty")
+        displacement = tuple(float(value) for value in self.displacement_mm)
+        if len(displacement) != 3 or not np.all(np.isfinite(displacement)):
+            raise ValueError("displacement_mm must contain three finite values")
+        if int(self.load_steps) < 1:
+            raise ValueError("load_steps must be positive")
+        if not isinstance(self.label, str) or not self.label:
+            raise ValueError("label must be a non-empty string")
+        object.__setattr__(self, "vertex_indices", indices)
+        object.__setattr__(self, "displacement_mm", displacement)
+        object.__setattr__(self, "load_steps", int(self.load_steps))
 
 
 @dataclass(frozen=True)
@@ -186,4 +211,57 @@ def prepare_fingertip_mechanics_mesh(
     )
 
 
-__all__ = ["FingertipMechanicsMesh", "prepare_fingertip_mechanics_mesh"]
+def outer_compliant_timing_patch(
+    prepared: FingertipMechanicsMesh,
+    *,
+    displacement_mm: Sequence[float] = (0.0, 0.5, 0.0),
+    load_steps: int = 8,
+) -> PrescribedVertexDisplacement:
+    """Select the nominal semantic outer arc for a timing-only indentation.
+
+    The selected vertices come from the mesh's semantic triangle topology.  No
+    coordinate threshold or indenter/contact interpretation is used.
+    """
+
+    if not isinstance(prepared, FingertipMechanicsMesh):
+        raise TypeError("prepared must be FingertipMechanicsMesh")
+    triangles = prepared.surface_triangles.get("outer_compliant_arc")
+    if triangles is None or not triangles.size:
+        raise ValueError("outer_compliant_arc semantic surface is unavailable")
+    vertex_indices = tuple(int(index) for index in np.unique(triangles.reshape(-1)))
+    return PrescribedVertexDisplacement(
+        vertex_indices=vertex_indices,
+        displacement_mm=tuple(float(value) for value in displacement_mm),
+        load_steps=load_steps,
+    )
+
+
+def solve_prescribed_indentation(
+    prepared: FingertipMechanicsMesh,
+    settings,
+    patch: PrescribedVertexDisplacement,
+):
+    """Run the benchmark-local prescribed patch through the neutral backend."""
+
+    if not isinstance(prepared, FingertipMechanicsMesh):
+        raise TypeError("prepared must be FingertipMechanicsMesh")
+    if not isinstance(patch, PrescribedVertexDisplacement):
+        raise TypeError("patch must be PrescribedVertexDisplacement")
+    from .backends.newton_vbd import solve_newton_vbd_prescribed
+
+    return solve_newton_vbd_prescribed(
+        prepared.tet_mesh,
+        settings,
+        vertex_indices=patch.vertex_indices,
+        displacement_mm=patch.displacement_mm,
+        load_steps=patch.load_steps,
+    )
+
+
+__all__ = [
+    "FingertipMechanicsMesh",
+    "PrescribedVertexDisplacement",
+    "outer_compliant_timing_patch",
+    "prepare_fingertip_mechanics_mesh",
+    "solve_prescribed_indentation",
+]

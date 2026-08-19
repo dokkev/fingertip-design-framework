@@ -152,9 +152,9 @@ class ExtrudedTransportGeometry:
     """All neutral surfaces and material-coordinate metadata for one state.
 
     ``planar_extruded`` is the OptiX representation of a deformed 2D
-    cross-section.  ``full3d_surface`` is reserved for an actual deformed 3D
-    FEA surface artifact; it must never be produced by the 2D extrusion
-    helper.
+    cross-section.  ``full3d_surface`` is reserved for a direct deformed 3D
+    FEA or VBD surface artifact; it must never be produced by the 2D
+    extrusion helper.
     """
 
     silicone: TriangleSurface
@@ -535,11 +535,12 @@ def build_full3d_transport_geometry(
     metadata: Mapping[str, Any],
     depth_mm: float = 11.0,
 ) -> ExtrudedTransportGeometry:
-    """Build transport geometry from an actual deformed 3D surface artifact.
+    """Build transport geometry from a direct deformed 3D surface artifact.
 
     This constructor intentionally accepts triangles directly and does not
     accept a ``PadMesh``.  The distinction is the provenance guard against
-    accidentally labelling an extrusion of 2D deformation as FULL_3D.
+    accidentally labelling an extrusion of 2D deformation as FULL_3D.  The
+    provenance guard accepts only direct FEA or direct VBD surface states.
     ``optical_domain`` is absent because full 3D field accumulation is
     performed from retained native path segments; callers requesting the
     legacy projected diagnostic must provide a separate validated domain.
@@ -570,7 +571,21 @@ def build_full3d_transport_geometry(
             raise Transport3DGeometryError(f"{name} surface has a non-finite longitudinal coordinate")
     enriched_metadata = dict(metadata)
     enriched_metadata["geometry_mode"] = "full3d_surface"
-    enriched_metadata["full3d_surface_provenance"] = "actual_deformed_3d_fea_surface"
+    provenance = str(
+        enriched_metadata.get(
+            "full3d_surface_provenance",
+            "actual_deformed_3d_fea_surface",
+        )
+    )
+    if provenance not in {
+        "actual_deformed_3d_fea_surface",
+        "actual_deformed_3d_vbd_surface",
+    }:
+        raise Transport3DGeometryError(
+            "full 3D surface provenance must identify a direct FEA or VBD "
+            "deformed surface"
+        )
+    enriched_metadata["full3d_surface_provenance"] = provenance
     enriched_metadata["reference_periodic_z_planes_mm"] = [-depth_mm / 2.0, depth_mm / 2.0]
     enriched_metadata["deformed_surface_z_extent_mm"] = [
         float(np.min(silicone.vertices[:, 2])),

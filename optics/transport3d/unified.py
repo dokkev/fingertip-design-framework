@@ -230,10 +230,13 @@ class OptiXTransport:
             )
         geometry_metadata = dict(geometry.metadata)
         if geometry.geometry_mode == "full3d_surface":
-            if geometry_metadata.get("full3d_surface_provenance") != (
-                "actual_deformed_3d_fea_surface"
-            ):
-                raise ValueError("FULL_3D geometry lacks actual FEA-surface provenance")
+            if geometry_metadata.get("full3d_surface_provenance") not in {
+                "actual_deformed_3d_fea_surface",
+                "actual_deformed_3d_vbd_surface",
+            }:
+                raise ValueError(
+                    "FULL_3D geometry lacks direct FEA/VBD-surface provenance"
+                )
             if geometry_metadata.get("morphology_fingerprint") not in (
                 None,
                 morphology_fingerprint,
