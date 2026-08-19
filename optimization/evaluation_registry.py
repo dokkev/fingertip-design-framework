@@ -43,12 +43,12 @@ def _finite_float(name: str, value: object) -> float:
 
 
 def canonical_morphology(parameters: Mapping[str, object]) -> dict[str, str]:
-    """Return a lossless, deterministic representation of the four fields."""
+    """Return a lossless, deterministic representation of the five fields."""
     expected = set(OPTIMIZABLE_PARAMETER_NAMES)
     supplied = set(parameters)
     if supplied != expected:
         raise ValueError(
-            "registry morphology must contain exactly the four production "
+            "registry morphology must contain exactly the five production "
             f"parameters; missing={sorted(expected - supplied)!r}, "
             f"unknown={sorted(supplied - expected)!r}"
         )
@@ -85,6 +85,7 @@ class EvaluationRegistryRecord:
     first_campaign_id: str
     result_artifact_path: str | None
     minimum_auc: float | None
+    objective_value: float | None
     failure_category: str | None
     failure_message: str | None
     failure_scenario: str | None
@@ -110,10 +111,23 @@ class EvaluationRegistryRecord:
             if minimum_auc < 0.0:
                 raise ValueError("minimum_auc must be nonnegative")
             object.__setattr__(self, "minimum_auc", minimum_auc)
-        if self.status == "success" and self.minimum_auc is None:
-            raise ValueError("successful registry record requires minimum_auc")
-        if self.status != "success" and self.minimum_auc is not None:
-            raise ValueError("failed registry record must not carry minimum_auc")
+        if self.objective_value is not None:
+            objective_value = _finite_float("objective_value", self.objective_value)
+            if objective_value < 0.0:
+                raise ValueError("objective_value must be nonnegative")
+            object.__setattr__(self, "objective_value", objective_value)
+        if self.status == "success" and (
+            self.minimum_auc is None and self.objective_value is None
+        ):
+            raise ValueError(
+                "successful registry record requires minimum_auc or objective_value"
+            )
+        if self.status != "success" and (
+            self.minimum_auc is not None or self.objective_value is not None
+        ):
+            raise ValueError(
+                "failed registry record must not carry minimum_auc or objective_value"
+            )
         if self.evaluation_wall_time_seconds is not None:
             wall = _finite_float(
                 "evaluation_wall_time_seconds",
@@ -141,6 +155,7 @@ class EvaluationRegistryRecord:
             "first_campaign_id": self.first_campaign_id,
             "result_artifact_path": self.result_artifact_path,
             "minimum_auc": self.minimum_auc,
+            "objective_value": self.objective_value,
             "failure_category": self.failure_category,
             "failure_message": self.failure_message,
             "failure_scenario": self.failure_scenario,
@@ -173,6 +188,7 @@ class EvaluationRegistryRecord:
             first_campaign_id=str(payload["first_campaign_id"]),
             result_artifact_path=payload.get("result_artifact_path"),
             minimum_auc=payload.get("minimum_auc"),
+            objective_value=payload.get("objective_value", payload.get("minimum_auc")),
             failure_category=payload.get("failure_category"),
             failure_message=payload.get("failure_message"),
             failure_scenario=payload.get("failure_scenario"),
@@ -228,6 +244,7 @@ class EvaluationRegistry:
         failure_message: str | None,
         failure_scenario: str | None,
         evaluation_wall_time_seconds: float | None,
+        objective_value: float | None = None,
     ) -> EvaluationRegistryRecord:
         """Persist one original result; never overwrite an existing result."""
         key = evaluation_key(contract_id, parameters)
@@ -247,6 +264,7 @@ class EvaluationRegistry:
             first_campaign_id=first_campaign_id,
             result_artifact_path=result_artifact_path,
             minimum_auc=minimum_auc,
+            objective_value=objective_value,
             failure_category=failure_category,
             failure_message=failure_message,
             failure_scenario=failure_scenario,

@@ -23,7 +23,7 @@ def test_sobol_proposals_are_exactly_64_and_reproducible() -> None:
     second = sobol_proposals()
 
     assert len(first) == SAMPLE_COUNT == 64
-    assert all(len(point) == len(SWEPT_RANGES) == 6 for point in first)
+    assert all(len(point) == len(SWEPT_RANGES) == 5 for point in first)
     assert first == second
     assert all(0.0 <= value < 1.0 for point in first for value in point)
 

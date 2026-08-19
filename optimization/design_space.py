@@ -17,6 +17,7 @@ OptimizableParameterName = Literal[
     "stem_width",
     "stem_height",
     "void_width",
+    "void_height",
 ]
 
 OPTIMIZABLE_PARAMETER_NAMES: tuple[OptimizableParameterName, ...] = (
@@ -24,10 +25,19 @@ OPTIMIZABLE_PARAMETER_NAMES: tuple[OptimizableParameterName, ...] = (
     "stem_width",
     "stem_height",
     "void_width",
+    "void_height",
 )
 _OPTIMIZABLE_PARAMETER_SET = frozenset(OPTIMIZABLE_PARAMETER_NAMES)
 _FIXED_FLAT_PAD_WIDTH_MM = 30.0
 _TOTAL_PAD_DEPTH_MM = 14.0
+PRODUCTION_NOMINAL_VOID_HEIGHT_MM = 0.25
+PRODUCTION_SEARCH_BOUNDS: tuple[tuple[str, float, float], ...] = (
+    ("flat_pad_height", 3.5, 6.5),
+    ("stem_width", 6.5, 9.0),
+    ("stem_height", 5.0, 7.5),
+    ("void_width", 0.5, 2.0),
+    ("void_height", 0.25, 3.0),
+)
 
 
 def _finite_real(name: str, value: object) -> float:
@@ -66,11 +76,12 @@ class DesignVariable:
 
 @dataclass(frozen=True)
 class DesignSpace:
-    """Immutable nominal parameters plus the four-variable production contract.
+    """Immutable nominal parameters plus the five-variable production contract.
 
-    Production search varies only the four active morphology fields.  The
-    width, total pad depth, and zero-height basal clearance are fixed by the
-    protocol; the semi-elliptical height is derived from the flat height.
+    Production search varies the four established morphology fields plus the
+    validated positive basal clearance.  Width and total pad depth remain
+    fixed by the protocol; the semi-elliptical height is derived from the flat
+    height.
     """
 
     nominal_parameters: FingertipParameters
@@ -79,12 +90,6 @@ class DesignSpace:
     def __post_init__(self) -> None:
         if not isinstance(self.nominal_parameters, FingertipParameters):
             raise TypeError("nominal_parameters must be FingertipParameters")
-        if self.nominal_parameters.void_height != 0.0:
-            raise ValueError(
-                "production DesignSpace requires void_height=0.0; "
-                "use FingertipParameters directly for historical or diagnostic "
-                "nonzero bottom clearance"
-            )
         if self.nominal_parameters.flat_pad_width != _FIXED_FLAT_PAD_WIDTH_MM:
             raise ValueError(
                 "production DesignSpace requires flat_pad_width=30.0"
@@ -104,7 +109,7 @@ class DesignSpace:
         variables = tuple(self.variables)
         if len(variables) != len(OPTIMIZABLE_PARAMETER_NAMES):
             raise ValueError(
-                "DesignSpace must contain exactly one entry for each of the four "
+                "DesignSpace must contain exactly one entry for each of the five "
                 "optimizable parameters"
             )
         if any(not isinstance(variable, DesignVariable) for variable in variables):
@@ -119,12 +124,12 @@ class DesignSpace:
             missing = _OPTIMIZABLE_PARAMETER_SET - set(by_name)
             unknown = set(by_name) - _OPTIMIZABLE_PARAMETER_SET
             raise ValueError(
-                "DesignSpace variables must contain exactly the four supported "
+                "DesignSpace variables must contain exactly the five supported "
                 f"parameters; missing={sorted(missing)!r}, unknown={sorted(unknown)!r}"
             )
         if any(not variable.optimize for variable in by_name.values()):
             raise ValueError(
-                "production DesignSpace requires all four morphology variables "
+                "production DesignSpace requires all five morphology variables "
                 "to be active"
             )
 
@@ -184,7 +189,6 @@ class DesignSpace:
             **updates,
             flat_pad_width=_FIXED_FLAT_PAD_WIDTH_MM,
             semielliptical_pad_height=_TOTAL_PAD_DEPTH_MM - flat_height,
-            void_height=0.0,
         )
         if candidate.semielliptical_pad_height <= 0.0:
             raise ValueError(
@@ -213,5 +217,7 @@ __all__ = [
     "DesignSpace",
     "DesignVariable",
     "OPTIMIZABLE_PARAMETER_NAMES",
+    "PRODUCTION_SEARCH_BOUNDS",
+    "PRODUCTION_NOMINAL_VOID_HEIGHT_MM",
     "OptimizableParameterName",
 ]

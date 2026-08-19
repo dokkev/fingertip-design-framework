@@ -7,7 +7,10 @@ from dataclasses import dataclass
 import numpy as np
 
 from mechanics3d.indentation import RigidPose3D
-from mesh.indenter import crown_frame_from_model
+from mesh.indenter import (
+    crown_frame_from_model,
+    surface_frame_from_normalized_location,
+)
 from mesh.rigid_object import RigidObjectMesh
 from model.fingertip_model import FingertipModel
 
@@ -39,6 +42,55 @@ class SphereAlignment:
     nominal_pose: RigidPose3D
     radius_mm: float
     initial_gap_mm: float
+    normalized_location: float = 0.5
+
+
+def sphere_alignment_at_normalized_location(
+    model: FingertipModel,
+    sphere_mesh: RigidObjectMesh,
+    normalized_location: float,
+    *,
+    initial_gap_mm: float = 0.25,
+) -> SphereAlignment:
+    """Align a sphere to one normalized point on the authoritative outer arc.
+
+    Zero is the right bonded endpoint, one half is the crown, and one is the
+    left bonded endpoint. The local outward normal defines the approach; the
+    central crown loading direction is deliberately not reused off-center.
+    """
+
+    if not isinstance(model, FingertipModel):
+        raise TypeError("model must be FingertipModel")
+    if not isinstance(sphere_mesh, RigidObjectMesh):
+        raise TypeError("sphere_mesh must be a RigidObjectMesh")
+    location = float(normalized_location)
+    if not np.isfinite(location) or not 0.0 <= location <= 1.0:
+        raise ValueError("normalized_location must be finite and lie in [0, 1]")
+    gap = float(initial_gap_mm)
+    if not np.isfinite(gap) or gap <= 0.0:
+        raise ValueError("initial_gap_mm must be finite and positive")
+
+    radius = _sphere_radius_mm(sphere_mesh)
+    frame = surface_frame_from_normalized_location(model, location)
+    target = np.asarray((*frame.point_mm, 0.0), dtype=float)
+    outward = np.asarray((*frame.pad_outward_normal, 0.0), dtype=float)
+    outward /= np.linalg.norm(outward)
+    approach = -outward
+    center = target + (radius + gap) * outward
+    if not np.all(np.isfinite(center)):
+        raise ValueError("sphere alignment produced non-finite coordinates")
+    return SphereAlignment(
+        target_point_mm=tuple(float(value) for value in target),
+        outward_normal=tuple(float(value) for value in outward),
+        approach_direction=tuple(float(value) for value in approach),
+        nominal_pose=RigidPose3D(
+            translation_mm=tuple(float(value) for value in center),
+            quaternion_xyzw=_IDENTITY_QUATERNION,
+        ),
+        radius_mm=radius,
+        initial_gap_mm=gap,
+        normalized_location=location,
+    )
 
 
 def canonical_sphere_alignment(
@@ -57,30 +109,25 @@ def canonical_sphere_alignment(
     if not np.isfinite(gap) or gap <= 0.0:
         raise ValueError("initial_gap_mm must be finite and positive")
 
-    radius = _sphere_radius_mm(sphere_mesh)
     frame = crown_frame_from_model(model)
-    target = np.asarray((frame.point_mm[0], frame.point_mm[1], 0.0), dtype=float)
-    normal = np.asarray(
-        (frame.pad_outward_normal[0], frame.pad_outward_normal[1], 0.0),
-        dtype=float,
-    )
-    normal /= np.linalg.norm(normal)
-    approach = -normal
-    center = target + (radius + gap) * normal
-
-    if not np.all(np.isfinite(center)):
-        raise ValueError("canonical sphere alignment produced non-finite coordinates")
-    return SphereAlignment(
-        target_point_mm=tuple(float(value) for value in target),
-        outward_normal=tuple(float(value) for value in normal),
-        approach_direction=tuple(float(value) for value in approach),
-        nominal_pose=RigidPose3D(
-            translation_mm=tuple(float(value) for value in center),
-            quaternion_xyzw=_IDENTITY_QUATERNION,
-        ),
-        radius_mm=radius,
+    alignment = sphere_alignment_at_normalized_location(
+        model,
+        sphere_mesh,
+        0.5,
         initial_gap_mm=gap,
     )
+    if not np.allclose(
+        alignment.target_point_mm[:2],
+        frame.point_mm,
+        atol=1.0e-10,
+        rtol=0.0,
+    ):
+        raise ValueError("normalized crown location does not match crown frame")
+    return alignment
 
 
-__all__ = ["SphereAlignment", "canonical_sphere_alignment"]
+__all__ = [
+    "SphereAlignment",
+    "canonical_sphere_alignment",
+    "sphere_alignment_at_normalized_location",
+]

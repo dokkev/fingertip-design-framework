@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 import time
 from types import MappingProxyType
-from typing import Callable, Literal, Mapping
+from typing import TYPE_CHECKING, Callable, Literal, Mapping
 
 from ax.api.client import Client
 from ax.api.configs import RangeParameterConfig
@@ -13,15 +13,18 @@ from ax.api.configs import RangeParameterConfig
 from model import InvalidFingertipParameters
 from optics.transport3d import Transport3DDependencyError
 from optimization.design_space import DesignSpace
-from optimization.evaluator import DesignEvaluation
 from optimization.evaluation_registry import (
     EvaluationRegistry,
     EvaluationRegistryRecord,
 )
-from optimization.study import OptimizationStudy
+
+if TYPE_CHECKING:
+    from optimization.evaluator import DesignEvaluation
+    from optimization.study import OptimizationStudy
 
 
 AX_OBJECTIVE_NAME = "minimum_auc"
+CONTACT_STATE_SEPARATION_OBJECTIVE_NAME = "contact_state_separation"
 MAX_CONSECUTIVE_KNOWN_PROPOSALS = 20
 OPTIX_RUNTIME_FAILURE_SIGNATURE = "optix-runtime-initialization"
 AxTrialPhase = Literal["nominal", "initialization", "search"]
@@ -42,6 +45,7 @@ class AxSettings:
     initialization_trials: int
     search_trials: int
     seed: int
+    objective_name: str = AX_OBJECTIVE_NAME
 
     def __post_init__(self) -> None:
         for name, value in (
@@ -57,6 +61,8 @@ class AxSettings:
             raise ValueError("search_trials must be nonnegative")
         if self.seed < 0:
             raise ValueError("seed must be nonnegative")
+        if not isinstance(self.objective_name, str) or not self.objective_name:
+            raise ValueError("objective_name must be a non-empty string")
 
 
 @dataclass(frozen=True)
@@ -66,7 +72,7 @@ class AxTrialRecord:
     trial_index: int
     phase: AxTrialPhase
     parameters: Mapping[str, float]
-    evaluation: DesignEvaluation | None
+    evaluation: object | None
     failure_message: str | None
     wall_time_seconds: float | None = None
     registry_key: str | None = None
@@ -102,6 +108,7 @@ class AxRunResult:
     consecutive_known_proposals: int = 0
     historical_success_count: int = 0
     historical_failure_count: int = 0
+    objective_name: str = AX_OBJECTIVE_NAME
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "records", tuple(self.records))
@@ -140,13 +147,11 @@ class AxRunResult:
         best_value: float | None = None
         for record in self.records:
             evaluation = record.evaluation
-            if (
-                evaluation is None
-                or evaluation.status != "success"
-                or evaluation.minimum_auc is None
-            ):
+            if evaluation is None or evaluation.status != "success":  # type: ignore[attr-defined]
                 continue
-            value = evaluation.minimum_auc
+            value = _evaluation_objective_value(evaluation, self.objective_name)
+            if value is None:
+                continue
             if best is None or best_value is None or value > best_value:
                 best = record
                 best_value = value
@@ -155,8 +160,8 @@ class AxRunResult:
 
 def create_ax_client(study: OptimizationStudy, settings: AxSettings) -> Client:
     """Configure one Ax client from active design variables and run settings."""
-    if not isinstance(study, OptimizationStudy):
-        raise TypeError("study must be an OptimizationStudy")
+    if not hasattr(study, "design_space"):
+        raise TypeError("study must provide a design_space")
     if not isinstance(settings, AxSettings):
         raise TypeError("settings must be AxSettings")
 
@@ -170,7 +175,7 @@ def create_ax_client(study: OptimizationStudy, settings: AxSettings) -> Client:
     ]
     client = Client(random_seed=settings.seed)
     client.configure_experiment(parameters=parameters)
-    client.configure_optimization(objective=AX_OBJECTIVE_NAME)
+    client.configure_optimization(objective=settings.objective_name)
     client.configure_generation_strategy(
         initialization_budget=settings.initialization_trials,
         initialization_random_seed=settings.seed,
@@ -181,10 +186,24 @@ def create_ax_client(study: OptimizationStudy, settings: AxSettings) -> Client:
     return client
 
 
-def _failure_message(evaluation: DesignEvaluation) -> str:
+def _failure_message(evaluation: object) -> str:
     return evaluation.failure_message or (
         f"DesignEvaluator returned status {evaluation.status!r}"
     )
+
+
+def _evaluation_objective_value(
+    evaluation: object,
+    objective_name: str,
+) -> float | None:
+    """Read the named maximize-oriented scalar without 3D/minimum_auc aliases."""
+    if objective_name == AX_OBJECTIVE_NAME:
+        value = getattr(evaluation, "minimum_auc", None)
+    else:
+        value = getattr(evaluation, "objective_value", None)
+        if value is None:
+            value = getattr(evaluation, "score", None)
+    return None if value is None else float(value)
 
 
 def _mark_failed(client: Client, trial_index: int, message: str) -> None:
@@ -234,7 +253,7 @@ def _duplicate_record(
     )
 
 
-def _failure_scenario(evaluation: DesignEvaluation | None) -> str | None:
+def _failure_scenario(evaluation: object | None) -> str | None:
     if evaluation is None:
         return None
     candidate = evaluation.diagnostics.get("failure_scenario")
@@ -245,6 +264,7 @@ def _bootstrap_historical_registry(
     client: Client,
     registry: EvaluationRegistry,
     contract_id: str,
+    objective_name: str,
 ) -> tuple[int, int]:
     """Seed one fresh Ax experiment with each same-contract result once."""
     success_count = 0
@@ -255,13 +275,18 @@ def _bootstrap_historical_registry(
             arm_name=f"historical-registry-{position}",
         )
         if record.status == "success":
-            if record.minimum_auc is None:
+            value = (
+                record.minimum_auc
+                if objective_name == AX_OBJECTIVE_NAME
+                else record.objective_value
+            )
+            if value is None:
                 raise ValueError(
-                    f"historical success has no minimum_auc: {record.key}"
+                    f"historical success has no {objective_name}: {record.key}"
                 )
             client.complete_trial(
                 trial_index=trial_index,
-                raw_data={AX_OBJECTIVE_NAME: (record.minimum_auc, 0.0)},
+                raw_data={objective_name: (value, 0.0)},
             )
             success_count += 1
         else:
@@ -277,6 +302,7 @@ def _evaluate_trial(
     trial_index: int,
     phase: AxTrialPhase,
     candidate: Mapping[str, float],
+    objective_name: str,
 ) -> AxTrialRecord:
     """Decode, evaluate, and report one already-created Ax trial."""
     parameters = dict(candidate)
@@ -306,14 +332,14 @@ def _evaluate_trial(
                 failure_message=message,
             )
 
-        value = evaluation.minimum_auc
+        value = _evaluation_objective_value(evaluation, objective_name)
         if value is None:
             raise ValueError(
-                "successful DesignEvaluation has no minimum_auc"
+                f"successful evaluation has no {objective_name}"
             )
         client.complete_trial(
             trial_index=trial_index,
-            raw_data={AX_OBJECTIVE_NAME: (value, 0.0)},
+            raw_data={objective_name: (value, 0.0)},
         )
         return AxTrialRecord(
             trial_index=trial_index,
@@ -385,7 +411,7 @@ def _ax_ready_for_search(client: Client) -> bool:
 
 
 def run_ax_optimization(
-    study: OptimizationStudy,
+    study: OptimizationStudy | object,
     settings: AxSettings,
     *,
     on_record: Callable[[Client, tuple[AxTrialRecord, ...]], None] | None = None,
@@ -401,8 +427,8 @@ def run_ax_optimization(
     need durable per-trial provenance. It is called only after Ax has marked a
     trial complete, failed, or abandoned as a known duplicate.
     """
-    if not isinstance(study, OptimizationStudy):
-        raise TypeError("study must be an OptimizationStudy")
+    if not hasattr(study, "design_space") or not hasattr(study, "create_evaluator"):
+        raise TypeError("study must provide design_space and create_evaluator()")
     if not isinstance(settings, AxSettings):
         raise TypeError("settings must be AxSettings")
     if evaluation_registry is not None:
@@ -428,6 +454,7 @@ def run_ax_optimization(
                 client,
                 evaluation_registry,
                 evaluation_contract_id,  # type: ignore[arg-type]
+                settings.objective_name,
             )
         )
     evaluator = study.create_evaluator()
@@ -446,6 +473,7 @@ def run_ax_optimization(
             consecutive_known_proposals=consecutive_known_proposals,
             historical_success_count=historical_success_count,
             historical_failure_count=historical_failure_count,
+            objective_name=settings.objective_name,
         )
 
     def evaluate_and_record(
@@ -482,6 +510,7 @@ def run_ax_optimization(
             trial_index,
             phase,
             candidate,
+            settings.objective_name,
         )
         record = replace(
             record,
@@ -500,7 +529,19 @@ def run_ax_optimization(
                 first_trial_index=record.trial_index,
                 first_campaign_id=campaign_id,  # type: ignore[arg-type]
                 result_artifact_path=result_artifact_path,
-                minimum_auc=None if evaluation is None else evaluation.minimum_auc,
+                minimum_auc=(
+                    None
+                    if evaluation is None or settings.objective_name != AX_OBJECTIVE_NAME
+                    else getattr(evaluation, "minimum_auc", None)
+                ),
+                objective_value=(
+                    None
+                    if evaluation is None or settings.objective_name == AX_OBJECTIVE_NAME
+                    else _evaluation_objective_value(
+                        evaluation,
+                        settings.objective_name,
+                    )
+                ),
                 failure_category=(
                     "invalid_design"
                     if evaluation is None
@@ -587,6 +628,7 @@ def run_ax_optimization(
 
 __all__ = [
     "AX_OBJECTIVE_NAME",
+    "CONTACT_STATE_SEPARATION_OBJECTIVE_NAME",
     "CampaignInfrastructureError",
     "MAX_CONSECUTIVE_KNOWN_PROPOSALS",
     "OPTIX_RUNTIME_FAILURE_SIGNATURE",

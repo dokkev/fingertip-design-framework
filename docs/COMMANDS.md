@@ -76,6 +76,19 @@ This benchmark applies a semantic `outer_compliant_arc` kinematic patch for
 search, Kratos FEA, or OptiX, and is a timing result rather than an FEA/VBD
 fidelity validation.
 
+Run the staged Newton sphere-contact numerical convergence sweep. It measures
+sphere surface, load-step, and VBD-iteration refinement at the 10 mm / 3 mm
+stress case, then cross-checks the selected setting at three radii. Results
+are written under `output/validation/mechanics3d/`:
+
+```bash
+python -m validation.mechanics3d.sweep_newton_sphere_parameters \
+  --device cuda:0
+```
+
+The sweep is validation-tier only; it does not change production mechanics,
+contact constants, FEA, or optical transport.
+
 Run the first direct nominal FEA/VBD correspondence characterization from the
 existing persisted Kratos artifact. This does not rerun Kratos FEA or OptiX;
 it rebuilds the exact shared LUMO tetrahedral mesh, translates the persisted

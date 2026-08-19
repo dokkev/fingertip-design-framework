@@ -14,7 +14,7 @@ from mesh.pad import PadMesh
 from mesh.indenter import IndenterPose2D
 from mesh.types import FingertipMesh
 from model.fingertip import Fingertip
-from optics.contact_object import IndenterOptics
+from optics.contact_object import IndenterOptics, ObjectBoundaryOptics
 from optics.cross_section.domain import _build_mesh_domain
 from optics.geometry.extrusion import (
     InvalidExtrudedOpticalMesh,
@@ -34,6 +34,7 @@ EXTERNAL_SURFACE_TAGS = (
 
 AIR_INTERFACE = "AIR_INTERFACE"
 OBJECT_CONTACT_INTERFACE = "OBJECT_CONTACT_INTERFACE"
+CARRIER_CONTACT_INTERFACE = "CARRIER_CONTACT_INTERFACE"
 INTERNAL_INTERFACE = "INTERNAL_INTERFACE"
 
 
@@ -168,7 +169,8 @@ class ExtrudedTransportGeometry:
     optical_domain: Any
     metadata: Mapping[str, Any]
     geometry_mode: Literal["planar_extruded", "full3d_surface"] = "planar_extruded"
-    indenter_optics: IndenterOptics | None = None
+    indenter_optics: ObjectBoundaryOptics | None = None
+    carrier_optics: ObjectBoundaryOptics | None = None
 
     def __post_init__(self) -> None:
         if not math.isfinite(self.depth_mm) or self.depth_mm != 11.0:
@@ -563,6 +565,7 @@ def build_full3d_transport_geometry(
     source_position_mm: tuple[float, float, float],
     source_medium: int,
     metadata: Mapping[str, Any],
+    carrier_optics: ObjectBoundaryOptics | None = None,
     depth_mm: float = 11.0,
 ) -> ExtrudedTransportGeometry:
     """Build transport geometry from a direct deformed 3D surface artifact.
@@ -608,6 +611,7 @@ def build_full3d_transport_geometry(
         )
     )
     if provenance not in {
+        "actual_reference_3d_volume_state",
         "actual_deformed_3d_fea_surface",
         "actual_deformed_3d_vbd_surface",
         "actual_deformed_3d_volume_state",
@@ -626,6 +630,18 @@ def build_full3d_transport_geometry(
         np.min(silicone.vertices[:, 2]) < -depth_mm / 2.0 - 1.0e-9
         or np.max(silicone.vertices[:, 2]) > depth_mm / 2.0 + 1.0e-9
     )
+    has_carrier_contact = any(
+        tag == CARRIER_CONTACT_INTERFACE
+        for tag in (silicone.interface_tags or ())
+    )
+    if has_carrier_contact and carrier_optics is None:
+        raise Transport3DGeometryError(
+            "carrier contact triangles require an explicit carrier optical boundary"
+        )
+    enriched_metadata["carrier_contact_active"] = has_carrier_contact
+    enriched_metadata["carrier_boundary_model"] = (
+        None if carrier_optics is None else carrier_optics.boundary_model
+    )
     return ExtrudedTransportGeometry(
         silicone=silicone,
         rigid=rigid,
@@ -638,11 +654,13 @@ def build_full3d_transport_geometry(
         optical_domain=None,
         metadata=enriched_metadata,
         geometry_mode="full3d_surface",
+        carrier_optics=carrier_optics,
     )
 
 
 __all__ = [
     "AIR_INTERFACE",
+    "CARRIER_CONTACT_INTERFACE",
     "EXTERNAL_SURFACE_TAGS",
     "ExtrudedTransportGeometry",
     "INTERNAL_INTERFACE",

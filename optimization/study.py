@@ -14,21 +14,16 @@ from optics.transport3d import Transport3DSettings
 
 from optimization.design_space import (
     OPTIMIZABLE_PARAMETER_NAMES,
+    PRODUCTION_SEARCH_BOUNDS,
     DesignSpace,
     DesignVariable,
+    PRODUCTION_NOMINAL_VOID_HEIGHT_MM,
 )
 from optimization.evaluator import DesignEvaluator
 from optimization.scenarios import ScenarioGrid
 
 
 PRODUCTION_FIXED_FLAT_PAD_WIDTH_MM = 30.0
-PRODUCTION_SEARCH_BOUNDS: tuple[tuple[str, float, float], ...] = (
-    ("flat_pad_height", 3.5, 6.5),
-    ("stem_width", 6.5, 9.0),
-    ("stem_height", 5.0, 7.5),
-    ("void_width", 0.5, 2.0),
-)
-
 PRODUCTION_EVALUATION_CONTRACT: dict[str, object] = {
     "schema": "production-evaluation-v1",
     "bounds_mm": PRODUCTION_SEARCH_BOUNDS,
@@ -70,7 +65,11 @@ PRODUCTION_EVALUATION_CONTRACT_ID = (
 def _production_design_space(
     nominal_parameters: FingertipParameters | None = None,
 ) -> DesignSpace:
-    nominal = FingertipParameters() if nominal_parameters is None else nominal_parameters
+    nominal = (
+        FingertipParameters(void_height=PRODUCTION_NOMINAL_VOID_HEIGHT_MM)
+        if nominal_parameters is None
+        else nominal_parameters
+    )
     bounds = {name: (lower, upper) for name, lower, upper in PRODUCTION_SEARCH_BOUNDS}
     variables = tuple(
         DesignVariable(
@@ -180,7 +179,7 @@ def create_production_study(
     *,
     nominal_parameters: FingertipParameters | None = None,
 ) -> OptimizationStudy:
-    """Build the frozen four-variable production optimization configuration."""
+    """Build the frozen five-variable production optimization configuration."""
     return OptimizationStudy(
         design_space=_production_design_space(nominal_parameters),
         scenario_grid=ScenarioGrid(),

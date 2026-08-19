@@ -21,6 +21,7 @@ from model import (
 )
 from optimization import (
     PRODUCTION_FIXED_FLAT_PAD_WIDTH_MM,
+    PRODUCTION_NOMINAL_VOID_HEIGHT_MM,
     PRODUCTION_SEARCH_BOUNDS,
     ScenarioGrid,
     create_production_study,
@@ -140,7 +141,6 @@ def _decoded_parameter_values(normalized_point: list[float]) -> dict[str, float]
         updates[name] = lower + normalized * (upper - lower)
     updates["flat_pad_width"] = FIXED_FLAT_PAD_WIDTH_MM
     updates["semielliptical_pad_height"] = 14.0 - updates["flat_pad_height"]
-    updates["void_height"] = 0.0
     return updates
 
 
@@ -617,7 +617,9 @@ def _run_parent(output: Path) -> int:
     state = _load_state(output, configuration, proposals)
 
     if state.get("nominal_result") is None:
-        nominal_parameters = FingertipParameters()
+        nominal_parameters = FingertipParameters(
+            void_height=PRODUCTION_NOMINAL_VOID_HEIGHT_MM
+        )
         nominal = _run_isolated_design(nominal_parameters, output, "nominal")
         nominal.update(
             {

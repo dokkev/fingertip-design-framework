@@ -13,6 +13,7 @@ from model.fingertip import Fingertip
 
 from .geometry import (
     AIR_INTERFACE,
+    CARRIER_CONTACT_INTERFACE,
     INTERNAL_INTERFACE,
     TriangleSurface,
     Transport3DGeometryError,
@@ -20,6 +21,7 @@ from .geometry import (
     build_full3d_transport_geometry,
     _surface_normals,
 )
+from optics.contact_object import CarrierOptics
 
 
 _SURFACE_ORIENTATION_TOLERANCE_MM = 1.0e-9
@@ -205,7 +207,12 @@ def _oriented_surface_faces(
     return faces.astype(np.uint32)
 
 
-def _silicone_surface(tip: Fingertip, state: FingertipVolumeState) -> TriangleSurface:
+def _silicone_surface(
+    tip: Fingertip,
+    state: FingertipVolumeState,
+    *,
+    carrier_contact_source_node_ids: frozenset[int] = frozenset(),
+) -> TriangleSurface:
     canonical_index = {
         int(node_id): index for index, node_id in enumerate(state.source_node_ids)
     }
@@ -282,7 +289,24 @@ def _silicone_surface(tip: Fingertip, state: FingertipVolumeState) -> TriangleSu
         [max(u_by_node.get(int(node_id), 0.0) for node_id in triangle.node_ids) for _, triangle in rows],
         dtype=float,
     )
-    interface_tags = tuple(AIR_INTERFACE if value else INTERNAL_INTERFACE for value in external)
+    # The mechanics result supplies exact canonical source-node provenance.
+    # Only semantic void triangles participating in that contact are changed;
+    # an open void remains an ordinary silicone-air boundary.
+    carrier_contact_families = {
+        "void_left",
+        "void_right",
+        "void_bottom",
+    }
+    interface_tags = tuple(
+        CARRIER_CONTACT_INTERFACE
+        if tag in carrier_contact_families
+        and any(
+            int(node_id) in carrier_contact_source_node_ids
+            for node_id in triangle.node_ids
+        )
+        else AIR_INTERFACE if value else INTERNAL_INTERFACE
+        for (tag, triangle), value in zip(rows, external)
+    )
     return TriangleSurface(
         vertices=vertices,
         faces=faces,
@@ -309,6 +333,8 @@ def build_fingertip_volume_state_geometry(
     *,
     reference_mesh: FingertipMesh | None = None,
     source_epsilon_mm: float = 1.0e-5,
+    carrier_contact_source_node_ids: frozenset[int] | set[int] | tuple[int, ...] = frozenset(),
+    carrier_optics: CarrierOptics | None = None,
     metadata: Mapping[str, Any] | None = None,
 ) -> Any:
     """Build direct ``full3d_surface`` geometry without FEA artifacts.
@@ -330,7 +356,16 @@ def build_fingertip_volume_state_geometry(
         tip,
         source_epsilon_mm=source_epsilon_mm,
     )
-    silicone = _silicone_surface(tip, state)
+    contact_node_ids = frozenset(int(node_id) for node_id in carrier_contact_source_node_ids)
+    silicone = _silicone_surface(
+        tip,
+        state,
+        carrier_contact_source_node_ids=contact_node_ids,
+    )
+    carrier_triangle_mask = np.asarray(
+        [tag == CARRIER_CONTACT_INTERFACE for tag in silicone.interface_tags or ()],
+        dtype=bool,
+    )
     geometry_metadata = {
         "morphology_fingerprint": state.morphology_fingerprint,
         "mechanics_source": "solver_neutral.FingertipVolumeState",
@@ -338,6 +373,13 @@ def build_fingertip_volume_state_geometry(
         "volume_state_source_node_count": len(state.source_node_ids),
         "full3d_surface_provenance": "actual_deformed_3d_volume_state",
         "rigid_geometry_source": "shared_authoritative_fingertip_geometry",
+        "carrier_contact_source_node_ids": sorted(contact_node_ids),
+        "carrier_optical_contact_triangle_count": int(np.count_nonzero(carrier_triangle_mask)),
+        "carrier_optics_enabled": carrier_optics is not None,
+        "carrier_boundary_model": (
+            None if carrier_optics is None else carrier_optics.boundary_model
+        ),
+        "carrier_mapping_method": "exact_semantic_surface_triangle_any_contact_vertex",
     }
     if metadata is not None:
         geometry_metadata.update(dict(metadata))
@@ -349,6 +391,7 @@ def build_fingertip_volume_state_geometry(
         source_position_mm=source_position,
         source_medium=source_medium,
         metadata=geometry_metadata,
+        carrier_optics=carrier_optics,
     )
 
 

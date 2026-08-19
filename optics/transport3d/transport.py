@@ -13,6 +13,7 @@ from optics.cross_section.result import _RawRaySegment
 from optics.cross_section.settings import TraceSettings
 from optics.cross_section.transport import _build_path_density_grid, _prepare_geometry
 from optics.transport3d.geometry import (
+    CARRIER_CONTACT_INTERFACE,
     OBJECT_CONTACT_INTERFACE,
     ExtrudedTransportGeometry,
     Transport3DGeometryError,
@@ -440,6 +441,19 @@ def _trace_with_runtime(
             "indenter optics require semantic silicone interface tags"
         )
     scene = OptixScene(runtime, geometry.silicone, geometry.rigid, geometry.envelope)
+    carrier_coincidence_tolerance_mm = float(
+        geometry.metadata.get(
+            "carrier_mapping_tolerance_mm", settings.intersection_epsilon_mm
+        )
+    )
+    if not np.isfinite(carrier_coincidence_tolerance_mm) or carrier_coincidence_tolerance_mm < 0.0:
+        raise Transport3DGeometryError(
+            "carrier_mapping_tolerance_mm must be finite and non-negative"
+        )
+    carrier_absorber_enabled = bool(
+        geometry.carrier_optics is not None
+        and geometry.carrier_optics.boundary_model == "absorber"
+    )
     # OptiX traverses float32 geometry.  Derive the self-hit offset from the
     # existing geometric epsilon and the float32 spacing at this cell scale.
     ray_offset = max(
@@ -466,6 +480,17 @@ def _trace_with_runtime(
             if geometry.silicone.interface_tags is not None
             else np.zeros(len(geometry.silicone.faces), dtype=bool)
         ),
+        "silicone_carrier_contact": cp.asarray(
+            np.asarray(
+                [
+                    tag == CARRIER_CONTACT_INTERFACE
+                    for tag in geometry.silicone.interface_tags
+                ],
+                dtype=bool,
+            )
+            if geometry.silicone.interface_tags is not None
+            else np.zeros(len(geometry.silicone.faces), dtype=bool)
+        ),
     }
     silicone_surface = type(
         "_DeviceSurface",
@@ -476,6 +501,7 @@ def _trace_with_runtime(
             "u_start": device_arrays["silicone_u_start"],
             "u_end": device_arrays["silicone_u_end"],
             "object_contact": device_arrays["silicone_object_contact"],
+            "carrier_contact": device_arrays["silicone_carrier_contact"],
         },
     )()
     source = cp.asarray(geometry.source_position_mm, dtype=cp.float32)
@@ -511,6 +537,10 @@ def _trace_with_runtime(
     object_transmitted_weight = 0.0
     object_interface_incident_weight = 0.0
     object_reflected_weight = 0.0
+    carrier_absorbed_weight = 0.0
+    carrier_transmitted_weight = 0.0
+    carrier_interface_incident_weight = 0.0
+    carrier_reflected_weight = 0.0
     periodic_wrap_termination_count = 0
     periodic_wrap_termination_weight = 0.0
     no_event_termination_count = 0
@@ -605,6 +635,31 @@ def _trace_with_runtime(
         periodic_selected = periodic_distance < best_distance - settings.intersection_epsilon_mm
         event = cp.where(periodic_selected, 3, event)
         best_distance = cp.where(periodic_selected, periodic_distance, best_distance)
+        safe_silicone_primitive = cp.maximum(silicone_primitive, 0)
+        carrier_patch = device_arrays["silicone_carrier_contact"][safe_silicone_primitive]
+        carrier_coincident = (
+            (silicone_found != 0)
+            & (rigid_found != 0)
+            & carrier_patch
+            & (
+                cp.abs(silicone_distance - rigid_distance)
+                <= carrier_coincidence_tolerance_mm
+            )
+        )
+        # OptiX can return the rigid carrier first when the mechanics-resolved
+        # silicone patch is coincident with it.  The semantic patch is the
+        # authoritative optical boundary; prefer that triangle only inside
+        # the documented contact/SDF tolerance.
+        event = cp.where(carrier_coincident, 0, event)
+        best_distance = cp.where(
+            carrier_coincident, silicone_distance, best_distance
+        )
+        carrier_air_absorber_event = (
+            carrier_coincident
+            & (medium == 0)
+            & carrier_absorber_enabled
+        )
+        event = cp.where(carrier_air_absorber_event, 4, event)
         no_event = ~cp.isfinite(best_distance)
         if bool(cp.any(no_event)):
             if not settings.terminate_on_no_event:
@@ -695,6 +750,15 @@ def _trace_with_runtime(
             rigid = physical_event == 1
             if bool(cp.any(rigid)):
                 terminated_weight += float(cp.asnumpy(cp.sum(physical_end_weights[rigid])))
+            carrier_air_absorber = physical_event == 4
+            if bool(cp.any(carrier_air_absorber)):
+                carrier_weight = physical_end_weights[carrier_air_absorber]
+                carrier_interface_incident_weight += float(
+                    cp.asnumpy(cp.sum(carrier_weight))
+                )
+                carrier_absorbed_weight += float(
+                    cp.asnumpy(cp.sum(carrier_weight))
+                )
             envelope = physical_event == 2
             if bool(cp.any(envelope)):
                 envelope_weight = physical_end_weights[envelope]
@@ -712,8 +776,15 @@ def _trace_with_runtime(
                 interface_primitive = physical_silicone_primitive[indices]
                 interface_bary = physical_silicone_bary[indices]
                 outward = device_arrays["silicone_normals"][interface_primitive]
-                tagged_contact = silicone_surface.object_contact[interface_primitive]
-                silicone_object_contact = tagged_contact & (interface_medium == 1)
+                silicone_object_contact = (
+                    silicone_surface.object_contact[interface_primitive]
+                    & (interface_medium == 1)
+                )
+                silicone_carrier_contact = (
+                    silicone_surface.carrier_contact[interface_primitive]
+                    & (interface_medium == 1)
+                )
+                tagged_contact = silicone_object_contact | silicone_carrier_contact
                 medium_normal = cp.where(
                     (interface_medium == 1)[:, None], outward, -outward
                 )
@@ -732,7 +803,7 @@ def _trace_with_runtime(
                 # transmitted medium, so orient the fallback from the
                 # incident direction instead of aborting a valid branch.
                 interface_normal = cp.where(
-                    silicone_object_contact[:, None], outward, medium_normal
+                    tagged_contact[:, None], outward, medium_normal
                 )
                 interface_normal = cp.where(
                     orientation_fallback[:, None], -interface_normal, interface_normal
@@ -813,6 +884,62 @@ def _trace_with_runtime(
                                 cp.sum(object_incident * (1.0 - object_reflectance))
                             )
                         )
+                if bool(cp.any(silicone_carrier_contact)):
+                    carrier_indices = cp.where(silicone_carrier_contact)[0]
+                    carrier_incident = interface_end_weights[carrier_indices]
+                    carrier_interface_incident_weight += float(
+                        cp.asnumpy(cp.sum(carrier_incident))
+                    )
+                    if geometry.carrier_optics is None:
+                        raise Transport3DPhysicsError(
+                            "carrier contact interface requires carrier optics"
+                        )
+                    if geometry.carrier_optics.boundary_model == "absorber":
+                        carrier_absorbed_weight += float(
+                            cp.asnumpy(cp.sum(carrier_incident))
+                        )
+                        reflected[carrier_indices] = 0.0
+                        transmitted[carrier_indices] = 0.0
+                        reflectance[carrier_indices] = 0.0
+                        tir[carrier_indices] = False
+                    else:
+                        if geometry.carrier_optics.refractive_index is None:
+                            raise Transport3DPhysicsError(
+                                "dielectric carrier optics requires a refractive index"
+                            )
+                        carrier_reflected, carrier_transmitted, carrier_reflectance, carrier_tir = (
+                            object_interface_split(
+                                cp,
+                                interface_directions[carrier_indices],
+                                interface_normal[carrier_indices],
+                                tip.optical.refractive_index_silicone,
+                                float(geometry.carrier_optics.refractive_index),
+                            )
+                        )
+                        if settings.mode == "planar":
+                            carrier_reflected = _enforce_planar_directions(
+                                cp,
+                                carrier_reflected,
+                                context="planar carrier reflected branch",
+                            )
+                            carrier_transmitted = _enforce_planar_directions(
+                                cp,
+                                carrier_transmitted,
+                                valid=~carrier_tir,
+                                context="planar carrier transmitted branch",
+                            )
+                        reflected[carrier_indices] = carrier_reflected
+                        transmitted[carrier_indices] = carrier_transmitted
+                        reflectance[carrier_indices] = carrier_reflectance
+                        tir[carrier_indices] = carrier_tir
+                        carrier_reflected_weight += float(
+                            cp.asnumpy(cp.sum(carrier_incident * carrier_reflectance))
+                        )
+                        carrier_transmitted_weight += float(
+                            cp.asnumpy(
+                                cp.sum(carrier_incident * (1.0 - carrier_reflectance))
+                            )
+                        )
                 reflected_weight = interface_end_weights * reflectance
                 transmitted_weight = interface_end_weights * (1.0 - reflectance)
                 if settings.mode == "planar":
@@ -865,7 +992,11 @@ def _trace_with_runtime(
                 # the mechanically contacted boundary.  A ray already in air
                 # sees the ordinary air/silicone interface; the exposed
                 # indenter body is deliberately absent from the scene.
-                ordinary_transmission = ~external_escape & ~silicone_object_contact
+                ordinary_transmission = (
+                    ~external_escape
+                    & ~silicone_object_contact
+                    & ~silicone_carrier_contact
+                )
                 if bool(cp.any(external_escape)):
                     outgoing_weight = transmitted_weight[external_escape] * (~tir[external_escape])
                     escaped_weight += float(cp.asnumpy(cp.sum(outgoing_weight)))
@@ -1039,6 +1170,24 @@ def _trace_with_runtime(
         "object_interface_incident_weight": object_interface_incident_weight,
         "object_reflected_weight": object_reflected_weight,
     }
+    geometry_metadata["carrier_interface"] = {
+        "enabled": geometry.carrier_optics is not None,
+        "boundary_model": (
+            None
+            if geometry.carrier_optics is None
+            else geometry.carrier_optics.boundary_model
+        ),
+        "carrier_absorbed_weight": carrier_absorbed_weight,
+        "carrier_transmitted_weight": carrier_transmitted_weight,
+        "carrier_interface_incident_weight": carrier_interface_incident_weight,
+        "carrier_reflected_weight": carrier_reflected_weight,
+        "contact_triangle_count": int(
+            sum(
+                tag == CARRIER_CONTACT_INTERFACE
+                for tag in (geometry.silicone.interface_tags or ())
+            )
+        ),
+    }
     escaped_weight += 0.0
     energy_balance_error = abs(
         launched_weight
@@ -1047,6 +1196,8 @@ def _trace_with_runtime(
         - terminated_weight
         - object_absorbed_weight
         - object_transmitted_weight
+        - carrier_absorbed_weight
+        - carrier_transmitted_weight
     ) / max(launched_weight, 1.0e-30)
     if not np.isfinite(energy_balance_error) or energy_balance_error > settings.energy_balance_tolerance:
         raise Transport3DPhysicsError(
@@ -1082,6 +1233,10 @@ def _trace_with_runtime(
         object_transmitted_weight=object_transmitted_weight,
         object_interface_incident_weight=object_interface_incident_weight,
         object_reflected_weight=object_reflected_weight,
+        carrier_absorbed_weight=carrier_absorbed_weight,
+        carrier_transmitted_weight=carrier_transmitted_weight,
+        carrier_interface_incident_weight=carrier_interface_incident_weight,
+        carrier_reflected_weight=carrier_reflected_weight,
         projected_x_edges_mm=None if projected[0] is None else projected[0],
         projected_y_edges_mm=None if projected[1] is None else projected[1],
         projected_weighted_path_density=None if projected[2] is None else projected[2],

@@ -76,11 +76,17 @@ class _FakeFEA:
         return self.states[depth]
 
 
-def test_design_space_has_four_active_variables_and_derived_height() -> None:
-    nominal = FingertipParameters()
+def test_design_space_has_five_active_variables_and_derived_height() -> None:
+    nominal = FingertipParameters(void_height=0.25)
     variables = tuple(
         DesignVariable(name, True, getattr(nominal, name), getattr(nominal, name))
-        for name in ("flat_pad_height", "stem_width", "stem_height", "void_width")
+        for name in (
+            "flat_pad_height",
+            "stem_width",
+            "stem_height",
+            "void_width",
+            "void_height",
+        )
     )
     space = DesignSpace(nominal, variables)
     decoded = space.decode(
@@ -89,6 +95,7 @@ def test_design_space_has_four_active_variables_and_derived_height() -> None:
             "stem_width": nominal.stem_width,
             "stem_height": nominal.stem_height,
             "void_width": nominal.void_width,
+            "void_height": nominal.void_height,
         }
     )
     assert tuple(variable.name for variable in space.variables) == (
@@ -96,10 +103,11 @@ def test_design_space_has_four_active_variables_and_derived_height() -> None:
         "stem_width",
         "stem_height",
         "void_width",
+        "void_height",
     )
     assert decoded.flat_pad_width == 30.0
     assert decoded.semielliptical_pad_height == 9.0
-    assert decoded.void_height == 0.0
+    assert decoded.void_height == 0.25
 
 
 def test_production_configuration_is_frozen() -> None:
@@ -144,7 +152,7 @@ def test_validation_runners_share_production_configuration() -> None:
 
 
 def _production_study(*, indenter_optics: IndenterOptics | None) -> OptimizationStudy:
-    nominal = FingertipParameters()
+    nominal = FingertipParameters(void_height=0.25)
     variables = tuple(
         DesignVariable(
             name,
@@ -152,7 +160,13 @@ def _production_study(*, indenter_optics: IndenterOptics | None) -> Optimization
             getattr(nominal, name) - 0.1,
             getattr(nominal, name) + 0.1,
         )
-        for name in ("flat_pad_height", "stem_width", "stem_height", "void_width")
+        for name in (
+            "flat_pad_height",
+            "stem_width",
+            "stem_height",
+            "void_width",
+            "void_height",
+        )
     )
     return OptimizationStudy(
         design_space=DesignSpace(nominal, variables),

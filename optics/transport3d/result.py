@@ -69,6 +69,10 @@ class Transport3DResult:
     object_transmitted_weight: float = 0.0
     object_interface_incident_weight: float = 0.0
     object_reflected_weight: float = 0.0
+    carrier_absorbed_weight: float = 0.0
+    carrier_transmitted_weight: float = 0.0
+    carrier_interface_incident_weight: float = 0.0
+    carrier_reflected_weight: float = 0.0
     projected_x_edges_mm: np.ndarray | None = None
     projected_y_edges_mm: np.ndarray | None = None
     projected_weighted_path_density: np.ndarray | None = None
@@ -114,6 +118,10 @@ class Transport3DResult:
             "object_transmitted_weight",
             "object_interface_incident_weight",
             "object_reflected_weight",
+            "carrier_absorbed_weight",
+            "carrier_transmitted_weight",
+            "carrier_interface_incident_weight",
+            "carrier_reflected_weight",
         )
         scalars = {name: float(getattr(self, name)) for name in scalar_names}
         if any(not np.isfinite(value) for value in scalars.values()):
@@ -134,6 +142,8 @@ class Transport3DResult:
                 "terminated_weight",
                 "object_absorbed_weight",
                 "object_transmitted_weight",
+                "carrier_absorbed_weight",
+                "carrier_transmitted_weight",
             )
         )
         calculated_error = abs(scalars["launched_weight"] - terminal_weight) / max(

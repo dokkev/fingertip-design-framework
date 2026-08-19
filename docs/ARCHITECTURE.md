@@ -154,11 +154,11 @@ It does not replace mesh-based reference/loaded comparisons.
   it does not alter production defaults, constitutive/contact formulation, or
   downstream optical physics; generated reports remain under `output/`.
 - `optimization/design_space.py` owns algorithm-independent study geometry
-  variable and bound definitions. The production search has four active
-  morphology variables, fixes the 30 mm/14 mm outer envelope, and freezes
-  `FingertipParameters.void_height` at zero;
-  the generic parameter object still supports nonzero historical/diagnostic
-  geometry. It does not import NiceGUI or an optimizer.
+  variable and bound definitions. The production search has five active
+  morphology variables, fixes the 30 mm/14 mm outer envelope, and uses a
+  validated positive `FingertipParameters.void_height` range of 0.25--3.0 mm;
+  exact zero remains a legacy/reference geometry rather than the new search
+  lower bound. It does not import NiceGUI or an optimizer.
 - `OptimizationStudy` and `DesignEvaluator` use one 48-step FEM trajectory per
   diameter/location pair and four exact captured depth states per trajectory;
   low-level FEM defaults remain unchanged.

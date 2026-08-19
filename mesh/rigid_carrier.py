@@ -139,6 +139,9 @@ def make_distal_phalanx_mesh(solid: FingertipSolid) -> RigidObjectMesh:
         metadata={
             "source_geometry": "FingertipSolid.rigid_geometry",
             "extrusion_depth_mm": _CARRIER_Z_MAX_MM - _CARRIER_Z_MIN_MM,
+            "cross_section_wkt": solid.rigid_geometry.wkt,
+            "z_min_mm": _CARRIER_Z_MIN_MM,
+            "z_max_mm": _CARRIER_Z_MAX_MM,
         },
     )
 

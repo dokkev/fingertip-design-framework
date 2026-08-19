@@ -10,7 +10,10 @@ import time
 from typing import Any
 
 from model import FingertipParameters
-from optimization import create_production_study
+from optimization import (
+    PRODUCTION_NOMINAL_VOID_HEIGHT_MM,
+    create_production_study,
+)
 from optimization.evaluator import DesignEvaluation, DesignEvaluator
 
 
@@ -130,7 +133,9 @@ def _configuration(
 
 
 def main() -> int:
-    parameters = FingertipParameters()
+    parameters = FingertipParameters(
+        void_height=PRODUCTION_NOMINAL_VOID_HEIGHT_MM
+    )
     evaluator = create_production_study().create_evaluator()
     result = {
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),

@@ -23,7 +23,8 @@ from optics.transport3d.transport import trace_geometry
 
 
 UnifiedOpticalMode = Literal["PLANAR_2D", "FULL_3D"]
-UNIFIED_ARTIFACT_SCHEMA = "unified-optix-transport-case-v3"
+UNIFIED_ARTIFACT_SCHEMA = "unified-optix-transport-case-v4"
+LEGACY_UNIFIED_ARTIFACT_SCHEMA_V3 = "unified-optix-transport-case-v3"
 LEGACY_UNIFIED_ARTIFACT_SCHEMA_V2 = "unified-optix-transport-case-v2"
 LEGACY_UNIFIED_ARTIFACT_SCHEMA = "unified-optix-transport-case-v1"
 
@@ -85,6 +86,10 @@ class UnifiedTransportResult:
     object_transmitted_weight: float = 0.0
     object_interface_incident_weight: float = 0.0
     object_reflected_weight: float = 0.0
+    carrier_absorbed_weight: float = 0.0
+    carrier_transmitted_weight: float = 0.0
+    carrier_interface_incident_weight: float = 0.0
+    carrier_reflected_weight: float = 0.0
 
     def __post_init__(self) -> None:
         if self.optical_mode not in ("PLANAR_2D", "FULL_3D"):
@@ -114,6 +119,10 @@ class UnifiedTransportResult:
                 self.object_transmitted_weight,
                 self.object_interface_incident_weight,
                 self.object_reflected_weight,
+                self.carrier_absorbed_weight,
+                self.carrier_transmitted_weight,
+                self.carrier_interface_incident_weight,
+                self.carrier_reflected_weight,
             ],
             dtype=float,
         )
@@ -201,6 +210,10 @@ class UnifiedTransportResult:
             object_transmitted_weight=result.object_transmitted_weight,
             object_interface_incident_weight=result.object_interface_incident_weight,
             object_reflected_weight=result.object_reflected_weight,
+            carrier_absorbed_weight=result.carrier_absorbed_weight,
+            carrier_transmitted_weight=result.carrier_transmitted_weight,
+            carrier_interface_incident_weight=result.carrier_interface_incident_weight,
+            carrier_reflected_weight=result.carrier_reflected_weight,
         )
 
 
@@ -231,12 +244,13 @@ class OptiXTransport:
         geometry_metadata = dict(geometry.metadata)
         if geometry.geometry_mode == "full3d_surface":
             if geometry_metadata.get("full3d_surface_provenance") not in {
+                "actual_reference_3d_volume_state",
                 "actual_deformed_3d_fea_surface",
                 "actual_deformed_3d_vbd_surface",
                 "actual_deformed_3d_volume_state",
             }:
                 raise ValueError(
-                    "FULL_3D geometry lacks direct FEA/VBD-surface provenance"
+                    "FULL_3D geometry lacks direct 3D surface provenance"
                 )
             if geometry_metadata.get("morphology_fingerprint") not in (
                 None,
@@ -251,6 +265,27 @@ class OptiXTransport:
             ) != expected_contact_fingerprint:
                 raise ValueError("FULL_3D geometry contact-state fingerprint mismatch")
         result = trace_geometry(tip, geometry, settings=settings, runtime=runtime)
+        configuration = dict(transport_configuration)
+        configuration["carrier_interface"] = dict(
+            geometry.metadata.get("carrier_interface", {})
+        )
+        configuration["carrier_contact_geometry"] = {
+            "enabled": geometry.carrier_optics is not None,
+            "boundary_model": (
+                None
+                if geometry.carrier_optics is None
+                else geometry.carrier_optics.boundary_model
+            ),
+            "contact_triangle_count": int(
+                sum(
+                    tag == "CARRIER_CONTACT_INTERFACE"
+                    for tag in (geometry.silicone.interface_tags or ())
+                )
+            ),
+            "mapping_tolerance_mm": geometry.metadata.get(
+                "carrier_mapping_tolerance_mm"
+            ),
+        }
         return UnifiedTransportResult.from_transport_result(
             result,
             morphology_id=morphology_id,
@@ -258,9 +293,7 @@ class OptiXTransport:
             mechanics_source=mechanics_source,
             mechanics_dimension=mechanics_dimension,
             contact_state=contact_state,
-            transport_configuration_fingerprint=fingerprint_mapping(
-                dict(transport_configuration)
-            ),
+            transport_configuration_fingerprint=fingerprint_mapping(configuration),
         )
 
 
@@ -372,6 +405,10 @@ def save_case_artifact(path: Path, result: UnifiedTransportResult, contract: Map
             "object_transmitted_weight": result.object_transmitted_weight,
             "object_interface_incident_weight": result.object_interface_incident_weight,
             "object_reflected_weight": result.object_reflected_weight,
+            "carrier_absorbed_weight": result.carrier_absorbed_weight,
+            "carrier_transmitted_weight": result.carrier_transmitted_weight,
+            "carrier_interface_incident_weight": result.carrier_interface_incident_weight,
+            "carrier_reflected_weight": result.carrier_reflected_weight,
             "path_diagnostics": dict(result.path_diagnostics),
         },
     }
@@ -389,6 +426,7 @@ def load_case_artifact(path: Path, *, expected_contract: Mapping[str, Any]) -> U
     schema = metadata.get("schema")
     if schema not in (
         UNIFIED_ARTIFACT_SCHEMA,
+        LEGACY_UNIFIED_ARTIFACT_SCHEMA_V3,
         LEGACY_UNIFIED_ARTIFACT_SCHEMA_V2,
         LEGACY_UNIFIED_ARTIFACT_SCHEMA,
     ):
@@ -486,12 +524,19 @@ def load_case_artifact(path: Path, *, expected_contract: Mapping[str, Any]) -> U
             record.get("object_interface_incident_weight", 0.0)
         ),
         object_reflected_weight=float(record.get("object_reflected_weight", 0.0)),
+        carrier_absorbed_weight=float(record.get("carrier_absorbed_weight", 0.0)),
+        carrier_transmitted_weight=float(record.get("carrier_transmitted_weight", 0.0)),
+        carrier_interface_incident_weight=float(
+            record.get("carrier_interface_incident_weight", 0.0)
+        ),
+        carrier_reflected_weight=float(record.get("carrier_reflected_weight", 0.0)),
     )
 
 
 __all__ = [
     "LEGACY_UNIFIED_ARTIFACT_SCHEMA",
     "LEGACY_UNIFIED_ARTIFACT_SCHEMA_V2",
+    "LEGACY_UNIFIED_ARTIFACT_SCHEMA_V3",
     "OptiXTransport",
     "UNIFIED_ARTIFACT_SCHEMA",
     "UnifiedOpticalMode",

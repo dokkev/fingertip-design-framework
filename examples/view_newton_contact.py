@@ -61,12 +61,25 @@ def _parser() -> argparse.ArgumentParser:
         help="post-contact sphere travel in mm",
     )
     parser.add_argument(
+        "--radius",
+        type=float,
+        default=2.0,
+        help="sphere radius in mm",
+    )
+    parser.add_argument(
+        "--sphere-subdivisions",
+        type=int,
+        default=1,
+        help="icosphere subdivision level",
+    )
+    parser.add_argument(
         "--initial-gap",
         type=float,
         default=0.25,
         help="free-space placement gap used before geometric first-contact search",
     )
     parser.add_argument("--load-steps", type=int, default=8)
+    parser.add_argument("--iterations", type=int, default=5)
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument(
         "--no-viewer",
@@ -140,7 +153,10 @@ def main() -> int:
         raise RuntimeError(f"CUDA device {args.device!r} is not available")
 
     fingertip, volume_mesh, prepared = _build_scene()
-    object_mesh = make_sphere_mesh(2.0, subdivisions=1)
+    object_mesh = make_sphere_mesh(
+        args.radius,
+        subdivisions=args.sphere_subdivisions,
+    )
     alignment = canonical_sphere_alignment(
         fingertip.geometry,
         object_mesh,
@@ -190,7 +206,7 @@ def main() -> int:
                 gravity=0.0,
                 dt=1.0e-3,
                 steps=1,
-                iterations=5,
+                iterations=args.iterations,
                 fixed_vertex_indices=prepared.support_vertex_indices,
             ),
             IndentationSettings(

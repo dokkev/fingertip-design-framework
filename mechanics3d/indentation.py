@@ -146,7 +146,7 @@ class IndentationResult:
 
     mechanics_result: Mechanics3DResult
     final_indenter_pose: RigidPose3D
-    diagnostics: Mapping[str, float | int | str | bool] = field(default_factory=dict)
+    diagnostics: Mapping[str, float | int | str | bool | tuple[int, ...]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not isinstance(self.mechanics_result, Mechanics3DResult):
@@ -165,13 +165,17 @@ def solve_fingertip_indentation(
     indentation_settings: IndentationSettings | None = None,
     *,
     first_contact: FirstContactResult | None = None,
+    visual_carrier_mesh: RigidObjectMesh | None = None,
+    rigid_carrier_mesh: RigidObjectMesh | None = None,
 ) -> IndentationResult:
     """Run one Newton VBD rigid-soft indentation through the neutral boundary.
 
     When ``first_contact`` is supplied, the backend starts from its verified
     collision-free ``spawn_pose`` and schedules loading relative to
     ``contact_pose``.  The first-contact object is solver-neutral and is only
-    used to define the mechanical initialization convention.
+    used to define the mechanical initialization convention.  A
+    ``visual_carrier_mesh`` is render-only; ``rigid_carrier_mesh`` is static
+    collision-enabled geometry and is deliberately a separate argument.
     """
 
     if not isinstance(prepared_fingertip, FingertipMechanicsMesh):
@@ -217,6 +221,8 @@ def solve_fingertip_indentation(
         indenter,
         mechanics_settings,
         indentation_settings,
+        visual_carrier_mesh=visual_carrier_mesh,
+        rigid_carrier_mesh=rigid_carrier_mesh,
         first_contact=first_contact,
     )
 

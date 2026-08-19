@@ -9,6 +9,8 @@ from typing import TYPE_CHECKING, Sequence
 import numpy as np
 import warp as wp
 import newton
+from shapely import wkt as shapely_wkt
+from shapely.geometry import Point
 
 from mechanics3d.solve import Mechanics3DSettings
 from mechanics3d.load import ParticleLoad
@@ -104,7 +106,110 @@ class _IndentationContext:
     control: object
     contacts: object
     indenter_body: int
+    indenter_shape: int
+    carrier_shape: int | None
+    carrier_mesh: RigidObjectMesh | None
+    void_bottom_vertex_indices: frozenset[int]
     rest_vertices_m: np.ndarray
+
+
+def _signed_carrier_clearance_mm(
+    vertices_mm: np.ndarray,
+    surface_triangles: np.ndarray,
+    carrier_mesh: RigidObjectMesh,
+) -> float:
+    """Return the minimum signed 2D clearance of a void surface to the carrier.
+
+    The carrier is an 11 mm extrusion of the authoritative rigid XY polygon.
+    Positive values mean separation, zero is contact, and negative values mean
+    that a void-surface vertex has entered the carrier cross-section.  This is
+    an independent diagnostic; Newton contact provenance remains authoritative
+    for whether a contact record was generated.
+    """
+
+    cross_section_wkt = carrier_mesh.metadata.get("cross_section_wkt")
+    if not isinstance(cross_section_wkt, str) or not cross_section_wkt:
+        return float("nan")
+    polygon = shapely_wkt.loads(cross_section_wkt)
+    z_min = float(carrier_mesh.metadata.get("z_min_mm", np.min(carrier_mesh.vertices_mm[:, 2])))
+    z_max = float(carrier_mesh.metadata.get("z_max_mm", np.max(carrier_mesh.vertices_mm[:, 2])))
+    local_indices = np.unique(np.asarray(surface_triangles, dtype=np.int64).reshape(-1))
+    points = np.asarray(vertices_mm, dtype=float)[local_indices]
+    clearances: list[float] = []
+    for x_mm, y_mm, z_mm in points:
+        if z_mm < z_min or z_mm > z_max:
+            continue
+        point = Point(float(x_mm), float(y_mm))
+        distance = float(point.distance(polygon.boundary))
+        clearances.append(-distance if polygon.covers(point) else distance)
+    return float(min(clearances)) if clearances else float("nan")
+
+
+def _contact_shape_details(
+    context: _IndentationContext,
+) -> tuple[int, int, int, int, frozenset[int]]:
+    """Return contact counts and exact soft-particle carrier provenance."""
+
+    count = int(context.contacts.soft_contact_count.numpy()[0])
+    shapes = np.asarray(context.contacts.soft_contact_shape.numpy()[:count], dtype=np.int64)
+    sphere_count = int(np.count_nonzero(shapes == context.indenter_shape))
+    carrier_count = (
+        int(np.count_nonzero(shapes == context.carrier_shape))
+        if context.carrier_shape is not None
+        else 0
+    )
+    soft_indices = np.asarray(
+        context.contacts.soft_contact_indices.numpy()[:count], dtype=np.int64
+    )
+    void_bottom_mask = np.any(
+        np.isin(soft_indices, tuple(context.void_bottom_vertex_indices))
+        & (soft_indices >= 0),
+        axis=1,
+    ) if count else np.zeros(0, dtype=bool)
+    carrier_void_bottom_count = (
+        int(np.count_nonzero((shapes == context.carrier_shape) & void_bottom_mask))
+        if context.carrier_shape is not None
+        else 0
+    )
+    carrier_vertex_indices: frozenset[int] = frozenset()
+    if count and context.carrier_shape is not None:
+        rows = soft_indices[shapes == context.carrier_shape]
+        all_carrier_vertices = frozenset(
+            int(index)
+            for index in np.asarray(rows, dtype=np.int64).reshape(-1)
+            if int(index) >= 0
+        )
+        # The current carrier-contact contract is the compliant pad's
+        # semantic void-bottom interface.  Other carrier soft-contact records
+        # can involve the bonded/support region and must not be promoted to an
+        # optical void triangle merely because the static carrier is nearby.
+        carrier_vertex_indices = frozenset(
+            all_carrier_vertices.intersection(context.void_bottom_vertex_indices)
+        )
+    rigid_count = int(context.contacts.rigid_contact_count.numpy()[0])
+    rigid_pairs = 0
+    if context.carrier_shape is not None and rigid_count:
+        shape0 = np.asarray(context.contacts.rigid_contact_shape0.numpy()[:rigid_count], dtype=np.int64)
+        shape1 = np.asarray(context.contacts.rigid_contact_shape1.numpy()[:rigid_count], dtype=np.int64)
+        rigid_pairs = int(
+            np.count_nonzero(
+                ((shape0 == context.indenter_shape) & (shape1 == context.carrier_shape))
+                | ((shape0 == context.carrier_shape) & (shape1 == context.indenter_shape))
+            )
+        )
+    return (
+        sphere_count,
+        carrier_count,
+        carrier_void_bottom_count,
+        rigid_pairs,
+        carrier_vertex_indices,
+    )
+
+
+def _contact_shape_counts(context: _IndentationContext) -> tuple[int, int, int, int]:
+    """Return sphere/carrier records, void-bottom records, and rigid pairs."""
+
+    return _contact_shape_details(context)[:4]
 
 
 def _build_vbd_context(mesh: TetMeshData, settings: Mechanics3DSettings):
@@ -262,11 +367,16 @@ def _build_indentation_context(
     *,
     initial_pose: RigidPose3D | None = None,
     visual_carrier_mesh: RigidObjectMesh | None = None,
+    rigid_carrier_mesh: RigidObjectMesh | None = None,
 ) -> _IndentationContext:
-    """Build one soft-tet plus kinematic triangle-mesh contact scene."""
+    """Build one soft-tet plus kinematic sphere and optional static carrier."""
 
-    if visual_carrier_mesh is not None and not isinstance(visual_carrier_mesh, RigidObjectMesh):
-        raise TypeError("visual_carrier_mesh must be a RigidObjectMesh or None")
+    for name, mesh in (
+        ("visual_carrier_mesh", visual_carrier_mesh),
+        ("rigid_carrier_mesh", rigid_carrier_mesh),
+    ):
+        if mesh is not None and not isinstance(mesh, RigidObjectMesh):
+            raise TypeError(f"{name} must be a RigidObjectMesh or None")
     if initial_pose is None:
         initial_pose = indenter.initial_pose
     if not isinstance(initial_pose, RigidPose3D):
@@ -344,6 +454,44 @@ def _build_indentation_context(
         # spurious contact shell around a millimetre-scale fingertip.
         particle_radius=0.0,
     )
+    carrier_shape = None
+    if rigid_carrier_mesh is not None:
+        carrier_vertices_m = (
+            np.asarray(rigid_carrier_mesh.vertices_mm, dtype=np.float32) * 1.0e-3
+        )
+        carrier_mesh = newton.Mesh(
+            carrier_vertices_m,
+            np.asarray(rigid_carrier_mesh.faces, dtype=np.int32).reshape(-1),
+            compute_inertia=False,
+            is_solid=True,
+        )
+        carrier_extent_m = float(np.max(np.ptp(carrier_vertices_m, axis=0)))
+        carrier_mesh.build_sdf(
+            device=device,
+            narrow_band_range=(-carrier_extent_m, carrier_extent_m),
+            target_voxel_size=sdf_target_voxel_m,
+            margin=0.0,
+        )
+        carrier_cfg = newton.ModelBuilder.ShapeConfig(
+            density=0.0,
+            ke=indentation_settings.soft_contact_ke,
+            kd=indentation_settings.soft_contact_kd,
+            mu=indentation_settings.soft_contact_mu,
+            gap=0.0,
+            has_shape_collision=False,
+            has_particle_collision=True,
+            collision_group=1,
+            is_visible=True,
+        )
+        carrier_cfg.configure_sdf(force_sdf=True)
+        carrier_shape = builder.add_shape_mesh(
+            body=-1,
+            mesh=carrier_mesh,
+            cfg=carrier_cfg,
+            color=wp.vec3(0.68, 0.70, 0.74),
+            label="distal_phalanx_carrier_collision_enabled",
+        )
+
     if visual_carrier_mesh is not None:
         carrier_vertices_m = (
             np.asarray(visual_carrier_mesh.vertices_mm, dtype=np.float32) * 1.0e-3
@@ -362,7 +510,7 @@ def _build_indentation_context(
             is_visible=True,
         )
         # Newton body -1 is static world geometry.  The collision flags are
-        # explicitly disabled so this shape can only be rendered by a viewer.
+        # explicitly disabled so this separate shape can only be rendered.
         builder.add_shape_mesh(
             body=-1,
             mesh=carrier_mesh,
@@ -381,7 +529,7 @@ def _build_indentation_context(
         is_kinematic=True,
         label=f"{indenter.mesh.name}_kinematic",
     )
-    builder.add_shape_mesh(
+    indenter_shape = builder.add_shape_mesh(
         body=indenter_body,
         mesh=rigid_mesh,
         cfg=rigid_cfg,
@@ -440,6 +588,19 @@ def _build_indentation_context(
         control=control,
         contacts=contacts,
         indenter_body=indenter_body,
+        indenter_shape=indenter_shape,
+        carrier_shape=carrier_shape,
+        carrier_mesh=rigid_carrier_mesh,
+        void_bottom_vertex_indices=(
+            frozenset(
+                np.unique(
+                    np.asarray(prepared_fingertip.surface_triangles["void_bottom"], dtype=np.int64)
+                    .reshape(-1)
+                ).tolist()
+            )
+            if "void_bottom" in prepared_fingertip.surface_triangles
+            else frozenset()
+        ),
         rest_vertices_m=rest_vertices_m,
     )
 
@@ -452,6 +613,7 @@ def solve_newton_vbd_indentation(
     *,
     viewer: object | None = None,
     visual_carrier_mesh: RigidObjectMesh | None = None,
+    rigid_carrier_mesh: RigidObjectMesh | None = None,
     first_contact: FirstContactResult | None = None,
 ) -> IndentationResult:
     """Run translation-only kinematic rigid-mesh contact with standalone VBD.
@@ -461,9 +623,9 @@ def solve_newton_vbd_indentation(
     indentation contract; when supplied, each accepted solver state and its
     contacts are sent to the viewer after the VBD step.
 
-    ``visual_carrier_mesh`` is an optional backend/example-local neutral mesh.
-    When supplied, it is added as visible static world geometry with collision
-    disabled; it does not enter the indentation mechanics state.
+    ``visual_carrier_mesh`` is a viewer-only mesh and never participates in
+    collision. ``rigid_carrier_mesh`` is a separate explicit collision-enabled
+    static world mesh. The two arguments are intentionally not interchangeable.
     """
 
     if first_contact is not None:
@@ -495,6 +657,7 @@ def solve_newton_vbd_indentation(
         indentation_settings,
         initial_pose=initial_pose,
         visual_carrier_mesh=visual_carrier_mesh,
+        rigid_carrier_mesh=rigid_carrier_mesh,
     )
     if viewer is not None:
         viewer.set_model(context.model)
@@ -507,9 +670,29 @@ def solve_newton_vbd_indentation(
         else initial_pose
     )
     max_soft_contact_count = 0
+    max_sphere_soft_contact_count = 0
+    max_carrier_soft_contact_count = 0
+    max_void_bottom_carrier_contact_count = 0
+    first_carrier_contact_step: int | None = None
+    max_sphere_carrier_rigid_contact_count = 0
+    carrier_contact_vertex_indices: set[int] = set()
     max_rigid_contact_count = 0
     max_soft_contact_overflow = 0
     max_rigid_contact_overflow = 0
+    min_carrier_clearance_mm = float("nan")
+    initial_carrier_clearance_mm = float("nan")
+    final_carrier_clearance_mm = float("nan")
+    carrier_surface = (
+        prepared_fingertip.surface_triangles.get("void_bottom")
+        if rigid_carrier_mesh is not None
+        else None
+    )
+    if rigid_carrier_mesh is not None and carrier_surface is not None:
+        initial_carrier_clearance_mm = _signed_carrier_clearance_mm(
+            context.rest_vertices_m * 1.0e3,
+            carrier_surface,
+            rigid_carrier_mesh,
+        )
     timestep_s = float(mechanics_settings.dt)
     for step in range(indentation_settings.load_steps):
         fraction = float(step + 1) / indentation_settings.load_steps
@@ -569,6 +752,31 @@ def solve_newton_vbd_indentation(
             collision_pipeline=context.pipeline,
             enable_rigid_soft_full_surface_contact=True,
         )
+        (
+            sphere_contact_count,
+            carrier_contact_count,
+            void_bottom_carrier_contact_count,
+            sphere_carrier_rigid_count,
+            contact_vertices,
+        ) = _contact_shape_details(context)
+        carrier_contact_vertex_indices.update(contact_vertices)
+        max_sphere_soft_contact_count = max(max_sphere_soft_contact_count, sphere_contact_count)
+        max_carrier_soft_contact_count = max(max_carrier_soft_contact_count, carrier_contact_count)
+        max_void_bottom_carrier_contact_count = max(
+            max_void_bottom_carrier_contact_count,
+            void_bottom_carrier_contact_count,
+        )
+        if void_bottom_carrier_contact_count and first_carrier_contact_step is None:
+            first_carrier_contact_step = step + 1
+        max_sphere_carrier_rigid_contact_count = max(
+            max_sphere_carrier_rigid_contact_count,
+            sphere_carrier_rigid_count,
+        )
+        if sphere_carrier_rigid_count:
+            raise RuntimeError(
+                "sphere-carrier rigid collision is active; carrier collision must "
+                "be particle-only for this indentation experiment"
+            )
         context.solver.step(
             context.state_in,
             context.state_out,
@@ -585,6 +793,19 @@ def solve_newton_vbd_indentation(
         max_soft_contact_overflow = max(max_soft_contact_overflow, soft_contact_overflow)
         max_rigid_contact_overflow = max(max_rigid_contact_overflow, rigid_contact_overflow)
         accepted_state = context.state_out
+        if rigid_carrier_mesh is not None and carrier_surface is not None:
+            current_clearance_mm = _signed_carrier_clearance_mm(
+                np.asarray(accepted_state.particle_q.numpy(), dtype=np.float32) * 1.0e3,
+                carrier_surface,
+                rigid_carrier_mesh,
+            )
+            if np.isfinite(current_clearance_mm):
+                min_carrier_clearance_mm = (
+                    current_clearance_mm
+                    if not np.isfinite(min_carrier_clearance_mm)
+                    else min(min_carrier_clearance_mm, current_clearance_mm)
+                )
+                final_carrier_clearance_mm = current_clearance_mm
         if viewer is not None:
             viewer.begin_frame((step + 1) * timestep_s)
             viewer.log_state(accepted_state)
@@ -649,6 +870,28 @@ def solve_newton_vbd_indentation(
         "load_steps": indentation_settings.load_steps,
         "rigid_sdf_target_voxel_mm": indentation_settings.rigid_sdf_target_voxel_mm,
         "max_soft_contact_count": max_soft_contact_count,
+        "max_sphere_soft_contact_count": max_sphere_soft_contact_count,
+        "max_carrier_soft_contact_count": max_carrier_soft_contact_count,
+        "max_void_bottom_carrier_contact_count": max_void_bottom_carrier_contact_count,
+        # This is the semantic contact count used by the optical handoff.
+        # ``max_carrier_soft_contact_count`` also includes carrier records
+        # outside the compliant void-bottom interface (for example support
+        # contacts), so it is intentionally not the optical provenance count.
+        "carrier_interface_contact_count": max_void_bottom_carrier_contact_count,
+        "first_carrier_contact_step": first_carrier_contact_step,
+        "carrier_contact_active": first_carrier_contact_step is not None,
+        "max_sphere_carrier_rigid_contact_count": max_sphere_carrier_rigid_contact_count,
+        "carrier_contact_vertex_indices": tuple(sorted(carrier_contact_vertex_indices)),
+        "carrier_contact_vertex_count": len(carrier_contact_vertex_indices),
+        "carrier_collision_enabled": rigid_carrier_mesh is not None,
+        "initial_carrier_clearance_mm": initial_carrier_clearance_mm,
+        "min_carrier_clearance_mm": min_carrier_clearance_mm,
+        "final_carrier_clearance_mm": final_carrier_clearance_mm,
+        "max_carrier_penetration_mm": (
+            max(0.0, -min_carrier_clearance_mm)
+            if np.isfinite(min_carrier_clearance_mm)
+            else float("nan")
+        ),
         "max_rigid_contact_count": max_rigid_contact_count,
         "max_soft_contact_overflow": max_soft_contact_overflow,
         "max_rigid_contact_overflow": max_rigid_contact_overflow,

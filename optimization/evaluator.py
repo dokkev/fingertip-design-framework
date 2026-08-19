@@ -1,4 +1,4 @@
-"""Algorithm-independent four-variable morphology evaluation."""
+"""Algorithm-independent morphology evaluation."""
 
 from __future__ import annotations
 

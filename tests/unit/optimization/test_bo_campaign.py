@@ -35,6 +35,7 @@ NOMINAL_PARAMETERS = {
     "stem_width": 7.6,
     "stem_height": 6.0,
     "void_width": 1.0,
+    "void_height": 0.25,
 }
 
 
@@ -54,6 +55,7 @@ def _record(
         "stem_width": 7.6,
         "stem_height": 6.0,
         "void_width": 1.0,
+        "void_height": 0.25,
     }
     return {
         "trial_index": index,
@@ -145,6 +147,7 @@ def test_summary_restores_known_nominal_and_overall_best(tmp_path) -> None:
         "stem_width": 7.6,
         "stem_height": 6.0,
         "void_width": 1.0,
+        "void_height": 0.25,
     }
     historical_best_parameters = {
         **nominal_parameters,

@@ -23,24 +23,28 @@ NOMINAL = {
     "stem_width": 7.6,
     "stem_height": 6.0,
     "void_width": 1.0,
+    "void_height": 0.25,
 }
 KNOWN_FAILURE = {
     "flat_pad_height": 5.1,
     "stem_width": 7.7,
     "stem_height": 6.1,
     "void_width": 1.1,
+    "void_height": 0.5,
 }
 NEW_INITIALIZATION = {
     "flat_pad_height": 5.2,
     "stem_width": 7.8,
     "stem_height": 6.2,
     "void_width": 1.2,
+    "void_height": 1.0,
 }
 NEW_SEARCH = {
     "flat_pad_height": 5.3,
     "stem_width": 7.9,
     "stem_height": 6.3,
     "void_width": 1.3,
+    "void_height": 1.5,
 }
 
 

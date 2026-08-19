@@ -8,6 +8,7 @@ from optics.transport3d.artifact import (
     load_full3d_surface_artifact,
 )
 from optics.transport3d.geometry import (
+    CARRIER_CONTACT_INTERFACE,
     build_full3d_transport_geometry,
     build_fixed_transport_surfaces,
     build_transport_geometry,
@@ -26,6 +27,7 @@ from optics.transport3d.unified import (
     OptiXTransport,
     LEGACY_UNIFIED_ARTIFACT_SCHEMA,
     LEGACY_UNIFIED_ARTIFACT_SCHEMA_V2,
+    LEGACY_UNIFIED_ARTIFACT_SCHEMA_V3,
     UnifiedTransportResult,
     fingerprint_mapping,
     load_case_artifact,
@@ -48,8 +50,10 @@ __all__ = [
     "OptiXTransport",
     "LEGACY_UNIFIED_ARTIFACT_SCHEMA",
     "LEGACY_UNIFIED_ARTIFACT_SCHEMA_V2",
+    "LEGACY_UNIFIED_ARTIFACT_SCHEMA_V3",
     "UnifiedTransportResult",
     "build_full3d_transport_geometry",
+    "CARRIER_CONTACT_INTERFACE",
     "build_fixed_transport_surfaces",
     "build_fingertip_volume_state_geometry",
     "build_transport_geometry",
