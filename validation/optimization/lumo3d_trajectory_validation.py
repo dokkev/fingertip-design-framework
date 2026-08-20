@@ -13,7 +13,7 @@ import numpy as np
 from model import FingertipParameters
 from optimization.objectives import normalized_field_distance
 from optimization.protocol import DEFAULT_TRAJECTORY_PROTOCOL, TrajectoryEvaluationProtocol
-from validation.mechanics3d.multi_location_sphere_contact import run_multi_location_sphere_contact
+from validation.physics.multi_location_sphere_contact import run_multi_location_sphere_contact
 from validation.optimization.lumo3d_trajectory_evaluator import (
     Lumo3DTrajectoryEvaluator,
     create_lumo3d_trajectory_study,
@@ -47,13 +47,15 @@ def _nominal() -> FingertipParameters:
 
 
 def _probe() -> FingertipParameters:
+    """Return a nearby, deterministic feasible morphology for M6 coverage."""
+
     return FingertipParameters(
-        flat_pad_height=2.0,
-        semielliptical_pad_height=6.0,
-        stem_width=6.0,
-        stem_height=2.0,
-        void_width=2.0,
-        void_height=0.0,
+        flat_pad_height=5.0,
+        semielliptical_pad_height=9.0,
+        stem_width=7.6,
+        stem_height=6.0,
+        void_width=1.2,
+        void_height=0.25,
     )
 
 
@@ -278,7 +280,8 @@ def run_validation(output: str | Path, *, device: str = "cuda:0") -> dict[str, A
         "# Architecture audit\n\n"
         "The trajectory evaluator consumes one immutable fixed-depth factorial "
         "optimization protocol (radius and absolute depth are independent). "
-        "Legacy fixed-state Lumo3DEvaluator remains a compatibility path. "
+        "The fixed-state Lumo3DEvaluator is used only as an explicit regression "
+        "oracle and is not part of the production Ax path. "
         "Newton stepping is shared by final-state and checkpoint APIs; OptiX is "
         "called only after exact checkpoint artifacts are persisted.\n",
         encoding="utf-8",
@@ -438,8 +441,8 @@ def run_validation(output: str | Path, *, device: str = "cuda:0") -> dict[str, A
         "objective_pathology": objective_pathology,
         "code_cleanup": {
             "files_simplified": [
-                "mechanics3d/indentation.py",
-                "mechanics3d/backends/newton_vbd.py",
+                "physics/indentation.py",
+                "physics/newton_vbd.py",
                 "optimization/__init__.py",
             ],
             "modules_added": [
@@ -450,12 +453,17 @@ def run_validation(output: str | Path, *, device: str = "cuda:0") -> dict[str, A
             ],
             "duplicate_constants_removed_from_active_path": True,
             "legacy_modules_retained": {
-                "optimization.scenarios": "legacy 2D compatibility callers/tests",
-                "optimization.evaluator": "legacy FEM/planar compatibility callers/tests",
-                "optimization.study": "legacy fixed study compatibility callers/tests",
-                "validation.optimization.lumo3d_evaluator": "fixed three-state reduction baseline",
+                "validation.optimization.lumo3d_evaluator": "independent fixed-state regression oracle only",
             },
-            "legacy_modules_removed": [],
+            "legacy_modules_removed": [
+                "optimization.scenarios",
+                "optimization.evaluator",
+                "optimization.study",
+                "case",
+                "fem",
+                "examples",
+                "visualization",
+            ],
         },
         "bo_run": False,
     }

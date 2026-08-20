@@ -11,13 +11,13 @@ pytest.importorskip("newton")
 
 import warp as wp
 
-from mechanics3d import Mechanics3DSession, Mechanics3DSettings, prepare_fingertip_mechanics_mesh
+from physics import NewtonSession, NewtonSettings, prepare_fingertip_mesh
 from mesh.volume3d import generate_volume_mesh
 from mesh.volume_types import volume_mesh_settings_for_tier
 from model.fingertip_model import FingertipModel
 from model.fingertip_parameters import FingertipParameters
 from model.solid import build_fingertip_solid
-from validation.mechanics3d.correspondence import (
+from validation.physics.correspondence import (
     VBD_CORRESPONDENCE_DT,
     VBD_CORRESPONDENCE_ITERATIONS,
     _selected_reference,
@@ -27,10 +27,10 @@ from validation.mechanics3d.correspondence import (
 
 
 @pytest.mark.smoke
-@pytest.mark.mechanics3d
+@pytest.mark.physics
 def test_nominal_localized_load_runs_on_exact_mesh() -> None:
     if not wp.is_device_available("cuda:0"):
-        pytest.skip("localized mechanics3d smoke requires cuda:0")
+        pytest.skip("localized physics smoke requires cuda:0")
 
     payload, reference, _ = _selected_reference()
     parameters = FingertipParameters(**payload["parameters"])
@@ -38,12 +38,12 @@ def test_nominal_localized_load_runs_on_exact_mesh() -> None:
         build_fingertip_solid(FingertipModel(parameters)),
         volume_mesh_settings_for_tier(payload["mesh"]["tier"]),
     )
-    prepared = prepare_fingertip_mechanics_mesh(volume_mesh)
+    prepared = prepare_fingertip_mesh(volume_mesh)
     correspondence = verify_exact_mesh_correspondence(volume_mesh, prepared, reference)
     load, construction = build_localized_particle_load(prepared, reference, payload)
-    result = Mechanics3DSession(
+    result = NewtonSession(
         prepared.tet_mesh,
-        Mechanics3DSettings(
+        NewtonSettings(
             device="cuda:0",
             gravity=0.0,
             dt=VBD_CORRESPONDENCE_DT,

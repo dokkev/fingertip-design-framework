@@ -6,7 +6,7 @@ import pytest
 
 pytest.importorskip("gmsh")
 
-from mechanics3d import prepare_fingertip_mechanics_mesh
+from physics import prepare_fingertip_mesh
 from mesh.rigid_carrier import make_distal_phalanx_mesh
 from mesh.volume3d import generate_volume_mesh
 from mesh.volume_types import volume_mesh_settings_for_tier
@@ -19,7 +19,7 @@ def test_positive_void_height_preserves_support_bonds_and_free_void_bottom() -> 
         fingertip.solid(),
         volume_mesh_settings_for_tier("search"),
     )
-    prepared = prepare_fingertip_mechanics_mesh(volume_mesh)
+    prepared = prepare_fingertip_mesh(volume_mesh)
 
     support = set(prepared.support_vertex_indices)
     left = set(prepared.surface_triangles["support_bond_left"].reshape(-1).tolist())

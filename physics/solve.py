@@ -11,11 +11,11 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .types import Mechanics3DResult, TetMeshData
+from .types import NewtonResult, TetMeshData
 
 
 @dataclass(frozen=True)
-class Mechanics3DSettings:
+class NewtonSettings:
     """Small, deterministic settings surface for the VBD prototype."""
 
     device: str = "cuda:0"
@@ -51,19 +51,19 @@ class Mechanics3DSettings:
 def solve(
     mesh: TetMeshData,
     *,
-    settings: Mechanics3DSettings | None = None,
-) -> Mechanics3DResult:
+    settings: NewtonSettings | None = None,
+) -> NewtonResult:
     """Run one small Newton ``SolverVBD`` solve and return neutral NumPy arrays.
 
-    Importing :mod:`mechanics3d` does not import Warp or Newton.  The optional
+    Importing :mod:`physics` does not import Warp or Newton.  The optional
     backend is loaded only when this function is called.
     """
 
     if not isinstance(mesh, TetMeshData):
         raise TypeError("mesh must be a TetMeshData instance")
     if settings is None:
-        settings = Mechanics3DSettings()
+        settings = NewtonSettings()
 
-    from .backends.newton_vbd import solve_newton_vbd
+    from .newton_vbd import solve_newton_vbd
 
     return solve_newton_vbd(mesh, settings)

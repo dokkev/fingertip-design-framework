@@ -10,6 +10,8 @@ from numbers import Real
 
 
 PROTOCOL_SCHEMA = "lumo3d-fixed-depth-trajectory-protocol-v1"
+
+
 def _finite(name: str, value: object) -> float:
     if isinstance(value, bool) or not isinstance(value, Real):
         raise TypeError(f"{name} must be a finite real number")

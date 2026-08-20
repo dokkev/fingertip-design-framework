@@ -24,12 +24,12 @@ from contact import (
     make_outer_compliant_surface,
     sphere_alignment_at_normalized_location,
 )
-from mechanics3d import (
+from physics import (
     IndentationResult,
     IndentationSettings,
-    Mechanics3DSettings,
+    NewtonSettings,
     RigidIndenter3D,
-    prepare_fingertip_mechanics_mesh,
+    prepare_fingertip_mesh,
     solve_fingertip_indentation,
 )
 from mesh.rigid_object import RigidObjectMesh, make_sphere_mesh
@@ -236,7 +236,7 @@ def run_multi_location_sphere_contact(
         raise ValueError("travel_mm must be finite and positive")
 
     volume_mesh = fingertip.volume_mesh(volume_mesh_settings_for_tier("search"))
-    prepared = prepare_fingertip_mechanics_mesh(volume_mesh)
+    prepared = prepare_fingertip_mesh(volume_mesh)
     if sphere_subdivisions < 1:
         raise ValueError("sphere_subdivisions must be positive")
     if not np.isfinite(max_load_increment_mm) or max_load_increment_mm <= 0.0:
@@ -252,7 +252,7 @@ def run_multi_location_sphere_contact(
         spawn_clearance_mm=0.05,
         max_travel_mm=20.0,
     )
-    mechanics_settings = Mechanics3DSettings(
+    mechanics_settings = NewtonSettings(
         device=device,
         gravity=0.0,
         dt=SEARCH_DT_S,

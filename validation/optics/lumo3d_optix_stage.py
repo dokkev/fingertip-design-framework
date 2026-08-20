@@ -10,7 +10,7 @@ from typing import Any
 
 import numpy as np
 
-from mechanics3d import prepare_fingertip_mechanics_mesh
+from physics import prepare_fingertip_mesh
 from mesh import FingertipVolumeState, volume_mesh_settings_for_tier
 from model import Fingertip
 from optics.transport3d import (
@@ -24,7 +24,7 @@ from optics.transport3d import (
 )
 from optics.transport3d.optix_backend import create_runtime
 from optics.optix.smoke import run_production_optix_smoke
-from validation.mechanics3d.deformed_state_artifact import restore_deformed_optical_state
+from validation.physics.deformed_state_artifact import restore_deformed_optical_state
 
 
 def _settings(
@@ -134,7 +134,7 @@ def run_lumo3d_optix_stage(
     stage3_payload = json.loads((root / "stage3_deformed_optical_geometry.json").read_text())
     tip = Fingertip()
     volume_mesh = tip.volume_mesh(volume_mesh_settings_for_tier("search"))
-    prepared = prepare_fingertip_mechanics_mesh(volume_mesh)
+    prepared = prepare_fingertip_mesh(volume_mesh)
     min_x, min_y, max_x, max_y = tip.geometry.material_geometry.bounds
     fingertip_margin_mm = 1.0
     settings = _settings(

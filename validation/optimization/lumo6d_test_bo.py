@@ -36,14 +36,16 @@ from optimization.design_space import (
     PRODUCTION_SEARCH_BOUNDS,
 )
 from optimization.evaluation_registry import EvaluationRegistry, REGISTRY_SCHEMA_VERSION
-from validation.optimization.lumo3d_evaluator import (
-    LUMO3D_EVALUATION_CONTRACT,
-    LUMO3D_EVALUATION_CONTRACT_ID,
+from validation.optimization.lumo3d_common import (
     LUMO3D_OBSERVATION_LEVEL,
     LUMO3D_OPTICAL_X_BOUNDS_MM,
     LUMO3D_OPTICAL_Y_BOUNDS_MM,
-    Lumo3DStudy,
-    create_lumo3d_study,
+)
+from validation.optimization.lumo3d_trajectory_evaluator import (
+    Lumo3DTrajectoryStudy,
+    TRAJECTORY_EVALUATION_CONTRACT_ID,
+    TRAJECTORY_EVALUATION_SCHEMA,
+    create_lumo3d_trajectory_study,
 )
 
 
@@ -52,6 +54,12 @@ SOBOL_TRIALS = 6
 BO_TRIALS = 4
 MAX_ATTEMPTED_TRIALS = SOBOL_TRIALS + BO_TRIALS
 OUTPUT_DIRECTORY = Path("output/validation/optimization/lumo6d_test_bo")
+TRAJECTORY_EVALUATION_CONTRACT = {
+    "schema": TRAJECTORY_EVALUATION_SCHEMA,
+    "objective": CONTACT_STATE_SEPARATION_OBJECTIVE_NAME,
+    "observation_level": LUMO3D_OBSERVATION_LEVEL,
+    "optical_mode": "FULL_3D",
+}
 
 
 def _now() -> str:
@@ -101,7 +109,7 @@ def _rms_displacement_from_artifact(path: object) -> float | None:
 
 
 def _aggregate_mechanics(evaluation: object) -> dict[str, Any]:
-    records = tuple(getattr(evaluation, "mechanics_diagnostics", ()))
+    records = tuple(getattr(evaluation, "checkpoint_diagnostics", ()))
     displacements = [
         float(item["max_displacement_mm"])
         for item in records
@@ -201,7 +209,7 @@ def _status_contract(status: str) -> str:
 
 def _trial_payload(
     record: Any,
-    study: Lumo3DStudy,
+    study: Lumo3DTrajectoryStudy,
     attempt_index: int | None,
 ) -> dict[str, Any]:
     parameters = _parameter_values(record.parameters)
@@ -284,15 +292,16 @@ def _trial_payload(
         "pairwise_contact_state_distances": (
             None
             if evaluation is None
-            else getattr(evaluation, "pairwise_distance_matrix", None)
+            else getattr(evaluation, "objective", {}).get("all_pairwise_distances")
         ),
         **mechanics,
         **optics,
         "first_contact_fingerprint": [
             item.get("contact_state_fingerprint")
             for item in (
-                () if evaluation is None else getattr(evaluation, "contact_states", ())
+                () if evaluation is None else getattr(evaluation, "optical_diagnostics", ())
             )
+            if isinstance(item, Mapping)
         ],
         "optical_grid_fingerprint": _optical_grid()["fingerprint"],
         "transport_configuration_fingerprint": evaluation_diagnostics.get(
@@ -314,7 +323,7 @@ def _trial_payload(
     }
 
 
-def _pre_run_sanity(study: Lumo3DStudy) -> dict[str, Any]:
+def _pre_run_sanity(study: Lumo3DTrajectoryStudy) -> dict[str, Any]:
     if len(study.design_space.active_variables) != 6:
         raise RuntimeError("SIX_D_PARAMETERIZATION_BLOCKER")
     if tuple(variable.name for variable in study.design_space.active_variables) != tuple(
@@ -348,7 +357,7 @@ def _pre_run_sanity(study: Lumo3DStudy) -> dict[str, Any]:
     return {
         "active_variable_count": len(study.design_space.active_variables),
         "active_variables": list(OPTIMIZABLE_PARAMETER_NAMES),
-        "numerical_envelopes": [list(item) for item in PRODUCTION_SEARCH_BOUNDS],
+        "numerical_envelopes": [spec.to_dict() for spec in PRODUCTION_SEARCH_BOUNDS],
         "linear_constraints": list(PRODUCTION_LINEAR_PARAMETER_CONSTRAINTS),
         "suggestions": values,
         "flat_pad_height_unique_count": len(flat_values),
@@ -548,7 +557,14 @@ def _diagnostics(
         "best_d_min_mm": None if best is None else best.get("minimum_silicone_thickness_mm"),
         "best_total_pad_depth_mm": None if best is None else best.get("total_pad_depth_mm"),
         "best_near_d_min_5mm": bool(best is not None and best.get("minimum_silicone_thickness_mm") is not None and float(best["minimum_silicone_thickness_mm"]) <= 5.5),
-        "best_on_numerical_envelope": bool(best is not None and any(abs(float(best[name]) - bound) <= 1.0e-8 for name, lower, upper in PRODUCTION_SEARCH_BOUNDS for bound in (lower, upper))),
+        "best_on_numerical_envelope": bool(
+            best is not None
+            and any(
+                abs(float(best[spec.name.value]) - bound) <= 1.0e-8
+                for spec in PRODUCTION_SEARCH_BOUNDS
+                for bound in (spec.lower, spec.upper)
+            )
+        ),
         "objective_range": None if not objective_values else [min(objective_values), max(objective_values)],
         "objective_vs_d_min_correlation": correlation("minimum_silicone_thickness_mm", "objective"),
         "objective_vs_void_width_correlation": correlation("void_width", "objective"),
@@ -577,7 +593,7 @@ def run_lumo6d_test_bo(output_dir: str | Path = OUTPUT_DIRECTORY) -> dict[str, A
     plots = output / "plots"
     plots.mkdir(parents=True, exist_ok=True)
     started = time.perf_counter()
-    study = create_lumo3d_study(output / "artifacts", mechanics_mode="search")
+    study = create_lumo3d_trajectory_study(output / "artifacts", mechanics_mode="search")
     search_mechanics = dict(study.create_evaluator().mechanics_contract)
     sanity = _pre_run_sanity(study)
     grid = _optical_grid()
@@ -592,11 +608,11 @@ def run_lumo6d_test_bo(output_dir: str | Path = OUTPUT_DIRECTORY) -> dict[str, A
             "max_attempted_proposals": MAX_ATTEMPTED_TRIALS,
         },
         "active_variables": list(OPTIMIZABLE_PARAMETER_NAMES),
-        "numerical_envelopes": [list(item) for item in PRODUCTION_SEARCH_BOUNDS],
+        "numerical_envelopes": [spec.to_dict() for spec in PRODUCTION_SEARCH_BOUNDS],
         "linear_constraints": list(PRODUCTION_LINEAR_PARAMETER_CONSTRAINTS),
-        "contract_id": LUMO3D_EVALUATION_CONTRACT_ID,
+        "contract_id": TRAJECTORY_EVALUATION_CONTRACT_ID,
         "registry_schema_version": REGISTRY_SCHEMA_VERSION,
-        "evaluation_contract": LUMO3D_EVALUATION_CONTRACT,
+        "evaluation_contract": TRAJECTORY_EVALUATION_CONTRACT,
         "observation_level": LUMO3D_OBSERVATION_LEVEL,
         "objective_name": CONTACT_STATE_SEPARATION_OBJECTIVE_NAME,
         "objective_direction": "maximize",
@@ -644,7 +660,7 @@ def run_lumo6d_test_bo(output_dir: str | Path = OUTPUT_DIRECTORY) -> dict[str, A
         # Ax adapter can bootstrap its observation without reevaluating it.
         registry = EvaluationRegistry(output / "registry.json")
         nominal_registry = registry.register(
-            LUMO3D_EVALUATION_CONTRACT_ID,
+            TRAJECTORY_EVALUATION_CONTRACT_ID,
             nominal_parameters,
             status="success",
             first_trial_index=0,
@@ -689,7 +705,7 @@ def run_lumo6d_test_bo(output_dir: str | Path = OUTPUT_DIRECTORY) -> dict[str, A
             settings,
             on_record=persist,
             evaluation_registry=registry,
-            evaluation_contract_id=LUMO3D_EVALUATION_CONTRACT_ID,
+            evaluation_contract_id=TRAJECTORY_EVALUATION_CONTRACT_ID,
             campaign_id=output.name,
             result_artifact_path=str((output / "checkpoint.json").resolve()),
             max_consecutive_known_proposals=20,
@@ -742,7 +758,7 @@ def run_lumo6d_test_bo(output_dir: str | Path = OUTPUT_DIRECTORY) -> dict[str, A
             "diagnostics": diagnostics,
             "objective_name": CONTACT_STATE_SEPARATION_OBJECTIVE_NAME,
             "objective_direction": "maximize",
-            "contract_id": LUMO3D_EVALUATION_CONTRACT_ID,
+            "contract_id": TRAJECTORY_EVALUATION_CONTRACT_ID,
             "artifact_directory": str(output),
             "total_wall_clock_runtime_s": time.perf_counter() - started,
             "plots": sorted(str(path.relative_to(output)) for path in plots.glob("*.png")),

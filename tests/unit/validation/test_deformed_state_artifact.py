@@ -9,10 +9,10 @@ import pytest
 
 pytest.importorskip("gmsh")
 
-from mechanics3d import prepare_fingertip_mechanics_mesh
+from physics import prepare_fingertip_mesh
 from mesh import volume_mesh_settings_for_tier
 from model import Fingertip
-from validation.mechanics3d.deformed_state_artifact import restore_deformed_optical_state
+from validation.physics.deformed_state_artifact import restore_deformed_optical_state
 
 
 def _write_artifact(path, prepared, deformed) -> str:
@@ -35,7 +35,7 @@ def _write_artifact(path, prepared, deformed) -> str:
 def test_persisted_state_restores_exact_deformed_optical_geometry(tmp_path) -> None:
     tip = Fingertip()
     volume_mesh = tip.volume_mesh(volume_mesh_settings_for_tier("search"))
-    prepared = prepare_fingertip_mechanics_mesh(volume_mesh)
+    prepared = prepare_fingertip_mesh(volume_mesh)
     deformed = np.asarray(prepared.tet_mesh.vertices, dtype=np.float32).copy()
     deformed[:, 1] += 0.05
     artifact = tmp_path / "state.npz"
@@ -63,7 +63,7 @@ def test_persisted_state_restores_exact_deformed_optical_geometry(tmp_path) -> N
 def test_persisted_state_hash_is_verified(tmp_path) -> None:
     tip = Fingertip()
     volume_mesh = tip.volume_mesh(volume_mesh_settings_for_tier("search"))
-    prepared = prepare_fingertip_mechanics_mesh(volume_mesh)
+    prepared = prepare_fingertip_mesh(volume_mesh)
     artifact = tmp_path / "state.npz"
     digest = _write_artifact(artifact, prepared, prepared.tet_mesh.vertices)
 

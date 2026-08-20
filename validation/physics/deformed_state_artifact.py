@@ -9,7 +9,7 @@ from typing import Iterable, Mapping
 
 import numpy as np
 
-from mechanics3d.fingertip import FingertipMechanicsMesh
+from physics.fingertip import PreparedFingertipMesh
 from mesh.volume_types import FingertipVolumeMesh
 from mesh.volume_state import FingertipVolumeState
 from model.fingertip import Fingertip
@@ -40,7 +40,7 @@ def _required_array(archive, name: str) -> np.ndarray:
 
 def _load_state(
     volume_mesh: FingertipVolumeMesh,
-    prepared: FingertipMechanicsMesh,
+    prepared: PreparedFingertipMesh,
     artifact_path: Path,
     expected_sha256: str,
 ) -> tuple[FingertipVolumeState, str, tuple[int, ...]]:
@@ -99,7 +99,7 @@ def _load_state(
 def restore_deformed_optical_state(
     tip: Fingertip,
     volume_mesh: FingertipVolumeMesh,
-    prepared: FingertipMechanicsMesh,
+    prepared: PreparedFingertipMesh,
     artifact_path: str | Path,
     expected_sha256: str,
     *,
@@ -113,8 +113,8 @@ def restore_deformed_optical_state(
         raise TypeError("tip must be Fingertip")
     if not isinstance(volume_mesh, FingertipVolumeMesh):
         raise TypeError("volume_mesh must be a FingertipVolumeMesh")
-    if not isinstance(prepared, FingertipMechanicsMesh):
-        raise TypeError("prepared must be a FingertipMechanicsMesh")
+    if not isinstance(prepared, PreparedFingertipMesh):
+        raise TypeError("prepared must be a PreparedFingertipMesh")
     path = Path(artifact_path)
     if not path.is_file():
         raise FileNotFoundError(path)

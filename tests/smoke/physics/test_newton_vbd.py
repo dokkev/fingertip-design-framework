@@ -10,14 +10,14 @@ pytest.importorskip("newton")
 
 import warp as wp
 
-from mechanics3d import Mechanics3DSettings, TetMeshData, solve
+from physics import NewtonSettings, TetMeshData, solve
 
 
 @pytest.mark.smoke
-@pytest.mark.mechanics3d
+@pytest.mark.physics
 def test_newton_vbd_deforms_tiny_tet_block_on_cuda() -> None:
     if not wp.is_device_available("cuda:0"):
-        pytest.skip("mechanics3d smoke requires cuda:0")
+        pytest.skip("physics smoke requires cuda:0")
 
     vertices = np.array(
         [
@@ -48,7 +48,7 @@ def test_newton_vbd_deforms_tiny_tet_block_on_cuda() -> None:
 
     result = solve(
         TetMeshData(vertices, tetrahedra),
-        settings=Mechanics3DSettings(
+        settings=NewtonSettings(
             # Wiring-smoke parameters only; not a calibrated silicone baseline.
             device="cuda:0",
             steps=1,

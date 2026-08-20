@@ -34,14 +34,6 @@ _OPTIMIZABLE_PARAMETER_SET = frozenset(OptimizableParameterName)
 _FIXED_FLAT_PAD_WIDTH_MM = 30.0
 PRODUCTION_MAX_TOTAL_PAD_DEPTH_MM = MAX_TOTAL_PAD_DEPTH_MM
 PRODUCTION_NOMINAL_VOID_HEIGHT_MM = 0.25
-PRODUCTION_SEARCH_BOUNDS: tuple[tuple[OptimizableParameterName, float, float], ...] = (
-    (OptimizableParameterName.FLAT_PAD_HEIGHT, 0.5, 29.5),
-    (OptimizableParameterName.SEMIELLIPTICAL_PAD_HEIGHT, 0.5, 29.5),
-    (OptimizableParameterName.STEM_WIDTH, 1.0, 20.0),
-    (OptimizableParameterName.STEM_HEIGHT, 1.0, 25.0),
-    (OptimizableParameterName.VOID_WIDTH, 0.0, 10.0),
-    (OptimizableParameterName.VOID_HEIGHT, 0.0, 25.0),
-)
 PRODUCTION_LINEAR_PARAMETER_CONSTRAINTS: tuple[str, ...] = (
     "flat_pad_height + semielliptical_pad_height <= 30.0",
     "stem_width + 2*void_width <= 20.0",
@@ -83,6 +75,41 @@ class DesignVariable:
             )
         object.__setattr__(self, "lower", lower)
         object.__setattr__(self, "upper", upper)
+
+
+@dataclass(frozen=True)
+class ParameterSpec:
+    """Named numerical envelope for one morphology parameter."""
+
+    name: OptimizableParameterName
+    lower: float
+    upper: float
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "name", OptimizableParameterName(self.name))
+        lower = _finite_real("lower", self.lower)
+        upper = _finite_real("upper", self.upper)
+        if lower > upper:
+            raise ValueError(f"lower bound must not exceed upper bound for {self.name}")
+        object.__setattr__(self, "lower", lower)
+        object.__setattr__(self, "upper", upper)
+
+    def to_dict(self) -> dict[str, object]:
+        return {"name": self.name.value, "lower": self.lower, "upper": self.upper}
+
+    def to_tuple(self) -> tuple[str, float, float]:
+        """Return the external Ax-compatible representation."""
+        return self.name.value, self.lower, self.upper
+
+
+PRODUCTION_SEARCH_BOUNDS: tuple[ParameterSpec, ...] = (
+    ParameterSpec(OptimizableParameterName.FLAT_PAD_HEIGHT, 0.5, 29.5),
+    ParameterSpec(OptimizableParameterName.SEMIELLIPTICAL_PAD_HEIGHT, 0.5, 29.5),
+    ParameterSpec(OptimizableParameterName.STEM_WIDTH, 1.0, 20.0),
+    ParameterSpec(OptimizableParameterName.STEM_HEIGHT, 1.0, 25.0),
+    ParameterSpec(OptimizableParameterName.VOID_WIDTH, 0.0, 10.0),
+    ParameterSpec(OptimizableParameterName.VOID_HEIGHT, 0.0, 25.0),
+)
 
 
 @dataclass(frozen=True)
@@ -202,6 +229,7 @@ class DesignSpace:
 __all__ = [
     "DesignSpace",
     "DesignVariable",
+    "ParameterSpec",
     "OPTIMIZABLE_PARAMETER_NAMES",
     "PRODUCTION_SEARCH_BOUNDS",
     "PRODUCTION_LINEAR_PARAMETER_CONSTRAINTS",

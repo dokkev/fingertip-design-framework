@@ -7,24 +7,24 @@ import time
 import numpy as np
 
 from .load import ParticleLoad
-from .solve import Mechanics3DSettings
-from .types import Mechanics3DResult, TetMeshData
+from .solve import NewtonSettings
+from .types import NewtonResult, TetMeshData
 
 
-class Mechanics3DSession:
+class NewtonSession:
     """Build one Newton model and run independent reset-and-solve evaluations."""
 
     def __init__(
         self,
         mesh: TetMeshData,
-        settings: Mechanics3DSettings | None = None,
+        settings: NewtonSettings | None = None,
     ) -> None:
         if not isinstance(mesh, TetMeshData):
             raise TypeError("mesh must be a TetMeshData instance")
         if settings is None:
-            settings = Mechanics3DSettings()
+            settings = NewtonSettings()
 
-        from .backends.newton_vbd import _build_vbd_context
+        from .newton_vbd import _build_vbd_context
         import warp as wp
 
         started = time.perf_counter()
@@ -49,7 +49,7 @@ class Mechanics3DSession:
         return float(self._session_creation_wall_s)
 
     @property
-    def settings(self) -> Mechanics3DSettings:
+    def settings(self) -> NewtonSettings:
         return self._settings
 
     @property
@@ -59,11 +59,11 @@ class Mechanics3DSession:
     def reset(self) -> None:
         """Restore both Newton states to the verified rest state."""
 
-        from .backends.newton_vbd import _reset_vbd_context
+        from .newton_vbd import _reset_vbd_context
 
         _reset_vbd_context(self._context)
 
-    def solve(self, load: ParticleLoad | None = None) -> Mechanics3DResult:
+    def solve(self, load: ParticleLoad | None = None) -> NewtonResult:
         """Reset, ramp one load, and return a fresh neutral mechanics result."""
 
         if load is None:
@@ -73,7 +73,7 @@ class Mechanics3DSession:
         if np.any(load.vertex_indices >= self._mesh.vertices.shape[0]):
             raise ValueError("ParticleLoad contains an out-of-range vertex index")
 
-        from .backends.newton_vbd import _solve_vbd_context
+        from .newton_vbd import _solve_vbd_context
 
         result, _timing = _solve_vbd_context(
             self._context,
@@ -86,7 +86,7 @@ class Mechanics3DSession:
     def solve_with_timing(
         self,
         load: ParticleLoad | None = None,
-    ) -> tuple[Mechanics3DResult, dict[str, float | int | str]]:
+    ) -> tuple[NewtonResult, dict[str, float | int | str]]:
         """Run ``solve`` while returning synchronized reset/solve timing."""
 
         if load is None:
@@ -96,7 +96,7 @@ class Mechanics3DSession:
         if np.any(load.vertex_indices >= self._mesh.vertices.shape[0]):
             raise ValueError("ParticleLoad contains an out-of-range vertex index")
 
-        from .backends.newton_vbd import _solve_vbd_context
+        from .newton_vbd import _solve_vbd_context
 
         return _solve_vbd_context(
             self._context,
@@ -106,4 +106,4 @@ class Mechanics3DSession:
         )
 
 
-__all__ = ["Mechanics3DSession"]
+__all__ = ["NewtonSession"]

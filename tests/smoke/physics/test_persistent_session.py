@@ -10,7 +10,7 @@ pytest.importorskip("newton")
 
 import warp as wp
 
-from mechanics3d import Mechanics3DSession, Mechanics3DSettings, ParticleLoad, TetMeshData
+from physics import NewtonSession, NewtonSettings, ParticleLoad, TetMeshData
 
 
 def _cube_mesh() -> TetMeshData:
@@ -29,15 +29,15 @@ def _cube_mesh() -> TetMeshData:
 
 
 @pytest.mark.smoke
-@pytest.mark.mechanics3d
+@pytest.mark.physics
 def test_persistent_session_reset_is_deterministic() -> None:
     if not wp.is_device_available("cuda:0"):
-        pytest.skip("persistent mechanics3d smoke requires cuda:0")
+        pytest.skip("persistent physics smoke requires cuda:0")
 
     mesh = _cube_mesh()
-    session = Mechanics3DSession(
+    session = NewtonSession(
         mesh,
-        Mechanics3DSettings(
+        NewtonSettings(
             device="cuda:0",
             gravity=0.0,
             steps=2,

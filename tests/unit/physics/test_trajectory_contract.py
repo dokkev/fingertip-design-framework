@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from mechanics3d import checkpoint_step_schedule
+from physics import checkpoint_step_schedule
 
 
 def test_checkpoint_schedule_lands_exactly_and_respects_increment() -> None:

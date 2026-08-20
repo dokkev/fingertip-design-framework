@@ -37,12 +37,12 @@ from contact import (
     make_outer_compliant_surface,
     sphere_alignment_at_normalized_location,
 )
-from mechanics3d import (
+from physics import (
     IndentationResult,
     IndentationSettings,
-    Mechanics3DSettings,
+    NewtonSettings,
     RigidIndenter3D,
-    prepare_fingertip_mechanics_mesh,
+    prepare_fingertip_mesh,
     solve_fingertip_indentation,
 )
 from mesh import make_distal_phalanx_mesh, make_sphere_mesh
@@ -50,7 +50,7 @@ from mesh.volume_types import volume_mesh_settings_for_tier
 from model import Fingertip, FingertipParameters
 
 
-OUTPUT_DIR = Path("output/validation/mechanics3d/void_height_carrier_contact")
+OUTPUT_DIR = Path("output/validation/physics/void_height_carrier_contact")
 SEARCH_SPHERE_SUBDIVISIONS = 3
 SEARCH_MAX_LOAD_INCREMENT_MM = 0.05
 SEARCH_VBD_ITERATIONS = 10
@@ -307,7 +307,7 @@ def _run_case(
             alignment.nominal_pose,
             alignment.approach_direction,
         )
-        mechanics = Mechanics3DSettings(
+        mechanics = NewtonSettings(
             device=device,
             gravity=0.0,
             dt=float(contract["dt_s"]),
@@ -650,7 +650,7 @@ def run_validation(
         raise ValueError("void heights and travels must be positive")
 
     config = {
-        "runner": "validation.mechanics3d.void_height_carrier_contact",
+        "runner": "validation.physics.void_height_carrier_contact",
         "matrix": matrix,
         "device": device,
         "profile": profile,
@@ -680,7 +680,7 @@ def run_validation(
         if cached is None:
             fingertip = Fingertip(parameters)
             volume_mesh = fingertip.volume_mesh(volume_mesh_settings_for_tier("search"))
-            prepared = prepare_fingertip_mechanics_mesh(volume_mesh)
+            prepared = prepare_fingertip_mesh(volume_mesh)
             carrier = make_distal_phalanx_mesh(volume_mesh.solid)
             cached = (volume_mesh, prepared, carrier)
             mesh_cache[parameters] = cached

@@ -1,93 +1,49 @@
-"""Current Ax orchestration, registry, and budget contracts."""
+"""Ax translation tests for the current morphology-only search boundary."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Mapping
-
-import pytest
+from types import SimpleNamespace
 
 import optimization.ax_adapter as ax_adapter
-from optimization.ax_adapter import AxSettings, run_ax_optimization
-from optimization.evaluation_registry import EvaluationRegistry
-from optimization.evaluator import DesignEvaluation
-from optimization.study import (
-    PRODUCTION_EVALUATION_CONTRACT_ID,
-    OptimizationStudy,
-    create_production_study,
-)
+from model import FingertipParameters
+from optimization.ax_adapter import AxSettings, create_ax_client, run_ax_optimization
+from optimization.design_space import DesignSpace, DesignVariable, PRODUCTION_SEARCH_BOUNDS
 
 
-NOMINAL = {
-    "flat_pad_height": 5.0,
-    "semielliptical_pad_height": 9.0,
-    "stem_width": 7.6,
-    "stem_height": 6.0,
-    "void_width": 1.0,
-    "void_height": 0.25,
-}
-KNOWN_FAILURE = {
-    "flat_pad_height": 5.1,
-    "semielliptical_pad_height": 8.9,
-    "stem_width": 7.7,
-    "stem_height": 6.1,
-    "void_width": 1.1,
-    "void_height": 0.5,
-}
-NEW_INITIALIZATION = {
-    "flat_pad_height": 5.2,
-    "semielliptical_pad_height": 9.1,
-    "stem_width": 7.8,
-    "stem_height": 6.2,
-    "void_width": 1.2,
-    "void_height": 1.0,
-}
-NEW_SEARCH = {
-    "flat_pad_height": 5.3,
-    "semielliptical_pad_height": 8.8,
-    "stem_width": 7.9,
-    "stem_height": 6.3,
-    "void_width": 1.3,
-    "void_height": 1.5,
-}
-
-
-def _evaluation(status: str, value: float | None = None) -> DesignEvaluation:
-    success = status == "success"
-    metric = value if success else None
-    return DesignEvaluation(
-        status=status,  # type: ignore[arg-type]
-        score=metric,
-        minimum_auc=metric,
-        mean_auc=metric,
-        median_auc=metric,
-        minimum_raw_contact_metric=metric,
-        mean_raw_contact_metric=metric,
-        limiting_trajectory=None,
-        limiting_diameter_mm=None,
-        limiting_location_x_mm=None,
-        minimum_raw_contact_state=None,
-        minimum_raw_contact_depth_mm=None,
-        trajectories=(),
-        states=(),
-        diagnostics={},
-        failure_message=None if success else "synthetic deterministic failure",
+def _space() -> DesignSpace:
+    return DesignSpace(
+        FingertipParameters(void_height=0.25),
+        tuple(
+            DesignVariable(spec.name, True, spec.lower, spec.upper)
+            for spec in PRODUCTION_SEARCH_BOUNDS
+        ),
     )
 
 
-class _CountingEvaluator:
-    def __init__(self, evaluations: list[DesignEvaluation]) -> None:
-        self._evaluations = iter(evaluations)
-        self.calls: list[dict[str, float]] = []
+@dataclass(frozen=True)
+class _Evaluation:
+    status: str
+    objective_value: float
+    diagnostics: dict[str, object]
+    failure_message: str | None = None
 
-    def evaluate(self, parameters) -> DesignEvaluation:
-        self.calls.append(
-            {
-                name: float(getattr(parameters, name))
-                for name in NOMINAL
-            }
-        )
-        return next(self._evaluations)
+
+class _Evaluator:
+    def __init__(self) -> None:
+        self.calls: list[object] = []
+
+    def evaluate(self, parameters) -> _Evaluation:
+        self.calls.append(parameters)
+        value = sum(float(getattr(parameters, name)) for name in (
+            "flat_pad_height",
+            "semielliptical_pad_height",
+            "stem_width",
+            "stem_height",
+            "void_width",
+            "void_height",
+        ))
+        return _Evaluation("success", value, {})
 
 
 @dataclass
@@ -98,29 +54,20 @@ class _Trial:
 
 
 class _ClientDouble:
-    def __init__(
-        self,
-        candidates: list[Mapping[str, float]],
-        generation_nodes: list[str] | None = None,
-    ) -> None:
-        self._candidates = iter(candidates)
-        self._generation_nodes = iter(
-            generation_nodes
-            if generation_nodes is not None
-            else ["Sobol"] * len(candidates)
-        )
+    def __init__(self, candidates: list[dict[str, float]]) -> None:
+        self.candidates = iter(candidates)
         self.trials: dict[int, _Trial] = {}
+        self.last_generation_node_name = "MBM"
 
     def attach_trial(self, parameters, arm_name=None) -> int:
-        trial_index = len(self.trials)
-        self.trials[trial_index] = _Trial(dict(parameters))
-        return trial_index
+        index = len(self.trials)
+        self.trials[index] = _Trial(dict(parameters))
+        return index
 
     def get_next_trials(self, max_trials: int):
         assert max_trials == 1
-        self.last_generation_node_name = next(self._generation_nodes)
-        trial_index = self.attach_trial(next(self._candidates))
-        return {trial_index: self.trials[trial_index].parameters}
+        index = self.attach_trial(next(self.candidates))
+        return {index: self.trials[index].parameters}
 
     def complete_trial(self, trial_index: int, raw_data) -> None:
         self.trials[trial_index].status = "COMPLETED"
@@ -133,356 +80,52 @@ class _ClientDouble:
         self.trials[trial_index].status = "ABANDONED"
 
 
-def _register(
-    registry: EvaluationRegistry,
-    parameters: Mapping[str, float],
-    *,
-    status: str,
-    trial_index: int,
-    minimum_auc: float | None,
-) -> None:
-    registry.register(
-        PRODUCTION_EVALUATION_CONTRACT_ID,
-        parameters,
-        status=status,
-        first_trial_index=trial_index,
-        first_campaign_id="historical",
-        result_artifact_path="output/historical/checkpoint.json",
-        minimum_auc=minimum_auc,
-        failure_category=None if status == "success" else status,
-        failure_message=None if status == "success" else "historical failure",
-        failure_scenario=None,
-        evaluation_wall_time_seconds=1.0,
+def _candidate(value: float) -> dict[str, float]:
+    return {
+        "flat_pad_height": value,
+        "semielliptical_pad_height": 9.0,
+        "stem_width": 7.6,
+        "stem_height": 6.0,
+        "void_width": 1.0,
+        "void_height": 0.25,
+    }
+
+
+def test_create_ax_client_translates_all_six_active_morphology_variables() -> None:
+    client = create_ax_client(
+        SimpleNamespace(design_space=_space()),
+        AxSettings(initialization_trials=1, search_trials=1, seed=7),
     )
+    assert set(client._experiment.parameters.keys()) == {
+        "flat_pad_height",
+        "semielliptical_pad_height",
+        "stem_width",
+        "stem_height",
+        "void_width",
+        "void_height",
+    }
 
 
-def _run_with_double(
+def test_run_ax_optimization_evaluates_morphology_without_mechanics_or_optics(
     monkeypatch,
-    tmp_path,
-    *,
-    client: _ClientDouble,
-    evaluator: _CountingEvaluator,
-    initialization_trials: int = 1,
-    search_trials: int = 1,
-    max_known: int = 20,
-):
-    study = create_production_study()
-    registry = EvaluationRegistry(tmp_path / "registry.json")
+) -> None:
+    client = _ClientDouble([_candidate(5.5)])
+    evaluator = _Evaluator()
+    study = SimpleNamespace(design_space=_space(), create_evaluator=lambda: evaluator)
     monkeypatch.setattr(ax_adapter, "create_ax_client", lambda *_: client)
-    monkeypatch.setattr(
-        OptimizationStudy,
-        "create_evaluator",
-        lambda self: evaluator,
-    )
-    result = run_ax_optimization(
-        study,
-        AxSettings(initialization_trials, search_trials, seed=17),
-        evaluation_registry=registry,
-        evaluation_contract_id=PRODUCTION_EVALUATION_CONTRACT_ID,
-        campaign_id="current",
-        result_artifact_path="output/current/checkpoint.json",
-        max_consecutive_known_proposals=max_known,
-    )
-    return registry, result
-
-
-def test_history_bootstrap_duplicate_abandon_and_unique_evaluation_budgets(
-    monkeypatch,
-    tmp_path,
-) -> None:
-    registry = EvaluationRegistry(tmp_path / "registry.json")
-    _register(registry, NOMINAL, status="success", trial_index=0, minimum_auc=0.4)
-    _register(
-        registry,
-        KNOWN_FAILURE,
-        status="optics_failure",
-        trial_index=1,
-        minimum_auc=None,
-    )
-    client = _ClientDouble(
-        [KNOWN_FAILURE, NEW_INITIALIZATION, NOMINAL, NEW_SEARCH],
-        generation_nodes=["Sobol", "Sobol", "MBM", "MBM"],
-    )
-    evaluator = _CountingEvaluator(
-        [_evaluation("success", 0.5), _evaluation("fea_failure")]
-    )
-    study = create_production_study()
-    monkeypatch.setattr(ax_adapter, "create_ax_client", lambda *_: client)
-    monkeypatch.setattr(
-        OptimizationStudy,
-        "create_evaluator",
-        lambda self: evaluator,
-    )
 
     result = run_ax_optimization(
         study,
-        AxSettings(1, 1, seed=3),
-        evaluation_registry=registry,
-        evaluation_contract_id=PRODUCTION_EVALUATION_CONTRACT_ID,
-        campaign_id="current",
-        result_artifact_path="output/current/checkpoint.json",
+        AxSettings(
+            initialization_trials=1,
+            search_trials=1,
+            seed=7,
+            objective_name="contact_state_separation",
+        ),
     )
 
-    assert [record.status for record in result.records] == [
-        "duplicate_skipped",
-        "duplicate_skipped",
-        "success",
-        "duplicate_skipped",
-        "fea_failure",
-    ]
-    assert evaluator.calls == [NEW_INITIALIZATION, NEW_SEARCH]
-    assert result.historical_success_count == 1
-    assert result.historical_failure_count == 1
-    assert result.ax_proposal_count == 4
-    assert result.duplicate_proposal_count == 2
-    assert result.new_evaluation_count == 2
-    assert result.unique_success_count == 1
-    assert result.unique_failure_count == 1
-    assert [trial.status for trial in client.trials.values()].count("COMPLETED") == 2
-    assert [trial.status for trial in client.trials.values()].count("FAILED") == 1
-    assert [trial.status for trial in client.trials.values()].count("ABANDONED") == 4
-    assert [record.phase for record in result.records] == [
-        "nominal",
-        "initialization",
-        "initialization",
-        "search",
-        "search",
-    ]
-    assert registry.lookup(
-        PRODUCTION_EVALUATION_CONTRACT_ID, NEW_INITIALIZATION
-    ).status == "success"
-    assert registry.lookup(
-        PRODUCTION_EVALUATION_CONTRACT_ID, NEW_SEARCH
-    ).status == "fea_failure"
-
-
-def test_known_proposals_do_not_consume_budget_and_trigger_stall_guard(
-    monkeypatch,
-    tmp_path,
-) -> None:
-    registry = EvaluationRegistry(tmp_path / "registry.json")
-    _register(registry, NOMINAL, status="success", trial_index=0, minimum_auc=0.4)
-    _register(
-        registry,
-        KNOWN_FAILURE,
-        status="fea_failure",
-        trial_index=1,
-        minimum_auc=None,
-    )
-    client = _ClientDouble(
-        [KNOWN_FAILURE, NOMINAL, KNOWN_FAILURE],
-        generation_nodes=["Sobol", "Sobol", "Sobol"],
-    )
-    evaluator = _CountingEvaluator([])
-    study = create_production_study()
-    monkeypatch.setattr(ax_adapter, "create_ax_client", lambda *_: client)
-    monkeypatch.setattr(
-        OptimizationStudy,
-        "create_evaluator",
-        lambda self: evaluator,
-    )
-
-    result = run_ax_optimization(
-        study,
-        AxSettings(1, 0, seed=3),
-        evaluation_registry=registry,
-        evaluation_contract_id=PRODUCTION_EVALUATION_CONTRACT_ID,
-        campaign_id="current",
-        result_artifact_path="output/current/checkpoint.json",
-        max_consecutive_known_proposals=3,
-    )
-
-    assert result.status == "optimizer_stalled_on_known_evaluations"
-    assert result.consecutive_known_proposals == 3
-    assert result.new_evaluation_count == 0
-    assert result.duplicate_proposal_count == 3
-    assert evaluator.calls == []
-    assert all(
-        client.trials[record.trial_index].status == "ABANDONED"
-        for record in result.records
-    )
-
-
-def test_checkpoint_hook_precedes_then_follows_registry_registration(
-    monkeypatch,
-    tmp_path,
-) -> None:
-    client = _ClientDouble(
-        [NEW_INITIALIZATION, NEW_SEARCH],
-        generation_nodes=["Sobol", "MBM"],
-    )
-    evaluator = _CountingEvaluator(
-        [_evaluation("success", 0.4), _evaluation("success", 0.5), _evaluation("success", 0.6)]
-    )
-    registry = EvaluationRegistry(tmp_path / "registry.json")
-    events: list[tuple[str, str | None, bool]] = []
-
-    def on_record(_client, records) -> None:
-        record = records[-1]
-        known = registry.lookup(
-            PRODUCTION_EVALUATION_CONTRACT_ID,
-            record.parameters,
-        )
-        events.append((record.phase, record.registry_key, known is not None))
-
-    study = create_production_study()
-    monkeypatch.setattr(ax_adapter, "create_ax_client", lambda *_: client)
-    monkeypatch.setattr(
-        OptimizationStudy,
-        "create_evaluator",
-        lambda self: evaluator,
-    )
-    run_ax_optimization(
-        study,
-        AxSettings(1, 1, seed=3),
-        on_record=on_record,
-        evaluation_registry=registry,
-        evaluation_contract_id=PRODUCTION_EVALUATION_CONTRACT_ID,
-        campaign_id="checkpoint-ordering",
-        result_artifact_path="output/checkpoint-ordering/checkpoint.json",
-    )
-
-    assert events == [
-        ("nominal", None, False),
-        ("nominal", events[1][1], True),
-        ("initialization", None, False),
-        ("initialization", events[3][1], True),
-        ("search", None, False),
-        ("search", events[5][1], True),
-    ]
-
-
-def test_real_ax_accepts_historical_nominal_then_abandons_nominal_duplicate(
-    monkeypatch,
-    tmp_path,
-) -> None:
-    study = create_production_study()
-    settings = AxSettings(1, 1, seed=23)
-    registry = EvaluationRegistry(tmp_path / "registry.json")
-    _register(registry, NOMINAL, status="success", trial_index=0, minimum_auc=0.4)
-    real_client = ax_adapter.create_ax_client(study, settings)
-    generated_calls = 0
-
-    class _ForcedClient:
-        def __getattr__(self, name):
-            return getattr(real_client, name)
-
-        def get_next_trials(self, max_trials: int):
-            nonlocal generated_calls
-            generated_calls += 1
-            return real_client.get_next_trials(
-                max_trials=max_trials,
-                fixed_parameters=(
-                    NEW_INITIALIZATION if generated_calls == 1 else NEW_SEARCH
-                ),
-            )
-
-    evaluator = _CountingEvaluator(
-        [_evaluation("success", 0.5), _evaluation("success", 0.6)]
-    )
-    monkeypatch.setattr(ax_adapter, "create_ax_client", lambda *_: _ForcedClient())
-    monkeypatch.setattr(
-        OptimizationStudy,
-        "create_evaluator",
-        lambda self: evaluator,
-    )
-
-    result = run_ax_optimization(
-        study,
-        settings,
-        evaluation_registry=registry,
-        evaluation_contract_id=PRODUCTION_EVALUATION_CONTRACT_ID,
-        campaign_id="historical-nominal-integration",
-        result_artifact_path=None,
-    )
-
-    assert [record.status for record in result.records] == [
-        "duplicate_skipped",
-        "success",
-        "success",
-    ]
-    assert evaluator.calls == [NEW_INITIALIZATION, NEW_SEARCH]
-    assert result.historical_success_count == 1
-    nominal = result.records[0]
-    assert real_client._experiment.trials[nominal.trial_index].status.name == (
-        "ABANDONED"
-    )
-
-
-def test_real_ax_failed_point_can_be_reproposed_then_registry_abandons_it(
-    monkeypatch,
-    tmp_path,
-) -> None:
-    """Exercise the Ax 1.3.1 Client while forcing the incident A -> A -> B."""
-    study = create_production_study()
-    settings = AxSettings(1, 1, seed=29)
-    real_client = ax_adapter.create_ax_client(study, settings)
-    forced = iter((KNOWN_FAILURE, KNOWN_FAILURE, NEW_INITIALIZATION, NEW_SEARCH))
-
-    class _ForcedClient:
-        def __getattr__(self, name):
-            return getattr(real_client, name)
-
-        def get_next_trials(self, max_trials: int):
-            return real_client.get_next_trials(
-                max_trials=max_trials,
-                fixed_parameters=next(forced),
-            )
-
-    evaluator = _CountingEvaluator(
-        [
-            _evaluation("success", 0.4),
-            _evaluation("optics_failure"),
-            _evaluation("success", 0.5),
-            _evaluation("success", 0.6),
-        ]
-    )
-    monkeypatch.setattr(ax_adapter, "create_ax_client", lambda *_: _ForcedClient())
-    monkeypatch.setattr(
-        OptimizationStudy,
-        "create_evaluator",
-        lambda self: evaluator,
-    )
-
-    result = run_ax_optimization(
-        study,
-        settings,
-        evaluation_registry=EvaluationRegistry(tmp_path / "registry.json"),
-        evaluation_contract_id=PRODUCTION_EVALUATION_CONTRACT_ID,
-        campaign_id="ax-1.3.1-integration",
-        result_artifact_path=None,
-    )
-
-    assert [record.status for record in result.records] == [
-        "success",
-        "optics_failure",
-        "duplicate_skipped",
-        "success",
-        "success",
-    ]
-    assert [record.phase for record in result.records] == [
-        "nominal",
-        "initialization",
-        "initialization",
-        "initialization",
-        "search",
-    ]
-    for actual, expected in zip(
-        evaluator.calls,
-        [NOMINAL, KNOWN_FAILURE, NEW_INITIALIZATION, NEW_SEARCH],
-        strict=True,
-    ):
-        assert actual == pytest.approx(expected)
-    assert [
-        real_client._experiment.trials[record.trial_index]
-        .generator_run._generation_node_name
-        for record in result.records[1:]
-    ] == ["Sobol", "Sobol", "Sobol", "MBM"]
-    failed, duplicate = result.records[1:3]
-    assert real_client._experiment.trials[failed.trial_index].status.name == "FAILED"
-    assert (
-        real_client._experiment.trials[duplicate.trial_index].status.name
-        == "ABANDONED"
-    )
-    assert result.new_evaluation_count == 4
-    assert result.duplicate_proposal_count == 1
+    assert result.status == "COMPLETE"
+    assert result.ax_proposal_count == 1
+    assert result.unique_success_count == 2  # manually attached nominal + proposal
+    assert len(evaluator.calls) == 2
+    assert all(record.status == "success" for record in result.records)

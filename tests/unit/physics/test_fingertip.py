@@ -14,10 +14,10 @@ from mesh.volume_types import VolumeMeshValidation, volume_mesh_settings_for_tie
 from model.fingertip_model import FingertipModel
 from model.fingertip_parameters import FingertipParameters
 from model.solid import build_fingertip_solid
-from mechanics3d import (
-    Mechanics3DResult,
+from physics import (
+    NewtonResult,
     make_fingertip_volume_state,
-    prepare_fingertip_mechanics_mesh,
+    prepare_fingertip_mesh,
 )
 
 
@@ -29,7 +29,7 @@ def volume_mesh():
 
 
 def test_adapter_preserves_fea_node_order_and_surface_provenance(volume_mesh) -> None:
-    prepared = prepare_fingertip_mechanics_mesh(volume_mesh)
+    prepared = prepare_fingertip_mesh(volume_mesh)
 
     assert tuple(prepared.source_node_ids) == tuple(sorted(volume_mesh.nodes))
     assert prepared.morphology_fingerprint == volume_mesh.morphology_fingerprint
@@ -39,7 +39,7 @@ def test_adapter_preserves_fea_node_order_and_surface_provenance(volume_mesh) ->
 
 
 def test_adapter_translates_all_connectivity_through_one_local_mapping(volume_mesh) -> None:
-    prepared = prepare_fingertip_mechanics_mesh(volume_mesh)
+    prepared = prepare_fingertip_mesh(volume_mesh)
     local = {node_id: index for index, node_id in enumerate(sorted(volume_mesh.nodes))}
 
     expected_tetrahedra = np.asarray(
@@ -69,12 +69,12 @@ def test_adapter_rejects_invalid_source_volume_mesh(volume_mesh) -> None:
         validation=VolumeMeshValidation(False, {"synthetic_failure": False}, ("synthetic_failure",)),
     )
     with pytest.raises(ValueError, match="invalid FingertipVolumeMesh"):
-        prepare_fingertip_mechanics_mesh(invalid)
+        prepare_fingertip_mesh(invalid)
 
 
 def test_mechanics_result_promotes_without_reordering_or_remeshing(volume_mesh) -> None:
-    prepared = prepare_fingertip_mechanics_mesh(volume_mesh)
-    result = Mechanics3DResult(
+    prepared = prepare_fingertip_mesh(volume_mesh)
+    result = NewtonResult(
         rest_vertices=prepared.tet_mesh.vertices,
         deformed_vertices=prepared.tet_mesh.vertices.copy(),
         tetrahedra=prepared.tet_mesh.tetrahedra,
@@ -97,10 +97,10 @@ def test_mechanics_result_promotes_without_reordering_or_remeshing(volume_mesh) 
 
 
 def test_mechanics_result_promotion_rejects_topology_mismatch(volume_mesh) -> None:
-    prepared = prepare_fingertip_mechanics_mesh(volume_mesh)
+    prepared = prepare_fingertip_mesh(volume_mesh)
     mismatched = prepared.tet_mesh.tetrahedra.copy()
     mismatched[0] = mismatched[0, ::-1]
-    result = Mechanics3DResult(
+    result = NewtonResult(
         rest_vertices=prepared.tet_mesh.vertices,
         deformed_vertices=prepared.tet_mesh.vertices,
         tetrahedra=mismatched,

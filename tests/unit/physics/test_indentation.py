@@ -5,17 +5,17 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from mechanics3d import (
+from physics import (
     IndentationResult,
     IndentationSettings,
-    Mechanics3DSettings,
-    Mechanics3DResult,
+    NewtonSettings,
+    NewtonResult,
     RigidIndenter3D,
     RigidPose3D,
     solve_fingertip_indentation,
 )
-from mechanics3d.fingertip import FingertipMechanicsMesh
-from mechanics3d.types import TetMeshData
+from physics.fingertip import PreparedFingertipMesh
+from physics.types import TetMeshData
 from mesh.rigid_object import make_cube_mesh
 
 
@@ -42,7 +42,7 @@ def test_indentation_settings_and_result_are_neutral() -> None:
     assert settings.travel_mm == 0.5
     assert settings.load_steps == 4
 
-    result = Mechanics3DResult(
+    result = NewtonResult(
         rest_vertices=np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]], dtype=np.float32),
         deformed_vertices=np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.1]], dtype=np.float32),
         tetrahedra=np.array([[0, 1, 2, 3]], dtype=np.int32),
@@ -57,7 +57,7 @@ def test_indentation_settings_and_result_are_neutral() -> None:
 
 
 def test_indentation_rejects_non_authoritative_fixed_vertices_before_backend_load() -> None:
-    prepared = FingertipMechanicsMesh(
+    prepared = PreparedFingertipMesh(
         TetMeshData(
             np.array(
                 [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
@@ -78,6 +78,6 @@ def test_indentation_rejects_non_authoritative_fixed_vertices_before_backend_loa
                 RigidPose3D((0.0, 2.0, 0.0), (0.0, 0.0, 0.0, 1.0)),
                 (0.0, -1.0, 0.0),
             ),
-            Mechanics3DSettings(fixed_vertex_indices=(0, 2)),
+            NewtonSettings(fixed_vertex_indices=(0, 2)),
             IndentationSettings(travel_mm=0.1),
         )

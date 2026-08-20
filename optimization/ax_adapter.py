@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 import time
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Callable, Literal, Mapping
+from typing import Callable, Literal, Mapping
 
 from ax.api.client import Client
 from ax.api.configs import RangeParameterConfig
@@ -20,11 +20,6 @@ from optimization.evaluation_registry import (
     EvaluationRegistry,
     EvaluationRegistryRecord,
 )
-
-if TYPE_CHECKING:
-    from optimization.evaluator import DesignEvaluation
-    from optimization.study import OptimizationStudy
-
 
 AX_OBJECTIVE_NAME = "minimum_auc"
 CONTACT_STATE_SEPARATION_OBJECTIVE_NAME = "contact_state_separation"
@@ -163,7 +158,7 @@ class AxRunResult:
         return best
 
 
-def create_ax_client(study: OptimizationStudy, settings: AxSettings) -> Client:
+def create_ax_client(study: object, settings: AxSettings) -> Client:
     """Configure one Ax client from active design variables and run settings."""
     if not hasattr(study, "design_space"):
         raise TypeError("study must provide a design_space")
@@ -419,7 +414,7 @@ def _ax_ready_for_search(client: Client) -> bool:
 
 
 def run_ax_optimization(
-    study: OptimizationStudy | object,
+    study: object,
     settings: AxSettings,
     *,
     on_record: Callable[[Client, tuple[AxTrialRecord, ...]], None] | None = None,

@@ -2,7 +2,7 @@
 
 This module is deliberately validation-owned.  It loads persisted nonlinear
 FEA states, solves the corresponding exact meshes with the already-frozen
-mechanics3d session, and sends both deformed surfaces through the one shared
+physics session, and sends both deformed surfaces through the one shared
 full-3D OptiX transport implementation.  It never runs Kratos FEA.
 """
 
@@ -24,11 +24,11 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 from scipy.stats import kendalltau, rankdata, spearmanr
 
-from mechanics3d import (
-    Mechanics3DSession,
-    Mechanics3DSettings,
+from physics import (
+    NewtonSession,
+    NewtonSettings,
     make_fingertip_volume_state as make_vbd_volume_state,
-    prepare_fingertip_mechanics_mesh,
+    prepare_fingertip_mesh,
 )
 from mesh.volume3d import generate_volume_mesh
 from mesh.volume_types import volume_mesh_settings_for_tier
@@ -60,11 +60,11 @@ from .correspondence import (
     compare_mechanics_states,
     verify_exact_mesh_correspondence,
 )
-from .fea3d_reference import load_fea3d_reference
+from validation.reference.kratos3d.fea3d_reference import load_fea3d_reference
 
 
 REFERENCE_ROOT = Path("output/validation/overnight_force_localized_trend/fea3d")
-OUTPUT_ROOT = Path("output/validation/mechanics3d")
+OUTPUT_ROOT = Path("output/validation/physics")
 OPTIX_ROOT = OUTPUT_ROOT / "vbd_fea_optical_optix"
 TREND_JSON = OUTPUT_ROOT / "vbd_fea_optical_trend.json"
 TREND_MD = OUTPUT_ROOT / "vbd_fea_optical_trend.md"
@@ -253,8 +253,8 @@ def discover_homogeneous_groups(rows: Sequence[Mapping[str, Any]]) -> list[dict[
     return [group for group in groups if group["candidate_count"] == largest]
 
 
-def _vbd_settings(prepared: Any) -> Mechanics3DSettings:
-    return Mechanics3DSettings(
+def _vbd_settings(prepared: Any) -> NewtonSettings:
+    return NewtonSettings(
         device="cuda:0",
         gravity=0.0,
         dt=VBD_CORRESPONDENCE_DT,
@@ -380,7 +380,7 @@ def _prepare_candidate(group: Mapping[str, Any], morphology_id: str) -> dict[str
         build_fingertip_solid(model),
         volume_mesh_settings_for_tier("search"),
     )
-    prepared = prepare_fingertip_mechanics_mesh(volume_mesh)
+    prepared = prepare_fingertip_mesh(volume_mesh)
     reference_mesh = tip.mesh()
     state: dict[str, Any] = {
         "morphology_id": morphology_id,
@@ -700,7 +700,7 @@ def run_comparison(
         for morphology_id in sorted(group["candidates"]):
             state = _prepare_candidate(group, morphology_id)
             settings = _vbd_settings(state["prepared"])
-            session = Mechanics3DSession(state["prepared"].tet_mesh, settings)
+            session = NewtonSession(state["prepared"].tet_mesh, settings)
             for side in ("left", "right"):
                 side_state = state["sides"][side]
                 reference = side_state["reference"]
@@ -743,9 +743,9 @@ def run_comparison(
                     metadata={
                         "morphology_id": state["morphology_id"],
                         "contact_state_fingerprint": vbd_fp,
-                        "mechanics_source": "mechanics3d.Mechanics3DSession",
+                        "mechanics_source": "physics.NewtonSession",
                         "vbd_side": side,
-                        "vbd_surface_source": "direct Mechanics3DResult deformed coordinates",
+                        "vbd_surface_source": "direct NewtonResult deformed coordinates",
                         "vbd_state_fingerprint": vbd_fp,
                         "full3d_surface_provenance": "actual_deformed_3d_volume_state",
                     },
@@ -811,7 +811,7 @@ def run_comparison(
                 vbd_contract = {
                     **common_contract,
                     "branch": "VBD",
-                    "mechanics_source": "mechanics3d.Mechanics3DSession",
+                    "mechanics_source": "physics.NewtonSession",
                     "native_manifest": str(side_state["case"]["native_manifest"]),
                     "native_manifest_sha256": side_state["case"]["native_manifest_sha256"],
                     "vbd_state_fingerprint": side_state["vbd_fp"],
@@ -844,7 +844,7 @@ def run_comparison(
                     settings=optix_settings,
                     morphology_id=state["morphology_id"],
                     morphology_fingerprint=state["morphology_fingerprint"],
-                    mechanics_source="mechanics3d.Mechanics3DSession",
+                    mechanics_source="physics.NewtonSession",
                     contact_state={"localized_load_only": True, "side": side, "contact_state_fingerprint": side_state["vbd_fp"]},
                     transport_config=config,
                     runtime=runtime,
@@ -953,7 +953,7 @@ def run_comparison(
             "source_artifacts": [str(row["native_manifest"]) for row in rows],
         },
         "vbd": {
-            "solver": "mechanics3d.Mechanics3DSession/Newton SolverVBD",
+            "solver": "physics.NewtonSession/Newton SolverVBD",
             "warp_version": _package_version("warp-lang"),
             "newton_version": _package_version("newton"),
             "settings": asdict(prepared_groups[0]["prepared_candidates"][0]["vbd_settings"]),

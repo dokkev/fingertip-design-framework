@@ -5,9 +5,9 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from mechanics3d import FingertipMechanicsMesh, Mechanics3DResult, TetMeshData
-from validation.mechanics3d.correspondence import compare_mechanics_states
-from validation.mechanics3d.fea3d_reference import FEA3DReferenceState
+from physics import PreparedFingertipMesh, NewtonResult, TetMeshData
+from validation.physics.correspondence import compare_mechanics_states
+from validation.reference.kratos3d.fea3d_reference import FEA3DReferenceState
 
 
 def _synthetic_states():
@@ -28,7 +28,7 @@ def _synthetic_states():
         [[0, 1, 3, 4], [1, 2, 3, 6], [1, 3, 4, 6], [1, 4, 5, 6], [3, 4, 6, 7]],
         dtype=np.int32,
     )
-    prepared = FingertipMechanicsMesh(
+    prepared = PreparedFingertipMesh(
         tet_mesh=TetMeshData(vertices, tetrahedra),
         source_node_ids=np.arange(8, dtype=np.int64),
         support_vertex_indices=(0, 1, 2, 3),
@@ -56,7 +56,7 @@ def _synthetic_states():
         provenance={"node_correspondence": "provable"},
         tetrahedra_node_ids=np.asarray(tetrahedra, dtype=np.int64),
     )
-    result = Mechanics3DResult(
+    result = NewtonResult(
         rest_vertices=vertices,
         deformed_vertices=vertices + vbd_displacement,
         tetrahedra=tetrahedra,

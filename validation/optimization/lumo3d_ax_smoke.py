@@ -19,11 +19,10 @@ from optimization.design_space import (
     PRODUCTION_SEARCH_BOUNDS,
 )
 from model import Fingertip, FingertipParameters
-from validation.optimization.lumo3d_evaluator import (
-    LUMO3D_EVALUATION_CONTRACT_ID,
+from validation.optimization.lumo3d_trajectory_evaluator import (
+    TRAJECTORY_EVALUATION_CONTRACT_ID,
+    create_lumo3d_trajectory_study,
     LUMO3D_OBSERVATION_LEVEL,
-    Lumo3DEvaluation,
-    create_lumo3d_study,
 )
 
 
@@ -42,7 +41,7 @@ class _SyntheticEvaluator:
     def __init__(self) -> None:
         self.calls: list[dict[str, float]] = []
 
-    def evaluate(self, parameters) -> Lumo3DEvaluation:
+    def evaluate(self, parameters):
         values = {
             name: float(getattr(parameters, name))
             for name in (
@@ -56,13 +55,9 @@ class _SyntheticEvaluator:
         }
         self.calls.append(values)
         score = sum(values.values()) / len(values)
-        return Lumo3DEvaluation(
+        return _SyntheticEvaluation(
             status="success",
             objective_value=score,
-            pairwise_distance_matrix=((0.0, score, score), (score, 0.0, score), (score, score, 0.0)),
-            contact_states=(),
-            mechanics_diagnostics=(),
-            optical_diagnostics=(),
             diagnostics={
                 "objective_name": CONTACT_STATE_SEPARATION_OBJECTIVE_NAME,
                 "observation_level": LUMO3D_OBSERVATION_LEVEL,
@@ -70,11 +65,22 @@ class _SyntheticEvaluator:
         )
 
 
+@dataclass(frozen=True)
+class _SyntheticEvaluation:
+    status: str
+    objective_value: float
+    diagnostics: dict[str, Any]
+
+    @property
+    def score(self) -> float:
+        return self.objective_value
+
+
 def run_lumo3d_ax_smoke(output_dir: str | Path) -> dict[str, Any]:
     """Run nominal + Sobol + MBM using the installed Ax 1.3.1 Client."""
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
-    wiring = create_lumo3d_study(output)
+    wiring = create_lumo3d_trajectory_study(output)
     evaluator = _SyntheticEvaluator()
     study = _SyntheticStudy(wiring.design_space, evaluator)
     registry_path = output / "registry.json"
@@ -92,7 +98,7 @@ def run_lumo3d_ax_smoke(output_dir: str | Path) -> dict[str, Any]:
             objective_name=CONTACT_STATE_SEPARATION_OBJECTIVE_NAME,
         ),
         evaluation_registry=registry,
-        evaluation_contract_id=LUMO3D_EVALUATION_CONTRACT_ID,
+        evaluation_contract_id=TRAJECTORY_EVALUATION_CONTRACT_ID,
         campaign_id="lumo3d-ax-smoke",
         result_artifact_path=str(output / "checkpoint.json"),
     )
@@ -108,7 +114,7 @@ def run_lumo3d_ax_smoke(output_dir: str | Path) -> dict[str, Any]:
         raise RuntimeError("Ax smoke did not retain a successful best record")
     if len(evaluator.calls) != 3:
         raise RuntimeError("synthetic Ax smoke did not evaluate exactly three records")
-    stored = registry.records_for_contract(LUMO3D_EVALUATION_CONTRACT_ID)
+    stored = registry.records_for_contract(TRAJECTORY_EVALUATION_CONTRACT_ID)
     if len(stored) != 3 or any(record.objective_value is None for record in stored):
         raise RuntimeError("Ax smoke registry did not persist objective_value")
     summary = {
@@ -140,18 +146,20 @@ def run_lumo3d_geometry_sensitivity(output_path: str | Path) -> dict[str, Any]:
     nominal = FingertipParameters(void_height=PRODUCTION_NOMINAL_VOID_HEIGHT_MM)
     base_parameters = {
         name: float(getattr(nominal, name))
-        for name, _, _ in PRODUCTION_SEARCH_BOUNDS
+        for spec in PRODUCTION_SEARCH_BOUNDS
+        for name in (spec.name.value,)
     }
     base_fingerprint = Fingertip(nominal).solid().morphology_fingerprint
     variables: dict[str, dict[str, Any]] = {}
-    for name, lower, upper in PRODUCTION_SEARCH_BOUNDS:
+    for spec in PRODUCTION_SEARCH_BOUNDS:
+        name, lower, upper = spec.name.value, spec.lower, spec.upper
         value = float(lower if getattr(nominal, name) != lower else upper)
         candidate = replace(nominal, **{name: value})
         fingerprint = Fingertip(candidate).solid().morphology_fingerprint
         variables[name] = {
             "candidate_parameters": {
                 field: float(getattr(candidate, field))
-                for field, _, _ in PRODUCTION_SEARCH_BOUNDS
+                for field in (spec.name.value for spec in PRODUCTION_SEARCH_BOUNDS)
             },
             "perturbed_variable": name,
             "perturbed_value": value,

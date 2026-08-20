@@ -11,10 +11,10 @@ from typing import Any
 
 import numpy as np
 
-from mechanics3d import (
-    Mechanics3DSettings,
+from physics import (
+    NewtonSettings,
     outer_compliant_timing_patch,
-    prepare_fingertip_mechanics_mesh,
+    prepare_fingertip_mesh,
     solve_prescribed_indentation,
 )
 from mesh.volume3d import generate_volume_mesh
@@ -73,7 +73,7 @@ def run_nominal_benchmark(
     solid = build_fingertip_solid(model)
     mesh_settings = volume_mesh_settings_for_tier("search")
     volume_mesh = generate_volume_mesh(solid, mesh_settings)
-    prepared = prepare_fingertip_mechanics_mesh(volume_mesh)
+    prepared = prepare_fingertip_mesh(volume_mesh)
     preprocessing_wall_s = time.perf_counter() - preprocessing_start
 
     patch = outer_compliant_timing_patch(
@@ -81,7 +81,7 @@ def run_nominal_benchmark(
         displacement_mm=(0.0, 0.5, 0.0),
         load_steps=8,
     )
-    settings = Mechanics3DSettings(
+    settings = NewtonSettings(
         device="cuda:0",
         gravity=0.0,
         dt=1.0 / 60.0,
@@ -114,7 +114,7 @@ def run_nominal_benchmark(
     warm_build = [float(item["model_build_wall_s"]) for item in warm_timings]
     warm_total = [float(item["total_mechanics_wall_s"]) for item in warm_timings]
     return {
-        "schema": "mechanics3d-vbd-prescribed-indentation-timing-v1",
+        "schema": "physics-vbd-prescribed-indentation-timing-v1",
         "case": "nominal_prescribed_0p5mm",
         "scientific_role": "timing-only prescribed indentation patch; not rigid-indenter contact",
         "fea_rerun": False,
@@ -164,7 +164,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path("output/validation/mechanics3d/vbd_nominal_indentation_timing.json"),
+        default=Path("output/validation/physics/vbd_nominal_indentation_timing.json"),
     )
     parser.add_argument("--repo-root", type=Path, default=Path("."))
     parser.add_argument("--warm-repeats", type=int, default=3)

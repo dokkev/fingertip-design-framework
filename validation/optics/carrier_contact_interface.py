@@ -17,7 +17,7 @@ from typing import Any, Iterable
 
 import numpy as np
 
-from mechanics3d import prepare_fingertip_mechanics_mesh
+from physics import prepare_fingertip_mesh
 from mesh import FingertipVolumeState, volume_mesh_settings_for_tier
 from model import Fingertip, FingertipParameters
 from optics.contact_object import CarrierOptics
@@ -31,10 +31,10 @@ from optics.transport3d import (
     transport_configuration,
 )
 from optics.transport3d.optix_backend import create_runtime
-from validation.mechanics3d.deformed_state_artifact import (
+from validation.physics.deformed_state_artifact import (
     restore_deformed_optical_state,
 )
-from validation.mechanics3d.multi_location_sphere_contact import (
+from validation.physics.multi_location_sphere_contact import (
     DEFAULT_RADIUS_MM,
     DEFAULT_TRAVEL_MM,
     SEARCH_MAX_LOAD_INCREMENT_MM,
@@ -364,7 +364,7 @@ def run_validation(
     parameters = FingertipParameters(void_height=float(void_height_mm))
     tip = Fingertip(parameters)
     volume_mesh = tip.volume_mesh(volume_mesh_settings_for_tier("search"))
-    prepared = prepare_fingertip_mechanics_mesh(volume_mesh)
+    prepared = prepare_fingertip_mesh(volume_mesh)
     runtime = create_runtime()
     settings = _settings(ray_count=ray_count)
     candidate_root = output / "observations"

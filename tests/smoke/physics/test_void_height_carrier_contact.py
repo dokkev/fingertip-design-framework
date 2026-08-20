@@ -21,11 +21,11 @@ from contact import (
     find_first_contact,
     make_outer_compliant_surface,
 )
-from mechanics3d import (
+from physics import (
     IndentationSettings,
-    Mechanics3DSettings,
+    NewtonSettings,
     RigidIndenter3D,
-    prepare_fingertip_mechanics_mesh,
+    prepare_fingertip_mesh,
     solve_fingertip_indentation,
 )
 from mesh.rigid_carrier import make_distal_phalanx_mesh
@@ -58,14 +58,14 @@ def _void_bottom_clearance_mm(vertices: np.ndarray, prepared, carrier) -> float:
 
 
 @pytest.mark.smoke
-@pytest.mark.mechanics3d
+@pytest.mark.physics
 def test_positive_void_height_collision_off_vs_on() -> None:
     if not wp.is_device_available("cuda:0"):
         pytest.skip("carrier-contact smoke requires cuda:0")
 
     fingertip = Fingertip(FingertipParameters(void_height=1.0))
     volume_mesh = fingertip.volume_mesh(volume_mesh_settings_for_tier("search"))
-    prepared = prepare_fingertip_mechanics_mesh(volume_mesh)
+    prepared = prepare_fingertip_mesh(volume_mesh)
     carrier = make_distal_phalanx_mesh(volume_mesh.solid)
     sphere = make_sphere_mesh(5.0, subdivisions=3)
     alignment = canonical_sphere_alignment(
@@ -90,7 +90,7 @@ def test_positive_void_height_collision_off_vs_on() -> None:
         alignment.nominal_pose,
         alignment.approach_direction,
     )
-    mechanics_settings = Mechanics3DSettings(
+    mechanics_settings = NewtonSettings(
         device="cuda:0",
         gravity=0.0,
         dt=1.0e-3,

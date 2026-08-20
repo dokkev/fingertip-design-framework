@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 
 from validation.common.io import strict_read_json
-from validation.mechanics3d.sweep_newton_sphere_parameters import (
+from validation.physics.sweep_newton_sphere_parameters import (
     SweepConfig,
     comparison_metrics,
     failed_record,

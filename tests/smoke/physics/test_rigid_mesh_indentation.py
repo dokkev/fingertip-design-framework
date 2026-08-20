@@ -18,16 +18,16 @@ from contact import (
     intersects,
     make_outer_compliant_surface,
 )
-from mechanics3d import (
+from physics import (
     IndentationSettings,
-    Mechanics3DSettings,
+    NewtonSettings,
     RigidIndenter3D,
     RigidPose3D,
     make_fingertip_volume_state,
-    prepare_fingertip_mechanics_mesh,
+    prepare_fingertip_mesh,
     solve_fingertip_indentation,
 )
-from mechanics3d.backends.newton_vbd import solve_newton_vbd_indentation
+from physics.newton_vbd import solve_newton_vbd_indentation
 from mesh.rigid_carrier import make_distal_phalanx_mesh
 from mesh.rigid_object import make_box_mesh, make_cylinder_mesh, make_sphere_mesh
 from mesh.volume3d import generate_volume_mesh
@@ -47,7 +47,7 @@ def _six_volumes(vertices: np.ndarray, tetrahedra: np.ndarray) -> np.ndarray:
 
 
 @pytest.mark.smoke
-@pytest.mark.mechanics3d
+@pytest.mark.physics
 def test_nominal_triangle_mesh_indenter_deforms_and_promotes_volume_state() -> None:
     if not wp.is_device_available("cuda:0"):
         pytest.skip("rigid-mesh indentation smoke requires cuda:0")
@@ -56,7 +56,7 @@ def test_nominal_triangle_mesh_indenter_deforms_and_promotes_volume_state() -> N
         build_fingertip_solid(FingertipModel(FingertipParameters())),
         volume_mesh_settings_for_tier("search"),
     )
-    prepared = prepare_fingertip_mechanics_mesh(volume_mesh)
+    prepared = prepare_fingertip_mesh(volume_mesh)
     object_mesh = make_sphere_mesh(2.0, subdivisions=1)
     surface_candidates = np.unique(prepared.surface_triangles["outer_compliant_arc"])
     surface_vertices = surface_candidates[
@@ -72,7 +72,7 @@ def test_nominal_triangle_mesh_indenter_deforms_and_promotes_volume_state() -> N
         ),
         (0.0, -1.0, 0.0),
     )
-    mechanics_settings = Mechanics3DSettings(
+    mechanics_settings = NewtonSettings(
         device="cuda:0",
         gravity=0.0,
         dt=1.0e-3,
@@ -177,7 +177,7 @@ def test_nominal_triangle_mesh_indenter_deforms_and_promotes_volume_state() -> N
 
 
 @pytest.mark.smoke
-@pytest.mark.mechanics3d
+@pytest.mark.physics
 def test_sphere_first_contact_normalization_is_start_distance_invariant() -> None:
     if not wp.is_device_available("cuda:0"):
         pytest.skip("sphere first-contact normalization smoke requires cuda:0")
@@ -188,7 +188,7 @@ def test_sphere_first_contact_normalization_is_start_distance_invariant() -> Non
         solid,
         volume_mesh_settings_for_tier("search"),
     )
-    prepared = prepare_fingertip_mechanics_mesh(volume_mesh)
+    prepared = prepare_fingertip_mesh(volume_mesh)
     object_mesh = make_sphere_mesh(2.0, subdivisions=1)
     surface = make_outer_compliant_surface(solid)
     contact_settings = FirstContactSettings(
@@ -224,7 +224,7 @@ def test_sphere_first_contact_normalization_is_start_distance_invariant() -> Non
     for result in first_contacts:
         assert not intersects(surface, object_mesh, result.spawn_pose)
 
-    mechanics_settings = Mechanics3DSettings(
+    mechanics_settings = NewtonSettings(
         device="cuda:0",
         gravity=0.0,
         dt=1.0e-3,
@@ -353,7 +353,7 @@ def test_sphere_first_contact_normalization_is_start_distance_invariant() -> Non
     ids=("sphere", "cylinder", "box"),
 )
 @pytest.mark.smoke
-@pytest.mark.mechanics3d
+@pytest.mark.physics
 def test_triangle_mesh_model_path_accepts_primitive_family(object_mesh) -> None:
     if not wp.is_device_available("cuda:0"):
         pytest.skip("rigid-mesh indentation smoke requires cuda:0")
@@ -375,10 +375,10 @@ def test_triangle_mesh_model_path_accepts_primitive_family(object_mesh) -> None:
         [[0, 1, 3, 4], [1, 2, 3, 6], [1, 3, 4, 6], [1, 4, 5, 6], [3, 4, 6, 7]],
         dtype=np.int32,
     )
-    from mechanics3d.fingertip import FingertipMechanicsMesh
-    from mechanics3d.types import TetMeshData
+    from physics.fingertip import PreparedFingertipMesh
+    from physics.types import TetMeshData
 
-    prepared = FingertipMechanicsMesh(
+    prepared = PreparedFingertipMesh(
         TetMeshData(vertices, tetrahedra),
         np.arange(8, dtype=np.int64),
         (0, 1, 2, 3),
@@ -394,7 +394,7 @@ def test_triangle_mesh_model_path_accepts_primitive_family(object_mesh) -> None:
     result = solve_fingertip_indentation(
         prepared,
         indenter,
-        Mechanics3DSettings(
+        NewtonSettings(
             device="cuda:0",
             gravity=0.0,
             dt=1.0e-3,

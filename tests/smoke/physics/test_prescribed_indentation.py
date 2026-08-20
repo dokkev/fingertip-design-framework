@@ -11,10 +11,10 @@ pytest.importorskip("newton")
 
 import warp as wp
 
-from mechanics3d import (
-    Mechanics3DSettings,
+from physics import (
+    NewtonSettings,
     outer_compliant_timing_patch,
-    prepare_fingertip_mechanics_mesh,
+    prepare_fingertip_mesh,
     solve_prescribed_indentation,
 )
 from mesh.volume3d import generate_volume_mesh
@@ -25,19 +25,19 @@ from model.solid import build_fingertip_solid
 
 
 @pytest.mark.smoke
-@pytest.mark.mechanics3d
+@pytest.mark.physics
 def test_nominal_fingertip_prescribed_patch_runs_on_cuda() -> None:
     if not wp.is_device_available("cuda:0"):
-        pytest.skip("prescribed mechanics3d smoke requires cuda:0")
+        pytest.skip("prescribed physics smoke requires cuda:0")
 
     model = FingertipModel(FingertipParameters())
     solid = build_fingertip_solid(model)
     volume_mesh = generate_volume_mesh(solid, volume_mesh_settings_for_tier("search"))
-    prepared = prepare_fingertip_mechanics_mesh(volume_mesh)
+    prepared = prepare_fingertip_mesh(volume_mesh)
     patch = outer_compliant_timing_patch(prepared, load_steps=2)
     result, timing = solve_prescribed_indentation(
         prepared,
-        Mechanics3DSettings(
+        NewtonSettings(
             device="cuda:0",
             gravity=0.0,
             steps=patch.load_steps,

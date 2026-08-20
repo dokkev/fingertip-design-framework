@@ -12,10 +12,10 @@ pytest.importorskip("cuda")
 
 import warp as wp
 
-from mechanics3d import (
-    Mechanics3DSettings,
+from physics import (
+    NewtonSettings,
     make_fingertip_volume_state,
-    prepare_fingertip_mechanics_mesh,
+    prepare_fingertip_mesh,
     solve,
 )
 from model import Fingertip
@@ -28,17 +28,17 @@ from optics.transport3d.optix_backend import create_runtime
 
 
 @pytest.mark.smoke
-@pytest.mark.mechanics3d
+@pytest.mark.physics
 def test_vbd_volume_state_reaches_full3d_optix_without_fea_artifact() -> None:
     if not wp.is_device_available("cuda:0"):
         pytest.skip("VBD→FULL_3D OptiX smoke requires cuda:0")
 
     tip = Fingertip()
     volume_mesh = tip.volume_mesh()
-    prepared = prepare_fingertip_mechanics_mesh(volume_mesh)
+    prepared = prepare_fingertip_mesh(volume_mesh)
     mechanics_result = solve(
         prepared.tet_mesh,
-        settings=Mechanics3DSettings(
+        settings=NewtonSettings(
             device="cuda:0",
             gravity=0.0,
             steps=1,

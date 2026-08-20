@@ -10,9 +10,9 @@ import numpy as np
 
 from mesh.rigid_object import RigidObjectMesh
 
-from .fingertip import FingertipMechanicsMesh
-from .solve import Mechanics3DSettings
-from .types import Mechanics3DResult
+from .fingertip import PreparedFingertipMesh
+from .solve import NewtonSettings
+from .types import NewtonResult
 
 if TYPE_CHECKING:
     from contact.first_contact import FirstContactResult
@@ -144,13 +144,13 @@ class IndentationSettings:
 class IndentationResult:
     """Neutral fingertip result plus the final prescribed rigid-object pose."""
 
-    mechanics_result: Mechanics3DResult
+    mechanics_result: NewtonResult
     final_indenter_pose: RigidPose3D
     diagnostics: Mapping[str, float | int | str | bool | tuple[int, ...]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        if not isinstance(self.mechanics_result, Mechanics3DResult):
-            raise TypeError("mechanics_result must be a Mechanics3DResult")
+        if not isinstance(self.mechanics_result, NewtonResult):
+            raise TypeError("mechanics_result must be a NewtonResult")
         if not isinstance(self.final_indenter_pose, RigidPose3D):
             raise TypeError("final_indenter_pose must be a RigidPose3D")
         if not isinstance(self.diagnostics, Mapping):
@@ -168,14 +168,14 @@ class IndentationCheckpoint:
     post_contact_travel_mm: float
     cumulative_step_index: int
     indenter_pose: RigidPose3D
-    mechanics_result: Mechanics3DResult
+    mechanics_result: NewtonResult
     diagnostics: Mapping[str, object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not isinstance(self.indenter_pose, RigidPose3D):
             raise TypeError("indenter_pose must be RigidPose3D")
-        if not isinstance(self.mechanics_result, Mechanics3DResult):
-            raise TypeError("mechanics_result must be Mechanics3DResult")
+        if not isinstance(self.mechanics_result, NewtonResult):
+            raise TypeError("mechanics_result must be NewtonResult")
         for name in (
             "checkpoint_fraction",
             "normalized_indentation_ratio",
@@ -258,9 +258,9 @@ def checkpoint_step_schedule(
 
 
 def solve_fingertip_indentation(
-    prepared_fingertip: FingertipMechanicsMesh,
+    prepared_fingertip: PreparedFingertipMesh,
     indenter: RigidIndenter3D,
-    mechanics_settings: Mechanics3DSettings | None = None,
+    mechanics_settings: NewtonSettings | None = None,
     indentation_settings: IndentationSettings | None = None,
     *,
     first_contact: FirstContactResult | None = None,
@@ -277,14 +277,14 @@ def solve_fingertip_indentation(
     collision-enabled geometry and is deliberately a separate argument.
     """
 
-    if not isinstance(prepared_fingertip, FingertipMechanicsMesh):
-        raise TypeError("prepared_fingertip must be a FingertipMechanicsMesh")
+    if not isinstance(prepared_fingertip, PreparedFingertipMesh):
+        raise TypeError("prepared_fingertip must be a PreparedFingertipMesh")
     if not isinstance(indenter, RigidIndenter3D):
         raise TypeError("indenter must be a RigidIndenter3D")
     if mechanics_settings is None:
-        mechanics_settings = Mechanics3DSettings()
-    if not isinstance(mechanics_settings, Mechanics3DSettings):
-        raise TypeError("mechanics_settings must be Mechanics3DSettings")
+        mechanics_settings = NewtonSettings()
+    if not isinstance(mechanics_settings, NewtonSettings):
+        raise TypeError("mechanics_settings must be NewtonSettings")
     if indentation_settings is None:
         raise TypeError("indentation_settings must be provided")
     if not isinstance(indentation_settings, IndentationSettings):
@@ -308,12 +308,12 @@ def solve_fingertip_indentation(
     authoritative_support = tuple(sorted(prepared_fingertip.support_vertex_indices))
     if configured_support and configured_support != authoritative_support:
         raise ValueError(
-            "mechanics3d indentation requires fixed_vertex_indices to be empty or "
+            "physics indentation requires fixed_vertex_indices to be empty or "
             "equal to prepared_fingertip.support_vertex_indices; the authoritative "
             f"support is {authoritative_support!r}, received {configured_support!r}"
         )
 
-    from .backends.newton_vbd import solve_newton_vbd_indentation
+    from .newton_vbd import solve_newton_vbd_indentation
 
     return solve_newton_vbd_indentation(
         prepared_fingertip,
@@ -327,9 +327,9 @@ def solve_fingertip_indentation(
 
 
 def solve_fingertip_indentation_trajectory(
-    prepared_fingertip: FingertipMechanicsMesh,
+    prepared_fingertip: PreparedFingertipMesh,
     indenter: RigidIndenter3D,
-    mechanics_settings: Mechanics3DSettings | None,
+    mechanics_settings: NewtonSettings | None,
     indentation_settings: IndentationSettings,
     checkpoint_travels_mm: Sequence[float],
     *,
@@ -343,9 +343,9 @@ def solve_fingertip_indentation_trajectory(
     """Solve one continuous path and capture exact requested checkpoints."""
 
     if mechanics_settings is None:
-        mechanics_settings = Mechanics3DSettings()
-    if not isinstance(mechanics_settings, Mechanics3DSettings):
-        raise TypeError("mechanics_settings must be Mechanics3DSettings")
+        mechanics_settings = NewtonSettings()
+    if not isinstance(mechanics_settings, NewtonSettings):
+        raise TypeError("mechanics_settings must be NewtonSettings")
     if not isinstance(indentation_settings, IndentationSettings):
         raise TypeError("indentation_settings must be IndentationSettings")
     travels = tuple(float(value) for value in checkpoint_travels_mm)
@@ -356,7 +356,7 @@ def solve_fingertip_indentation_trajectory(
     )
     if len(fractions) != len(travels):
         raise ValueError("checkpoint_fractions must match checkpoint_travels_mm")
-    from .backends.newton_vbd import solve_newton_vbd_indentation_trajectory
+    from .newton_vbd import solve_newton_vbd_indentation_trajectory
 
     return solve_newton_vbd_indentation_trajectory(
         prepared_fingertip,

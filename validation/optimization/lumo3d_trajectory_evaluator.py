@@ -1,8 +1,7 @@
 """Configurable continuous-trajectory FULL_3D LUMO evaluator.
 
-This module is deliberately beside the fixed three-state compatibility
-evaluator.  It owns orchestration and provenance only; mechanics and optical
-physics remain in their existing neutral backends.
+This module owns orchestration and provenance only; mechanics and optical
+physics remain in their neutral backends.
 """
 
 from __future__ import annotations
@@ -23,13 +22,13 @@ from contact import (
     make_outer_compliant_surface,
     sphere_alignment_at_normalized_location,
 )
-from mechanics3d import (
+from physics import (
     IndentationSettings,
-    Mechanics3DSettings,
+    NewtonSettings,
     RigidIndenter3D,
     solve_fingertip_indentation_trajectory,
-    prepare_fingertip_mechanics_mesh,
-    InvalidFingertipMechanicsMesh,
+    prepare_fingertip_mesh,
+    InvalidFingertipMesh,
 )
 from mesh.rigid_carrier import make_distal_phalanx_mesh
 from mesh.rigid_object import make_sphere_mesh, RigidObjectMesh
@@ -77,22 +76,23 @@ from optimization.protocol import (
     DEFAULT_TRAJECTORY_PROTOCOL,
     TrajectoryEvaluationProtocol,
 )
-from validation.mechanics3d.deformed_state_artifact import restore_deformed_optical_state
-from validation.mechanics3d.multi_location_sphere_contact import (
+from validation.physics.deformed_state_artifact import restore_deformed_optical_state
+from validation.physics.multi_location_sphere_contact import (
     _unintended_boundary_clearance_mm,
 )
-from validation.optimization.lumo3d_evaluator import (
+from validation.optimization.lumo3d_common import (
     LUMO3D_OBSERVATION_LEVEL,
     LUMO3D_OPTICAL_X_BOUNDS_MM,
     LUMO3D_OPTICAL_Y_BOUNDS_MM,
-    _candidate_id,
-    _energy_record,
-    _material,
-    _optical_settings,
+    candidate_id,
+    energy_record,
+    material,
+    optical_settings,
 )
 
 
 TRAJECTORY_EVALUATION_SCHEMA = "lumo3d-trajectory-evaluation-v1"
+TRAJECTORY_EVALUATION_CONTRACT_ID = TRAJECTORY_EVALUATION_SCHEMA
 CURRENT_CELL_HALF_LENGTH_MM = 5.5
 
 
@@ -358,7 +358,7 @@ class Lumo3DTrajectoryEvaluator:
         self.mechanics_contract = mechanics_contract
         self.device = device
         self.mechanics_mode = mechanics_mode
-        self.settings = _optical_settings()
+        self.settings = optical_settings()
 
     def _domain_failure(self, radius_mm: float) -> str | None:
         clearance = CURRENT_CELL_HALF_LENGTH_MM - float(radius_mm)
@@ -424,7 +424,7 @@ class Lumo3DTrajectoryEvaluator:
         # depths; neither controls the physical loading path.
         checkpoint_fractions = self.protocol.checkpoint_fractions
         normalized_ratios = self.protocol.normalized_indentation_ratios(radius_mm)
-        mechanics_settings = Mechanics3DSettings(
+        mechanics_settings = NewtonSettings(
             device=self.device,
             gravity=0.0,
             dt=self.mechanics_contract.dt_s,
@@ -509,12 +509,12 @@ class Lumo3DTrajectoryEvaluator:
         try:
             validate_minimum_silicone_thickness(parameters)
             tip = Fingertip(parameters)
-            candidate_id = _candidate_id(parameters)
+            morphology_id = candidate_id(parameters)
             candidate_root = (
                 self.artifact_root
                 / f"protocol_{self.protocol.fingerprint}"
                 / "candidates"
-                / candidate_id
+                / morphology_id
             )
             for radius in self.protocol.indenter_radii_mm:
                 reason = self._domain_failure(radius)
@@ -526,7 +526,7 @@ class Lumo3DTrajectoryEvaluator:
                     )
 
             volume_mesh = tip.volume_mesh(volume_mesh_settings_for_tier("search"))
-            prepared = prepare_fingertip_mechanics_mesh(volume_mesh)
+            prepared = prepare_fingertip_mesh(volume_mesh)
             contact_surface = make_outer_compliant_surface(volume_mesh.solid)
             carrier_mesh = make_distal_phalanx_mesh(volume_mesh.solid)
 
@@ -549,7 +549,7 @@ class Lumo3DTrajectoryEvaluator:
             stage = "optics"
             configuration = transport_configuration(
                 self.settings,
-                material=_material(tip),
+                material=material(tip),
                 source={"model": "existing Fingertip optical source", "evaluator": TRAJECTORY_EVALUATION_SCHEMA},
             )
             objective_contract = {
@@ -609,7 +609,7 @@ class Lumo3DTrajectoryEvaluator:
                     tip,
                     restored.geometry,
                     settings=self.settings,
-                    morphology_id=candidate_id,
+                    morphology_id=morphology_id,
                     morphology_fingerprint=volume_mesh.morphology_fingerprint,
                     mechanics_source=str(restored.artifact_path),
                     mechanics_dimension="3D",
@@ -628,7 +628,7 @@ class Lumo3DTrajectoryEvaluator:
                     "schema": TRAJECTORY_EVALUATION_SCHEMA,
                     "objective": OBJECTIVE_NAME,
                     "observation_level": LUMO3D_OBSERVATION_LEVEL,
-                    "morphology_id": candidate_id,
+                    "morphology_id": morphology_id,
                     "morphology_fingerprint": volume_mesh.morphology_fingerprint,
                     "protocol": self.protocol.to_dict(),
                     "protocol_fingerprint": self.protocol.fingerprint,
@@ -643,7 +643,7 @@ class Lumo3DTrajectoryEvaluator:
                     "transport_configuration_fingerprint": result.transport_configuration_fingerprint,
                 }
                 save_case_artifact(artifact, result, contract)
-                energy = _energy_record(result)
+                energy = energy_record(result)
                 optical_record = dict(record)
                 optical_record.update(energy)
                 optical_record.update(
@@ -713,7 +713,7 @@ class Lumo3DTrajectoryEvaluator:
             raise
         except (InvalidFingertip, InvalidFingertipParameters) as exc:
             return _failure("invalid_design", f"{type(exc).__name__}: {exc}", diagnostics={"failure_stage": stage})
-        except (VolumeMeshDependencyError, VolumeMeshingError, InvalidFingertipMechanicsMesh) as exc:
+        except (VolumeMeshDependencyError, VolumeMeshingError, InvalidFingertipMesh) as exc:
             return _failure("mesh_failure", f"{type(exc).__name__}: {exc}", diagnostics={"failure_stage": stage})
         except (Transport3DGeometryError, Transport3DPhysicsError, Transport3DResultError, Transport3DTraceError) as exc:
             return _failure("optics_failure", f"{type(exc).__name__}: {exc}", diagnostics={"failure_stage": stage})
@@ -760,8 +760,8 @@ def create_lumo3d_trajectory_study(
     design_space = DesignSpace(
         FingertipParameters(void_height=PRODUCTION_NOMINAL_VOID_HEIGHT_MM),
         tuple(
-            DesignVariable(name, True, lower, upper)
-            for name, lower, upper in PRODUCTION_SEARCH_BOUNDS
+            DesignVariable(spec.name, True, spec.lower, spec.upper)
+            for spec in PRODUCTION_SEARCH_BOUNDS
         ),
     )
     return Lumo3DTrajectoryStudy(
@@ -777,6 +777,8 @@ def create_lumo3d_trajectory_study(
 
 __all__ = [
     "CURRENT_CELL_HALF_LENGTH_MM",
+    "TRAJECTORY_EVALUATION_CONTRACT_ID",
+    "TRAJECTORY_EVALUATION_SCHEMA",
     "Lumo3DTrajectoryEvaluation",
     "Lumo3DTrajectoryEvaluator",
     "Lumo3DTrajectoryStudy",

@@ -13,18 +13,16 @@ from optimization import (
     DesignVariable,
     OPTIMIZABLE_PARAMETER_NAMES,
     PRODUCTION_SEARCH_BOUNDS,
-    create_production_study,
 )
 
 
-def _space(
-    nominal: FingertipParameters | None = None,
-    *,
-    bounds: tuple[tuple[str, float, float], ...] = PRODUCTION_SEARCH_BOUNDS,
-) -> DesignSpace:
+def _space(nominal: FingertipParameters | None = None) -> DesignSpace:
     return DesignSpace(
         FingertipParameters(void_height=0.25) if nominal is None else nominal,
-        tuple(DesignVariable(name, True, lower, upper) for name, lower, upper in bounds),
+        tuple(
+            DesignVariable(spec.name, True, spec.lower, spec.upper)
+            for spec in PRODUCTION_SEARCH_BOUNDS
+        ),
     )
 
 
@@ -39,8 +37,8 @@ def test_supported_variables_are_exactly_the_current_six() -> None:
     )
     assert tuple(
         (variable.name, variable.lower, variable.upper)
-        for variable in create_production_study().design_space.active_variables
-    ) == PRODUCTION_SEARCH_BOUNDS
+        for variable in _space().active_variables
+    ) == tuple(spec.to_tuple() for spec in PRODUCTION_SEARCH_BOUNDS)
 
 
 def test_design_variable_rejects_invalid_metadata() -> None:
@@ -56,20 +54,15 @@ def test_design_variable_rejects_invalid_metadata() -> None:
 
 def test_space_requires_all_six_active_variables_once() -> None:
     variables = tuple(
-        DesignVariable(name, True, lower, upper)
-        for name, lower, upper in PRODUCTION_SEARCH_BOUNDS
+        DesignVariable(spec.name, True, spec.lower, spec.upper)
+        for spec in PRODUCTION_SEARCH_BOUNDS
     )
     with pytest.raises(ValueError, match="exactly one entry"):
         DesignSpace(FingertipParameters(), variables[:-1])
     with pytest.raises(ValueError, match="duplicate"):
         DesignSpace(FingertipParameters(), (*variables[:-1], variables[0]))
     inactive = tuple(
-        DesignVariable(
-            variable.name,
-            variable.name != "void_width",
-            variable.lower,
-            variable.upper,
-        )
+        DesignVariable(variable.name, variable.name != "void_width", variable.lower, variable.upper)
         for variable in variables
     )
     with pytest.raises(ValueError, match="all six"):
@@ -87,16 +80,13 @@ def test_decode_uses_independent_flat_and_semielliptical_heights() -> None:
         "void_height": 1.25,
     }
     decoded = space.decode(values)
-
     assert decoded.flat_pad_width == 30.0
     assert decoded.flat_pad_height == 6.25
     assert decoded.semielliptical_pad_height == 10.5
     assert decoded.total_pad_depth == 16.75
     assert decoded.void_height == 1.25
     with pytest.raises(ValueError, match="missing"):
-        space.decode(
-            {name: value for name, value in values.items() if name != "void_width"}
-        )
+        space.decode({name: value for name, value in values.items() if name != "void_width"})
     with pytest.raises(ValueError, match="unknown"):
         space.decode({**values, "flat_pad_width": 31.0})
     with pytest.raises(ValueError, match="outside"):
@@ -135,11 +125,6 @@ def test_decode_preserves_fixed_material_and_link_fields() -> None:
         assert getattr(decoded, name) == before[name]
 
 
-def test_production_study_accepts_zero_nominal_void_height() -> None:
-    study = create_production_study(nominal_parameters=FingertipParameters())
-    assert study.design_space.nominal_parameters.void_height == 0.0
-
-
 def test_corner_values_are_deterministic_for_six_variables() -> None:
     space = _space()
     corners = space.corner_values()
@@ -151,18 +136,17 @@ def test_corner_values_are_deterministic_for_six_variables() -> None:
 
 @pytest.mark.parametrize("void_height", (0.25, 1.5, 2.0))
 def test_void_height_decodes_into_authoritative_geometry(void_height: float) -> None:
-    space = create_production_study().design_space
-    values = {
-        variable.name: (
-            void_height
-            if variable.name == "void_height"
-            else getattr(space.nominal_parameters, variable.name)
-        )
-        for variable in space.active_variables
-    }
-    parameters = space.decode(values)
+    parameters = _space().decode(
+        {
+            variable.name: (
+                void_height
+                if variable.name == "void_height"
+                else getattr(_space().nominal_parameters, variable.name)
+            )
+            for variable in _space().active_variables
+        }
+    )
     solid = Fingertip(parameters).solid()
-
     assert parameters.void_height == void_height
     assert parameters.void_bottom_y == -(parameters.stem_height + void_height)
     assert solid.parameters.void_height == void_height

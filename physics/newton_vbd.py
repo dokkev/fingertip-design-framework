@@ -1,4 +1,4 @@
-"""Newton 1.4 VBD backend for the isolated mechanics3d prototype."""
+"""Newton 1.4 VBD backend for the isolated physics prototype."""
 
 from __future__ import annotations
 
@@ -12,11 +12,11 @@ import newton
 from shapely import wkt as shapely_wkt
 from shapely.geometry import Point
 
-from mechanics3d.solve import Mechanics3DSettings
-from mechanics3d.load import ParticleLoad
-from mechanics3d.types import Mechanics3DResult, TetMeshData
-from mechanics3d.fingertip import FingertipMechanicsMesh
-from mechanics3d.indentation import (
+from physics.solve import NewtonSettings
+from physics.load import ParticleLoad
+from physics.types import NewtonResult, TetMeshData
+from physics.fingertip import PreparedFingertipMesh
+from physics.indentation import (
     IndentationCheckpoint,
     IndentationResult,
     IndentationSettings,
@@ -82,7 +82,7 @@ def _set_kinematic_body_state(
 @dataclass
 class _VBDContext:
     mesh: TetMeshData
-    settings: Mechanics3DSettings
+    settings: NewtonSettings
     device: object
     model: object
     solver: object
@@ -96,9 +96,9 @@ class _VBDContext:
 
 @dataclass
 class _IndentationContext:
-    prepared: FingertipMechanicsMesh
+    prepared: PreparedFingertipMesh
     indenter: RigidIndenter3D
-    mechanics_settings: Mechanics3DSettings
+    mechanics_settings: NewtonSettings
     indentation_settings: IndentationSettings
     device: object
     model: object
@@ -215,13 +215,13 @@ def _contact_shape_counts(context: _IndentationContext) -> tuple[int, int, int, 
     return _contact_shape_details(context)[:4]
 
 
-def _build_vbd_context(mesh: TetMeshData, settings: Mechanics3DSettings):
+def _build_vbd_context(mesh: TetMeshData, settings: NewtonSettings):
     wp.init()
     if not wp.is_device_available(settings.device):
         raise RuntimeError(f"CUDA device {settings.device!r} is not available")
     device = wp.get_device(settings.device)
     if not device.is_cuda:
-        raise ValueError("mechanics3d requires a CUDA device, for example cuda:0")
+        raise ValueError("physics requires a CUDA device, for example cuda:0")
     if any(index >= mesh.vertices.shape[0] for index in settings.fixed_vertex_indices):
         raise ValueError("fixed_vertex_indices contain an out-of-range vertex")
 
@@ -286,9 +286,9 @@ def _reset_vbd_context(context: _VBDContext) -> None:
 def _solve_vbd_context(
     context: _VBDContext,
     mesh: TetMeshData,
-    settings: Mechanics3DSettings,
+    settings: NewtonSettings,
     load: ParticleLoad,
-) -> tuple[Mechanics3DResult, dict[str, float | int | str]]:
+) -> tuple[NewtonResult, dict[str, float | int | str]]:
     """Reset and solve one force-ramped load without rebuilding the model."""
 
     if mesh is not context.mesh or settings != context.settings:
@@ -339,7 +339,7 @@ def _solve_vbd_context(
     )
     rest_vertices = context.rest_vertices_m * 1.0e3
     total_wall_s = time.perf_counter() - reset_started
-    result = Mechanics3DResult(
+    result = NewtonResult(
         rest_vertices=rest_vertices,
         deformed_vertices=deformed_vertices,
         tetrahedra=mesh.tetrahedra,
@@ -363,9 +363,9 @@ def _warp_pose(pose, *, device: object):
 
 
 def _build_indentation_context(
-    prepared_fingertip: FingertipMechanicsMesh,
+    prepared_fingertip: PreparedFingertipMesh,
     indenter: RigidIndenter3D,
-    mechanics_settings: Mechanics3DSettings,
+    mechanics_settings: NewtonSettings,
     indentation_settings: IndentationSettings,
     *,
     initial_pose: RigidPose3D | None = None,
@@ -392,13 +392,13 @@ def _build_indentation_context(
         )
     device = wp.get_device(mechanics_settings.device)
     if not device.is_cuda:
-        raise ValueError("mechanics3d requires a CUDA device, for example cuda:0")
+        raise ValueError("physics requires a CUDA device, for example cuda:0")
 
     configured_support = tuple(sorted(mechanics_settings.fixed_vertex_indices))
     authoritative_support = tuple(sorted(prepared_fingertip.support_vertex_indices))
     if configured_support and configured_support != authoritative_support:
         raise ValueError(
-            "mechanics3d indentation requires fixed_vertex_indices to be empty or "
+            "physics indentation requires fixed_vertex_indices to be empty or "
             "equal to prepared_fingertip.support_vertex_indices; the authoritative "
             f"support is {authoritative_support!r}, received {configured_support!r}"
         )
@@ -609,9 +609,9 @@ def _build_indentation_context(
 
 
 def _solve_newton_vbd_indentation_path(
-    prepared_fingertip: FingertipMechanicsMesh,
+    prepared_fingertip: PreparedFingertipMesh,
     indenter: RigidIndenter3D,
-    mechanics_settings: Mechanics3DSettings,
+    mechanics_settings: NewtonSettings,
     indentation_settings: IndentationSettings,
     *,
     viewer: object | None = None,
@@ -660,9 +660,9 @@ def _solve_newton_vbd_indentation_path(
 
 
 def _solve_newton_vbd_indentation_path_with_schedule(
-    prepared_fingertip: FingertipMechanicsMesh,
+    prepared_fingertip: PreparedFingertipMesh,
     indenter: RigidIndenter3D,
-    mechanics_settings: Mechanics3DSettings,
+    mechanics_settings: NewtonSettings,
     indentation_settings: IndentationSettings,
     schedule: tuple[tuple[float, int, int], ...],
     *,
@@ -910,7 +910,7 @@ def _solve_newton_vbd_indentation_path_with_schedule(
                 * 1.0e3
             )
             rest_vertices = context.rest_vertices_m * 1.0e3
-            snapshot_result = Mechanics3DResult(
+            snapshot_result = NewtonResult(
                 rest_vertices=rest_vertices,
                 deformed_vertices=snapshot_vertices,
                 tetrahedra=prepared_fingertip.tet_mesh.tetrahedra,
@@ -1011,9 +1011,9 @@ def _solve_newton_vbd_indentation_path_with_schedule(
 
 
 def solve_newton_vbd_indentation(
-    prepared_fingertip: FingertipMechanicsMesh,
+    prepared_fingertip: PreparedFingertipMesh,
     indenter: RigidIndenter3D,
-    mechanics_settings: Mechanics3DSettings,
+    mechanics_settings: NewtonSettings,
     indentation_settings: IndentationSettings,
     *,
     viewer: object | None = None,
@@ -1042,9 +1042,9 @@ def solve_newton_vbd_indentation(
 
 
 def solve_newton_vbd_indentation_trajectory(
-    prepared_fingertip: FingertipMechanicsMesh,
+    prepared_fingertip: PreparedFingertipMesh,
     indenter: RigidIndenter3D,
-    mechanics_settings: Mechanics3DSettings,
+    mechanics_settings: NewtonSettings,
     indentation_settings: IndentationSettings,
     checkpoint_travels_mm: Sequence[float],
     *,
@@ -1085,8 +1085,8 @@ def solve_newton_vbd_indentation_trajectory(
 
 def solve_newton_vbd(
     mesh: TetMeshData,
-    settings: Mechanics3DSettings,
-) -> Mechanics3DResult:
+    settings: NewtonSettings,
+) -> NewtonResult:
     """Solve a neutral tetrahedral mesh using Newton's supported VBD API."""
 
     context = _build_vbd_context(mesh, settings)
@@ -1108,7 +1108,7 @@ def solve_newton_vbd(
         np.asarray(context.state_in.particle_q.numpy(), dtype=np.float32).copy() * 1.0e3
     )
     rest_vertices = context.rest_vertices_m * 1.0e3
-    return Mechanics3DResult(
+    return NewtonResult(
         rest_vertices=rest_vertices,
         deformed_vertices=deformed_vertices,
         tetrahedra=mesh.tetrahedra,
@@ -1118,12 +1118,12 @@ def solve_newton_vbd(
 
 def solve_newton_vbd_prescribed(
     mesh: TetMeshData,
-    settings: Mechanics3DSettings,
+    settings: NewtonSettings,
     *,
     vertex_indices: Sequence[int],
     displacement_mm: Sequence[float],
     load_steps: int,
-) -> tuple[Mechanics3DResult, dict[str, float | int | str]]:
+) -> tuple[NewtonResult, dict[str, float | int | str]]:
     """Run a minimal prescribed-vertex timing solve without contact search.
 
     This is intentionally a benchmark-only kinematic patch.  It does not
@@ -1151,7 +1151,7 @@ def solve_newton_vbd_prescribed(
         raise RuntimeError(f"CUDA device {settings.device!r} is not available")
     device = wp.get_device(settings.device)
     if not device.is_cuda:
-        raise ValueError("mechanics3d requires a CUDA device, for example cuda:0")
+        raise ValueError("physics requires a CUDA device, for example cuda:0")
     wp.synchronize_device(device)
     mechanics_start = time.perf_counter()
     build_start = mechanics_start
@@ -1195,7 +1195,7 @@ def solve_newton_vbd_prescribed(
     deformed_vertices = np.asarray(context.state_in.particle_q.numpy(), dtype=np.float32).copy() * 1.0e3
     rest_vertices = context.rest_vertices_m * 1.0e3
     total_mechanics_wall_s = time.perf_counter() - mechanics_start
-    result = Mechanics3DResult(
+    result = NewtonResult(
         rest_vertices=rest_vertices,
         deformed_vertices=deformed_vertices,
         tetrahedra=mesh.tetrahedra,

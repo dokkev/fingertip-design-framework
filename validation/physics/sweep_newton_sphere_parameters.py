@@ -1,7 +1,7 @@
 """Staged numerical convergence sweep for the Newton sphere-contact path.
 
 This is a validation-tier utility.  It uses the same neutral first-contact
-and Newton indentation APIs as ``examples/view_newton_contact.py`` and does
+and Newton indentation APIs as the production ``physics`` package and does
 not change the mechanics model or contact constants.
 """
 
@@ -19,7 +19,7 @@ import numpy as np
 from validation.common.io import atomic_write_json, write_csv
 
 
-DEFAULT_OUTPUT_DIR = Path("output/validation/mechanics3d/newton_sphere_sweep")
+DEFAULT_OUTPUT_DIR = Path("output/validation/physics/newton_sphere_sweep")
 DEFAULT_DEVICE = "cuda:0"
 
 DT_S = 1.0e-3
@@ -206,7 +206,7 @@ def _six_volumes(vertices: np.ndarray, tetrahedra: np.ndarray) -> np.ndarray:
 
 def _prepare_case() -> _PreparedCase:
     from contact import make_outer_compliant_surface
-    from mechanics3d import prepare_fingertip_mechanics_mesh
+    from physics import prepare_fingertip_mesh
     from mesh.volume3d import generate_volume_mesh
     from mesh.volume_types import volume_mesh_settings_for_tier
     from model.fingertip_model import FingertipModel
@@ -225,7 +225,7 @@ def _prepare_case() -> _PreparedCase:
         solid,
         volume_mesh_settings_for_tier("search"),
     )
-    prepared = prepare_fingertip_mechanics_mesh(volume_mesh)
+    prepared = prepare_fingertip_mesh(volume_mesh)
     return _PreparedCase(
         model=model,
         solid=solid,
@@ -242,9 +242,9 @@ def _run_case(case: _PreparedCase, config: SweepConfig, device: str) -> _RunBund
         find_first_contact,
         intersects,
     )
-    from mechanics3d import (
+    from physics import (
         IndentationSettings,
-        Mechanics3DSettings,
+        NewtonSettings,
         RigidIndenter3D,
         solve_fingertip_indentation,
     )
@@ -285,7 +285,7 @@ def _run_case(case: _PreparedCase, config: SweepConfig, device: str) -> _RunBund
         result = solve_fingertip_indentation(
             case.prepared,
             indenter,
-            Mechanics3DSettings(
+            NewtonSettings(
                 device=device,
                 gravity=GRAVITY,
                 dt=DT_S,
@@ -574,7 +574,7 @@ def run_sweep(*, device: str = DEFAULT_DEVICE) -> dict[str, Any]:
         },
     }
     return {
-        "schema": "mechanics3d-newton-sphere-convergence-sweep-v1",
+        "schema": "physics-newton-sphere-convergence-sweep-v1",
         "fixed_parameters": {
             "dt": DT_S,
             "gravity": GRAVITY,

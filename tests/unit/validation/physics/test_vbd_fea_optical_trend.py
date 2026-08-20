@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from validation.mechanics3d.vbd_fea_optical_trend import (
+from validation.physics.vbd_fea_optical_trend import (
     artifact_contract_is_exact,
     rank_statistics,
     selection_summary,

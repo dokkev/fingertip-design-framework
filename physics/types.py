@@ -57,7 +57,7 @@ class TetMeshData:
 
 
 @dataclass(frozen=True)
-class Mechanics3DResult:
+class NewtonResult:
     """Neutral rest/deformed coordinates returned by a 3D mechanics solve."""
 
     rest_vertices: np.ndarray

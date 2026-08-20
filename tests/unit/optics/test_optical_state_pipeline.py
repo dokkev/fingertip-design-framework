@@ -122,7 +122,7 @@ def test_core_imports_do_not_load_mitsuba() -> None:
             sys.executable,
             "-c",
             (
-                "import sys; import model, mesh, fem, optics; "
+                "import sys; import model, mesh, physics, optics; "
                 "assert not any(name == 'mitsuba' or "
                 "name.startswith('mitsuba.') for name in sys.modules); "
                 "assert 'optics.mitsuba' not in sys.modules; "

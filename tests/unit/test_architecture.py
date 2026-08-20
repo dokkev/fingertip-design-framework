@@ -1,4 +1,4 @@
-"""Static dependency guards for the reusable package boundaries."""
+"""Static dependency guards for the current package boundaries."""
 
 from __future__ import annotations
 
@@ -34,12 +34,8 @@ def _assert_no_prefix(package: str, forbidden: tuple[str, ...]) -> None:
 
 
 def test_production_packages_do_not_import_validation_or_tests() -> None:
-    for package in ("model", "mesh", "fem", "visualization"):
+    for package in ("model", "mesh", "contact", "physics", "optics", "optimization"):
         _assert_no_prefix(package, ("validation", "tests"))
-
-
-def test_case_does_not_depend_on_optimization() -> None:
-    _assert_no_prefix("case", ("optimization",))
 
 
 def test_model_is_geometry_only() -> None:
@@ -48,7 +44,7 @@ def test_model_is_geometry_only() -> None:
         (
             "mesh",
             "fem",
-            "mechanics3d",
+            "physics",
             "optics",
             "visualization",
             "gmsh",
@@ -61,44 +57,23 @@ def test_model_is_geometry_only() -> None:
 def test_mesh_is_solver_and_plotting_independent() -> None:
     _assert_no_prefix(
         "mesh",
-        ("fem", "mechanics3d", "optics", "validation", "visualization", "matplotlib", "KratosMultiphysics"),
+        ("fem", "physics", "optics", "validation", "visualization", "matplotlib", "KratosMultiphysics"),
     )
 
 
-def test_fem_has_no_plotting_dependency() -> None:
-    _assert_no_prefix("fem", ("visualization", "matplotlib"))
-
-
-def test_mechanics3d_has_no_fem_or_optics_dependency() -> None:
-    _assert_no_prefix("mechanics3d", ("fem", "optics", "validation", "tests"))
-
-
-def test_visualization_has_no_solver_or_validation_dependency() -> None:
-    _assert_no_prefix(
-        "visualization",
-        (
-            "mechanics3d",
-            "newton",
-            "warp",
-            "KratosMultiphysics",
-            "validation",
-            "tests",
-        ),
-    )
-
-
-def test_full_field_producer_uses_active_python_interpreter() -> None:
-    path = (
-        REPOSITORY_ROOT
-        / "validation"
-        / "fingertip"
-        / "indentation"
-        / "normal_field_atlas.py"
-    )
-    source = path.read_text(encoding="utf-8")
-    assert "PYTHON = Path(sys.executable).resolve()" in source
-    assert "/home/dk/" not in source
+def test_physics_has_no_fem_or_optics_dependency() -> None:
+    _assert_no_prefix("physics", ("fem", "optics", "validation", "tests"))
 
 
 def test_optics_has_no_mechanics_or_validation_dependency() -> None:
-    _assert_no_prefix("optics", ("mechanics3d", "validation", "tests"))
+    _assert_no_prefix("optics", ("physics", "validation", "tests"))
+
+
+def test_removed_legacy_packages_are_absent() -> None:
+    for package in ("fem", "case", "visualization", "examples", "mechanics3d"):
+        assert not any((REPOSITORY_ROOT / package).glob("*.py"))
+
+
+def test_physics_has_one_flattened_newton_implementation() -> None:
+    assert (REPOSITORY_ROOT / "physics" / "newton_vbd.py").is_file()
+    assert not any((REPOSITORY_ROOT / "physics" / "backends").glob("*.py"))

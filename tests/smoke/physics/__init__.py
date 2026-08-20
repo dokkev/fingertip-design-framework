@@ -1,1 +1,1 @@
-"""GPU smoke tests for the optional mechanics3d backend."""
+"""GPU smoke tests for the optional physics backend."""

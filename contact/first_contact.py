@@ -8,7 +8,7 @@ from dataclasses import dataclass
 import numpy as np
 from shapely.geometry import LineString, Point
 
-from mechanics3d.indentation import RigidPose3D
+from physics.indentation import RigidPose3D
 from mesh.rigid_object import RigidObjectMesh
 from model.solid import FingertipSolid
 

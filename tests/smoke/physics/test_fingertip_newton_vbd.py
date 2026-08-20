@@ -11,7 +11,7 @@ pytest.importorskip("newton")
 
 import warp as wp
 
-from mechanics3d import Mechanics3DSettings, prepare_fingertip_mechanics_mesh, solve
+from physics import NewtonSettings, prepare_fingertip_mesh, solve
 from mesh.volume3d import generate_volume_mesh
 from mesh.volume_types import volume_mesh_settings_for_tier
 from model.fingertip_model import FingertipModel
@@ -20,15 +20,15 @@ from model.solid import build_fingertip_solid
 
 
 @pytest.mark.smoke
-@pytest.mark.mechanics3d
+@pytest.mark.physics
 def test_nominal_fingertip_volume_mesh_advances_on_cuda() -> None:
     if not wp.is_device_available("cuda:0"):
-        pytest.skip("nominal mechanics3d smoke requires cuda:0")
+        pytest.skip("nominal physics smoke requires cuda:0")
 
     model = FingertipModel(FingertipParameters())
     solid = build_fingertip_solid(model)
     volume_mesh = generate_volume_mesh(solid, volume_mesh_settings_for_tier("search"))
-    prepared = prepare_fingertip_mechanics_mesh(volume_mesh)
+    prepared = prepare_fingertip_mesh(volume_mesh)
 
     assert volume_mesh.validation.passed, volume_mesh.validation.errors
     assert volume_mesh.nodes
@@ -48,7 +48,7 @@ def test_nominal_fingertip_volume_mesh_advances_on_cuda() -> None:
 
     result = solve(
         prepared.tet_mesh,
-        settings=Mechanics3DSettings(
+        settings=NewtonSettings(
             device="cuda:0",
             gravity=0.0,
             steps=1,

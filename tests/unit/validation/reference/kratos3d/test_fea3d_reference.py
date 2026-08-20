@@ -8,7 +8,7 @@ import json
 import numpy as np
 import pytest
 
-from validation.mechanics3d import FEA3DReferenceError, load_fea3d_reference
+from validation.reference.kratos3d import FEA3DReferenceError, load_fea3d_reference
 
 
 def _write_fixture(tmp_path, *, node_ids=True, malformed=None, inconsistent=False):

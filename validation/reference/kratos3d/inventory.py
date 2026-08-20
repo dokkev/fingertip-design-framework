@@ -272,7 +272,7 @@ def build_fea3d_inventory(repo_root: str | Path = ".") -> dict[str, Any]:
         all_records.extend(records)
 
     return {
-        "schema": "mechanics3d-fea3d-reference-inventory-v1",
+        "schema": "physics-fea3d-reference-inventory-v1",
         "artifact_roots_are_generated_evidence": True,
         "kratos_rerun": False,
         "families": families,
@@ -303,7 +303,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path("output/validation/mechanics3d/fea3d_reference_inventory.json"),
+        default=Path("output/validation/physics/fea3d_reference_inventory.json"),
     )
     parser.add_argument("--repo-root", type=Path, default=Path("."))
     args = parser.parse_args(argv)

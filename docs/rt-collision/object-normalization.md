@@ -970,7 +970,7 @@ Follow the repository's existing package conventions if a better location
 already exists.
 
 These responsibilities must not live inside
-mechanics3d/backends/newton_vbd.py, and neutral types must not depend on
+physics/backends/newton_vbd.py, and neutral types must not depend on
 OptiX. Collision-RT should later become one backend of the collision-query
 interface.
 

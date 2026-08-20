@@ -1,4 +1,4 @@
-"""Adapter from the authoritative 3D fingertip volume mesh to mechanics3d."""
+"""Adapter from the authoritative 3D fingertip volume mesh to physics."""
 
 from __future__ import annotations
 
@@ -14,10 +14,10 @@ from mesh.volume_state import (
     make_fingertip_volume_state as make_volume_state,
 )
 
-from .types import Mechanics3DResult, TetMeshData
+from .types import NewtonResult, TetMeshData
 
 
-class InvalidFingertipMechanicsMesh(ValueError):
+class InvalidFingertipMesh(ValueError):
     """Raised when a volume mesh fails the pre-Newton mechanics contract."""
 
 
@@ -64,7 +64,7 @@ class PrescribedVertexDisplacement:
 
 
 @dataclass(frozen=True)
-class FingertipMechanicsMesh:
+class PreparedFingertipMesh:
     """Neutral fingertip topology plus source-node and surface provenance."""
 
     tet_mesh: TetMeshData
@@ -135,15 +135,15 @@ def _support_surface_tags(volume_mesh: FingertipVolumeMesh) -> tuple[str, ...]:
     return tags
 
 
-def prepare_fingertip_mechanics_mesh(
+def prepare_fingertip_mesh(
     volume_mesh: FingertipVolumeMesh,
-) -> FingertipMechanicsMesh:
+) -> PreparedFingertipMesh:
     """Convert an existing validated ``FingertipVolumeMesh`` without remeshing."""
 
     if not isinstance(volume_mesh, FingertipVolumeMesh):
         raise TypeError("volume_mesh must be FingertipVolumeMesh")
     if not volume_mesh.validation.passed:
-        raise InvalidFingertipMechanicsMesh(
+        raise InvalidFingertipMesh(
             "refusing invalid FingertipVolumeMesh: "
             + ", ".join(volume_mesh.validation.errors)
         )
@@ -210,7 +210,7 @@ def prepare_fingertip_mechanics_mesh(
         raise ValueError("authoritative support surfaces contain no nodes")
     support_vertex_indices = tuple(sorted(local_index[node_id] for node_id in support_source_ids))
 
-    return FingertipMechanicsMesh(
+    return PreparedFingertipMesh(
         tet_mesh=TetMeshData(coordinates, local_tetrahedra),
         source_node_ids=np.asarray(source_node_ids, dtype=np.int64),
         support_vertex_indices=support_vertex_indices,
@@ -221,21 +221,21 @@ def prepare_fingertip_mechanics_mesh(
 
 def make_fingertip_volume_state(
     volume_mesh: FingertipVolumeMesh,
-    prepared: FingertipMechanicsMesh,
-    result: Mechanics3DResult,
+    prepared: PreparedFingertipMesh,
+    result: NewtonResult,
 ) -> FingertipVolumeState:
     """Promote one exact generic mechanics result to the neutral state.
 
     The adapter accepts only the canonical local row order produced by
-    ``prepare_fingertip_mechanics_mesh``.  It never performs nearest-neighbor
+    ``prepare_fingertip_mesh``.  It never performs nearest-neighbor
     matching or silently substitutes topology from another source.
     """
     if not isinstance(volume_mesh, FingertipVolumeMesh):
         raise TypeError("volume_mesh must be FingertipVolumeMesh")
-    if not isinstance(prepared, FingertipMechanicsMesh):
-        raise TypeError("prepared must be FingertipMechanicsMesh")
-    if not isinstance(result, Mechanics3DResult):
-        raise TypeError("result must be Mechanics3DResult")
+    if not isinstance(prepared, PreparedFingertipMesh):
+        raise TypeError("prepared must be PreparedFingertipMesh")
+    if not isinstance(result, NewtonResult):
+        raise TypeError("result must be NewtonResult")
     canonical_node_ids = tuple(sorted(volume_mesh.nodes))
     if tuple(int(value) for value in prepared.source_node_ids) != canonical_node_ids:
         raise ValueError("mechanics adapter source-node correspondence is not canonical")
@@ -257,7 +257,7 @@ def make_fingertip_volume_state(
 
 
 def outer_compliant_timing_patch(
-    prepared: FingertipMechanicsMesh,
+    prepared: PreparedFingertipMesh,
     *,
     displacement_mm: Sequence[float] = (0.0, 0.5, 0.0),
     load_steps: int = 8,
@@ -268,8 +268,8 @@ def outer_compliant_timing_patch(
     coordinate threshold or indenter/contact interpretation is used.
     """
 
-    if not isinstance(prepared, FingertipMechanicsMesh):
-        raise TypeError("prepared must be FingertipMechanicsMesh")
+    if not isinstance(prepared, PreparedFingertipMesh):
+        raise TypeError("prepared must be PreparedFingertipMesh")
     triangles = prepared.surface_triangles.get("outer_compliant_arc")
     if triangles is None or not triangles.size:
         raise ValueError("outer_compliant_arc semantic surface is unavailable")
@@ -282,17 +282,17 @@ def outer_compliant_timing_patch(
 
 
 def solve_prescribed_indentation(
-    prepared: FingertipMechanicsMesh,
+    prepared: PreparedFingertipMesh,
     settings,
     patch: PrescribedVertexDisplacement,
 ):
     """Run the benchmark-local prescribed patch through the neutral backend."""
 
-    if not isinstance(prepared, FingertipMechanicsMesh):
-        raise TypeError("prepared must be FingertipMechanicsMesh")
+    if not isinstance(prepared, PreparedFingertipMesh):
+        raise TypeError("prepared must be PreparedFingertipMesh")
     if not isinstance(patch, PrescribedVertexDisplacement):
         raise TypeError("patch must be PrescribedVertexDisplacement")
-    from .backends.newton_vbd import solve_newton_vbd_prescribed
+    from .newton_vbd import solve_newton_vbd_prescribed
 
     return solve_newton_vbd_prescribed(
         prepared.tet_mesh,
@@ -304,10 +304,10 @@ def solve_prescribed_indentation(
 
 
 __all__ = [
-    "FingertipMechanicsMesh",
+    "PreparedFingertipMesh",
     "PrescribedVertexDisplacement",
     "make_fingertip_volume_state",
     "outer_compliant_timing_patch",
-    "prepare_fingertip_mechanics_mesh",
+    "prepare_fingertip_mesh",
     "solve_prescribed_indentation",
 ]

@@ -12,9 +12,9 @@ from typing import Any, Literal, Mapping
 
 import numpy as np
 
-from mechanics3d import (
-    InvalidFingertipMechanicsMesh,
-    prepare_fingertip_mechanics_mesh,
+from physics import (
+    InvalidFingertipMesh,
+    prepare_fingertip_mesh,
 )
 from mesh import volume_mesh_settings_for_tier
 from mesh.volume3d import VolumeMeshDependencyError, VolumeMeshingError
@@ -47,8 +47,8 @@ from optimization.design_space import (
     DesignVariable,
     OPTIMIZABLE_PARAMETER_NAMES,
 )
-from validation.mechanics3d.deformed_state_artifact import restore_deformed_optical_state
-from validation.mechanics3d.multi_location_sphere_contact import (
+from validation.physics.deformed_state_artifact import restore_deformed_optical_state
+from validation.physics.multi_location_sphere_contact import (
     DEFAULT_LOCATION_U,
     DEFAULT_RADIUS_MM,
     DEFAULT_TRAVEL_MM,
@@ -59,6 +59,14 @@ from validation.mechanics3d.multi_location_sphere_contact import (
     VALIDATION_VBD_ITERATIONS,
     run_multi_location_sphere_contact,
 )
+from validation.optimization.lumo3d_common import (
+    LUMO3D_OPTICAL_X_BOUNDS_MM,
+    LUMO3D_OPTICAL_Y_BOUNDS_MM,
+    candidate_id as make_candidate_id,
+    energy_record as make_energy_record,
+    material as make_material,
+    optical_settings as make_optical_settings,
+)
 
 
 LUMO3D_OBSERVATION_LEVEL = "FULL_3D native internal transport redistribution proxy"
@@ -67,7 +75,7 @@ LUMO3D_OPTICAL_X_BOUNDS_MM = (-16.0, 16.0)
 LUMO3D_OPTICAL_Y_BOUNDS_MM = (-31.0, 4.5)
 LUMO3D_EVALUATION_CONTRACT: dict[str, Any] = {
     "schema": "lumo3d-multi-contact-evaluation-v1",
-    "bounds_mm": PRODUCTION_SEARCH_BOUNDS,
+    "bounds_mm": [spec.to_dict() for spec in PRODUCTION_SEARCH_BOUNDS],
     "contact": {
         "normalized_locations": DEFAULT_LOCATION_U,
         "sphere_radius_mm": DEFAULT_RADIUS_MM,
@@ -105,53 +113,6 @@ LUMO3D_EVALUATION_CONTRACT_ID = (
         ).encode()
     ).hexdigest()[:16]
 )
-def _optical_settings() -> Transport3DSettings:
-    return Transport3DSettings(
-        mode="full3d",
-        ray_count=256,
-        max_interactions=6,
-        maximum_segment_count=4096,
-        maximum_periodic_wraps=8,
-        surface_u_bins=32,
-        surface_z_bins=16,
-        internal_grid_width=32,
-        internal_grid_height=32,
-        internal_z_bins=8,
-        x_bounds_mm=LUMO3D_OPTICAL_X_BOUNDS_MM,
-        y_bounds_mm=LUMO3D_OPTICAL_Y_BOUNDS_MM,
-        terminate_on_periodic_wrap_limit=True,
-        terminate_on_no_event=True,
-        retain_internal_path_field=True,
-        retain_projected_segments=False,
-    )
-
-
-def _material(tip: Fingertip) -> dict[str, float]:
-    return {
-        "refractive_index_air": tip.optical.refractive_index_air,
-        "refractive_index_silicone": tip.optical.refractive_index_silicone,
-        "absorption_per_mm": tip.optical.absorption_per_mm,
-        "scattering_per_mm": tip.optical.scattering_per_mm,
-    }
-
-
-def _candidate_id(parameters: FingertipParameters) -> str:
-    payload = {
-        name: float(getattr(parameters, name))
-        for name in (
-            "flat_pad_height",
-            "semielliptical_pad_height",
-            "stem_width",
-            "stem_height",
-            "void_width",
-            "void_height",
-        )
-    }
-    return hashlib.sha256(
-        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
-    ).hexdigest()[:16]
-
-
 def _contact_state(
     case: Any,
     morphology_fingerprint: str,
@@ -214,42 +175,6 @@ def _contact_state(
         "carrier_contact_source_node_ids": list(contact_source_ids),
         "carrier_mapping_tolerance_mm": 0.5 * float(
             case.indentation.diagnostics.get("rigid_sdf_target_voxel_mm", 0.125)
-        ),
-    }
-
-
-def _energy_record(result: Any) -> dict[str, Any]:
-    launched = float(result.launched_weight)
-    carrier_absorbed = float(result.carrier_absorbed_weight)
-    escaped = float(result.escaped_weight)
-    return {
-        "launched_weight": launched,
-        "escaped_weight": escaped,
-        "escaped_transport_fraction": escaped / max(launched, 1.0e-30),
-        "absorbed_weight": float(result.absorbed_weight),
-        "terminated_weight": float(result.terminated_weight),
-        "total_transport": float(result.total_transport),
-        "object_interface_optics": "disabled_in_deformation_only_scene",
-        "object_interface_incident_weight": float(result.object_interface_incident_weight),
-        "object_absorbed_weight": float(result.object_absorbed_weight),
-        "object_transmitted_weight": float(result.object_transmitted_weight),
-        "object_reflected_weight": float(result.object_reflected_weight),
-        "carrier_absorbed_weight": carrier_absorbed,
-        "carrier_absorption_fraction": carrier_absorbed / max(launched, 1.0e-30),
-        "carrier_transmitted_weight": float(result.carrier_transmitted_weight),
-        "carrier_interface_incident_weight": float(
-            result.carrier_interface_incident_weight
-        ),
-        "carrier_reflected_weight": float(result.carrier_reflected_weight),
-        "carrier_optical_contact_triangle_count": int(
-            result.path_diagnostics.get("carrier_interface", {}).get(
-                "contact_triangle_count", 0
-            )
-        ),
-        "energy_balance_error": float(result.energy_balance_error),
-        "field_shape": list(result.field.shape),
-        "field_finite_nonnegative": bool(
-            np.all(np.isfinite(result.field)) and np.all(result.field >= 0.0)
         ),
     }
 
@@ -323,7 +248,7 @@ class Lumo3DEvaluator:
                 "max_load_increment_mm": VALIDATION_MAX_LOAD_INCREMENT_MM,
                 "vbd_iterations": VALIDATION_VBD_ITERATIONS,
             }
-        self.settings = _optical_settings()
+        self.settings = make_optical_settings()
 
     def evaluate(self, parameters: FingertipParameters) -> Lumo3DEvaluation:
         stage = "mechanics"
@@ -333,7 +258,7 @@ class Lumo3DEvaluator:
         try:
             validate_minimum_silicone_thickness(parameters)
             tip = Fingertip(parameters)
-            candidate_id = _candidate_id(parameters)
+            candidate_id = make_candidate_id(parameters)
             candidate_root = self.artifact_root / "candidates" / candidate_id
             mechanics_root = candidate_root / "mechanics"
             contact = run_multi_location_sphere_contact(
@@ -353,8 +278,8 @@ class Lumo3DEvaluator:
             mechanics_runtime_s = time.perf_counter() - evaluation_started
 
             volume_mesh = tip.volume_mesh(volume_mesh_settings_for_tier("search"))
-            prepared = prepare_fingertip_mechanics_mesh(volume_mesh)
-            material = _material(tip)
+            prepared = prepare_fingertip_mesh(volume_mesh)
+            material = make_material(tip)
             configuration = transport_configuration(
                 self.settings,
                 material=material,
@@ -429,7 +354,7 @@ class Lumo3DEvaluator:
                 }
                 artifact = candidate_root / f"location_u_{case.normalized_location:.3f}.json"
                 save_case_artifact(artifact, result, contract)
-                record = _energy_record(result)
+                record = make_energy_record(result)
                 record.update(
                     {
                         "normalized_location": case.normalized_location,
@@ -524,7 +449,7 @@ class Lumo3DEvaluator:
         except (
             VolumeMeshDependencyError,
             VolumeMeshingError,
-            InvalidFingertipMechanicsMesh,
+            InvalidFingertipMesh,
         ) as exc:
             return _failure("mesh_failure", f"{type(exc).__name__}: {exc}")
         except (
@@ -585,8 +510,8 @@ def create_lumo3d_study(
         design_space=DesignSpace(
             FingertipParameters(void_height=PRODUCTION_NOMINAL_VOID_HEIGHT_MM),
             tuple(
-                DesignVariable(name, True, lower, upper)
-                for name, lower, upper in PRODUCTION_SEARCH_BOUNDS
+                DesignVariable(spec.name, True, spec.lower, spec.upper)
+                for spec in PRODUCTION_SEARCH_BOUNDS
             ),
         ),
         artifact_root=Path(artifact_root),

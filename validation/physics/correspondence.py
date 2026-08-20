@@ -10,11 +10,11 @@ from typing import Any, Mapping
 
 import numpy as np
 
-from mechanics3d import (
-    Mechanics3DSession,
-    Mechanics3DSettings,
+from physics import (
+    NewtonSession,
+    NewtonSettings,
     ParticleLoad,
-    prepare_fingertip_mechanics_mesh,
+    prepare_fingertip_mesh,
 )
 from mesh.volume3d import generate_volume_mesh
 from mesh.volume_types import volume_mesh_settings_for_tier
@@ -23,10 +23,14 @@ from model.fingertip_parameters import FingertipParameters
 from model.solid import build_fingertip_solid
 from validation.common.io import atomic_write_json, strict_read_json
 
-from .fea3d_reference import FEA3DReferenceError, FEA3DReferenceState, load_fea3d_reference
+from validation.reference.kratos3d.fea3d_reference import (
+    FEA3DReferenceError,
+    FEA3DReferenceState,
+    load_fea3d_reference,
+)
 
 
-class Mechanics3DCorrespondenceError(ValueError):
+class NewtonCorrespondenceError(ValueError):
     """Raised when the selected FEA state cannot be compared fail-closed."""
 
 
@@ -47,7 +51,7 @@ def _surface_nodes(prepared, tags: tuple[str, ...]) -> np.ndarray:
     triangles = [prepared.surface_triangles[tag] for tag in tags if tag in prepared.surface_triangles]
     if len(triangles) != len(tags):
         missing = sorted(set(tags) - set(prepared.surface_triangles))
-        raise Mechanics3DCorrespondenceError(f"required semantic surfaces are missing: {missing}")
+        raise NewtonCorrespondenceError(f"required semantic surfaces are missing: {missing}")
     return np.unique(np.concatenate([triangle.reshape(-1) for triangle in triangles])).astype(np.int64)
 
 
@@ -55,7 +59,7 @@ def _triangles(prepared, tags: tuple[str, ...]) -> np.ndarray:
     triangles = [prepared.surface_triangles[tag] for tag in tags if tag in prepared.surface_triangles]
     if len(triangles) != len(tags):
         missing = sorted(set(tags) - set(prepared.surface_triangles))
-        raise Mechanics3DCorrespondenceError(f"required semantic surfaces are missing: {missing}")
+        raise NewtonCorrespondenceError(f"required semantic surfaces are missing: {missing}")
     return np.concatenate(triangles, axis=0)
 
 
@@ -64,7 +68,7 @@ def _triangle_normals(coordinates: np.ndarray, triangles: np.ndarray) -> np.ndar
     cross = np.cross(points[:, 1] - points[:, 0], points[:, 2] - points[:, 0])
     lengths = np.linalg.norm(cross, axis=1)
     if np.any(~np.isfinite(lengths)) or np.any(lengths <= 1.0e-12):
-        raise Mechanics3DCorrespondenceError("comparison surface contains a degenerate triangle")
+        raise NewtonCorrespondenceError("comparison surface contains a degenerate triangle")
     return cross / lengths[:, None]
 
 
@@ -76,7 +80,7 @@ def _angles_deg(first: np.ndarray, second: np.ndarray) -> np.ndarray:
 def _stats(values: np.ndarray) -> dict[str, float]:
     values = np.asarray(values, dtype=float)
     if values.size == 0 or not np.all(np.isfinite(values)):
-        raise Mechanics3DCorrespondenceError("descriptor values must be finite and non-empty")
+        raise NewtonCorrespondenceError("descriptor values must be finite and non-empty")
     return {
         "mean": float(np.mean(values)),
         "median": float(np.median(values)),
@@ -205,7 +209,7 @@ def compare_mechanics_states(reference: FEA3DReferenceState, prepared, vbd_resul
     vbd_deformed = np.asarray(vbd_result.deformed_vertices, dtype=float)
     vbd_displacement = np.asarray(vbd_result.displacement, dtype=float)
     if vbd_deformed.shape != fea_deformed.shape:
-        raise Mechanics3DCorrespondenceError("FEA and VBD deformed coordinate shapes differ")
+        raise NewtonCorrespondenceError("FEA and VBD deformed coordinate shapes differ")
 
     error = vbd_displacement - fea_displacement
     error_norm = np.linalg.norm(error, axis=1)
@@ -231,7 +235,7 @@ def compare_mechanics_states(reference: FEA3DReferenceState, prepared, vbd_resul
     )
     load_metadata = reference.load_metadata.get("load")
     if not isinstance(load_metadata, Mapping):
-        raise Mechanics3DCorrespondenceError("selected reference has no localized load metadata")
+        raise NewtonCorrespondenceError("selected reference has no localized load metadata")
     localization = _localization(
         reference_coordinates,
         fea_displacement,
@@ -278,7 +282,7 @@ def compare_mechanics_states(reference: FEA3DReferenceState, prepared, vbd_resul
 
 def verify_exact_mesh_correspondence(volume_mesh, prepared, reference: FEA3DReferenceState) -> dict[str, Any]:
     if reference.source_node_ids is None or reference.tetrahedra_node_ids is None:
-        raise Mechanics3DCorrespondenceError("reference lacks explicit node or tetrahedron provenance")
+        raise NewtonCorrespondenceError("reference lacks explicit node or tetrahedron provenance")
     current_ids = np.asarray(sorted(volume_mesh.nodes), dtype=np.int64)
     current_coordinates = np.asarray(
         [[volume_mesh.nodes[int(node_id)].x_mm, volume_mesh.nodes[int(node_id)].y_mm, volume_mesh.nodes[int(node_id)].z_mm] for node_id in current_ids],
@@ -300,9 +304,9 @@ def verify_exact_mesh_correspondence(volume_mesh, prepared, reference: FEA3DRefe
         "tet_count": int(current_tetrahedra.shape[0]),
     }
     if not all((source_ids_exact, coordinate_identity, tetrahedra_exact, morphology_exact)):
-        raise Mechanics3DCorrespondenceError(f"authoritative mesh mismatch: {result}")
+        raise NewtonCorrespondenceError(f"authoritative mesh mismatch: {result}")
     if not np.array_equal(prepared.source_node_ids, current_ids):
-        raise Mechanics3DCorrespondenceError("mechanics3d adapter changed the authoritative node order")
+        raise NewtonCorrespondenceError("physics adapter changed the authoritative node order")
     return result
 
 
@@ -330,20 +334,20 @@ def _selected_reference(repo_root: str | Path = ".") -> tuple[dict[str, Any], FE
         ):
             candidates.append((path, payload))
     if len(candidates) != 1:
-        raise Mechanics3DCorrespondenceError(
+        raise NewtonCorrespondenceError(
             f"expected one nominal localized reference, found {len(candidates)}"
         )
     case_path, payload = candidates[0]
     raw_manifest = payload.get("native_manifest")
     if not isinstance(raw_manifest, str):
-        raise Mechanics3DCorrespondenceError("selected reference has no native manifest")
+        raise NewtonCorrespondenceError("selected reference has no native manifest")
     manifest = Path(raw_manifest)
     if not manifest.is_absolute():
         manifest = repo_root / manifest
     try:
         reference = load_fea3d_reference(manifest, case_metadata=payload)
     except (FEA3DReferenceError, OSError, ValueError) as exception:
-        raise Mechanics3DCorrespondenceError(str(exception)) from exception
+        raise NewtonCorrespondenceError(str(exception)) from exception
     return payload, reference, case_path
 
 
@@ -355,10 +359,10 @@ def build_localized_particle_load(
     force_control = case_payload.get("force_control")
     load_definition = case_payload.get("load")
     if not isinstance(force_control, Mapping) or not isinstance(load_definition, Mapping):
-        raise Mechanics3DCorrespondenceError("localized FEA load metadata is incomplete")
+        raise NewtonCorrespondenceError("localized FEA load metadata is incomplete")
     selected = force_control.get("selected_triangles")
     if not isinstance(selected, list) or not selected:
-        raise Mechanics3DCorrespondenceError("localized FEA load has no selected triangles")
+        raise NewtonCorrespondenceError("localized FEA load has no selected triangles")
 
     source_to_local = {int(source_id): index for index, source_id in enumerate(prepared.source_node_ids)}
     outer_tags = tuple(
@@ -375,33 +379,33 @@ def build_localized_particle_load(
     nodal_forces = np.zeros((coordinates.shape[0], 3), dtype=float)
     pressure = float(load_definition["pressure_mpa"])
     if not math.isfinite(pressure) or pressure <= 0.0:
-        raise Mechanics3DCorrespondenceError("FEA pressure is not finite and positive")
+        raise NewtonCorrespondenceError("FEA pressure is not finite and positive")
     loaded_area = 0.0
     reference_resultant = np.zeros(3, dtype=float)
     for row in selected:
         if not isinstance(row, Mapping):
-            raise Mechanics3DCorrespondenceError("selected triangle metadata is malformed")
+            raise NewtonCorrespondenceError("selected triangle metadata is malformed")
         source_ids = tuple(int(value) for value in row["node_ids"])
         if len(source_ids) != 3 or tuple(sorted(source_ids)) not in known_triangles:
-            raise Mechanics3DCorrespondenceError("selected load triangle is not an authoritative outer surface triangle")
+            raise NewtonCorrespondenceError("selected load triangle is not an authoritative outer surface triangle")
         try:
             local = np.asarray([source_to_local[value] for value in source_ids], dtype=np.int64)
         except KeyError as exception:
-            raise Mechanics3DCorrespondenceError("selected load triangle references an unknown node") from exception
+            raise NewtonCorrespondenceError("selected load triangle references an unknown node") from exception
         points = coordinates[local]
         cross = np.cross(points[1] - points[0], points[2] - points[0])
         norm = float(np.linalg.norm(cross))
         if not math.isfinite(norm) or norm <= 1.0e-12:
-            raise Mechanics3DCorrespondenceError("selected load triangle is degenerate")
+            raise NewtonCorrespondenceError("selected load triangle is degenerate")
         area = 0.5 * norm
         centroid = np.mean(points, axis=0)
         inward = -cross / norm
         if not np.allclose(area, float(row["area_mm2"]), rtol=0.0, atol=5.0e-5):
-            raise Mechanics3DCorrespondenceError("selected load triangle area differs from FEA artifact")
+            raise NewtonCorrespondenceError("selected load triangle area differs from FEA artifact")
         if not np.allclose(centroid, np.asarray(row["centroid_mm"], dtype=float), rtol=0.0, atol=5.0e-5):
-            raise Mechanics3DCorrespondenceError("selected load triangle centroid differs from FEA artifact")
+            raise NewtonCorrespondenceError("selected load triangle centroid differs from FEA artifact")
         if not np.allclose(inward, np.asarray(row["inward_normal"], dtype=float), rtol=0.0, atol=5.0e-6):
-            raise Mechanics3DCorrespondenceError("selected load triangle normal differs from FEA artifact")
+            raise NewtonCorrespondenceError("selected load triangle normal differs from FEA artifact")
         profile = float(row["profile_weight"])
         face_force = pressure * profile * area * inward
         reference_resultant += face_force
@@ -437,7 +441,7 @@ def build_localized_particle_load(
         "orientation": str(load_definition["orientation"]),
     }
     if construction["resultant_magnitude_error_n"] > 1.0e-5:
-        raise Mechanics3DCorrespondenceError("discrete VBD resultant does not match FEA artifact resultant")
+        raise NewtonCorrespondenceError("discrete VBD resultant does not match FEA artifact resultant")
     return particle_load, construction
 
 
@@ -457,11 +461,11 @@ def run_nominal_correspondence(
         build_fingertip_solid(model),
         volume_mesh_settings_for_tier(mesh_tier),
     )
-    prepared = prepare_fingertip_mechanics_mesh(volume_mesh)
+    prepared = prepare_fingertip_mesh(volume_mesh)
     correspondence = verify_exact_mesh_correspondence(volume_mesh, prepared, reference)
     particle_load, load_construction = build_localized_particle_load(prepared, reference, case_payload)
 
-    settings = Mechanics3DSettings(
+    settings = NewtonSettings(
         device="cuda:0",
         gravity=0.0,
         dt=VBD_CORRESPONDENCE_DT,
@@ -469,7 +473,7 @@ def run_nominal_correspondence(
         iterations=VBD_CORRESPONDENCE_ITERATIONS,
         fixed_vertex_indices=prepared.support_vertex_indices,
     )
-    session = Mechanics3DSession(prepared.tet_mesh, settings)
+    session = NewtonSession(prepared.tet_mesh, settings)
     session.solve(particle_load)  # untimed warm-up
     timed_results = []
     timings = []
@@ -486,7 +490,7 @@ def run_nominal_correspondence(
     session_creation = session.session_creation_wall_s
     comparison = compare_mechanics_states(reference, prepared, final_result)
     return {
-        "schema": "mechanics3d-nominal-fea-vbd-correspondence-v1",
+        "schema": "physics-nominal-fea-vbd-correspondence-v1",
         "scientific_role": "first localized-load correspondence characterization; not a calibrated VBD fidelity claim",
         "fea_rerun": False,
         "optix_run": False,
@@ -578,12 +582,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path("output/validation/mechanics3d/nominal_fea_vbd_correspondence.json"),
+        default=Path("output/validation/physics/nominal_fea_vbd_correspondence.json"),
     )
     parser.add_argument(
         "--report",
         type=Path,
-        default=Path("output/validation/mechanics3d/nominal_fea_vbd_correspondence.md"),
+        default=Path("output/validation/physics/nominal_fea_vbd_correspondence.md"),
     )
     parser.add_argument("--repo-root", type=Path, default=Path("."))
     parser.add_argument("--warm-repeats", type=int, default=5)
@@ -611,7 +615,7 @@ if __name__ == "__main__":
 
 
 __all__ = [
-    "Mechanics3DCorrespondenceError",
+    "NewtonCorrespondenceError",
     "VBD_CORRESPONDENCE_DT",
     "VBD_CORRESPONDENCE_ITERATIONS",
     "build_localized_particle_load",

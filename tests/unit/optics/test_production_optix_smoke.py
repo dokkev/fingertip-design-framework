@@ -12,7 +12,6 @@ from optics.optix.smoke import (
     ProductionOptixSmokeResult,
 )
 from validation.optics import production_optix_smoke as smoke_cli
-from validation.optimization import bo_campaign
 
 
 class _FakeArray:
@@ -187,19 +186,3 @@ def test_cli_success_summary_contains_runtime_and_result_counts(monkeypatch, cap
     assert "rays=2" in output
     assert "terminal=hit=1,miss=1" in output
     assert "results=hit=1,miss=1" in output
-
-
-def test_bo_preflight_calls_the_same_shared_smoke(monkeypatch) -> None:
-    calls: list[str] = []
-
-    def fake_smoke() -> ProductionOptixSmokeResult:
-        calls.append("smoke")
-        return _result()
-
-    monkeypatch.setattr(bo_campaign, "run_production_optix_smoke", fake_smoke)
-
-    result = bo_campaign._optix_preflight()
-
-    assert calls == ["smoke"]
-    assert result["status"] == "PASS"
-    assert result["smoke"]["ray_count"] == 2
