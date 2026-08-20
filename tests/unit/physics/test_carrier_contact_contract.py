@@ -44,7 +44,7 @@ def test_carrier_mesh_records_authoritative_cross_section_and_depth() -> None:
     fingertip = Fingertip(FingertipParameters(void_height=1.0))
     carrier = make_distal_phalanx_mesh(fingertip.solid())
 
-    assert carrier.metadata["source_geometry"] == "FingertipSolid.rigid_geometry"
-    assert isinstance(carrier.metadata["cross_section_wkt"], str)
-    assert carrier.metadata["z_min_mm"] == pytest.approx(-5.5)
-    assert carrier.metadata["z_max_mm"] == pytest.approx(5.5)
+    assert carrier.surface_mesh.metadata["source_geometry"] == "FingertipSolid.rigid_geometry"
+    assert carrier.cross_section.equals(fingertip.solid().rigid_geometry)
+    assert carrier.z_min_mm == pytest.approx(-5.5)
+    assert carrier.z_max_mm == pytest.approx(5.5)

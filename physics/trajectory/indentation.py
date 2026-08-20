@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Mapping, Sequence
 
 import numpy as np
 
+from mesh.rigid.carrier import RigidCarrierMesh
 from mesh.rigid.object import RigidObjectMesh, RigidPose3D
 
 from .fingertip import PreparedFingertipMesh
@@ -271,7 +272,7 @@ def solve_fingertip_indentation(
     *,
     first_contact: FirstContactResult | None = None,
     visual_carrier_mesh: RigidObjectMesh | None = None,
-    rigid_carrier_mesh: RigidObjectMesh | None = None,
+    rigid_carrier_mesh: RigidCarrierMesh | None = None,
 ) -> IndentationResult:
     """Run one Newton VBD rigid-soft indentation through the neutral boundary.
 
@@ -336,7 +337,7 @@ def solve_fingertip_indentation_trajectory(
     max_load_increment_mm: float = 0.05,
     first_contact: FirstContactResult | None = None,
     visual_carrier_mesh: RigidObjectMesh | None = None,
-    rigid_carrier_mesh: RigidObjectMesh | None = None,
+    rigid_carrier_mesh: RigidCarrierMesh | None = None,
 ) -> IndentationTrajectoryResult:
     """Solve one continuous path and capture exact requested checkpoints."""
 

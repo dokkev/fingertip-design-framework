@@ -40,7 +40,11 @@ def search_settings() -> FirstContactSettings:
 
 def test_canonical_alignment_is_geometry_defined_and_collision_free(contact_case) -> None:
     model, surface, sphere = contact_case
-    alignment = canonical_sphere_alignment(model, sphere, initial_gap_mm=0.25)
+    alignment = canonical_sphere_alignment(
+        model,
+        radius_mm=2.0,
+        initial_gap_mm=0.25,
+    )
 
     assert alignment.target_point_mm[2] == 0.0
     assert np.isclose(np.linalg.norm(alignment.outward_normal), 1.0)
@@ -56,7 +60,7 @@ def test_canonical_alignment_is_geometry_defined_and_collision_free(contact_case
 
 def test_first_contact_preserves_clear_hit_and_spawn_contract(contact_case, search_settings) -> None:
     model, surface, sphere = contact_case
-    alignment = canonical_sphere_alignment(model, sphere)
+    alignment = canonical_sphere_alignment(model, radius_mm=2.0)
     result = find_first_contact(
         surface,
         sphere,
@@ -76,7 +80,7 @@ def test_first_contact_preserves_clear_hit_and_spawn_contract(contact_case, sear
 
 def test_first_contact_is_deterministic(contact_case, search_settings) -> None:
     model, surface, sphere = contact_case
-    alignment = canonical_sphere_alignment(model, sphere)
+    alignment = canonical_sphere_alignment(model, radius_mm=2.0)
     first = find_first_contact(
         surface,
         sphere,
@@ -97,8 +101,8 @@ def test_first_contact_is_deterministic(contact_case, search_settings) -> None:
 
 def test_first_contact_is_invariant_to_free_space_start_distance(contact_case, search_settings) -> None:
     model, surface, sphere = contact_case
-    near = canonical_sphere_alignment(model, sphere, initial_gap_mm=1.0)
-    far = canonical_sphere_alignment(model, sphere, initial_gap_mm=10.0)
+    near = canonical_sphere_alignment(model, radius_mm=2.0, initial_gap_mm=1.0)
+    far = canonical_sphere_alignment(model, radius_mm=2.0, initial_gap_mm=10.0)
     near_result = find_first_contact(
         surface,
         sphere,
@@ -128,7 +132,7 @@ def test_first_contact_is_invariant_to_free_space_start_distance(contact_case, s
 
 def test_first_contact_rejects_overlapping_reference_and_unreachable_search(contact_case) -> None:
     model, surface, sphere = contact_case
-    alignment = canonical_sphere_alignment(model, sphere)
+    alignment = canonical_sphere_alignment(model, radius_mm=2.0)
     direction = np.asarray(alignment.approach_direction)
     overlap_translation = np.asarray(alignment.nominal_pose.translation_mm) + 2.1 * direction
     overlap_pose = type(alignment.nominal_pose)(

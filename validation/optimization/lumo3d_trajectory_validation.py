@@ -18,7 +18,7 @@ from optimization.evaluator import (
     Lumo3DTrajectoryEvaluator,
     create_lumo3d_trajectory_study,
 )
-from validation.optimization.lumo3d_evaluator import Lumo3DEvaluator
+from validation.reference.lumo3d_fixed_state_oracle import FixedStateLumo3DOracle
 
 
 OUTPUT_NAME = "lumo3d_fixed_depth_trajectory_evaluator_v1"
@@ -179,7 +179,7 @@ def _compare_legacy_reduction(
         "field_comparisons": field_comparisons,
         "maximum_normalized_field_distance": float(maximum_field_distance),
         "comparison_basis": (
-            "independent Lumo3DEvaluator versus reduced Lumo3DTrajectoryEvaluator; "
+            "independent fixed-state oracle versus reduced Lumo3DTrajectoryEvaluator; "
             "same nominal morphology, R=5 mm, travel=1.5 mm, u=0.25/0.50/0.75"
         ),
         "pass": bool(
@@ -297,10 +297,11 @@ def run_validation(output: str | Path, *, device: str = "cuda:0") -> dict[str, A
         "# Architecture audit\n\n"
         "The trajectory evaluator consumes one immutable fixed-depth factorial "
         "optimization protocol (radius and absolute depth are independent). "
-        "The fixed-state Lumo3DEvaluator is used only as an explicit regression "
+        "The fixed-state Lumo3D oracle is used only as an explicit regression "
         "oracle and is not part of the production Ax path. "
         "Newton stepping is shared by final-state and checkpoint APIs; OptiX is "
-        "called only after exact checkpoint artifacts are persisted.\n",
+        "called from the in-memory checkpoint state, with artifacts retained for "
+        "provenance and regression comparison.\n",
         encoding="utf-8",
     )
 
@@ -342,7 +343,7 @@ def run_validation(output: str | Path, *, device: str = "cuda:0") -> dict[str, A
     reduced_new = Lumo3DTrajectoryEvaluator(root / "legacy_reduction_new", protocol=reduced_protocol, device=device).evaluate(_nominal())
     if reduced_new.status != "success":
         raise RuntimeError("legacy reduction comparison could not complete")
-    legacy = Lumo3DEvaluator(
+    legacy = FixedStateLumo3DOracle(
         root / "legacy_reduction_legacy",
         device=device,
         normalized_locations=(0.25, 0.50, 0.75),
@@ -467,14 +468,14 @@ def run_validation(output: str | Path, *, device: str = "cuda:0") -> dict[str, A
             ],
             "modules_added": [
                 "optimization/protocol.py",
-                "optimization/mechanics_contract.py",
+                "lumo/mechanics_contract.py",
                 "optimization/objectives.py",
                 "optimization/evaluator.py",
                 "optimization/deformed_state_artifact.py",
             ],
             "duplicate_constants_removed_from_active_path": True,
             "legacy_modules_retained": {
-                "validation.optimization.lumo3d_evaluator": "independent fixed-state regression oracle only",
+                "validation.reference.lumo3d_fixed_state_oracle": "independent fixed-state regression oracle only",
             },
             "legacy_modules_removed": [
                 "validation/optimization/lumo3d_trajectory_evaluator.py",

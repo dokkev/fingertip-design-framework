@@ -1,7 +1,6 @@
 """Rigid-object geometry and pose contracts."""
 
-from .carrier import make_distal_phalanx_mesh
-from .indenter import IndenterPose2D
+from .carrier import RigidCarrierMesh, make_distal_phalanx_mesh
 from .object import (
     RigidObjectMesh,
     RigidPose3D,
@@ -12,8 +11,8 @@ from .object import (
 )
 
 __all__ = [
-    "IndenterPose2D",
     "RigidObjectMesh",
+    "RigidCarrierMesh",
     "RigidPose3D",
     "make_box_mesh",
     "make_cube_mesh",

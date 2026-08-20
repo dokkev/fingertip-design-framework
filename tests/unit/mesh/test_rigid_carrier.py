@@ -40,12 +40,14 @@ def _edge_directions(mesh) -> dict[tuple[int, int], list[int]]:
 def test_distal_phalanx_mesh_is_closed_deterministic_and_outward() -> None:
     first = make_distal_phalanx_mesh(_solid())
     second = make_distal_phalanx_mesh(_solid())
+    first_surface = first.surface_mesh
+    second_surface = second.surface_mesh
 
-    np.testing.assert_array_equal(first.vertices_mm, second.vertices_mm)
-    np.testing.assert_array_equal(first.faces, second.faces)
-    assert np.all(np.isfinite(first.vertices_mm))
-    assert np.all(np.isfinite(first.faces))
-    triangle_points = first.vertices_mm[first.faces]
+    np.testing.assert_array_equal(first_surface.vertices_mm, second_surface.vertices_mm)
+    np.testing.assert_array_equal(first_surface.faces, second_surface.faces)
+    assert np.all(np.isfinite(first_surface.vertices_mm))
+    assert np.all(np.isfinite(first_surface.faces))
+    triangle_points = first_surface.vertices_mm[first_surface.faces]
     assert np.all(
         np.linalg.norm(
             np.cross(triangle_points[:, 1] - triangle_points[:, 0], triangle_points[:, 2] - triangle_points[:, 0]),
@@ -53,22 +55,24 @@ def test_distal_phalanx_mesh_is_closed_deterministic_and_outward() -> None:
         )
         > 1.0e-12
     )
-    assert _signed_volume(first) > 0.0
-    assert all(len(directions) == 2 for directions in _edge_directions(first).values())
-    assert all(sorted(directions) == [-1, 1] for directions in _edge_directions(first).values())
+    assert _signed_volume(first_surface) > 0.0
+    assert all(len(directions) == 2 for directions in _edge_directions(first_surface).values())
+    assert all(sorted(directions) == [-1, 1] for directions in _edge_directions(first_surface).values())
     np.testing.assert_allclose(
-        first.bounds_mm,
+        first_surface.bounds_mm,
         ((-15.0, -6.0, -5.5), (15.0, 3.5, 5.5)),
         atol=1.0e-12,
         rtol=0.0,
     )
-    assert first.metadata["source_geometry"] == "FingertipSolid.rigid_geometry"
+    assert first_surface.metadata["source_geometry"] == "FingertipSolid.rigid_geometry"
+    assert first.z_min_mm == -5.5
+    assert first.z_max_mm == 5.5
 
 
 def test_distal_phalanx_cross_section_matches_authoritative_rigid_geometry() -> None:
     solid = _solid()
     mesh = make_distal_phalanx_mesh(solid)
-    top = mesh.vertices_mm[mesh.faces]
+    top = mesh.surface_mesh.vertices_mm[mesh.surface_mesh.faces]
     top_faces = top[np.all(np.isclose(top[:, :, 2], 5.5, atol=1.0e-12), axis=1)]
     reconstructed = unary_union(
         [Polygon(face[:, :2]) for face in top_faces]
@@ -104,7 +108,7 @@ def test_distal_phalanx_mesh_preserves_authoritative_holes() -> None:
     )
 
     mesh = make_distal_phalanx_mesh(solid)
-    top = mesh.vertices_mm[mesh.faces]
+    top = mesh.surface_mesh.vertices_mm[mesh.surface_mesh.faces]
     top_faces = top[np.all(np.isclose(top[:, :, 2], 5.5, atol=1.0e-12), axis=1)]
     reconstructed = unary_union([Polygon(face[:, :2]) for face in top_faces])
 

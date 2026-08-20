@@ -15,6 +15,12 @@ from .sphere_alignment import (
     canonical_sphere_alignment,
     sphere_alignment_at_normalized_location,
 )
+from .surface_frame import (
+    CrownFrame,
+    InvalidSurfaceFrame,
+    crown_frame_from_model,
+    surface_frame_from_normalized_location,
+)
 
 __all__ = [
     "CandidateContactError",
@@ -22,10 +28,14 @@ __all__ = [
     "FirstContactSettings",
     "FingertipContactSurface",
     "SphereAlignment",
+    "CrownFrame",
+    "InvalidSurfaceFrame",
     "canonical_sphere_alignment",
     "sphere_alignment_at_normalized_location",
     "find_first_contact",
     "intersects",
     "make_outer_compliant_surface",
     "unintended_boundary_clearance_mm",
+    "crown_frame_from_model",
+    "surface_frame_from_normalized_location",
 ]

@@ -285,7 +285,7 @@ def make_sphere_mesh(radius_mm: float, subdivisions: int = 2) -> RigidObjectMesh
         vertices_mm=vertices,
         faces=faces,
         name=f"sphere_r{radius:g}_sub{subdivisions}",
-        metadata={"primitive": "sphere", "radius_mm": radius, "subdivisions": subdivisions},
+        metadata={"source": "parametric_sphere", "subdivisions": subdivisions},
     )
 
 

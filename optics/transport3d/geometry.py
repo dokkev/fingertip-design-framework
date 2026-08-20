@@ -309,7 +309,7 @@ def build_fixed_transport_surfaces(
     """
     if not isinstance(reference_mesh, FingertipMesh):
         raise TypeError("reference_mesh must be FingertipMesh")
-    reference_pad = reference_mesh.pad
+    reference_pad = PadMesh.from_fingertip_mesh(reference_mesh)
     try:
         rigid_pad = _rigid_pad_mesh(reference_mesh)
         rigid_extrusion = _ExtrudedMesh.from_pad_mesh(rigid_pad, depth_mm=depth_mm)

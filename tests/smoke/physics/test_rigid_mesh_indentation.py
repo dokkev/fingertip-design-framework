@@ -128,7 +128,7 @@ def test_nominal_triangle_mesh_indenter_deforms_and_promotes_volume_state() -> N
             soft_contact_ke=1.0e3,
             soft_contact_kd=10.0,
         ),
-        visual_carrier_mesh=make_distal_phalanx_mesh(volume_mesh.solid),
+        visual_carrier_mesh=make_distal_phalanx_mesh(volume_mesh.solid).surface_mesh,
     )
 
     np.testing.assert_allclose(
@@ -204,7 +204,11 @@ def test_sphere_first_contact_normalization_is_start_distance_invariant() -> Non
         max_travel_mm=contact_settings.max_travel_mm,
     )
     alignments = tuple(
-        canonical_sphere_alignment(model, object_mesh, initial_gap_mm=gap)
+        canonical_sphere_alignment(
+            model,
+            radius_mm=2.0,
+            initial_gap_mm=gap,
+        )
         for gap in (1.0, 10.0)
     )
     first_contacts = tuple(

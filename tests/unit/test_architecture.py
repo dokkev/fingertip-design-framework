@@ -38,7 +38,7 @@ def _assert_no_prefix(package: str, forbidden: tuple[str, ...]) -> None:
 
 
 def test_production_packages_do_not_import_validation_or_tests() -> None:
-    for package in ("model", "mesh", "contact", "physics", "optics", "optimization"):
+    for package in ("model", "mesh", "contact", "physics", "optics", "lumo", "optimization"):
         _assert_no_prefix(package, ("validation", "tests"))
 
 
@@ -78,8 +78,12 @@ def test_optics_has_no_mechanics_or_validation_dependency() -> None:
 
 
 def test_lower_layers_do_not_import_gui() -> None:
-    for package in ("model", "mesh", "contact", "physics", "optics", "optimization"):
+    for package in ("model", "mesh", "contact", "physics", "optics", "lumo", "optimization"):
         _assert_no_prefix(package, ("gui",))
+
+
+def test_lumo_does_not_import_optimization() -> None:
+    _assert_no_prefix("lumo", ("optimization",))
 
 
 def test_removed_legacy_packages_are_absent() -> None:

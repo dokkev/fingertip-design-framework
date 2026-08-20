@@ -27,7 +27,6 @@ import time
 from typing import Any, Iterable, Mapping
 
 import numpy as np
-from shapely import wkt
 from shapely.geometry import Point
 
 from contact import (
@@ -121,17 +120,14 @@ def _signed_void_bottom_clearance_mm(
     """Return signed XY clearance of the deformed void-bottom surface.
 
     The carrier cross-section and z extent come from the authoritative rigid
-    carrier mesh metadata.  Positive means outside the carrier polygon,
+    carrier contract.  Positive means outside the carrier polygon,
     negative means geometrically inside it.  This is an independent
     diagnostic; it does not participate in Newton contact or alter results.
     """
 
-    try:
-        carrier_polygon = wkt.loads(str(carrier_mesh.metadata["cross_section_wkt"]))
-        z_min_mm = float(carrier_mesh.metadata["z_min_mm"])
-        z_max_mm = float(carrier_mesh.metadata["z_max_mm"])
-    except (KeyError, TypeError, ValueError) as exc:
-        raise ValueError("carrier mesh lacks valid cross-section/z-bound metadata") from exc
+    carrier_polygon = carrier_mesh.cross_section
+    z_min_mm = carrier_mesh.z_min_mm
+    z_max_mm = carrier_mesh.z_max_mm
     triangles = np.asarray(prepared.surface_triangles["void_bottom"], dtype=np.int64)
     coordinates = np.asarray(vertices_mm, dtype=float)
     distances = []
@@ -226,8 +222,11 @@ def _write_geometry_artifact(
         void_bottom_vertex_indices=np.asarray(
             np.unique(prepared.surface_triangles["void_bottom"]), dtype=np.int32
         ),
-        carrier_vertices_mm=np.asarray(carrier_mesh.vertices_mm, dtype=np.float32),
-        carrier_faces=np.asarray(carrier_mesh.faces, dtype=np.int32),
+        carrier_vertices_mm=np.asarray(
+            carrier_mesh.surface_mesh.vertices_mm,
+            dtype=np.float32,
+        ),
+        carrier_faces=np.asarray(carrier_mesh.surface_mesh.faces, dtype=np.int32),
     )
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -283,8 +282,8 @@ def _run_case(
         contact_surface = make_outer_compliant_surface(volume_mesh.solid)
         alignment = sphere_alignment_at_normalized_location(
             Fingertip(parameters).geometry,
-            sphere_mesh,
             location_u,
+            radius_mm=radius_mm,
             initial_gap_mm=0.25,
         )
         if intersects(contact_surface, sphere_mesh, alignment.nominal_pose):

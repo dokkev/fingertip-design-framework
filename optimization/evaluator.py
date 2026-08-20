@@ -6,7 +6,7 @@ physics remain in their neutral backends.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 import hashlib
 import json
 from pathlib import Path
@@ -25,11 +25,14 @@ from mesh.fingertip.geometry import GmshDependencyError
 from model import (
     Fingertip,
     FingertipParameters,
+    LED,
     InvalidFingertip,
     InvalidFingertipParameters,
+    OpticalMaterial,
     validate_minimum_silicone_thickness,
 )
 from optics.transport3d import (
+    Transport3DSettings,
     Transport3DDependencyError,
     Transport3DGeometryError,
     Transport3DPhysicsError,
@@ -42,7 +45,7 @@ from optimization.design_space import (
     PRODUCTION_NOMINAL_VOID_HEIGHT_MM,
     PRODUCTION_SEARCH_BOUNDS,
 )
-from optimization.mechanics_contract import (
+from lumo.mechanics_contract import (
     DEFAULT_MECHANICS_CONTRACT,
     MechanicsContract,
 )
@@ -53,6 +56,10 @@ from optimization.objectives import (
     TrajectoryObjectiveResult,
     compute_trajectory_objective,
     normalized_field_distance,
+)
+from optimization.deformed_state_artifact import (
+    build_contact_state_record,
+    write_mechanics_artifact,
 )
 from optimization.protocol import (
     DEFAULT_TRAJECTORY_PROTOCOL,
@@ -75,8 +82,48 @@ from lumo.simulation import (
 
 
 TRAJECTORY_EVALUATION_SCHEMA = "lumo3d-trajectory-evaluation-v1"
-TRAJECTORY_EVALUATION_CONTRACT_ID = TRAJECTORY_EVALUATION_SCHEMA
 CURRENT_CELL_HALF_LENGTH_MM = 5.5
+
+
+def trajectory_evaluation_contract_id(
+    *,
+    protocol: TrajectoryEvaluationProtocol,
+    objective_config: TrajectoryObjectiveConfig,
+    mechanics_contract: MechanicsContract,
+    optical_settings: Transport3DSettings,
+    led: LED,
+    optical_material: OpticalMaterial,
+) -> str:
+    """Fingerprint every fixed input that can change a production result."""
+    payload = {
+        "schema": TRAJECTORY_EVALUATION_SCHEMA,
+        "protocol": protocol.to_dict(),
+        "objective": asdict(objective_config),
+        "mechanics": mechanics_contract.to_dict(),
+        "transport": asdict(optical_settings),
+        "led": {
+            "relative_radiant_power": float(led.relative_radiant_power),
+            "emission_half_angle_deg": float(led.emission_half_angle_deg),
+        },
+        "optical_material": {
+            "refractive_index_air": float(optical_material.refractive_index_air),
+            "refractive_index_silicone": float(
+                optical_material.refractive_index_silicone
+            ),
+            "absorption_per_mm": float(optical_material.absorption_per_mm),
+        },
+    }
+    return f"{TRAJECTORY_EVALUATION_SCHEMA}:{fingerprint_mapping(payload)[:16]}"
+
+
+TRAJECTORY_EVALUATION_CONTRACT_ID = trajectory_evaluation_contract_id(
+    protocol=DEFAULT_TRAJECTORY_PROTOCOL,
+    objective_config=TrajectoryObjectiveConfig(),
+    mechanics_contract=DEFAULT_MECHANICS_CONTRACT,
+    optical_settings=lumo_optical_settings(),
+    led=LED(),
+    optical_material=OpticalMaterial(),
+)
 
 
 def _candidate_id(parameters: FingertipParameters) -> str:
@@ -151,23 +198,32 @@ def _objective_failure(
 def _checkpoint_record(
     contact_result: ContactSimulationResult,
     state: ContactOpticalState,
+    *,
+    mechanics_artifact_path: Path,
+    mechanics_artifact_sha256: str,
+    contact_state: Mapping[str, Any],
+    final_pose_error_mm: float,
 ) -> dict[str, Any]:
     """Convert one simulation state to the persisted evaluator boundary."""
 
     checkpoint = state.checkpoint
     alignment = contact_result.alignment
     first_contact = contact_result.first_contact
+    trajectory_id = (
+        f"u_{contact_result.normalized_location:.3f}"
+        f"__radius_{contact_result.indenter_radius_mm:.3f}"
+    )
     return {
-        "trajectory_id": state.trajectory_id,
-        "normalized_location": state.normalized_location,
-        "radius_mm": state.indenter_radius_mm,
+        "trajectory_id": trajectory_id,
+        "normalized_location": contact_result.normalized_location,
+        "radius_mm": contact_result.indenter_radius_mm,
         "checkpoint_index": checkpoint.checkpoint_index,
         "checkpoint_depth_mm": checkpoint.post_contact_travel_mm,
         "checkpoint_fraction": checkpoint.checkpoint_fraction,
         "normalized_indentation_ratio": checkpoint.normalized_indentation_ratio,
         "post_contact_travel_mm": checkpoint.post_contact_travel_mm,
         "unintended_boundary_clearance_mm": float(
-            state.contact_state["unintended_boundary_clearance_mm"]
+            contact_result.unintended_boundary_clearance_mm
         ),
         "cumulative_step_index": checkpoint.cumulative_step_index,
         "first_contact_travel_mm": first_contact.travel_to_contact_mm,
@@ -176,15 +232,25 @@ def _checkpoint_record(
                 "target_point_mm": alignment.target_point_mm,
                 "outward_normal": alignment.outward_normal,
                 "approach_direction": alignment.approach_direction,
-                "radius_mm": state.indenter_radius_mm,
+                "radius_mm": contact_result.indenter_radius_mm,
                 "contact_pose_mm": first_contact.contact_pose.translation_mm,
             }
         ),
-        "mechanics_artifact_path": str(state.mechanics_artifact_path),
-        "mechanics_artifact_sha256": state.mechanics_artifact_sha256,
-        "final_pose_error_mm": state.final_pose_error_mm,
+        "mechanics_artifact_path": str(mechanics_artifact_path),
+        "mechanics_artifact_sha256": mechanics_artifact_sha256,
+        "final_pose_error_mm": float(final_pose_error_mm),
         "mechanics_diagnostics": dict(checkpoint.diagnostics),
+        "contact_state": dict(contact_state),
     }
+
+
+def _final_pose_error_mm(contact_result: ContactSimulationResult, state: ContactOpticalState) -> float:
+    expected = contact_result.first_contact.pose_at_post_contact_travel(
+        state.checkpoint.post_contact_travel_mm
+    )
+    actual = np.asarray(state.checkpoint.indenter_pose.translation_mm, dtype=float)
+    target = np.asarray(expected.translation_mm, dtype=float)
+    return float(np.linalg.norm(actual - target))
 
 
 class Lumo3DTrajectoryEvaluator:
@@ -199,6 +265,9 @@ class Lumo3DTrajectoryEvaluator:
         mechanics_contract: MechanicsContract = DEFAULT_MECHANICS_CONTRACT,
         device: str = "cuda:0",
         mechanics_mode: str = "search",
+        optical_settings: Transport3DSettings | None = None,
+        led: LED = LED(),
+        optical_material: OpticalMaterial = OpticalMaterial(),
     ) -> None:
         if not isinstance(protocol, TrajectoryEvaluationProtocol):
             raise TypeError("protocol must be TrajectoryEvaluationProtocol")
@@ -212,7 +281,23 @@ class Lumo3DTrajectoryEvaluator:
         self.mechanics_contract = mechanics_contract
         self.device = device
         self.mechanics_mode = mechanics_mode
-        self.settings = lumo_optical_settings()
+        if not isinstance(led, LED):
+            raise TypeError("led must be an LED")
+        if not isinstance(optical_material, OpticalMaterial):
+            raise TypeError("optical_material must be an OpticalMaterial")
+        self.led = led
+        self.optical_material = optical_material
+        self.settings = optical_settings or lumo_optical_settings()
+        if not isinstance(self.settings, Transport3DSettings):
+            raise TypeError("optical_settings must be a Transport3DSettings")
+        self.evaluation_contract_id = trajectory_evaluation_contract_id(
+            protocol=self.protocol,
+            objective_config=self.objective_config,
+            mechanics_contract=self.mechanics_contract,
+            optical_settings=self.settings,
+            led=self.led,
+            optical_material=self.optical_material,
+        )
 
     def evaluate(self, parameters: FingertipParameters) -> Lumo3DTrajectoryEvaluation:
         """Run validation, mesh/contact mechanics, optical states, and objective.
@@ -237,7 +322,11 @@ class Lumo3DTrajectoryEvaluator:
         stage = "mechanics"
         try:
             validate_minimum_silicone_thickness(parameters)
-            tip = Fingertip(parameters)
+            tip = Fingertip(
+                parameters,
+                led=self.led,
+                optical=self.optical_material,
+            )
             morphology_id = _candidate_id(parameters)
             candidate_root = (
                 self.artifact_root
@@ -256,15 +345,12 @@ class Lumo3DTrajectoryEvaluator:
 
             simulation = LumoSimulation.from_fingertip(
                 tip,
-                artifact_root=candidate_root,
-                protocol=self.protocol,
+                initial_gap_mm=self.protocol.initial_gap_mm,
                 mechanics_contract=self.mechanics_contract,
                 device=self.device,
-                settings=self.settings,
+                optical_settings=self.settings,
             )
             volume_mesh = simulation.volume_mesh
-            mechanics_finished = time.perf_counter()
-            stage = "optics"
             configuration = transport_configuration(
                 self.settings,
                 material=optical_physics_parameters(tip),
@@ -281,11 +367,13 @@ class Lumo3DTrajectoryEvaluator:
                 "mechanics_contract_fingerprint": self.mechanics_contract.fingerprint,
                 "optical_configuration_fingerprint": fingerprint_mapping(configuration),
                 "objective_contract_fingerprint": fingerprint_mapping(objective_contract),
+                "evaluation_contract_id": self.evaluation_contract_id,
             }
             trajectory_records: list[Mapping[str, Any]] = []
             optical_records: list[Mapping[str, Any]] = []
             observations: list[TrajectoryObservation] = []
-            optics_started = time.perf_counter()
+            mechanics_runtime_s = 0.0
+            optics_runtime_s = 0.0
             for radius in self.protocol.indenter_radii_mm:
                 for location in self.protocol.contact_locations_u:
                     contact_result = simulation.run_sphere_contact(
@@ -293,14 +381,59 @@ class Lumo3DTrajectoryEvaluator:
                         radius_mm=radius,
                         checkpoint_depths_mm=self.protocol.checkpoint_depths_mm,
                     )
+                    mechanics_runtime_s += contact_result.mechanics_seconds
+                    optics_runtime_s += contact_result.optics_seconds
                     for state in contact_result.checkpoints:
-                        record = _checkpoint_record(contact_result, state)
+                        trajectory_id = (
+                            f"u_{contact_result.normalized_location:.3f}"
+                            f"__radius_{contact_result.indenter_radius_mm:.3f}"
+                        )
+                        mechanics_artifact = (
+                            candidate_root
+                            / "mechanics"
+                            / trajectory_id
+                            / f"checkpoint_{state.checkpoint.checkpoint_index:02d}.npz"
+                        )
+                        mechanics_artifact_sha256 = write_mechanics_artifact(
+                            mechanics_artifact,
+                            state.checkpoint,
+                            simulation.prepared,
+                        )
+                        contact_state = build_contact_state_record(
+                            morphology_fingerprint=volume_mesh.morphology_fingerprint,
+                            protocol=self.protocol,
+                            location_u=contact_result.normalized_location,
+                            radius_mm=contact_result.indenter_radius_mm,
+                            checkpoint_depth_mm=state.checkpoint.post_contact_travel_mm,
+                            checkpoint_fraction=state.checkpoint.checkpoint_fraction,
+                            normalized_indentation_ratio=(
+                                state.checkpoint.normalized_indentation_ratio
+                            ),
+                            post_contact_travel_mm=state.checkpoint.post_contact_travel_mm,
+                            unintended_boundary_clearance_mm=(
+                                contact_result.unintended_boundary_clearance_mm
+                            ),
+                            checkpoint_diagnostics=state.checkpoint.diagnostics,
+                            source_node_ids=tuple(
+                                int(value) for value in simulation.prepared.source_node_ids
+                            ),
+                            mechanics_artifact_sha256=mechanics_artifact_sha256,
+                        )
+                        pose_error_mm = _final_pose_error_mm(contact_result, state)
+                        record = _checkpoint_record(
+                            contact_result,
+                            state,
+                            mechanics_artifact_path=mechanics_artifact,
+                            mechanics_artifact_sha256=mechanics_artifact_sha256,
+                            contact_state=contact_state,
+                            final_pose_error_mm=pose_error_mm,
+                        )
                         trajectory_records.append(record)
                         configuration_fingerprint = fingerprint_mapping(configuration)
                         artifact = (
                             candidate_root
-                            / f"location_u_{state.normalized_location:.3f}"
-                            f"__radius_{state.indenter_radius_mm:.3f}"
+                            / f"location_u_{contact_result.normalized_location:.3f}"
+                            f"__radius_{contact_result.indenter_radius_mm:.3f}"
                             f"__depth_{state.checkpoint.post_contact_travel_mm:.3f}mm"
                             f"__checkpoint_{state.checkpoint.checkpoint_index:02d}.json"
                         )
@@ -314,11 +447,11 @@ class Lumo3DTrajectoryEvaluator:
                             "protocol_fingerprint": self.protocol.fingerprint,
                             "mechanics_contract": self.mechanics_contract.to_dict(),
                             "evaluation_identity": evaluation_identity,
-                            "mechanics_artifact_sha256": state.mechanics_artifact_sha256,
+                            "mechanics_artifact_sha256": mechanics_artifact_sha256,
                             "mechanics_dimension": "3D",
                             "geometry_mode": "full3d_surface",
                             "full3d_surface_provenance": "actual_deformed_3d_volume_state",
-                            "contact_state": dict(state.contact_state),
+                            "contact_state": dict(contact_state),
                             "transport_configuration": configuration,
                             "transport_configuration_fingerprint": configuration_fingerprint,
                         }
@@ -330,14 +463,14 @@ class Lumo3DTrajectoryEvaluator:
                             {
                                 "artifact": str(artifact),
                                 "artifact_field": str(artifact.with_suffix(".npz")),
-                                "contact_state": dict(state.contact_state),
-                                "contact_state_fingerprint": state.contact_state[
+                                "contact_state": dict(contact_state),
+                                "contact_state_fingerprint": contact_state[
                                     "contact_state_fingerprint"
                                 ],
-                                "carrier_contact_active": state.contact_state[
+                                "carrier_contact_active": contact_state[
                                     "carrier_contact_active"
                                 ],
-                                "carrier_contact_occurred": state.contact_state[
+                                "carrier_contact_occurred": contact_state[
                                     "carrier_contact_occurred"
                                 ],
                                 "transport_configuration_fingerprint": configuration_fingerprint,
@@ -347,8 +480,8 @@ class Lumo3DTrajectoryEvaluator:
                         optical_records.append(optical_record)
                         observations.append(
                             TrajectoryObservation(
-                                location_u=state.normalized_location,
-                                radius_mm=state.indenter_radius_mm,
+                                location_u=contact_result.normalized_location,
+                                radius_mm=contact_result.indenter_radius_mm,
                                 checkpoint_depth_mm=state.checkpoint.post_contact_travel_mm,
                                 field=state.optics.field,
                                 diagnostics=energy,
@@ -374,8 +507,8 @@ class Lumo3DTrajectoryEvaluator:
                 "actual_newton_trajectory_count": self.protocol.trajectory_count,
                 "checkpoint_count": self.protocol.checkpoint_count,
                 "optical_state_count": len(optical_records),
-                "mechanics_runtime_s": mechanics_finished - started,
-                "optics_runtime_s": time.perf_counter() - optics_started,
+                "mechanics_runtime_s": mechanics_runtime_s,
+                "optics_runtime_s": optics_runtime_s,
                 "total_runtime_s": time.perf_counter() - started,
                 "morphology_fingerprint": volume_mesh.morphology_fingerprint,
                 "transport_configuration_fingerprint": fingerprint_mapping(configuration),
@@ -435,6 +568,20 @@ class Lumo3DTrajectoryStudy:
     mechanics_contract: MechanicsContract = DEFAULT_MECHANICS_CONTRACT
     device: str = "cuda:0"
     mechanics_mode: str = "search"
+    optical_settings: Transport3DSettings = lumo_optical_settings()
+    led: LED = LED()
+    optical_material: OpticalMaterial = OpticalMaterial()
+
+    @property
+    def evaluation_contract_id(self) -> str:
+        return trajectory_evaluation_contract_id(
+            protocol=self.protocol,
+            objective_config=self.objective_config,
+            mechanics_contract=self.mechanics_contract,
+            optical_settings=self.optical_settings,
+            led=self.led,
+            optical_material=self.optical_material,
+        )
 
     def create_evaluator(self) -> Lumo3DTrajectoryEvaluator:
         return Lumo3DTrajectoryEvaluator(
@@ -444,6 +591,9 @@ class Lumo3DTrajectoryStudy:
             mechanics_contract=self.mechanics_contract,
             device=self.device,
             mechanics_mode=self.mechanics_mode,
+            optical_settings=self.optical_settings,
+            led=self.led,
+            optical_material=self.optical_material,
         )
 
 
@@ -455,11 +605,16 @@ def create_lumo3d_trajectory_study(
     mechanics_contract: MechanicsContract = DEFAULT_MECHANICS_CONTRACT,
     device: str = "cuda:0",
     mechanics_mode: str = "search",
+    optical_settings: Transport3DSettings | None = None,
+    led: LED = LED(),
+    optical_material: OpticalMaterial = OpticalMaterial(),
+    nominal_parameters: FingertipParameters | None = None,
 ) -> Lumo3DTrajectoryStudy:
     """Build the lightweight 3D study/configuration boundary."""
 
     design_space = DesignSpace(
-        FingertipParameters(void_height=PRODUCTION_NOMINAL_VOID_HEIGHT_MM),
+        nominal_parameters
+        or FingertipParameters(void_height=PRODUCTION_NOMINAL_VOID_HEIGHT_MM),
         tuple(
             DesignVariable(spec.name, True, spec.lower, spec.upper)
             for spec in PRODUCTION_SEARCH_BOUNDS
@@ -473,6 +628,9 @@ def create_lumo3d_trajectory_study(
         mechanics_contract=mechanics_contract,
         device=device,
         mechanics_mode=mechanics_mode,
+        optical_settings=optical_settings or lumo_optical_settings(),
+        led=led,
+        optical_material=optical_material,
     )
 
 
@@ -545,6 +703,7 @@ __all__ = [
     "CURRENT_CELL_HALF_LENGTH_MM",
     "TRAJECTORY_EVALUATION_CONTRACT_ID",
     "TRAJECTORY_EVALUATION_SCHEMA",
+    "trajectory_evaluation_contract_id",
     "Lumo3DTrajectoryEvaluation",
     "Lumo3DTrajectoryEvaluator",
     "Lumo3DTrajectoryStudy",

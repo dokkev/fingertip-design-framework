@@ -259,7 +259,7 @@ def _run_case(case: _PreparedCase, config: SweepConfig, device: str) -> _RunBund
         )
         alignment = canonical_sphere_alignment(
             case.model,
-            sphere,
+            radius_mm=config.radius_mm,
             initial_gap_mm=0.25,
         )
         contact_settings = FirstContactSettings(

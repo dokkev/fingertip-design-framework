@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import math
 from typing import Iterable
 
@@ -17,6 +18,30 @@ from .object import RigidObjectMesh
 _CARRIER_Z_MIN_MM = -5.5
 _CARRIER_Z_MAX_MM = 5.5
 _XY_KEY_DIGITS = 12
+
+
+@dataclass(frozen=True)
+class RigidCarrierMesh:
+    """Rigid carrier surface plus its explicit collision diagnostic geometry."""
+
+    surface_mesh: RigidObjectMesh
+    cross_section: Polygon | MultiPolygon
+    z_min_mm: float
+    z_max_mm: float
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.surface_mesh, RigidObjectMesh):
+            raise TypeError("surface_mesh must be a RigidObjectMesh")
+        if not isinstance(self.cross_section, (Polygon, MultiPolygon)):
+            raise TypeError("cross_section must be a Polygon or MultiPolygon")
+        if self.cross_section.is_empty or not self.cross_section.is_valid:
+            raise ValueError("cross_section must be valid and non-empty")
+        z_min = float(self.z_min_mm)
+        z_max = float(self.z_max_mm)
+        if not math.isfinite(z_min) or not math.isfinite(z_max) or z_min >= z_max:
+            raise ValueError("carrier z bounds must be finite with z_min_mm < z_max_mm")
+        object.__setattr__(self, "z_min_mm", z_min)
+        object.__setattr__(self, "z_max_mm", z_max)
 
 
 def _iter_polygons(geometry: Polygon | MultiPolygon) -> tuple[Polygon, ...]:
@@ -65,7 +90,7 @@ def _triangle_coordinates(triangle: Polygon) -> tuple[tuple[float, float], ...]:
     return coordinates
 
 
-def make_distal_phalanx_mesh(solid: FingertipSolid) -> RigidObjectMesh:
+def make_distal_phalanx_mesh(solid: FingertipSolid) -> RigidCarrierMesh:
     """Create the closed 11 mm carrier surface from ``solid.rigid_geometry``.
 
     The helper is neutral geometry only.  It preserves the authoritative XY
@@ -132,18 +157,21 @@ def make_distal_phalanx_mesh(solid: FingertipSolid) -> RigidObjectMesh:
             bottom_face = (bottom_face[0], bottom_face[2], bottom_face[1])
             faces.extend((bottom_face, top_face))
 
-    return RigidObjectMesh(
+    surface_mesh = RigidObjectMesh(
         vertices_mm=np.asarray(vertices, dtype=np.float64),
         faces=np.asarray(faces, dtype=np.int64),
         name="distal_phalanx_carrier",
         metadata={
             "source_geometry": "FingertipSolid.rigid_geometry",
             "extrusion_depth_mm": _CARRIER_Z_MAX_MM - _CARRIER_Z_MIN_MM,
-            "cross_section_wkt": solid.rigid_geometry.wkt,
-            "z_min_mm": _CARRIER_Z_MIN_MM,
-            "z_max_mm": _CARRIER_Z_MAX_MM,
         },
+    )
+    return RigidCarrierMesh(
+        surface_mesh=surface_mesh,
+        cross_section=solid.rigid_geometry,
+        z_min_mm=_CARRIER_Z_MIN_MM,
+        z_max_mm=_CARRIER_Z_MAX_MM,
     )
 
 
-__all__ = ["make_distal_phalanx_mesh"]
+__all__ = ["RigidCarrierMesh", "make_distal_phalanx_mesh"]

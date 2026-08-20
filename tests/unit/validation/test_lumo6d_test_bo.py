@@ -2,7 +2,7 @@
 
 from types import SimpleNamespace
 
-from optimization.mechanics_contract import MechanicsContract
+from lumo.mechanics_contract import MechanicsContract
 from validation.optimization.lumo6d_test_bo import _search_mechanics, _status_contract
 
 

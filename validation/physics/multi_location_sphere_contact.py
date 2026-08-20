@@ -247,8 +247,8 @@ def run_multi_location_sphere_contact(
     for location in locations:
         alignment = sphere_alignment_at_normalized_location(
             fingertip.geometry,
-            sphere_mesh,
             location,
+            radius_mm=radius,
             initial_gap_mm=initial_gap_mm,
         )
         if intersects(contact_surface, sphere_mesh, alignment.nominal_pose):

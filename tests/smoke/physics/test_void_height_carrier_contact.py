@@ -6,7 +6,6 @@ import math
 
 import numpy as np
 import pytest
-from shapely import wkt
 from shapely.geometry import Point
 
 pytest.importorskip("gmsh")
@@ -45,9 +44,9 @@ def _six_volumes(vertices: np.ndarray, tetrahedra: np.ndarray) -> np.ndarray:
 
 
 def _void_bottom_clearance_mm(vertices: np.ndarray, prepared, carrier) -> float:
-    polygon = wkt.loads(carrier.metadata["cross_section_wkt"])
-    z_min = float(carrier.metadata["z_min_mm"])
-    z_max = float(carrier.metadata["z_max_mm"])
+    polygon = carrier.cross_section
+    z_min = carrier.z_min_mm
+    z_max = carrier.z_max_mm
     indices = np.unique(prepared.surface_triangles["void_bottom"].reshape(-1))
     clearances = []
     for x_mm, y_mm, z_mm in vertices[indices]:
@@ -74,7 +73,7 @@ def test_positive_void_height_collision_off_vs_on() -> None:
     sphere = make_sphere_mesh(5.0, subdivisions=3)
     alignment = canonical_sphere_alignment(
         fingertip.geometry,
-        sphere,
+        radius_mm=5.0,
         initial_gap_mm=0.25,
     )
     first_contact = find_first_contact(

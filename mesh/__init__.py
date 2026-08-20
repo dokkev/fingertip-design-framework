@@ -1,7 +1,6 @@
 """Public solver-independent mesh data contracts."""
 
 from mesh.fingertip.surface import InvalidPadMesh, PadMesh
-from mesh.rigid import IndenterPose2D
 from mesh.fingertip.contracts import (
     FingertipMesh,
     InvalidMeshSettings,
@@ -36,7 +35,7 @@ from mesh.rigid.object import (
     make_cylinder_mesh,
     make_sphere_mesh,
 )
-from mesh.rigid.carrier import make_distal_phalanx_mesh
+from mesh.rigid.carrier import RigidCarrierMesh, make_distal_phalanx_mesh
 from mesh.io.obj import (
     RigidMeshAssetError,
     load_obj,
@@ -50,7 +49,6 @@ __all__ = [
     "GmshDependencyError",
     "InvalidMeshSettings",
     "InvalidPadMesh",
-    "IndenterPose2D",
     "MeshSettings",
     "PadMesh",
     "mesh_settings_for_level",
@@ -68,6 +66,7 @@ __all__ = [
     "FingertipVolumeState",
     "make_fingertip_volume_state",
     "RigidObjectMesh",
+    "RigidCarrierMesh",
     "RigidPose3D",
     "make_box_mesh",
     "make_cube_mesh",

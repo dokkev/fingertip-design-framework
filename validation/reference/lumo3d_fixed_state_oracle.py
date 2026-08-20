@@ -1,4 +1,9 @@
-"""Multi-contact FULL_3D evaluator for the LUMO optimization milestone."""
+"""Frozen fixed-state FULL_3D oracle for trajectory regression comparisons.
+
+This module is intentionally outside the production optimization package.  It
+preserves the older fixed-depth implementation as a read-only comparison
+oracle; new campaigns must use :mod:`optimization.evaluator`.
+"""
 
 from __future__ import annotations
 
@@ -38,10 +43,7 @@ from optics.transport3d import (
 )
 from optics.transport3d.optix_backend import create_runtime
 from optimization.design_space import (
-    PRODUCTION_NOMINAL_VOID_HEIGHT_MM,
     PRODUCTION_SEARCH_BOUNDS,
-    DesignSpace,
-    DesignVariable,
     OPTIMIZABLE_PARAMETER_NAMES,
 )
 from optimization.deformed_state_artifact import restore_deformed_optical_state
@@ -254,8 +256,8 @@ def _failure(
     )
 
 
-class Lumo3DEvaluator:
-    """Evaluate one morphology at the three frozen sphere contact locations."""
+class FixedStateLumo3DOracle:
+    """Evaluate one morphology using the frozen fixed-state comparison path."""
 
     objective_name = CONTACT_STATE_SEPARATION_OBJECTIVE_NAME
 
@@ -271,7 +273,9 @@ class Lumo3DEvaluator:
         self.device = device
         self.normalized_locations = tuple(float(value) for value in normalized_locations)
         if self.normalized_locations != tuple(DEFAULT_LOCATION_U):
-            raise ValueError("Lumo3DEvaluator requires the frozen three contact locations")
+            raise ValueError(
+                "FixedStateLumo3DOracle requires the frozen three contact locations"
+            )
         if mechanics_mode not in {"search", "validation"}:
             raise ValueError("mechanics_mode must be 'search' or 'validation'")
         self.mechanics_mode = mechanics_mode
@@ -514,45 +518,6 @@ class Lumo3DEvaluator:
             if record["unintended_boundary_clearance_mm"] <= 0.0 or record["cell_end_clearance_mm"] <= 0.0:
                 raise RuntimeError("mechanics contact violates geometric clearance")
 
-
-@dataclass(frozen=True)
-class Lumo3DStudy:
-    """Small Ax study adapter that reuses the production six-variable space."""
-
-    design_space: DesignSpace
-    artifact_root: Path
-    device: str = "cuda:0"
-    mechanics_mode: str = "search"
-
-    def create_evaluator(self) -> Lumo3DEvaluator:
-        return Lumo3DEvaluator(
-            self.artifact_root,
-            device=self.device,
-            mechanics_mode=self.mechanics_mode,
-        )
-
-
-def create_lumo3d_study(
-    artifact_root: str | Path,
-    *,
-    device: str = "cuda:0",
-    mechanics_mode: str = "search",
-) -> Lumo3DStudy:
-    """Create a 3D-active study without importing the legacy 2D evaluator."""
-    return Lumo3DStudy(
-        design_space=DesignSpace(
-            FingertipParameters(void_height=PRODUCTION_NOMINAL_VOID_HEIGHT_MM),
-            tuple(
-                DesignVariable(spec.name, True, spec.lower, spec.upper)
-                for spec in PRODUCTION_SEARCH_BOUNDS
-            ),
-        ),
-        artifact_root=Path(artifact_root),
-        device=device,
-        mechanics_mode=mechanics_mode,
-    )
-
-
 __all__ = [
     "LUMO3D_OBSERVATION_LEVEL",
     "LUMO3D_EVALUATION_CONTRACT",
@@ -560,7 +525,5 @@ __all__ = [
     "LUMO3D_OPTICAL_X_BOUNDS_MM",
     "LUMO3D_OPTICAL_Y_BOUNDS_MM",
     "Lumo3DEvaluation",
-    "Lumo3DEvaluator",
-    "Lumo3DStudy",
-    "create_lumo3d_study",
+    "FixedStateLumo3DOracle",
 ]

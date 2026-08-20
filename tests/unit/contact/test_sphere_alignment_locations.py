@@ -26,7 +26,11 @@ def sphere():
 
 def test_locations_use_native_arc_and_local_normal(model, sphere) -> None:
     alignments = tuple(
-        sphere_alignment_at_normalized_location(model, sphere, location)
+        sphere_alignment_at_normalized_location(
+            model,
+            location,
+            radius_mm=5.0,
+        )
         for location in (0.25, 0.50, 0.75)
     )
 
@@ -51,13 +55,17 @@ def test_locations_use_native_arc_and_local_normal(model, sphere) -> None:
 
 
 def test_canonical_alignment_is_the_arc_midpoint(model, sphere) -> None:
-    canonical = canonical_sphere_alignment(model, sphere)
-    midpoint = sphere_alignment_at_normalized_location(model, sphere, 0.5)
+    canonical = canonical_sphere_alignment(model, radius_mm=5.0)
+    midpoint = sphere_alignment_at_normalized_location(
+        model,
+        0.5,
+        radius_mm=5.0,
+    )
     assert canonical == midpoint
 
 
 def test_location_validation_is_fail_closed(model, sphere) -> None:
     with pytest.raises(ValueError, match="normalized_location"):
-        sphere_alignment_at_normalized_location(model, sphere, -0.1)
+        sphere_alignment_at_normalized_location(model, -0.1, radius_mm=5.0)
     with pytest.raises(ValueError, match="normalized_location"):
-        sphere_alignment_at_normalized_location(model, sphere, 1.1)
+        sphere_alignment_at_normalized_location(model, 1.1, radius_mm=5.0)

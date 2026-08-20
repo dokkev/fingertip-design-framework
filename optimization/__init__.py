@@ -17,7 +17,6 @@ from optimization.evaluation_registry import (
     EvaluationRegistry,
     EvaluationRegistryRecord,
 )
-from optimization.mechanics_contract import DEFAULT_MECHANICS_CONTRACT, MechanicsContract
 from optimization.objectives import (
     OBJECTIVE_NAME,
     TrajectoryObjectiveConfig,
@@ -33,13 +32,11 @@ from optimization.protocol import (
 )
 
 __all__ = [
-    "DEFAULT_MECHANICS_CONTRACT",
     "DEFAULT_TRAJECTORY_PROTOCOL",
     "DesignSpace",
     "DesignVariable",
     "EvaluationRegistry",
     "EvaluationRegistryRecord",
-    "MechanicsContract",
     "OBJECTIVE_NAME",
     "OPTIMIZABLE_PARAMETER_NAMES",
     "OptimizableParameterName",

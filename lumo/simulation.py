@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from pathlib import Path
-from types import MappingProxyType
-from typing import Any, Mapping
+from dataclasses import dataclass
+import time
 
 import numpy as np
 
@@ -21,8 +19,11 @@ from contact import (
     unintended_boundary_clearance_mm,
 )
 from contact.sphere_alignment import SphereAlignment
+from lumo.mechanics_contract import DEFAULT_MECHANICS_CONTRACT, MechanicsContract
 from mesh import volume_mesh_settings_for_tier
-from mesh.rigid.carrier import make_distal_phalanx_mesh
+from mesh.fingertip.contracts import FingertipMesh, mesh_settings_for_level
+from mesh.fingertip.geometry import generate_fingertip_mesh
+from mesh.rigid.carrier import RigidCarrierMesh, make_distal_phalanx_mesh
 from mesh.rigid.object import RigidObjectMesh, make_sphere_mesh
 from mesh.volume.contracts import FingertipVolumeMesh
 from mesh.volume.mesh import generate_volume_mesh
@@ -32,23 +33,11 @@ from optics.contracts.objects import CarrierOptics
 from optics.transport3d import (
     Transport3DResult,
     Transport3DSettings,
+    build_fingertip_volume_state_geometry,
     trace_geometry,
 )
 from optics.transport3d.optix_backend import create_runtime
 from optics.optix.runtime import OptixRuntime
-from optimization.deformed_state_artifact import (
-    build_contact_state_record,
-    restore_deformed_optical_state,
-    write_mechanics_artifact,
-)
-from optimization.mechanics_contract import (
-    DEFAULT_MECHANICS_CONTRACT,
-    MechanicsContract,
-)
-from optimization.protocol import (
-    DEFAULT_TRAJECTORY_PROTOCOL,
-    TrajectoryEvaluationProtocol,
-)
 from physics import (
     IndentationCheckpoint,
     IndentationSettings,
@@ -56,8 +45,9 @@ from physics import (
     NewtonSettings,
     PreparedFingertipMesh,
     RigidIndenter3D,
-    solve_fingertip_indentation_trajectory,
+    make_fingertip_volume_state,
     prepare_fingertip_mesh,
+    solve_fingertip_indentation_trajectory,
 )
 
 
@@ -91,16 +81,9 @@ def lumo_optical_settings() -> Transport3DSettings:
 class ContactOpticalState:
     """One Newton checkpoint and its corresponding optical observation."""
 
-    normalized_location: float
-    indenter_radius_mm: float
-    trajectory_id: str
     checkpoint: IndentationCheckpoint
     mechanics: FingertipVolumeState
     optics: Transport3DResult
-    mechanics_artifact_path: Path
-    mechanics_artifact_sha256: str
-    contact_state: Mapping[str, Any] = field(default_factory=dict)
-    final_pose_error_mm: float = 0.0
 
     def __post_init__(self) -> None:
         if not isinstance(self.checkpoint, IndentationCheckpoint):
@@ -109,23 +92,21 @@ class ContactOpticalState:
             raise TypeError("mechanics must be a FingertipVolumeState")
         if not isinstance(self.optics, Transport3DResult):
             raise TypeError("optics must be a Transport3DResult")
-        if not isinstance(self.contact_state, Mapping):
-            raise TypeError("contact_state must be a mapping")
-        object.__setattr__(
-            self,
-            "contact_state",
-            MappingProxyType(dict(self.contact_state)),
-        )
 
 
 @dataclass(frozen=True)
 class ContactSimulationResult:
-    """All mechanics and optical states for one contact condition."""
+    """All mechanics and optical states for one spherical contact condition."""
 
+    normalized_location: float
+    indenter_radius_mm: float
     alignment: SphereAlignment
     first_contact: FirstContactResult
     trajectory: IndentationTrajectoryResult
     checkpoints: tuple[ContactOpticalState, ...]
+    unintended_boundary_clearance_mm: float
+    mechanics_seconds: float
+    optics_seconds: float
 
     def __post_init__(self) -> None:
         if not isinstance(self.alignment, SphereAlignment):
@@ -138,6 +119,23 @@ class ContactSimulationResult:
         if any(not isinstance(item, ContactOpticalState) for item in checkpoints):
             raise TypeError("checkpoints must contain ContactOpticalState values")
         object.__setattr__(self, "checkpoints", checkpoints)
+        for name in (
+            "normalized_location",
+            "indenter_radius_mm",
+            "unintended_boundary_clearance_mm",
+            "mechanics_seconds",
+            "optics_seconds",
+        ):
+            value = float(getattr(self, name))
+            if not np.isfinite(value) or value < 0.0:
+                raise ValueError(f"{name} must be finite and non-negative")
+            object.__setattr__(self, name, value)
+        if not 0.0 <= self.normalized_location <= 1.0:
+            raise ValueError("normalized_location must lie in [0, 1]")
+        if self.indenter_radius_mm <= 0.0:
+            raise ValueError("indenter_radius_mm must be positive")
+        if self.unintended_boundary_clearance_mm <= 0.0:
+            raise ValueError("unintended_boundary_clearance_mm must be positive")
 
 
 class LumoSimulation:
@@ -150,12 +148,12 @@ class LumoSimulation:
         volume_mesh: FingertipVolumeMesh,
         prepared: PreparedFingertipMesh,
         contact_surface: FingertipContactSurface,
-        carrier_mesh: RigidObjectMesh,
-        artifact_root: str | Path,
-        protocol: TrajectoryEvaluationProtocol = DEFAULT_TRAJECTORY_PROTOCOL,
+        carrier_mesh: RigidCarrierMesh,
+        reference_mesh: FingertipMesh,
+        initial_gap_mm: float,
         mechanics_contract: MechanicsContract = DEFAULT_MECHANICS_CONTRACT,
         device: str = "cuda:0",
-        settings: Transport3DSettings | None = None,
+        optical_settings: Transport3DSettings | None = None,
         optix_runtime: OptixRuntime | None = None,
     ) -> None:
         if not isinstance(tip, Fingertip):
@@ -166,12 +164,15 @@ class LumoSimulation:
             raise TypeError("prepared must be a PreparedFingertipMesh")
         if not isinstance(contact_surface, FingertipContactSurface):
             raise TypeError("contact_surface must be a FingertipContactSurface")
-        if not isinstance(carrier_mesh, RigidObjectMesh):
-            raise TypeError("carrier_mesh must be a RigidObjectMesh")
-        if not isinstance(protocol, TrajectoryEvaluationProtocol):
-            raise TypeError("protocol must be TrajectoryEvaluationProtocol")
+        if not isinstance(carrier_mesh, RigidCarrierMesh):
+            raise TypeError("carrier_mesh must be a RigidCarrierMesh")
+        if not isinstance(reference_mesh, FingertipMesh):
+            raise TypeError("reference_mesh must be a FingertipMesh")
         if not isinstance(mechanics_contract, MechanicsContract):
-            raise TypeError("mechanics_contract must be MechanicsContract")
+            raise TypeError("mechanics_contract must be a MechanicsContract")
+        gap = float(initial_gap_mm)
+        if not np.isfinite(gap) or gap <= 0.0:
+            raise ValueError("initial_gap_mm must be finite and positive")
         if optix_runtime is not None and not isinstance(optix_runtime, OptixRuntime):
             raise TypeError("optix_runtime must be an OptixRuntime or None")
         self.tip = tip
@@ -179,11 +180,11 @@ class LumoSimulation:
         self.prepared = prepared
         self.contact_surface = contact_surface
         self.carrier_mesh = carrier_mesh
-        self.artifact_root = Path(artifact_root)
-        self.protocol = protocol
+        self.reference_mesh = reference_mesh
+        self.initial_gap_mm = gap
         self.mechanics_contract = mechanics_contract
         self.device = device
-        self.settings = settings or lumo_optical_settings()
+        self.optical_settings = optical_settings or lumo_optical_settings()
         self.optix_runtime = optix_runtime
 
     @classmethod
@@ -191,14 +192,13 @@ class LumoSimulation:
         cls,
         tip: Fingertip,
         *,
-        artifact_root: str | Path,
-        protocol: TrajectoryEvaluationProtocol = DEFAULT_TRAJECTORY_PROTOCOL,
+        initial_gap_mm: float = 0.25,
         mechanics_contract: MechanicsContract = DEFAULT_MECHANICS_CONTRACT,
         device: str = "cuda:0",
-        settings: Transport3DSettings | None = None,
+        optical_settings: Transport3DSettings | None = None,
         optix_runtime: OptixRuntime | None = None,
     ) -> "LumoSimulation":
-        """Prepare reusable mesh/contact/runtime state for one morphology."""
+        """Prepare reusable mesh/contact/reference state for one morphology."""
 
         if not isinstance(tip, Fingertip):
             raise TypeError("tip must be a Fingertip")
@@ -213,11 +213,14 @@ class LumoSimulation:
             prepared=prepared,
             contact_surface=make_outer_compliant_surface(volume_mesh.solid),
             carrier_mesh=make_distal_phalanx_mesh(volume_mesh.solid),
-            artifact_root=artifact_root,
-            protocol=protocol,
+            reference_mesh=generate_fingertip_mesh(
+                tip.geometry,
+                mesh_settings_for_level("medium"),
+            ),
+            initial_gap_mm=initial_gap_mm,
             mechanics_contract=mechanics_contract,
             device=device,
-            settings=settings,
+            optical_settings=optical_settings,
             optix_runtime=optix_runtime,
         )
 
@@ -245,6 +248,54 @@ class LumoSimulation:
             tuple(depth / radius for depth in depths),
         )
 
+    def _carrier_contact_source_ids(self, checkpoint: IndentationCheckpoint) -> tuple[int, ...]:
+        local_indices = tuple(
+            int(index)
+            for index in checkpoint.diagnostics.get(
+                "active_carrier_contact_vertex_indices", ()
+            )
+        )
+        return tuple(
+            int(self.prepared.source_node_ids[index])
+            for index in local_indices
+            if 0 <= index < len(self.prepared.source_node_ids)
+        )
+
+    def _state_geometry(
+        self,
+        checkpoint: IndentationCheckpoint,
+        *,
+        location_u: float,
+        carrier_contact_source_node_ids: tuple[int, ...],
+    ) -> tuple[object, object]:
+        mechanics = make_fingertip_volume_state(
+            self.volume_mesh,
+            self.prepared,
+            checkpoint.mechanics_result,
+        )
+        mapping_tolerance_mm = 0.5 * float(
+            checkpoint.diagnostics.get("rigid_sdf_target_voxel_mm", 0.125)
+        )
+        geometry = build_fingertip_volume_state_geometry(
+            self.tip,
+            mechanics,
+            reference_mesh=self.reference_mesh,
+            carrier_contact_source_node_ids=frozenset(
+                carrier_contact_source_node_ids
+            ),
+            carrier_optics=CarrierOptics("absorber"),
+            carrier_mapping_tolerance_mm=mapping_tolerance_mm,
+            full3d_surface_provenance="actual_deformed_3d_volume_state",
+            metadata={
+                "contact_location_u": float(location_u),
+                "checkpoint_depth_mm": checkpoint.post_contact_travel_mm,
+                "carrier_contact_source_node_ids": list(
+                    carrier_contact_source_node_ids
+                ),
+            },
+        )
+        return mechanics, geometry
+
     def run_sphere_contact(
         self,
         *,
@@ -254,38 +305,24 @@ class LumoSimulation:
     ) -> ContactSimulationResult:
         """Run one spherical contact condition through Newton and OptiX."""
 
+        mechanics_started = time.perf_counter()
         sphere = make_sphere_mesh(
             radius_mm,
             subdivisions=self.mechanics_contract.sphere_subdivisions,
         )
-        return self.run_contact(
-            location_u=location_u,
-            indenter=sphere,
-            checkpoint_depths_mm=checkpoint_depths_mm,
-        )
-
-    def run_contact(
-        self,
-        *,
-        location_u: float,
-        indenter: RigidObjectMesh,
-        checkpoint_depths_mm: tuple[float, ...],
-    ) -> ContactSimulationResult:
-        """Run first contact, one continuous trajectory, and all optical states."""
-
         alignment = sphere_alignment_at_normalized_location(
             self.tip.geometry,
-            indenter,
             location_u,
-            initial_gap_mm=self.protocol.initial_gap_mm,
+            radius_mm=radius_mm,
+            initial_gap_mm=self.initial_gap_mm,
         )
-        if intersects(self.contact_surface, indenter, alignment.nominal_pose):
+        if intersects(self.contact_surface, sphere, alignment.nominal_pose):
             raise CandidateContactError(
                 f"u={location_u:g} nominal pose is not collision-free"
             )
         first_contact = find_first_contact(
             self.contact_surface,
-            indenter,
+            sphere,
             alignment.nominal_pose,
             alignment.approach_direction,
             FirstContactSettings(
@@ -295,7 +332,7 @@ class LumoSimulation:
                 max_travel_mm=20.0,
             ),
         )
-        if intersects(self.contact_surface, indenter, first_contact.spawn_pose):
+        if intersects(self.contact_surface, sphere, first_contact.spawn_pose):
             raise CandidateContactError(
                 f"u={location_u:g} spawn pose is not collision-free"
             )
@@ -314,6 +351,7 @@ class LumoSimulation:
             checkpoint_depths_mm,
             alignment.radius_mm,
         )
+        depths = tuple(float(value) for value in checkpoint_depths_mm)
         mechanics_settings = NewtonSettings(
             device=self.device,
             gravity=0.0,
@@ -323,13 +361,12 @@ class LumoSimulation:
             fixed_vertex_indices=self.prepared.support_vertex_indices,
         )
         indentation_settings = IndentationSettings(
-            travel_mm=checkpoint_depths_mm[-1],
+            travel_mm=depths[-1],
             load_steps=max(
                 1,
                 int(
                     np.ceil(
-                        float(checkpoint_depths_mm[-1])
-                        / self.mechanics_contract.max_load_increment_mm
+                        depths[-1] / self.mechanics_contract.max_load_increment_mm
                     )
                 ),
             ),
@@ -340,111 +377,53 @@ class LumoSimulation:
         trajectory = solve_fingertip_indentation_trajectory(
             self.prepared,
             RigidIndenter3D(
-                indenter,
+                sphere,
                 alignment.nominal_pose,
                 alignment.approach_direction,
             ),
             mechanics_settings,
             indentation_settings,
-            checkpoint_depths_mm,
+            depths,
             checkpoint_fractions=checkpoint_fractions,
             normalized_indentation_ratios=normalized_ratios,
             max_load_increment_mm=self.mechanics_contract.max_load_increment_mm,
             first_contact=first_contact,
             rigid_carrier_mesh=self.carrier_mesh,
         )
+        mechanics_seconds = time.perf_counter() - mechanics_started
 
-        trajectory_id = f"u_{location_u:.3f}__radius_{alignment.radius_mm:.3f}"
+        optics_started = time.perf_counter()
         checkpoints: list[ContactOpticalState] = []
         for checkpoint in trajectory.checkpoints:
-            checkpoint_path = (
-                self.artifact_root
-                / "mechanics"
-                / trajectory_id
-                / (
-                    f"checkpoint_{checkpoint.checkpoint_index:02d}"
-                    f"_depth_{checkpoint.post_contact_travel_mm:.3f}mm.npz"
-                )
-            )
-            artifact_sha = write_mechanics_artifact(
-                checkpoint_path,
+            source_ids = self._carrier_contact_source_ids(checkpoint)
+            mechanics, geometry = self._state_geometry(
                 checkpoint,
-                self.prepared,
-            )
-            contact_state = build_contact_state_record(
-                morphology_fingerprint=self.volume_mesh.morphology_fingerprint,
-                protocol=self.protocol,
-                location_u=float(location_u),
-                radius_mm=alignment.radius_mm,
-                checkpoint_depth_mm=checkpoint.post_contact_travel_mm,
-                checkpoint_fraction=checkpoint.checkpoint_fraction,
-                normalized_indentation_ratio=checkpoint.normalized_indentation_ratio,
-                post_contact_travel_mm=checkpoint.post_contact_travel_mm,
-                unintended_boundary_clearance_mm=boundary_clearance,
-                checkpoint_diagnostics=checkpoint.diagnostics,
-                source_node_ids=self.prepared.source_node_ids,
-                mechanics_artifact_sha256=artifact_sha,
-            )
-            restored = restore_deformed_optical_state(
-                self.tip,
-                self.volume_mesh,
-                self.prepared,
-                checkpoint_path,
-                artifact_sha,
-                carrier_optics=CarrierOptics("absorber"),
-                carrier_contact_source_node_ids=contact_state[
-                    "carrier_contact_source_node_ids"
-                ],
-                carrier_mapping_tolerance_mm=contact_state[
-                    "carrier_mapping_tolerance_mm"
-                ],
-                metadata={
-                    "contact_state_fingerprint": contact_state[
-                        "contact_state_fingerprint"
-                    ],
-                    "contact_location_u": location_u,
-                    "checkpoint_depth_mm": checkpoint.post_contact_travel_mm,
-                    "checkpoint_fraction": checkpoint.checkpoint_fraction,
-                    "normalized_indentation_ratio": checkpoint.normalized_indentation_ratio,
-                    "post_contact_travel_mm": checkpoint.post_contact_travel_mm,
-                    "unintended_boundary_clearance_mm": boundary_clearance,
-                    "observation_level": LUMO3D_OBSERVATION_LEVEL,
-                    "carrier_optical_boundary_model": "absorber",
-                },
-            )
-            expected_pose = first_contact.pose_at_post_contact_travel(
-                checkpoint.post_contact_travel_mm
-            )
-            pose_error = float(
-                np.linalg.norm(
-                    np.asarray(checkpoint.indenter_pose.translation_mm)
-                    - np.asarray(expected_pose.translation_mm)
-                )
+                location_u=location_u,
+                carrier_contact_source_node_ids=source_ids,
             )
             checkpoints.append(
                 ContactOpticalState(
-                    normalized_location=float(location_u),
-                    indenter_radius_mm=alignment.radius_mm,
-                    trajectory_id=trajectory_id,
                     checkpoint=checkpoint,
-                    mechanics=restored.state,
+                    mechanics=mechanics,
                     optics=trace_geometry(
                         self.tip,
-                        restored.geometry,
-                        settings=self.settings,
+                        geometry,
+                        settings=self.optical_settings,
                         runtime=self._runtime(),
                     ),
-                    mechanics_artifact_path=checkpoint_path,
-                    mechanics_artifact_sha256=artifact_sha,
-                    contact_state=contact_state,
-                    final_pose_error_mm=pose_error,
                 )
             )
+        optics_seconds = time.perf_counter() - optics_started
         return ContactSimulationResult(
+            normalized_location=float(location_u),
+            indenter_radius_mm=alignment.radius_mm,
             alignment=alignment,
             first_contact=first_contact,
             trajectory=trajectory,
             checkpoints=tuple(checkpoints),
+            unintended_boundary_clearance_mm=float(boundary_clearance),
+            mechanics_seconds=mechanics_seconds,
+            optics_seconds=optics_seconds,
         )
 
 

@@ -44,7 +44,7 @@ model.FingertipParameters
     -> model / mesh geometry
     -> contact.find_first_contact
     -> physics.trajectory.indentation.solve_fingertip_indentation_trajectory
-    -> mechanics checkpoint artifacts
+    -> lumo.LumoSimulation in-memory state handoff
     -> optics.transport3d FULL_3D OptiX
     -> optimization.objectives
     -> validation reports or optimization.adapters.ax
@@ -60,10 +60,10 @@ model.FingertipParameters
 | `contact/` | geometry-derived first-contact and sphere alignment | production contact initialization |
 | `physics/` | Newton 1.4 / Warp mechanics and trajectory state | one production mechanics path |
 | `optics/` | optical contracts and FULL_3D transport implementation | production BO path |
-| `lumo/` | reusable concrete LUMO simulation state and execution orchestration | mechanics/optics implementation and optimization policy |
-| `optimization/` | fixed protocol, objective, registry, Ax boundary, evaluator | solver implementation and scientific report generation |
+| `lumo/` | reusable concrete LUMO simulation state and execution orchestration | production orchestration boundary |
+| `optimization/` | fixed protocol, objective, registry, Ax boundary, evaluator, persistence | production evaluation and search boundary |
 | `validation/` | reports, smoke tests, regression/reference workflows, bounded campaign runners | domain/solver/transport ownership; production evaluation is in `optimization/` |
-| `validation/reference/kratos3d/` | preserved 3D Kratos reference implementation | validation-only |
+| `validation/reference/` | preserved fixed-state and Kratos reference implementations | validation-only |
 | `gui/` | NiceGUI design-space shell and diagnostics | optional consumer, not core architecture |
 | `tests/` | unit and dependency/runtime smoke contracts | never a production dependency |
 | `docs/` | architecture and reproducible command maps | documentation only |
@@ -80,14 +80,14 @@ directories named `case/`, `examples/`, `fem/`, `visualization/`, or
 | --- | --- | --- |
 | morphology and constraints | `model/fingertip_model.py::FingertipParameters` | `model/fingertip.py`, `model/solid.py` |
 | neutral volume mesh | `mesh/volume/contracts.py` | `mesh/volume/mesh.py`, `mesh/volume/state.py` |
-| rigid object/carrier mesh | `mesh/rigid/object.py` | `mesh/rigid/carrier.py`, `mesh/rigid/indenter.py` |
+| rigid object/carrier mesh | `mesh/rigid/object.py` | `mesh/rigid/carrier.py` |
 | neutral rigid pose | `mesh/rigid/object.py::RigidPose3D` | `contact/`, `physics/` |
 | first contact | `contact/first_contact.py` | `contact/sphere_alignment.py` |
 | mechanics public API | `physics/trajectory/indentation.py` | `physics/trajectory/fingertip.py`, `physics/contracts/` |
 | Newton implementation | `physics/newton/vbd.py` | `physics/newton/session.py`, `physics/newton/viewer.py` |
 | FULL_3D transport | `optics/transport3d/transport.py` | `geometry.py`, `fingertip.py`, `optix_backend.py` |
 | OptiX runtime/preflight | `optics/optix/runtime.py` | `validation/optics/optix_smoke.py`, `scripts/tools/optix_doctor.py` |
-| evaluation protocol | `optimization/protocol.py` | `optimization/mechanics_contract.py` |
+| evaluation protocol | `optimization/protocol.py` | `lumo/mechanics_contract.py` |
 | morphology search space | `optimization/design_space.py` | `optimization/evaluation_registry.py` |
 | objective | `optimization/objectives.py` | `optimization/evaluator.py` |
 | reusable LUMO simulation | `lumo/simulation.py` | `optimization/evaluator.py` |
@@ -107,8 +107,8 @@ directories named `case/`, `examples/`, `fem/`, `visualization/`, or
 | `contact` | Shapely-based collision predicate, coarse bracket/bisection, canonical sphere alignment, clear/spawn/contact poses | deformation solve and optical transport |
 | `physics` | NumPy-facing Newton/Warp settings/results, prescribed indentation, continuous trajectory checkpoints, contact diagnostics | Ax generation, objective calculation, validation orchestration |
 | `optics` | optical boundary/result contracts, FULL_3D surface geometry, CUDA/OptiX runtime and launches | mechanics state evolution and BO decisions |
-| `lumo` | concrete `LumoSimulation` state/orchestration and named contact results | contact/Newton/OptiX implementation and optimization policy |
-| `optimization` | six-dimensional design space, fixed-depth factorial protocol, mechanics contract, trajectory objective, exact morphology registry, Ax adapter | mesh/solver/transport implementation and simulation state |
+| `lumo` | concrete `LumoSimulation` state/orchestration and named contact results | contact/Newton/OptiX implementation, persistence, and optimization policy |
+| `optimization` | six-dimensional design space, fixed-depth factorial protocol, trajectory objective, exact morphology registry, Ax adapter, evaluator, artifact persistence | mesh/solver/transport implementation and reusable simulation state |
 | `validation` | reports, smoke/regression/reference workflows, and bounded campaign runners | domain/solver/transport ownership; production packages must not import it |
 | `gui` | optional controls and diagnostics presentation | domain rules, solver settings, transport, campaign orchestration |
 
@@ -150,11 +150,13 @@ default protocol and returns three absolute post-contact depth checkpoints per
 trajectory, for 18 optical states. Radius and depth are independent protocol
 axes; normalized depth/radius values are derived diagnostics only.
 
-`LumoSimulation` persists each mechanics checkpoint before using it for optics
-and returns named `ContactSimulationResult` / `ContactOpticalState` values.
-The evaluator converts those values at the artifact boundary. The optical
-artifact includes the mechanics artifact digest, protocol, transport
-configuration, contact-state identity, and deformed 3D surface provenance.
+`LumoSimulation` keeps each Newton checkpoint in memory while constructing its
+optical state and returns named `ContactSimulationResult` /
+`ContactOpticalState` values. The evaluator may persist mechanics checkpoints
+for campaign provenance after the in-memory handoff; persistence is not a
+required production optics input. Optical artifacts include the protocol,
+transport configuration, contact-state identity, and deformed 3D surface
+provenance.
 
 
 ## Important subsystem paths
@@ -178,7 +180,7 @@ millimetres in `NewtonResult` and checkpoint records. `physics.newton.vbd` is
 the sole Newton implementation. `physics.newton.viewer` is debug-only and must not
 change solver state or become a general visualization framework.
 
-`optimization.mechanics_contract.DEFAULT_MECHANICS_CONTRACT` owns the frozen
+`lumo.mechanics_contract.DEFAULT_MECHANICS_CONTRACT` owns the frozen
 search numerical settings. Do not duplicate or retune those settings in the
 evaluator, GUI, or validation scripts.
 
@@ -226,7 +228,8 @@ infrastructure failure.
 | neutral volume mesh | `mesh` | `physics`, `optics`, `validation` | NumPy-backed nodes/elements and surface metadata; no solver object |
 | first-contact result | `contact` | `physics`, `validation` | geometry-derived poses and post-contact travel; `T_spawn` is clear-side initialization only |
 | mechanics result/checkpoint | `physics` | `validation`, `optics` | NumPy arrays and immutable diagnostics; Newton state does not cross into optics |
-| deformed state artifact | `optimization/deformed_state_artifact` | `optics.transport3d` | exact checkpoint mesh plus digest and source-node provenance |
+| in-memory deformed state | `lumo.ContactOpticalState` | `optics.transport3d` | exact `FingertipVolumeState` checkpoint; authoritative production handoff |
+| persisted mechanics artifact | `optimization/deformed_state_artifact` | reports/reference recovery | exact checkpoint mesh plus digest and source-node provenance; not required by production optics |
 | optical result | `optics.transport3d` | `optimization`, `validation` | raw transport fields/weights, energy bookkeeping, and configuration fingerprints |
 | objective observation | `optimization.objectives` | `validation`, `optimization.adapters.ax` | trajectory observations preserve location, radius, depth, raw field, and diagnostics |
 | registry record | `optimization.evaluation_registry` | Ax adapter/campaign reports | exact contract + morphology identity; failed records carry no successful objective |
@@ -265,18 +268,16 @@ Installation and exact commands belong in `docs/COMMANDS.md`.
 The allowed high-level direction is:
 
 ```text
-model
-  -> mesh
-  -> contact
-  -> physics
-  -> optics
-  -> optimization / validation consumers
+model -> mesh -> contact -> physics
+model / mesh -> optics
+contact / physics / optics -> lumo
+lumo -> optimization / validation consumers
 ```
 
 This diagram is a consumption direction, not a requirement that every package
 import every predecessor. In particular, optics consumes neutral model/mesh
-and restored mechanics artifacts at orchestration boundaries; optics does not
-import `physics`. Validation is the top-level scientific consumer and may
+and in-memory mechanics states at the `lumo` orchestration boundary; optics does
+not import `physics`. Validation is the top-level scientific consumer and may
 compose all production packages.
 
 Important guards:
@@ -357,7 +358,7 @@ conda run -n lit python -m validation.optics.optix_smoke
 The fixed-depth trajectory validation and bounded 6D test BO are validation
 workflows, not ordinary unit tests or permission to start a production BO.
 
-`validation/optimization/lumo3d_evaluator.py` is retained as a fixed-state
+`validation/reference/lumo3d_fixed_state_oracle.py` is retained as a fixed-state
 regression oracle for the trajectory evaluator. `validation/physics/
 multi_location_sphere_contact.py` is a validation-level orchestration fixture
 that reuses the neutral contact and Newton APIs. Neither is the production Ax
@@ -368,7 +369,7 @@ evaluation entry point.
 
 These are verified current-code deviations, not recommended new architecture:
 
-- The repository retains the fixed-state evaluator noted above. New candidate
+- The repository retains the fixed-state reference oracle noted above. New candidate
   evaluations must follow the `optimization.evaluator` FULL_3D trajectory
   workflow unless a validation task explicitly names a reference implementation.
 

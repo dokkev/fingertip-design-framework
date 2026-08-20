@@ -42,6 +42,7 @@ include = [
   "validation*",
   "optics*",
   "optimization*",
+  "lumo*",
   "gui*",
   "util*",
 ]

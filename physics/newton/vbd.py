@@ -9,7 +9,6 @@ from typing import TYPE_CHECKING, Sequence
 import numpy as np
 import warp as wp
 import newton
-from shapely import wkt as shapely_wkt
 from shapely.geometry import Point
 
 from physics.newton.solve import NewtonSettings, PhysicsDependencyError
@@ -24,6 +23,7 @@ from physics.trajectory.indentation import (
     RigidIndenter3D,
     checkpoint_step_schedule,
 )
+from mesh.rigid.carrier import RigidCarrierMesh
 from mesh.rigid.object import RigidObjectMesh, RigidPose3D
 
 if TYPE_CHECKING:
@@ -134,7 +134,7 @@ class _IndentationContext:
     indenter_body: int
     indenter_shape: int
     carrier_shape: int | None
-    carrier_mesh: RigidObjectMesh | None
+    carrier_mesh: RigidCarrierMesh | None
     void_bottom_vertex_indices: frozenset[int]
     rest_vertices_m: np.ndarray
 
@@ -142,7 +142,7 @@ class _IndentationContext:
 def _signed_carrier_clearance_mm(
     vertices_mm: np.ndarray,
     surface_triangles: np.ndarray,
-    carrier_mesh: RigidObjectMesh,
+    carrier_mesh: RigidCarrierMesh,
 ) -> float:
     """Return the minimum signed 2D clearance of a void surface to the carrier.
 
@@ -153,12 +153,9 @@ def _signed_carrier_clearance_mm(
     for whether a contact record was generated.
     """
 
-    cross_section_wkt = carrier_mesh.metadata.get("cross_section_wkt")
-    if not isinstance(cross_section_wkt, str) or not cross_section_wkt:
-        return float("nan")
-    polygon = shapely_wkt.loads(cross_section_wkt)
-    z_min = float(carrier_mesh.metadata.get("z_min_mm", np.min(carrier_mesh.vertices_mm[:, 2])))
-    z_max = float(carrier_mesh.metadata.get("z_max_mm", np.max(carrier_mesh.vertices_mm[:, 2])))
+    polygon = carrier_mesh.cross_section
+    z_min = carrier_mesh.z_min_mm
+    z_max = carrier_mesh.z_max_mm
     local_indices = np.unique(np.asarray(surface_triangles, dtype=np.int64).reshape(-1))
     points = np.asarray(vertices_mm, dtype=float)[local_indices]
     clearances: list[float] = []
@@ -388,16 +385,18 @@ def _build_indentation_context(
     *,
     initial_pose: RigidPose3D | None = None,
     visual_carrier_mesh: RigidObjectMesh | None = None,
-    rigid_carrier_mesh: RigidObjectMesh | None = None,
+    rigid_carrier_mesh: RigidCarrierMesh | None = None,
 ) -> _IndentationContext:
     """Build one soft-tet plus kinematic sphere and optional static carrier."""
 
-    for name, mesh in (
-        ("visual_carrier_mesh", visual_carrier_mesh),
-        ("rigid_carrier_mesh", rigid_carrier_mesh),
+    if visual_carrier_mesh is not None and not isinstance(
+        visual_carrier_mesh, RigidObjectMesh
     ):
-        if mesh is not None and not isinstance(mesh, RigidObjectMesh):
-            raise TypeError(f"{name} must be a RigidObjectMesh or None")
+        raise TypeError("visual_carrier_mesh must be a RigidObjectMesh or None")
+    if rigid_carrier_mesh is not None and not isinstance(
+        rigid_carrier_mesh, RigidCarrierMesh
+    ):
+        raise TypeError("rigid_carrier_mesh must be a RigidCarrierMesh or None")
     if initial_pose is None:
         initial_pose = indenter.initial_pose
     if not isinstance(initial_pose, RigidPose3D):
@@ -471,11 +470,12 @@ def _build_indentation_context(
     carrier_shape = None
     if rigid_carrier_mesh is not None:
         carrier_vertices_m = (
-            np.asarray(rigid_carrier_mesh.vertices_mm, dtype=np.float32) * 1.0e-3
+            np.asarray(rigid_carrier_mesh.surface_mesh.vertices_mm, dtype=np.float32)
+            * 1.0e-3
         )
         carrier_mesh = newton.Mesh(
             carrier_vertices_m,
-            np.asarray(rigid_carrier_mesh.faces, dtype=np.int32).reshape(-1),
+            np.asarray(rigid_carrier_mesh.surface_mesh.faces, dtype=np.int32).reshape(-1),
             compute_inertia=False,
             is_solid=True,
         )
@@ -627,7 +627,7 @@ def _solve_newton_vbd_indentation_path(
     *,
     viewer: object | None = None,
     visual_carrier_mesh: RigidObjectMesh | None = None,
-    rigid_carrier_mesh: RigidObjectMesh | None = None,
+    rigid_carrier_mesh: RigidCarrierMesh | None = None,
     first_contact: FirstContactResult | None = None,
 ) -> IndentationTrajectoryResult:
     """Run translation-only kinematic rigid-mesh contact with standalone VBD.
@@ -682,7 +682,7 @@ def _solve_newton_vbd_indentation_path_with_schedule(
     normalized_indentation_ratios: tuple[float, ...] | None = None,
     viewer: object | None = None,
     visual_carrier_mesh: RigidObjectMesh | None = None,
-    rigid_carrier_mesh: RigidObjectMesh | None = None,
+    rigid_carrier_mesh: RigidCarrierMesh | None = None,
     first_contact: FirstContactResult | None = None,
 ) -> IndentationTrajectoryResult:
     """Execute the one shared incremental VBD loop for all path APIs."""
@@ -1029,7 +1029,7 @@ def solve_newton_vbd_indentation(
     *,
     viewer: object | None = None,
     visual_carrier_mesh: RigidObjectMesh | None = None,
-    rigid_carrier_mesh: RigidObjectMesh | None = None,
+    rigid_carrier_mesh: RigidCarrierMesh | None = None,
     first_contact: FirstContactResult | None = None,
 ) -> IndentationResult:
     """Run one indentation path and return its final checkpoint."""
@@ -1064,7 +1064,7 @@ def solve_newton_vbd_indentation_trajectory(
     max_load_increment_mm: float = 0.05,
     viewer: object | None = None,
     visual_carrier_mesh: RigidObjectMesh | None = None,
-    rigid_carrier_mesh: RigidObjectMesh | None = None,
+    rigid_carrier_mesh: RigidCarrierMesh | None = None,
     first_contact: FirstContactResult | None = None,
 ) -> IndentationTrajectoryResult:
     """Run one continuous VBD path and capture exact checkpoint states."""

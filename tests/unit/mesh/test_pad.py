@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 import numpy as np
-import pytest
 
-from mesh import InvalidPadMesh, PadMesh
+from mesh import PadMesh
 
 
 def _square_mesh() -> PadMesh:
@@ -47,33 +46,12 @@ def test_pad_mesh_maps_ids_normalizes_winding_and_preserves_semantics() -> None:
     assert mesh.node_ids.tolist() == [30, 10, 40, 20]
 
 
-def test_deformed_mesh_is_composition_and_rejects_invalid_states() -> None:
+def test_pad_mesh_exposes_reference_topology_only() -> None:
     mesh = _square_mesh()
-    displacement = np.asarray(
-        [[0.0, 0.0], [0.1, 0.0], [0.1, 0.2], [0.0, 0.2]],
-        dtype=float,
-    )
 
-    loaded = mesh.deformed(displacement)
-
-    np.testing.assert_allclose(loaded.coordinates, mesh.coordinates + displacement)
-    np.testing.assert_array_equal(loaded.node_ids, mesh.node_ids)
-    np.testing.assert_array_equal(loaded.triangles, mesh.triangles)
-    np.testing.assert_array_equal(loaded.boundary_edges, mesh.boundary_edges)
-    assert loaded.reference_mesh is mesh
-    assert loaded.boundaries is mesh.boundaries
-    np.testing.assert_array_equal(mesh.coordinates, np.asarray(
-        [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]
-    ))
-
-    with pytest.raises(InvalidPadMesh, match="shape"):
-        mesh.deformed(np.zeros((len(mesh.node_ids), 3)))
-    with pytest.raises(InvalidPadMesh, match="finite"):
-        mesh.deformed(np.full_like(mesh.coordinates, np.nan))
-    with pytest.raises(InvalidPadMesh, match="degenerate or inverted"):
-        mesh.deformed(
-            np.asarray(
-                [[0.0, 0.0], [-2.0, 0.0], [0.0, 0.0], [0.0, 0.0]],
-                dtype=float,
-            )
-        )
+    np.testing.assert_array_equal(mesh.coordinates, mesh.reference_coordinates_mm)
+    assert mesh.boundaries is mesh.boundary_edges_by_tag
+    assert not hasattr(mesh, "deformed")
+    assert not hasattr(mesh, "reference_mesh")
+    assert not hasattr(mesh, "displacement")
+    assert not hasattr(mesh, "metadata")

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
@@ -9,7 +8,7 @@ import pytest
 
 from contact import CandidateContactError
 from mesh.volume.mesh import VolumeMeshDependencyError
-from model import FingertipParameters
+from model import FingertipParameters, LED, OpticalMaterial
 from optimization.objectives import TrajectoryObservation, compute_trajectory_objective
 from optimization.protocol import DEFAULT_TRAJECTORY_PROTOCOL, TrajectoryEvaluationProtocol
 from optimization.evaluator import (
@@ -37,6 +36,36 @@ def test_custom_protocol_is_consumed_by_study_without_evaluator_changes(tmp_path
     assert evaluator.protocol is protocol
     assert evaluator.protocol.optical_state_count == 36
     assert evaluator.mechanics_contract.max_load_increment_mm == 0.05
+
+
+def test_evaluation_contract_id_changes_with_fixed_scientific_inputs(tmp_path) -> None:
+    base = create_lumo3d_trajectory_study(tmp_path / "base")
+    changed_protocol = create_lumo3d_trajectory_study(
+        tmp_path / "protocol",
+        protocol=TrajectoryEvaluationProtocol(
+            contact_locations_u=(0.2, 0.5, 0.8),
+            indenter_radii_mm=(5.0,),
+            checkpoint_depths_mm=(1.0,),
+        ),
+    )
+    changed_led = create_lumo3d_trajectory_study(
+        tmp_path / "led",
+        led=LED(emission_half_angle_deg=60.0),
+    )
+    changed_material = create_lumo3d_trajectory_study(
+        tmp_path / "material",
+        optical_material=OpticalMaterial(absorption_per_mm=0.03),
+    )
+    changed_unused_material = create_lumo3d_trajectory_study(
+        tmp_path / "unused-material",
+        optical_material=OpticalMaterial(scattering_per_mm=9.0),
+    )
+
+    assert len(base.evaluation_contract_id.split(":", 1)[1]) == 16
+    assert base.evaluation_contract_id != changed_protocol.evaluation_contract_id
+    assert base.evaluation_contract_id != changed_led.evaluation_contract_id
+    assert base.evaluation_contract_id != changed_material.evaluation_contract_id
+    assert base.evaluation_contract_id == changed_unused_material.evaluation_contract_id
 
 
 def test_radius_six_is_rejected_as_domain_incompatible_before_mesh_or_newton(tmp_path) -> None:
@@ -145,6 +174,21 @@ def test_unexpected_objective_error_propagates(
     evaluator = Lumo3DTrajectoryEvaluator(tmp_path, protocol=protocol)
 
     monkeypatch.setattr(evaluator_module, "save_case_artifact", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        evaluator_module,
+        "write_mechanics_artifact",
+        lambda *_args, **_kwargs: "artifact",
+    )
+    monkeypatch.setattr(
+        evaluator_module,
+        "build_contact_state_record",
+        lambda **_kwargs: {
+            "contact_state_fingerprint": "contact",
+            "carrier_contact_active": False,
+            "carrier_contact_occurred": False,
+        },
+    )
+    monkeypatch.setattr(evaluator_module, "_final_pose_error_mm", lambda *_args: 0.0)
 
     class _Result:
         field = np.ones((2, 2), dtype=float)
@@ -174,22 +218,15 @@ def test_unexpected_objective_error_propagates(
             diagnostics={},
         )
         state = SimpleNamespace(
-            normalized_location=location_u,
-            indenter_radius_mm=5.0,
-            trajectory_id=f"u_{location_u:.3f}",
             checkpoint=checkpoint,
             optics=_Result(),
-            mechanics_artifact_path=Path(tmp_path / "state.npz"),
-            mechanics_artifact_sha256="artifact",
-            final_pose_error_mm=0.0,
-            contact_state={
-                "unintended_boundary_clearance_mm": 1.0,
-                "contact_state_fingerprint": "contact",
-                "carrier_contact_active": False,
-                "carrier_contact_occurred": False,
-            },
         )
         return SimpleNamespace(
+            normalized_location=location_u,
+            indenter_radius_mm=5.0,
+            unintended_boundary_clearance_mm=1.0,
+            mechanics_seconds=0.0,
+            optics_seconds=0.0,
             alignment=SimpleNamespace(
                 target_point_mm=(0.0, 0.0, 0.0),
                 outward_normal=(0.0, 1.0, 0.0),
@@ -204,6 +241,7 @@ def test_unexpected_objective_error_propagates(
 
     class _Simulation:
         volume_mesh = SimpleNamespace(morphology_fingerprint="mesh")
+        prepared = SimpleNamespace(source_node_ids=np.array([1], dtype=np.int64))
 
         @staticmethod
         def from_fingertip(*_args, **_kwargs):

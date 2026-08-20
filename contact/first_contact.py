@@ -139,16 +139,16 @@ class FirstContactResult:
 
 
 def _sphere_radius_mm(object_mesh: RigidObjectMesh) -> float:
-    if object_mesh.metadata.get("primitive") != "sphere":
-        raise ValueError("first-contact MVP requires a sphere mesh")
-    radius = float(object_mesh.metadata.get("radius_mm", float("nan")))
     norms = np.linalg.norm(object_mesh.vertices_mm, axis=1)
+    radius = float(norms[0]) if len(norms) else float("nan")
     if (
         not np.isfinite(radius)
         or radius <= 0.0
         or not np.allclose(norms, radius, rtol=0.0, atol=1.0e-10)
     ):
-        raise ValueError("object mesh is not a valid centered sphere mesh")
+        raise ValueError(
+            "first-contact MVP requires a closed mesh whose vertices lie on a sphere"
+        )
     return radius
 
 

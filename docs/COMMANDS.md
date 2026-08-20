@@ -77,6 +77,28 @@ It performs six Sobol and four model-based proposals only after OptiX
 preflight. Do not use it as a substitute for a reviewed production campaign,
 and do not run it as part of ordinary focused test execution.
 
+## Production BO entry point
+
+The production runner keeps its experiment settings in a visible `USER CONFIG`
+block and requires explicit trial opt-in. Run the cheap gate first:
+
+```bash
+conda run -n lit python scripts/optimization/run_bo.py --preflight
+```
+
+For a minimal production-path smoke only:
+
+```bash
+conda run -n lit python scripts/optimization/run_bo.py \
+  --trials 1 \
+  --output output/optimization/bo_smoke
+```
+
+It uses the production evaluator, Ax adapter, and exact-contract evaluation
+registry. A shared CUDA/OptiX/Gmsh/Newton prerequisite failure aborts before
+candidate registration; a morphology failure is recorded as a candidate
+result.
+
 ## Newton viewer helpers
 
 Interactive Newton viewer support is kept in `physics.newton.viewer` for debugging.
@@ -100,5 +122,5 @@ with `mesh.load_obj_directory()`. The loader requires an explicit
 
 ## Generated artifacts
 
-Validation and benchmark outputs belong under `output/validation/`. Existing
+Validation, optimization, and benchmark outputs belong under `output/`. Existing
 scientific artifacts are not overwritten by cleanup or documentation commands.
