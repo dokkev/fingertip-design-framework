@@ -6,8 +6,7 @@ import argparse
 import csv
 import json
 from pathlib import Path
-from types import SimpleNamespace
-from typing import Any
+from typing import Any, Mapping
 
 import numpy as np
 
@@ -15,11 +14,11 @@ from model import FingertipParameters
 from optimization.objectives import normalized_field_distance
 from optimization.protocol import DEFAULT_TRAJECTORY_PROTOCOL, TrajectoryEvaluationProtocol
 from validation.mechanics3d.multi_location_sphere_contact import run_multi_location_sphere_contact
-from optics.transport3d import native_field_separability
 from validation.optimization.lumo3d_trajectory_evaluator import (
     Lumo3DTrajectoryEvaluator,
     create_lumo3d_trajectory_study,
 )
+from validation.optimization.lumo3d_evaluator import Lumo3DEvaluator
 
 
 OUTPUT_NAME = "lumo3d_fixed_depth_trajectory_evaluator_v1"
@@ -77,26 +76,98 @@ def _distance_matrix(fields: tuple[np.ndarray, ...]) -> np.ndarray:
     return matrix
 
 
-def _legacy_metric_from_same_checkout(evaluation: Any) -> float:
-    """Run the legacy pairwise metric on the new evaluator's exact fields."""
+def _compare_legacy_reduction(
+    reduced_new: Any,
+    legacy: Any,
+    *,
+    objective_tolerance: float = 1.0e-3,
+    field_tolerance: float = 5.0e-2,
+) -> dict[str, Any]:
+    """Compare independent legacy and reduced-trajectory evaluator outputs."""
 
-    fields = _fields(evaluation)
-    axes = tuple(np.arange(size + 1, dtype=float) for size in fields[0].shape)
-    results = tuple(
-        SimpleNamespace(
-            optical_mode="FULL_3D",
-            field=field,
-            field_axes=axes,
-            total_transport=float(np.sum(field)),
-        )
-        for field in fields
+    if legacy.status != "success":
+        return {
+            "legacy_status": legacy.status,
+            "legacy_failure_message": legacy.failure_message,
+            "pass": False,
+        }
+    new_records = tuple(
+        sorted(reduced_new.optical_diagnostics, key=lambda item: float(item["normalized_location"]))
     )
-    pairwise = [
-        float(native_field_separability(first, second)["normalized_redistribution_l1"])
-        for index, first in enumerate(results)
-        for second in results[index + 1 :]
-    ]
-    return min(pairwise)
+    legacy_records = tuple(
+        sorted(legacy.optical_diagnostics, key=lambda item: float(item["normalized_location"]))
+    )
+    if len(new_records) != len(legacy_records):
+        return {
+            "legacy_status": legacy.status,
+            "new_state_count": len(new_records),
+            "legacy_state_count": len(legacy_records),
+            "pass": False,
+        }
+    if not new_records:
+        return {
+            "legacy_status": legacy.status,
+            "new_state_count": 0,
+            "legacy_state_count": 0,
+            "pass": False,
+        }
+    field_comparisons: list[dict[str, Any]] = []
+    for new_record, legacy_record in zip(new_records, legacy_records, strict=True):
+        if float(new_record["normalized_location"]) != float(legacy_record["normalized_location"]):
+            return {
+                "legacy_status": legacy.status,
+                "location_mismatch": {
+                    "new": float(new_record["normalized_location"]),
+                    "legacy": float(legacy_record["normalized_location"]),
+                },
+                "pass": False,
+            }
+        new_field = np.asarray(
+            np.load(new_record["artifact_field"], allow_pickle=False)["field"],
+            dtype=float,
+        )
+        legacy_field = np.asarray(
+            np.load(legacy_record["artifact_field"], allow_pickle=False)["field"],
+            dtype=float,
+        )
+        if new_field.shape != legacy_field.shape:
+            return {
+                "legacy_status": legacy.status,
+                "field_shape_mismatch": {
+                    "new": list(new_field.shape),
+                    "legacy": list(legacy_field.shape),
+                },
+                "pass": False,
+            }
+        field_comparisons.append(
+            {
+                "normalized_location": float(new_record["normalized_location"]),
+                "max_abs_field_error": float(np.max(np.abs(new_field - legacy_field))),
+                "normalized_field_distance": normalized_field_distance(new_field, legacy_field),
+            }
+        )
+    objective_error = abs(float(reduced_new.objective_value) - float(legacy.objective_value))
+    maximum_field_distance = max(
+        comparison["normalized_field_distance"] for comparison in field_comparisons
+    )
+    return {
+        "legacy_status": legacy.status,
+        "new_objective": float(reduced_new.objective_value),
+        "legacy_objective": float(legacy.objective_value),
+        "objective_abs_error": float(objective_error),
+        "objective_tolerance": objective_tolerance,
+        "field_tolerance": field_tolerance,
+        "field_comparisons": field_comparisons,
+        "maximum_normalized_field_distance": float(maximum_field_distance),
+        "comparison_basis": (
+            "independent Lumo3DEvaluator versus reduced Lumo3DTrajectoryEvaluator; "
+            "same nominal morphology, R=5 mm, travel=1.5 mm, u=0.25/0.50/0.75"
+        ),
+        "pass": bool(
+            objective_error <= objective_tolerance
+            and maximum_field_distance <= field_tolerance
+        ),
+    }
 
 
 def _plot_outputs(root: Path, evaluations: dict[str, Any]) -> None:
@@ -248,15 +319,14 @@ def run_validation(output: str | Path, *, device: str = "cuda:0") -> dict[str, A
     reduced_new = Lumo3DTrajectoryEvaluator(root / "legacy_reduction_new", protocol=reduced_protocol, device=device).evaluate(_nominal())
     if reduced_new.status != "success":
         raise RuntimeError("legacy reduction comparison could not complete")
-    legacy_same_checkout = _legacy_metric_from_same_checkout(reduced_new)
-    legacy_error = abs(float(reduced_new.objective_value) - legacy_same_checkout)
-    _write_json(root / "legacy_reduction_check.json", {
-        "reduced_new_objective": reduced_new.objective_value,
-        "legacy_contact_state_separation": legacy_same_checkout,
-        "absolute_error": legacy_error,
-        "comparison_basis": "same reduced evaluator FULL_3D fields; optics.transport3d.native_field_separability",
-        "pass": legacy_error <= 1.0e-10,
-    })
+    legacy = Lumo3DEvaluator(
+        root / "legacy_reduction_legacy",
+        device=device,
+        normalized_locations=(0.25, 0.50, 0.75),
+        mechanics_mode="search",
+    ).evaluate(_nominal())
+    legacy_comparison = _compare_legacy_reduction(reduced_new, legacy)
+    _write_json(root / "legacy_reduction_check.json", legacy_comparison)
 
     new_final = next(
         record for record in evaluations["nominal"].trajectory_diagnostics
@@ -325,10 +395,18 @@ def run_validation(output: str | Path, *, device: str = "cuda:0") -> dict[str, A
         label: bool(result.objective.get("objective_pathology", False))
         for label, result in evaluations.items()
     }
+    legacy_reduction_pass = bool(legacy_comparison.get("pass", False))
+    mechanics_regression_pass = mechanics_error <= 2.0e-2
+    domain_check_pass = domain_result.status == "domain_incompatible"
+    no_objective_pathology = not any(objective_pathology.values())
+    hard_checks_pass = (
+        legacy_reduction_pass
+        and mechanics_regression_pass
+        and domain_check_pass
+        and no_objective_pathology
+    )
     validation_status = (
-        "PASS"
-        if legacy_error <= 1.0e-10 and not any(objective_pathology.values())
-        else "PASS_WITH_LIMITATION"
+        "PASS" if hard_checks_pass else "FAIL"
     )
     summary = {
         "schema": "lumo3d-fixed-depth-trajectory-validation-summary-v1",
@@ -349,10 +427,14 @@ def run_validation(output: str | Path, *, device: str = "cuda:0") -> dict[str, A
         },
         "total_newton_trajectory_count": sum(len({record["trajectory_id"] for record in result.trajectory_diagnostics}) for result in evaluations.values()),
         "total_full3d_optical_state_count": sum(len(result.optical_diagnostics) for result in evaluations.values()),
-        "legacy_reduction_absolute_error": legacy_error,
+        "legacy_reduction": legacy_comparison,
+        "legacy_reduction_absolute_error": legacy_comparison.get("objective_abs_error"),
         "mechanics_final_state_max_abs_error_mm": mechanics_error,
         "domain_check_status": domain_result.status,
-        "legacy_reduction_pass": legacy_error <= 1.0e-10,
+        "legacy_reduction_pass": legacy_reduction_pass,
+        "mechanics_regression_pass": mechanics_regression_pass,
+        "domain_check_pass": domain_check_pass,
+        "no_objective_pathology": no_objective_pathology,
         "objective_pathology": objective_pathology,
         "code_cleanup": {
             "files_simplified": [

@@ -945,7 +945,11 @@ def _solve_newton_vbd_indentation_path_with_schedule(
                 "max_void_bottom_carrier_contact_count": max_void_bottom_carrier_contact_count,
                 "carrier_interface_contact_count": max_void_bottom_carrier_contact_count,
                 "first_carrier_contact_step": first_carrier_contact_step,
-                "carrier_contact_active": first_carrier_contact_step is not None,
+                # This checkpoint describes the contacts present at the
+                # current accepted solver state. Keep trajectory-level onset
+                # provenance separate from the current-state flag.
+                "carrier_contact_active": bool(contact_vertices),
+                "carrier_contact_occurred": first_carrier_contact_step is not None,
                 "max_sphere_carrier_rigid_contact_count": max_sphere_carrier_rigid_contact_count,
                 "carrier_contact_vertex_indices": tuple(sorted(carrier_contact_vertex_indices)),
                 "carrier_contact_vertex_count": len(carrier_contact_vertex_indices),

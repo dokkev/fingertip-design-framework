@@ -161,7 +161,8 @@ def _contact_state(
     local_contact_indices = tuple(
         int(index)
         for index in case.indentation.diagnostics.get(
-            "carrier_contact_vertex_indices", ()
+            "active_carrier_contact_vertex_indices",
+            case.indentation.diagnostics.get("carrier_contact_vertex_indices", ()),
         )
     )
     contact_source_ids = tuple(
@@ -192,6 +193,9 @@ def _contact_state(
         "spawn_clearance_mm": float(case.first_contact.spawn_clearance_mm),
         "carrier_contact_active": bool(
             case.indentation.diagnostics.get("carrier_contact_active", False)
+        ),
+        "carrier_contact_occurred": bool(
+            case.indentation.diagnostics.get("carrier_contact_occurred", False)
         ),
         "carrier_mechanical_contact_count": int(
             case.indentation.diagnostics.get(
@@ -432,6 +436,8 @@ class Lumo3DEvaluator:
                         "artifact": str(artifact),
                         "artifact_field": str(artifact.with_suffix(".npz")),
                         "contact_state_fingerprint": contact_state["contact_state_fingerprint"],
+                        "carrier_contact_active": contact_state["carrier_contact_active"],
+                        "carrier_contact_occurred": contact_state["carrier_contact_occurred"],
                         "mechanics_artifact_path": str(restored.artifact_path),
                         "mechanics_artifact_sha256": restored.artifact_sha256,
                     }

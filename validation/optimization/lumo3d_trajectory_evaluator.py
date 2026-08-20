@@ -78,6 +78,9 @@ from optimization.protocol import (
     TrajectoryEvaluationProtocol,
 )
 from validation.mechanics3d.deformed_state_artifact import restore_deformed_optical_state
+from validation.mechanics3d.multi_location_sphere_contact import (
+    _unintended_boundary_clearance_mm,
+)
 from validation.optimization.lumo3d_evaluator import (
     LUMO3D_OBSERVATION_LEVEL,
     LUMO3D_OPTICAL_X_BOUNDS_MM,
@@ -120,6 +123,7 @@ def _state_identity(
     checkpoint_fraction: float,
     normalized_indentation_ratio: float,
     post_contact_travel_mm: float,
+    unintended_boundary_clearance_mm: float,
     mechanics_artifact_sha256: str,
 ) -> dict[str, Any]:
     return {
@@ -131,6 +135,7 @@ def _state_identity(
         "checkpoint_fraction": float(checkpoint_fraction),
         "normalized_indentation_ratio": float(normalized_indentation_ratio),
         "post_contact_travel_mm": float(post_contact_travel_mm),
+        "unintended_boundary_clearance_mm": float(unintended_boundary_clearance_mm),
         "mechanics_artifact_sha256": mechanics_artifact_sha256,
         "mechanics_artifact_fingerprint": mechanics_artifact_sha256,
     }
@@ -146,6 +151,7 @@ def _contact_state(
     checkpoint_fraction: float,
     normalized_indentation_ratio: float,
     post_contact_travel_mm: float,
+    unintended_boundary_clearance_mm: float,
     checkpoint_diagnostics: Mapping[str, Any],
     source_node_ids: tuple[int, ...],
     mechanics_artifact_sha256: str,
@@ -168,6 +174,7 @@ def _contact_state(
         checkpoint_fraction=checkpoint_fraction,
         normalized_indentation_ratio=normalized_indentation_ratio,
         post_contact_travel_mm=post_contact_travel_mm,
+        unintended_boundary_clearance_mm=unintended_boundary_clearance_mm,
         mechanics_artifact_sha256=mechanics_artifact_sha256,
     )
     return {
@@ -180,9 +187,11 @@ def _contact_state(
         "checkpoint_fraction": float(checkpoint_fraction),
         "normalized_indentation_ratio": float(normalized_indentation_ratio),
         "post_contact_travel_mm": float(post_contact_travel_mm),
+        "unintended_boundary_clearance_mm": float(unintended_boundary_clearance_mm),
         "first_contact_travel_mm": float(checkpoint_diagnostics.get("first_contact_travel_mm", 0.0)),
         "spawn_clearance_mm": float(checkpoint_diagnostics.get("spawn_clearance_mm", 0.0)),
         "carrier_contact_active": bool(checkpoint_diagnostics.get("carrier_contact_active", False)),
+        "carrier_contact_occurred": bool(checkpoint_diagnostics.get("carrier_contact_occurred", False)),
         "carrier_mechanical_contact_count": int(checkpoint_diagnostics.get("carrier_interface_contact_count", 0)),
         "carrier_mechanical_contact_vertex_count": len(source_ids),
         "first_carrier_contact_step": checkpoint_diagnostics.get("first_carrier_contact_step"),
@@ -398,6 +407,17 @@ class Lumo3DTrajectoryEvaluator:
         )
         if intersects(contact_surface, sphere_mesh, first_contact.spawn_pose):
             raise RuntimeError(f"u={location_u:g} spawn pose is not collision-free")
+        boundary_clearance = _unintended_boundary_clearance_mm(
+            tip,
+            sphere_mesh,
+            alignment,
+            first_contact,
+        )
+        if boundary_clearance <= 0.0:
+            raise RuntimeError(
+                f"u={location_u:g} reaches an unintended external boundary "
+                f"before arc contact: clearance={boundary_clearance:g} mm"
+            )
         travels = self.protocol.checkpoint_depths_mm
         # The mechanics API retains these generic checkpoint annotations for
         # scheduling/provenance. They are derived from the fixed absolute
@@ -465,6 +485,7 @@ class Lumo3DTrajectoryEvaluator:
                 "checkpoint_fraction": checkpoint.checkpoint_fraction,
                 "normalized_indentation_ratio": checkpoint.normalized_indentation_ratio,
                 "post_contact_travel_mm": checkpoint.post_contact_travel_mm,
+                "unintended_boundary_clearance_mm": boundary_clearance,
                 "cumulative_step_index": checkpoint.cumulative_step_index,
                 "first_contact_travel_mm": first_contact.travel_to_contact_mm,
                 "first_contact_fingerprint": fingerprint_mapping({
@@ -524,6 +545,7 @@ class Lumo3DTrajectoryEvaluator:
                             candidate_root=candidate_root,
                         )
                     )
+            mechanics_finished = time.perf_counter()
             stage = "optics"
             configuration = transport_configuration(
                 self.settings,
@@ -557,6 +579,7 @@ class Lumo3DTrajectoryEvaluator:
                     checkpoint_fraction=float(record["checkpoint_fraction"]),
                     normalized_indentation_ratio=float(record["normalized_indentation_ratio"]),
                     post_contact_travel_mm=float(record["post_contact_travel_mm"]),
+                    unintended_boundary_clearance_mm=float(record["unintended_boundary_clearance_mm"]),
                     checkpoint_diagnostics=record["mechanics_diagnostics"],
                     source_node_ids=prepared.source_node_ids,
                     mechanics_artifact_sha256=str(record["mechanics_artifact_sha256"]),
@@ -576,6 +599,7 @@ class Lumo3DTrajectoryEvaluator:
                         "checkpoint_fraction": record["checkpoint_fraction"],
                         "normalized_indentation_ratio": record["normalized_indentation_ratio"],
                         "post_contact_travel_mm": record["post_contact_travel_mm"],
+                        "unintended_boundary_clearance_mm": record["unintended_boundary_clearance_mm"],
                         "observation_level": LUMO3D_OBSERVATION_LEVEL,
                         "carrier_optical_boundary_model": "absorber",
                         "carrier_mapping_tolerance_mm": contact_state["carrier_mapping_tolerance_mm"],
@@ -629,6 +653,7 @@ class Lumo3DTrajectoryEvaluator:
                         "contact_state": contact_state,
                         "contact_state_fingerprint": contact_state["contact_state_fingerprint"],
                         "carrier_contact_active": contact_state["carrier_contact_active"],
+                        "carrier_contact_occurred": contact_state["carrier_contact_occurred"],
                         "transport_configuration_fingerprint": result.transport_configuration_fingerprint,
                         "evaluation_identity": evaluation_identity,
                     }
@@ -660,7 +685,7 @@ class Lumo3DTrajectoryEvaluator:
                 "actual_newton_trajectory_count": self.protocol.trajectory_count,
                 "checkpoint_count": self.protocol.checkpoint_count,
                 "optical_state_count": len(optical_records),
-                "mechanics_runtime_s": time.perf_counter() - started,
+                "mechanics_runtime_s": mechanics_finished - started,
                 "optics_runtime_s": time.perf_counter() - optics_started,
                 "total_runtime_s": time.perf_counter() - started,
                 "morphology_fingerprint": volume_mesh.morphology_fingerprint,
