@@ -7,8 +7,9 @@ from typing import Any, Mapping
 import numpy as np
 from shapely.geometry import LineString, Point
 
+from mesh.fingertip import generate_fingertip_mesh
+from mesh.types import FingertipMesh, mesh_settings_for_level
 from mesh.volume_state import FingertipVolumeState
-from mesh.types import FingertipMesh
 from model.fingertip import Fingertip
 
 from .geometry import (
@@ -350,7 +351,10 @@ def build_fingertip_volume_state_geometry(
     if state.morphology_fingerprint != tip.solid().morphology_fingerprint:
         raise Transport3DGeometryError("volume state morphology does not match Fingertip")
     if reference_mesh is None:
-        reference_mesh = tip.mesh()
+        reference_mesh = generate_fingertip_mesh(
+            tip.geometry,
+            mesh_settings_for_level("medium"),
+        )
     rigid, envelope = build_fixed_transport_surfaces(reference_mesh, depth_mm=11.0)
     source_position, source_medium = _source_state(
         tip,

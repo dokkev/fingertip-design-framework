@@ -1,4 +1,4 @@
-"""Neutral data contracts for the optional 3D mechanics surrogate."""
+"""Neutral data contracts for the 3D mechanics backend."""
 
 from __future__ import annotations
 

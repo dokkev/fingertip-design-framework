@@ -7,6 +7,7 @@ from .first_contact import (
     find_first_contact,
     make_outer_compliant_surface,
     intersects,
+    unintended_boundary_clearance_mm,
 )
 from .sphere_alignment import (
     SphereAlignment,
@@ -24,4 +25,5 @@ __all__ = [
     "find_first_contact",
     "intersects",
     "make_outer_compliant_surface",
+    "unintended_boundary_clearance_mm",
 ]

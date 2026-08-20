@@ -14,7 +14,7 @@ from model import FingertipParameters
 from optimization.objectives import normalized_field_distance
 from optimization.protocol import DEFAULT_TRAJECTORY_PROTOCOL, TrajectoryEvaluationProtocol
 from validation.physics.multi_location_sphere_contact import run_multi_location_sphere_contact
-from validation.optimization.lumo3d_trajectory_evaluator import (
+from optimization.evaluator import (
     Lumo3DTrajectoryEvaluator,
     create_lumo3d_trajectory_study,
 )
@@ -395,7 +395,7 @@ def run_validation(output: str | Path, *, device: str = "cuda:0") -> dict[str, A
     })
 
     objective_pathology = {
-        label: bool(result.objective.get("objective_pathology", False))
+        label: bool(getattr(result.objective, "objective_pathology", False))
         for label, result in evaluations.items()
     }
     legacy_reduction_pass = bool(legacy_comparison.get("pass", False))
@@ -449,15 +449,19 @@ def run_validation(output: str | Path, *, device: str = "cuda:0") -> dict[str, A
                 "optimization/protocol.py",
                 "optimization/mechanics_contract.py",
                 "optimization/objectives.py",
-                "validation/optimization/lumo3d_trajectory_evaluator.py",
+                "optimization/evaluator.py",
+                "optimization/evaluator_support.py",
+                "optimization/deformed_state_artifact.py",
             ],
             "duplicate_constants_removed_from_active_path": True,
             "legacy_modules_retained": {
                 "validation.optimization.lumo3d_evaluator": "independent fixed-state regression oracle only",
             },
             "legacy_modules_removed": [
+                "validation/optimization/lumo3d_trajectory_evaluator.py",
+                "validation/optimization/lumo3d_common.py",
+                "validation/physics/deformed_state_artifact.py",
                 "optimization.scenarios",
-                "optimization.evaluator",
                 "optimization.study",
                 "case",
                 "fem",

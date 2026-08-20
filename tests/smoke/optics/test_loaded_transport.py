@@ -4,6 +4,8 @@ import numpy as np
 import pytest
 from shapely.geometry import Point
 
+from mesh.fingertip import generate_fingertip_mesh
+from mesh.types import mesh_settings_for_level
 from model import Fingertip, FingertipParameters
 from optics import TraceSettings, trace
 
@@ -11,7 +13,10 @@ from optics import TraceSettings, trace
 @pytest.mark.gmsh
 def test_loaded_cutout_gap_starts_in_air_and_reaches_silicone() -> None:
     tip = Fingertip(FingertipParameters())
-    mesh = tip.mesh()
+    mesh = generate_fingertip_mesh(
+        tip.geometry,
+        mesh_settings_for_level("medium"),
+    )
     settings = TraceSettings(
         ray_count=31,
         grid_width=48,

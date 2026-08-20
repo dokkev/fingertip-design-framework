@@ -1,4 +1,4 @@
-"""Shared immutable configuration helpers for the current FULL_3D evaluators."""
+"""Shared configuration helpers for the production FULL_3D evaluator."""
 
 from __future__ import annotations
 

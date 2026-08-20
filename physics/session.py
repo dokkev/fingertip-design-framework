@@ -7,7 +7,7 @@ import time
 import numpy as np
 
 from .load import ParticleLoad
-from .solve import NewtonSettings
+from .solve import NewtonSettings, _load_newton_backend
 from .types import NewtonResult, TetMeshData
 
 
@@ -24,11 +24,11 @@ class NewtonSession:
         if settings is None:
             settings = NewtonSettings()
 
-        from .newton_vbd import _build_vbd_context
-        import warp as wp
+        backend = _load_newton_backend()
+        wp = backend.wp
 
         started = time.perf_counter()
-        context = _build_vbd_context(mesh, settings)
+        context = backend._build_vbd_context(mesh, settings)
         wp.synchronize_device(context.device)
         self._context = context
         self._mesh = mesh
@@ -59,9 +59,8 @@ class NewtonSession:
     def reset(self) -> None:
         """Restore both Newton states to the verified rest state."""
 
-        from .newton_vbd import _reset_vbd_context
-
-        _reset_vbd_context(self._context)
+        backend = _load_newton_backend()
+        backend._reset_vbd_context(self._context)
 
     def solve(self, load: ParticleLoad | None = None) -> NewtonResult:
         """Reset, ramp one load, and return a fresh neutral mechanics result."""
@@ -73,9 +72,8 @@ class NewtonSession:
         if np.any(load.vertex_indices >= self._mesh.vertices.shape[0]):
             raise ValueError("ParticleLoad contains an out-of-range vertex index")
 
-        from .newton_vbd import _solve_vbd_context
-
-        result, _timing = _solve_vbd_context(
+        backend = _load_newton_backend()
+        result, _timing = backend._solve_vbd_context(
             self._context,
             self._mesh,
             self._settings,
@@ -96,9 +94,8 @@ class NewtonSession:
         if np.any(load.vertex_indices >= self._mesh.vertices.shape[0]):
             raise ValueError("ParticleLoad contains an out-of-range vertex index")
 
-        from .newton_vbd import _solve_vbd_context
-
-        return _solve_vbd_context(
+        backend = _load_newton_backend()
+        return backend._solve_vbd_context(
             self._context,
             self._mesh,
             self._settings,

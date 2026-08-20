@@ -65,8 +65,17 @@ def test_physics_has_no_fem_or_optics_dependency() -> None:
     _assert_no_prefix("physics", ("fem", "optics", "validation", "tests"))
 
 
+def test_contact_is_solver_independent() -> None:
+    _assert_no_prefix("contact", ("physics", "validation", "tests"))
+
+
 def test_optics_has_no_mechanics_or_validation_dependency() -> None:
     _assert_no_prefix("optics", ("physics", "validation", "tests"))
+
+
+def test_lower_layers_do_not_import_gui() -> None:
+    for package in ("model", "mesh", "contact", "physics", "optics", "optimization"):
+        _assert_no_prefix(package, ("gui",))
 
 
 def test_removed_legacy_packages_are_absent() -> None:

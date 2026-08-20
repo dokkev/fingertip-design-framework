@@ -21,7 +21,7 @@ python -m pip install -e ".[mesh,physics,ax,test]"
 ./scripts/pytest_lit tests/unit/model tests/unit/mesh -q
 ./scripts/pytest_lit tests/unit/contact tests/unit/physics -q
 ./scripts/pytest_lit tests/unit/optics tests/unit/optimization -q
-./scripts/pytest_lit tests/unit/validation/test_lumo3d_trajectory_evaluator.py -q
+./scripts/pytest_lit tests/unit/optimization/test_evaluator.py -q
 ```
 
 The Newton smoke tests require the CUDA-capable `lit` environment:

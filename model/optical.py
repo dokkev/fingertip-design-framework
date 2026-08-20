@@ -17,13 +17,12 @@ class LED:
     emission_rgb: tuple[float, float, float] = (1.0, 1.0, 1.0)
 
     def __post_init__(self) -> None:
-        scalars = {
-            "width_mm": self.width_mm,
-            "height_mm": self.height_mm,
-            "relative_radiant_power": self.relative_radiant_power,
-            "emission_half_angle_deg": self.emission_half_angle_deg,
-        }
-        if any(not isfinite(value) for value in scalars.values()):
+        if (
+            not isfinite(self.width_mm)
+            or not isfinite(self.height_mm)
+            or not isfinite(self.relative_radiant_power)
+            or not isfinite(self.emission_half_angle_deg)
+        ):
             raise ValueError("LED properties must be finite")
         if self.width_mm <= 0.0 or self.height_mm <= 0.0:
             raise ValueError("LED width and height must be greater than zero")

@@ -1,4 +1,4 @@
-"""Optional GPU mechanics surrogate with a neutral NumPy boundary."""
+"""GPU mechanics API with a neutral NumPy boundary."""
 
 from .fingertip import (
     PreparedFingertipMesh,
@@ -11,7 +11,7 @@ from .fingertip import (
 )
 from .load import ParticleLoad
 from .session import NewtonSession
-from .solve import NewtonSettings, solve
+from .solve import NewtonSettings, PhysicsDependencyError, solve
 from .types import NewtonResult, TetMeshData
 from .indentation import (
     IndentationCheckpoint,
@@ -19,7 +19,6 @@ from .indentation import (
     IndentationSettings,
     IndentationTrajectoryResult,
     RigidIndenter3D,
-    RigidPose3D,
     checkpoint_step_schedule,
     solve_fingertip_indentation,
     solve_fingertip_indentation_trajectory,
@@ -28,6 +27,7 @@ from .indentation import (
 __all__ = [
     "NewtonResult",
     "NewtonSettings",
+    "PhysicsDependencyError",
     "NewtonSession",
     "IndentationResult",
     "IndentationCheckpoint",
@@ -38,7 +38,6 @@ __all__ = [
     "PrescribedVertexDisplacement",
     "ParticleLoad",
     "RigidIndenter3D",
-    "RigidPose3D",
     "checkpoint_step_schedule",
     "TetMeshData",
     "outer_compliant_timing_patch",

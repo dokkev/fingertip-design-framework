@@ -15,6 +15,7 @@ from mesh.volume_state import (
 )
 
 from .types import NewtonResult, TetMeshData
+from .solve import _load_newton_backend
 
 
 class InvalidFingertipMesh(ValueError):
@@ -292,9 +293,8 @@ def solve_prescribed_indentation(
         raise TypeError("prepared must be PreparedFingertipMesh")
     if not isinstance(patch, PrescribedVertexDisplacement):
         raise TypeError("patch must be PrescribedVertexDisplacement")
-    from .newton_vbd import solve_newton_vbd_prescribed
-
-    return solve_newton_vbd_prescribed(
+    backend = _load_newton_backend()
+    return backend.solve_newton_vbd_prescribed(
         prepared.tet_mesh,
         settings,
         vertex_indices=patch.vertex_indices,

@@ -11,7 +11,10 @@ from typing import Any
 import numpy as np
 
 from physics import prepare_fingertip_mesh
+from mesh.fingertip import generate_fingertip_mesh
 from mesh import FingertipVolumeState, volume_mesh_settings_for_tier
+from mesh.types import mesh_settings_for_level
+from mesh.volume3d import generate_volume_mesh
 from model import Fingertip
 from optics.transport3d import (
     OptiXTransport,
@@ -24,7 +27,7 @@ from optics.transport3d import (
 )
 from optics.transport3d.optix_backend import create_runtime
 from optics.optix.smoke import run_production_optix_smoke
-from validation.physics.deformed_state_artifact import restore_deformed_optical_state
+from optimization.deformed_state_artifact import restore_deformed_optical_state
 
 
 def _settings(
@@ -133,7 +136,10 @@ def run_lumo3d_optix_stage(
     stage2_payload = json.loads((root / "stage2_multi_location_contact.json").read_text())
     stage3_payload = json.loads((root / "stage3_deformed_optical_geometry.json").read_text())
     tip = Fingertip()
-    volume_mesh = tip.volume_mesh(volume_mesh_settings_for_tier("search"))
+    volume_mesh = generate_volume_mesh(
+        tip.solid(),
+        volume_mesh_settings_for_tier("search"),
+    )
     prepared = prepare_fingertip_mesh(volume_mesh)
     min_x, min_y, max_x, max_y = tip.geometry.material_geometry.bounds
     fingertip_margin_mm = 1.0
@@ -152,7 +158,10 @@ def run_lumo3d_optix_stage(
     reference_geometry = build_fingertip_volume_state_geometry(
         tip,
         reference_state,
-        reference_mesh=tip.mesh(),
+        reference_mesh=generate_fingertip_mesh(
+            tip.geometry,
+            mesh_settings_for_level("medium"),
+        ),
         metadata={
             "contact_state_fingerprint": reference_fingerprint,
             "optical_state_id": "reference-unloaded",

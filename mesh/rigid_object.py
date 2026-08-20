@@ -11,12 +11,70 @@ import numpy as np
 
 _AREA_TOLERANCE_MM2 = 1.0e-12
 _VOLUME_TOLERANCE_MM3 = 1.0e-12
+_QUATERNION_NORM_TOLERANCE = 1.0e-12
+
+
+def _finite_tuple(
+    value: tuple[float, ...] | list[float],
+    *,
+    length: int,
+    name: str,
+) -> tuple[float, ...]:
+    array = np.asarray(value, dtype=float)
+    if array.shape != (length,) or not np.all(np.isfinite(array)):
+        raise ValueError(f"{name} must contain {length} finite values")
+    return tuple(float(component) for component in array)
+
+
+def _normalize(
+    value: tuple[float, ...],
+    *,
+    tolerance: float,
+    name: str,
+) -> tuple[float, ...]:
+    array = np.asarray(value, dtype=float)
+    norm = float(np.linalg.norm(array))
+    if not np.isfinite(norm) or norm <= tolerance:
+        raise ValueError(f"{name} must have a finite nonzero norm")
+    return tuple(float(component) for component in array / norm)
 
 
 def _readonly_array(value: np.ndarray, *, dtype: np.dtype) -> np.ndarray:
     array = np.array(value, dtype=dtype, copy=True)
     array.setflags(write=False)
     return array
+
+
+@dataclass(frozen=True)
+class RigidPose3D:
+    """Solver-independent rigid pose in repository millimetres.
+
+    The quaternion uses ``xyzw`` order.  This record belongs beside the
+    neutral rigid-object mesh so contact registration does not depend on the
+    mechanics package.
+    """
+
+    translation_mm: tuple[float, float, float]
+    quaternion_xyzw: tuple[float, float, float, float]
+
+    def __post_init__(self) -> None:
+        translation = _finite_tuple(
+            self.translation_mm,
+            length=3,
+            name="translation_mm",
+        )
+        quaternion = _finite_tuple(
+            self.quaternion_xyzw,
+            length=4,
+            name="quaternion_xyzw",
+        )
+        quaternion = _normalize(
+            quaternion,
+            tolerance=_QUATERNION_NORM_TOLERANCE,
+            name="quaternion_xyzw",
+        )
+        object.__setattr__(self, "translation_mm", translation)
+        object.__setattr__(self, "quaternion_xyzw", quaternion)
 
 
 def _validate_closed_triangle_mesh(vertices: np.ndarray, faces: np.ndarray) -> None:
@@ -348,6 +406,7 @@ def make_cube_mesh(size_mm: float) -> RigidObjectMesh:
 
 
 __all__ = [
+    "RigidPose3D",
     "RigidObjectMesh",
     "make_box_mesh",
     "make_cube_mesh",

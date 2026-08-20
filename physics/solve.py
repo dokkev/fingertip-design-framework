@@ -1,4 +1,4 @@
-"""Public neutral solver boundary for the optional Newton VBD surrogate.
+"""Public neutral solver boundary for the Newton VBD backend.
 
 The current backend/runtime is Newton and the selected solver is ``SolverVBD``.
 Those implementation identities remain private to the backend; callers receive
@@ -14,9 +14,26 @@ import numpy as np
 from .types import NewtonResult, TetMeshData
 
 
+class PhysicsDependencyError(RuntimeError):
+    """Raised when the Newton/Warp execution backend is unavailable."""
+
+
+def _load_newton_backend():
+    """Load the optional Newton/Warp backend at the execution boundary."""
+
+    try:
+        from . import newton_vbd
+    except (ImportError, OSError) as exc:
+        raise PhysicsDependencyError(
+            "Newton/Warp backend could not be imported: "
+            f"{type(exc).__name__}: {exc}"
+        ) from exc
+    return newton_vbd
+
+
 @dataclass(frozen=True)
 class NewtonSettings:
-    """Small, deterministic settings surface for the VBD prototype."""
+    """Small, deterministic settings surface for the VBD backend."""
 
     device: str = "cuda:0"
     dt: float = 1.0 / 60.0
@@ -64,6 +81,5 @@ def solve(
     if settings is None:
         settings = NewtonSettings()
 
-    from .newton_vbd import solve_newton_vbd
-
-    return solve_newton_vbd(mesh, settings)
+    backend = _load_newton_backend()
+    return backend.solve_newton_vbd(mesh, settings)

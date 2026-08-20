@@ -2,17 +2,20 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 import hashlib
 import json
 import math
 from typing import Literal
 
-from shapely.geometry import MultiLineString, Polygon
+from shapely.geometry import MultiLineString, MultiPolygon, Polygon
 from shapely.geometry.base import BaseGeometry
 
 from model.fingertip_model import FingertipModel, PolygonalGeometry
-from model.fingertip_parameters import FingertipParameters
+from model.fingertip_parameters import (
+    FingertipParameters,
+    fingertip_parameters_fingerprint,
+)
 
 
 DEFAULT_EXTRUSION_DEPTH_MM = 11.0
@@ -58,12 +61,10 @@ class FingertipSolid:
     def __post_init__(self) -> None:
         if not isinstance(self.parameters, FingertipParameters):
             raise TypeError("parameters must be FingertipParameters")
-        for name, value in (
-            ("z_min_mm", self.z_min_mm),
-            ("z_max_mm", self.z_max_mm),
-        ):
-            if not math.isfinite(float(value)):
-                raise ValueError(f"{name} must be finite")
+        if not math.isfinite(float(self.z_min_mm)):
+            raise ValueError("z_min_mm must be finite")
+        if not math.isfinite(float(self.z_max_mm)):
+            raise ValueError("z_max_mm must be finite")
         if self.z_min_mm >= self.z_max_mm:
             raise ValueError("z_min_mm must be smaller than z_max_mm")
         if not math.isclose(
@@ -73,13 +74,18 @@ class FingertipSolid:
             abs_tol=1.0e-12,
         ):
             raise ValueError("the representative solid cell must be exactly 11 mm")
-        for name, geometry in (
-            ("pad_geometry", self.pad_geometry),
-            ("rigid_geometry", self.rigid_geometry),
-            ("material_geometry", self.material_geometry),
-        ):
-            if geometry.is_empty or not geometry.is_valid:
-                raise ValueError(f"{name} must be a non-empty valid polygonal geometry")
+        if self.pad_geometry.is_empty or not self.pad_geometry.is_valid:
+            raise ValueError(
+                "pad_geometry must be a non-empty valid polygonal geometry"
+            )
+        if self.rigid_geometry.is_empty or not self.rigid_geometry.is_valid:
+            raise ValueError(
+                "rigid_geometry must be a non-empty valid polygonal geometry"
+            )
+        if self.material_geometry.is_empty or not self.material_geometry.is_valid:
+            raise ValueError(
+                "material_geometry must be a non-empty valid polygonal geometry"
+            )
         if self.pad_geometry.intersection(self.rigid_geometry).area > self.parameters.geometry_tolerance:
             raise ValueError("pad and rigid solid regions overlap")
         if self.material_geometry.symmetric_difference(
@@ -143,7 +149,12 @@ class FingertipSolid:
         finite_boundary = True
         nonzero_area = True
         ring_count = 0
-        for geometry in getattr(self.material_geometry, "geoms", (self.material_geometry,)):
+        geometries = (
+            self.material_geometry.geoms
+            if isinstance(self.material_geometry, MultiPolygon)
+            else (self.material_geometry,)
+        )
+        for geometry in geometries:
             if geometry.is_empty or not geometry.is_valid or not isinstance(geometry, Polygon):
                 polygonal = False
                 continue
@@ -183,8 +194,16 @@ class FingertipSolid:
         z_min_mm: float,
         z_max_mm: float,
     ) -> str:
+        """Fingerprint the exact constructed solid and its physical source.
+
+        The parameter portion uses the canonical physical morphology
+        fingerprint.  WKB is retained here intentionally as exact solid
+        provenance for a particular polygonal representation; callers that
+        compare physical morphologies independently of sampling should use
+        ``fingertip_parameters_fingerprint``.
+        """
         payload = {
-            "parameters": asdict(parameters),
+            "physical_morphology": fingertip_parameters_fingerprint(parameters),
             "pad_wkb_hex": pad_geometry.wkb_hex,
             "rigid_wkb_hex": rigid_geometry.wkb_hex,
             "material_wkb_hex": material_geometry.wkb_hex,

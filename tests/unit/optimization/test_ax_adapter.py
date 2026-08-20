@@ -5,10 +5,18 @@ from __future__ import annotations
 from dataclasses import dataclass
 from types import SimpleNamespace
 
+import pytest
+
 import optimization.ax_adapter as ax_adapter
 from model import FingertipParameters
-from optimization.ax_adapter import AxSettings, create_ax_client, run_ax_optimization
+from optimization.ax_adapter import (
+    AxSettings,
+    CampaignInfrastructureError,
+    create_ax_client,
+    run_ax_optimization,
+)
 from optimization.design_space import DesignSpace, DesignVariable, PRODUCTION_SEARCH_BOUNDS
+from physics import PhysicsDependencyError
 
 
 def _space() -> DesignSpace:
@@ -129,3 +137,30 @@ def test_run_ax_optimization_evaluates_morphology_without_mechanics_or_optics(
     assert result.unique_success_count == 2  # manually attached nominal + proposal
     assert len(evaluator.calls) == 2
     assert all(record.status == "success" for record in result.records)
+
+
+class _PhysicsDependencyEvaluator:
+    def evaluate(self, parameters):
+        raise PhysicsDependencyError("Warp runtime unavailable")
+
+
+def test_shared_physics_dependency_abandons_ax_trial_and_aborts_campaign(monkeypatch) -> None:
+    client = _ClientDouble([_candidate(5.5)])
+    evaluator = _PhysicsDependencyEvaluator()
+    study = SimpleNamespace(design_space=_space(), create_evaluator=lambda: evaluator)
+    monkeypatch.setattr(ax_adapter, "create_ax_client", lambda *_: client)
+
+    with pytest.raises(CampaignInfrastructureError) as raised:
+        run_ax_optimization(
+            study,
+            AxSettings(
+                initialization_trials=1,
+                search_trials=1,
+                seed=7,
+                objective_name="contact_state_separation",
+            ),
+        )
+
+    assert raised.value.signature == "newton-warp-runtime-initialization"
+    assert client.trials
+    assert all(trial.status == "ABANDONED" for trial in client.trials.values())

@@ -15,7 +15,6 @@ dependencies = [
 [project.optional-dependencies]
 mesh = ["gmsh>=4.12"]
 validation = ["scipy>=1.11"]
-optics = ["mitsuba>=3.8"]
 optix = [
   "pyoptix",
   "cupy-cuda13x",

@@ -2,84 +2,34 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 import hashlib
 import json
 from math import isfinite, sqrt
-from typing import Mapping
 
 
 class InvalidFingertipParameters(ValueError):
     """Raised when fingertip dimensions cannot define a valid LIT pad."""
 
 
-MINIMUM_SILICONE_LIGAMENT_MM = 2.0
+PRODUCTION_MINIMUM_SILICONE_THICKNESS_MM = 5.0
 MAX_TOTAL_PAD_DEPTH_MM = 30.0
 
 
-@dataclass(frozen=True)
-class SiliconeLigamentMeasures:
-    """Conservative lateral and distal ligament measures in millimeters."""
-
-    side_ligament_mm: float
-    ellipse_depth_at_cutout_mm: float
-    distal_ligament_mm: float
-    minimum_silicone_ligament_mm: float
-
-
-def silicone_ligament_measures(
-    parameters: "FingertipParameters | Mapping[str, float]",
-) -> SiliconeLigamentMeasures:
-    """Return conservative design-space ligament measures.
-
-    These quantities are not an exact minimum Euclidean wall thickness.
-    """
-    if isinstance(parameters, Mapping):
-        value = parameters.__getitem__
-    else:
-        value = lambda name: getattr(parameters, name)
-    flat_pad_width = float(value("flat_pad_width"))
-    stem_width = float(value("stem_width"))
-    void_width = float(value("void_width"))
-    semielliptical_pad_height = float(value("semielliptical_pad_height"))
-    flat_pad_height = float(value("flat_pad_height"))
-    stem_height = float(value("stem_height"))
-    void_height = float(value("void_height"))
-    half_width = flat_pad_width / 2.0
-    cutout_half_width = stem_width / 2.0 + void_width
-    side_ligament = half_width - cutout_half_width
-    ellipse_depth = semielliptical_pad_height * sqrt(
-        1.0 - (cutout_half_width / half_width) ** 2
-    )
-    distal_ligament = (
-        flat_pad_height + ellipse_depth - (stem_height + void_height)
-    )
-    return SiliconeLigamentMeasures(
-        side_ligament_mm=side_ligament,
-        ellipse_depth_at_cutout_mm=ellipse_depth,
-        distal_ligament_mm=distal_ligament,
-        minimum_silicone_ligament_mm=min(side_ligament, distal_ligament),
-    )
-
-
-def validate_silicone_ligament(
-    parameters: "FingertipParameters | Mapping[str, float]",
+def ellipse_depth_at_cutout_mm(
     *,
-    minimum_mm: float = MINIMUM_SILICONE_LIGAMENT_MM,
-) -> SiliconeLigamentMeasures:
-    """Reject a design that violates the conservative ligament rule."""
-    measures = silicone_ligament_measures(parameters)
-    if (
-        measures.side_ligament_mm < minimum_mm
-        or measures.distal_ligament_mm < minimum_mm
-    ):
-        raise InvalidFingertipParameters(
-            "silicone ligament design-space rule requires side and distal "
-            f"ligaments >= {minimum_mm:g} mm: "
-            f"side={measures.side_ligament_mm:g} mm, "
-            f"distal={measures.distal_ligament_mm:g} mm"
-        )
-    return measures
+    flat_pad_width: float,
+    semielliptical_pad_height: float,
+    stem_width: float,
+    void_width: float,
+) -> float:
+    """Return the analytic lower-envelope depth at the cutout side."""
+    half_width = float(flat_pad_width) / 2.0
+    cutout_half_width = float(stem_width) / 2.0 + float(void_width)
+    normalized_x = cutout_half_width / half_width
+    if not 0.0 <= normalized_x < 1.0:
+        raise ValueError("cutout must lie strictly inside the pad half-width")
+    return float(semielliptical_pad_height) * sqrt(1.0 - normalized_x**2)
 
 
 @dataclass(frozen=True)
@@ -114,114 +64,87 @@ class FingertipParameters:
         """Validate values immediately so every instance is usable."""
         self.validate()
 
-    @property
-    def ellipse_start_y(self) -> float:
-        """Vertical coordinate where the lower semi-ellipse begins."""
-        return -self.flat_pad_height
-
-    @property
-    def stem_tip_y(self) -> float:
-        """Vertical coordinate of the rigid stem tip."""
-        return -self.stem_height
-
-    @property
-    def void_bottom_y(self) -> float:
-        """Vertical coordinate of the complete internal cutout bottom."""
-        return -(self.stem_height + self.void_height)
-
-    @property
-    def pad_tip_y(self) -> float:
-        """Distal-most coordinate of the complete external pad envelope."""
-        return -(self.flat_pad_height + self.semielliptical_pad_height)
-
-    @property
-    def total_pad_depth(self) -> float:
-        """Total external depth from the interface to the distal pad tip."""
-        return self.flat_pad_height + self.semielliptical_pad_height
-
-    @property
-    def cutout_width(self) -> float:
-        """Total centered cutout width around the rigid stem."""
-        return self.stem_width + 2.0 * self.void_width
-
-    @property
-    def cutout_half_width(self) -> float:
-        """Distance from the symmetry axis to either cutout side."""
-        return self.cutout_width / 2.0
-
-    @property
-    def cutout_height(self) -> float:
-        """Total cutout depth from ``y = 0`` into the pad."""
-        return self.stem_height + self.void_height
-
-    @property
-    def cutout_depth(self) -> float:
-        """Depth alias retained for boundary and mesh construction."""
-        return self.cutout_height
-
-    @property
-    def bonded_segment_length(self) -> float:
-        """Length of either three-segment bonded pad-to-link boundary."""
-        return self.bond_extension_height + (
-            self.flat_pad_width - self.cutout_width
-        ) / 2.0
-
-    @property
-    def void_area(self) -> float:
-        """Area of clearance left after the rigid stem fills the cutout."""
-        return (
-            self.cutout_width * self.cutout_height
-            - self.stem_width * self.stem_height
-        )
-
     def validate(self) -> None:
         """Raise ``InvalidFingertipParameters`` for inconsistent dimensions."""
-        dimensions = {
-            "flat_pad_width": self.flat_pad_width,
-            "flat_pad_height": self.flat_pad_height,
-            "semielliptical_pad_height": self.semielliptical_pad_height,
-            "link_thickness": self.link_thickness,
-            "bond_extension_width": self.bond_extension_width,
-            "bond_extension_height": self.bond_extension_height,
-            "stem_width": self.stem_width,
-            "stem_height": self.stem_height,
-            "void_width": self.void_width,
-            "void_height": self.void_height,
-            "young_modulus_mpa": self.young_modulus_mpa,
-            "poisson_ratio": self.poisson_ratio,
-            "geometry_tolerance": self.geometry_tolerance,
-        }
-        for name, value in dimensions.items():
-            if not isfinite(value):
-                raise InvalidFingertipParameters(f"{name} must be finite")
+        if not isfinite(self.flat_pad_width):
+            raise InvalidFingertipParameters("flat_pad_width must be finite")
+        if not isfinite(self.flat_pad_height):
+            raise InvalidFingertipParameters("flat_pad_height must be finite")
+        if not isfinite(self.semielliptical_pad_height):
+            raise InvalidFingertipParameters(
+                "semielliptical_pad_height must be finite"
+            )
+        if not isfinite(self.link_thickness):
+            raise InvalidFingertipParameters("link_thickness must be finite")
+        if not isfinite(self.bond_extension_width):
+            raise InvalidFingertipParameters(
+                "bond_extension_width must be finite"
+            )
+        if not isfinite(self.bond_extension_height):
+            raise InvalidFingertipParameters(
+                "bond_extension_height must be finite"
+            )
+        if not isfinite(self.stem_width):
+            raise InvalidFingertipParameters("stem_width must be finite")
+        if not isfinite(self.stem_height):
+            raise InvalidFingertipParameters("stem_height must be finite")
+        if not isfinite(self.void_width):
+            raise InvalidFingertipParameters("void_width must be finite")
+        if not isfinite(self.void_height):
+            raise InvalidFingertipParameters("void_height must be finite")
+        if not isfinite(self.geometry_tolerance):
+            raise InvalidFingertipParameters("geometry_tolerance must be finite")
+        if not isfinite(self.young_modulus_mpa):
+            raise InvalidFingertipParameters("young_modulus_mpa must be finite")
+        if not isfinite(self.poisson_ratio):
+            raise InvalidFingertipParameters("poisson_ratio must be finite")
 
-        for name in (
-            "flat_pad_width",
-            "flat_pad_height",
-            "semielliptical_pad_height",
-            "link_thickness",
-            "bond_extension_width",
-            "bond_extension_height",
-            "stem_width",
-            "stem_height",
-        ):
-            if dimensions[name] <= 0.0:
-                raise InvalidFingertipParameters(f"{name} must be greater than zero")
+        if self.flat_pad_width <= 0.0:
+            raise InvalidFingertipParameters(
+                "flat_pad_width must be greater than zero"
+            )
+        if self.flat_pad_height <= 0.0:
+            raise InvalidFingertipParameters(
+                "flat_pad_height must be greater than zero"
+            )
+        if self.semielliptical_pad_height <= 0.0:
+            raise InvalidFingertipParameters(
+                "semielliptical_pad_height must be greater than zero"
+            )
+        if self.link_thickness <= 0.0:
+            raise InvalidFingertipParameters(
+                "link_thickness must be greater than zero"
+            )
+        if self.bond_extension_width <= 0.0:
+            raise InvalidFingertipParameters(
+                "bond_extension_width must be greater than zero"
+            )
+        if self.bond_extension_height <= 0.0:
+            raise InvalidFingertipParameters(
+                "bond_extension_height must be greater than zero"
+            )
+        if self.stem_width <= 0.0:
+            raise InvalidFingertipParameters("stem_width must be greater than zero")
+        if self.stem_height <= 0.0:
+            raise InvalidFingertipParameters(
+                "stem_height must be greater than zero"
+            )
 
         if self.void_width < 0.0 or self.void_height < 0.0:
             raise InvalidFingertipParameters(
                 "void_width and void_height must be nonnegative"
             )
-        if (
-            self.flat_pad_height + self.semielliptical_pad_height
-            > MAX_TOTAL_PAD_DEPTH_MM + self.geometry_tolerance
-        ):
+        total_pad_depth = self.flat_pad_height + self.semielliptical_pad_height
+        cutout_width = self.stem_width + 2.0 * self.void_width
+        cutout_half_width = cutout_width / 2.0
+        cutout_height = self.stem_height + self.void_height
+        if total_pad_depth > MAX_TOTAL_PAD_DEPTH_MM + self.geometry_tolerance:
             raise InvalidFingertipParameters(
                 "total pad depth must not exceed 30 mm: "
                 f"flat_pad_height={self.flat_pad_height:g}, "
                 "semielliptical_pad_height="
                 f"{self.semielliptical_pad_height:g}, "
-                f"total={self.total_pad_depth:g}"
+                f"total={total_pad_depth:g}"
             )
         if self.young_modulus_mpa <= 0.0:
             raise InvalidFingertipParameters(
@@ -248,19 +171,18 @@ class FingertipParameters:
                 "bond_extension_height must be smaller than link_thickness"
             )
         if (
-            2.0 * self.bond_extension_width + self.cutout_width
+            2.0 * self.bond_extension_width + cutout_width
             >= self.flat_pad_width
         ):
             raise InvalidFingertipParameters(
                 "2*bond_extension_width + cutout_width must be smaller than "
                 "flat_pad_width: "
                 f"bond_extension_width={self.bond_extension_width:g}, "
-                f"cutout_width={self.cutout_width:g}, "
+                f"cutout_width={cutout_width:g}, "
                 f"flat_pad_width={self.flat_pad_width:g}"
             )
 
         half_width = self.flat_pad_width / 2.0
-        cutout_half_width = self.cutout_half_width
         if cutout_half_width >= half_width - self.geometry_tolerance:
             raise InvalidFingertipParameters(
                 "cutout must remain strictly inside the external half-width: "
@@ -271,12 +193,15 @@ class FingertipParameters:
 
         penetration_depth = max(
             0.0,
-            self.cutout_height - self.flat_pad_height,
+            cutout_height - self.flat_pad_height,
         )
         if penetration_depth > 0.0:
-            available_ellipse_depth = silicone_ligament_measures(
-                self
-            ).ellipse_depth_at_cutout_mm
+            available_ellipse_depth = ellipse_depth_at_cutout_mm(
+                flat_pad_width=self.flat_pad_width,
+                semielliptical_pad_height=self.semielliptical_pad_height,
+                stem_width=self.stem_width,
+                void_width=self.void_width,
+            )
             if penetration_depth >= available_ellipse_depth - self.geometry_tolerance:
                 raise InvalidFingertipParameters(
                     "cutout bottom must remain strictly inside the "
@@ -288,16 +213,28 @@ class FingertipParameters:
 
 
 def fingertip_parameters_fingerprint(parameters: FingertipParameters) -> str:
-    """Return a dimension-neutral fingerprint for physical model parameters.
+    """Return a fingerprint for the physical morphology parameters.
 
-    This deliberately fingerprints only the validated parameter object.  It
-    does not construct a 2D or 3D geometry representation, so the identity is
-    stable across mechanics and optical dimensional adapters.
+    Sampling resolution, geometry tolerance, and material properties are
+    representation/numerical/material settings rather than morphology
+    identity.  The explicit payload is serialized only at this boundary so
+    the same physical morphology has one stable identity across adapters.
     """
     if not isinstance(parameters, FingertipParameters):
         raise TypeError("parameters must be FingertipParameters")
     payload = json.dumps(
-        asdict(parameters),
+        {
+            "flat_pad_width": parameters.flat_pad_width,
+            "flat_pad_height": parameters.flat_pad_height,
+            "semielliptical_pad_height": parameters.semielliptical_pad_height,
+            "link_thickness": parameters.link_thickness,
+            "bond_extension_width": parameters.bond_extension_width,
+            "bond_extension_height": parameters.bond_extension_height,
+            "stem_width": parameters.stem_width,
+            "stem_height": parameters.stem_height,
+            "void_width": parameters.void_width,
+            "void_height": parameters.void_height,
+        },
         sort_keys=True,
         separators=(",", ":"),
     ).encode("utf-8")

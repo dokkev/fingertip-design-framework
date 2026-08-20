@@ -7,6 +7,7 @@ import pytest
 from model import (
     FingertipParameters,
     InvalidFingertipParameters,
+    PRODUCTION_MINIMUM_SILICONE_THICKNESS_MM,
     silicone_thickness_measures,
     validate_minimum_silicone_thickness,
 )
@@ -15,8 +16,8 @@ from model import (
 def test_nominal_thickness_is_finite_and_above_constraint() -> None:
     parameters = FingertipParameters(void_height=0.25)
     measures = silicone_thickness_measures(parameters)
-    assert measures.side_ligament_mm > 2.0
-    assert measures.diagonal_ellipse_ligament_mm > 2.0
+    assert measures.side_ligament_mm > PRODUCTION_MINIMUM_SILICONE_THICKNESS_MM
+    assert measures.diagonal_ellipse_ligament_mm > PRODUCTION_MINIMUM_SILICONE_THICKNESS_MM
     assert measures.minimum_silicone_thickness_mm == pytest.approx(
         min(measures.side_ligament_mm, measures.diagonal_ellipse_ligament_mm)
     )

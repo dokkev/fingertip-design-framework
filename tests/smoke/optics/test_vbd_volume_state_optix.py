@@ -12,6 +12,10 @@ pytest.importorskip("cuda")
 
 import warp as wp
 
+from mesh.fingertip import generate_fingertip_mesh
+from mesh.types import mesh_settings_for_level
+from mesh.volume3d import generate_volume_mesh
+from mesh.volume_types import volume_mesh_settings_for_tier
 from physics import (
     NewtonSettings,
     make_fingertip_volume_state,
@@ -34,7 +38,10 @@ def test_vbd_volume_state_reaches_full3d_optix_without_fea_artifact() -> None:
         pytest.skip("VBD→FULL_3D OptiX smoke requires cuda:0")
 
     tip = Fingertip()
-    volume_mesh = tip.volume_mesh()
+    volume_mesh = generate_volume_mesh(
+        tip.solid(),
+        volume_mesh_settings_for_tier("search"),
+    )
     prepared = prepare_fingertip_mesh(volume_mesh)
     mechanics_result = solve(
         prepared.tet_mesh,
@@ -47,7 +54,14 @@ def test_vbd_volume_state_reaches_full3d_optix_without_fea_artifact() -> None:
         ),
     )
     state = make_fingertip_volume_state(volume_mesh, prepared, mechanics_result)
-    geometry = build_fingertip_volume_state_geometry(tip, state, reference_mesh=tip.mesh())
+    geometry = build_fingertip_volume_state_geometry(
+        tip,
+        state,
+        reference_mesh=generate_fingertip_mesh(
+            tip.geometry,
+            mesh_settings_for_level("medium"),
+        ),
+    )
     runtime = create_runtime()
     result = trace_geometry(
         tip,

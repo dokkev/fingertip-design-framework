@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from importlib import import_module
-from typing import Any
 
 from shapely.geometry import Polygon, box
 
-from model.fingertip_model import FingertipBoundaries, FingertipModel
+from model.fingertip_model import FingertipModel
 from model.fingertip_parameters import FingertipParameters
 from model.optical import LED, OpticalMaterial
+from model.solid import FingertipSolid, build_fingertip_solid
 
 
 class InvalidFingertip(ValueError):
@@ -40,19 +39,14 @@ class Fingertip:
         object.__setattr__(self, "geometry", geometry)
 
     @property
-    def boundaries(self) -> FingertipBoundaries:
-        """Return the physical geometry's named boundary semantics."""
-        return self.geometry.boundaries
-
-    @property
     def led_source(self) -> tuple[float, float]:
         """Return the source at the center of the LED's distal edge [mm]."""
-        return 0.0, self.parameters.stem_tip_y
+        return 0.0, -self.parameters.stem_height
 
     @property
     def led_package_geometry(self) -> Polygon:
         """Return LED package placement metadata for optics and plotting."""
-        stem_tip_y = self.parameters.stem_tip_y
+        stem_tip_y = -self.parameters.stem_height
         return box(
             -self.led.width_mm / 2.0,
             stem_tip_y,
@@ -65,28 +59,9 @@ class Fingertip:
         """Return the distal unit emission axis in model coordinates."""
         return 0.0, -1.0
 
-    def mesh(self, settings: Any | None = None) -> Any:
-        """Generate one discrete mesh; repeated calls may use other settings."""
-        generator = import_module("mesh.fingertip").generate_fingertip_mesh
-        settings_for_level = import_module(
-            "mesh.types"
-        ).mesh_settings_for_level
-        selected = settings or settings_for_level("medium")
-        return generator(self.geometry, selected)
-
-    def solid(self, extrusion_depth_mm: float = 11.0) -> Any:
+    def solid(self, extrusion_depth_mm: float = 11.0) -> FingertipSolid:
         """Build the independent semantic 3D representative cell."""
-        builder = import_module("model.solid").build_fingertip_solid
-        return builder(self.geometry, extrusion_depth_mm=extrusion_depth_mm)
-
-    def volume_mesh(self, settings: Any | None = None) -> Any:
-        """Generate the canonical 3D mechanics mesh for this morphology.
-
-        The established search-tier policy is used when settings are omitted.
-        A mesh is intentionally not cached so one physical design may be
-        discretized at multiple tiers.
-        """
-        volume_module = import_module("mesh.volume3d")
-        volume_types = import_module("mesh.volume_types")
-        selected = settings or volume_types.volume_mesh_settings_for_tier("search")
-        return volume_module.generate_volume_mesh(self.solid(), selected)
+        return build_fingertip_solid(
+            self.geometry,
+            extrusion_depth_mm=extrusion_depth_mm,
+        )

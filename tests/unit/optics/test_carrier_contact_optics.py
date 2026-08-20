@@ -6,6 +6,9 @@ import pytest
 pytest.importorskip("gmsh")
 
 from mesh import FingertipVolumeState, volume_mesh_settings_for_tier
+from mesh.fingertip import generate_fingertip_mesh
+from mesh.types import mesh_settings_for_level
+from mesh.volume3d import generate_volume_mesh
 from model import Fingertip
 from optics.contact_object import CarrierOptics, IndenterOptics
 from optics.transport3d import build_fingertip_volume_state_geometry
@@ -14,7 +17,10 @@ from optics.transport3d.geometry import CARRIER_CONTACT_INTERFACE
 
 def _reference_state():
     tip = Fingertip()
-    volume_mesh = tip.volume_mesh(volume_mesh_settings_for_tier("search"))
+    volume_mesh = generate_volume_mesh(
+        tip.solid(),
+        volume_mesh_settings_for_tier("search"),
+    )
     return tip, volume_mesh, FingertipVolumeState.reference(volume_mesh)
 
 
@@ -23,7 +29,10 @@ def test_open_gap_keeps_all_void_triangles_as_air_or_internal() -> None:
     geometry = build_fingertip_volume_state_geometry(
         tip,
         state,
-        reference_mesh=tip.mesh(),
+        reference_mesh=generate_fingertip_mesh(
+            tip.geometry,
+            mesh_settings_for_level("medium"),
+        ),
         carrier_optics=CarrierOptics("absorber"),
     )
 
@@ -40,7 +49,10 @@ def test_exact_contact_vertices_map_only_semantic_void_triangles() -> None:
     geometry = build_fingertip_volume_state_geometry(
         tip,
         state,
-        reference_mesh=tip.mesh(),
+        reference_mesh=generate_fingertip_mesh(
+            tip.geometry,
+            mesh_settings_for_level("medium"),
+        ),
         carrier_contact_source_node_ids={contacted_node},
         carrier_optics=CarrierOptics("absorber"),
     )
@@ -61,7 +73,9 @@ def test_contact_triangles_require_explicit_carrier_optics() -> None:
         build_fingertip_volume_state_geometry(
             tip,
             state,
-            reference_mesh=tip.mesh(),
+            reference_mesh=generate_fingertip_mesh(
+                tip.geometry,
+                mesh_settings_for_level("medium"),
+            ),
             carrier_contact_source_node_ids={contacted_node},
         )
-

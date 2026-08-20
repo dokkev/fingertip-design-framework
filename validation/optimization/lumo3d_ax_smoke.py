@@ -19,7 +19,7 @@ from optimization.design_space import (
     PRODUCTION_SEARCH_BOUNDS,
 )
 from model import Fingertip, FingertipParameters
-from validation.optimization.lumo3d_trajectory_evaluator import (
+from optimization.evaluator import (
     TRAJECTORY_EVALUATION_CONTRACT_ID,
     create_lumo3d_trajectory_study,
     LUMO3D_OBSERVATION_LEVEL,

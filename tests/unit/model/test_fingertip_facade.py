@@ -40,8 +40,8 @@ def test_fingertip_owns_led_metadata_without_changing_mechanical_geometry() -> N
         led=LED(width_mm=2.0, height_mm=1.0, relative_radiant_power=2.0),
     )
 
-    assert reference.led_source == (0.0, parameters.stem_tip_y)
-    assert alternate.led_source == (0.0, parameters.stem_tip_y)
+    assert reference.led_source == (0.0, -parameters.stem_height)
+    assert alternate.led_source == (0.0, -parameters.stem_height)
     assert alternate.led_package_geometry.bounds != pytest.approx(
         reference.led_package_geometry.bounds
     )
@@ -51,4 +51,4 @@ def test_fingertip_owns_led_metadata_without_changing_mechanical_geometry() -> N
     assert alternate.geometry.material_geometry.area == pytest.approx(
         reference.geometry.material_geometry.area
     )
-    assert alternate.boundaries.segments.keys() == reference.boundaries.segments.keys()
+    assert alternate.geometry.boundaries.segments.keys() == reference.geometry.boundaries.segments.keys()

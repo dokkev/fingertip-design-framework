@@ -21,10 +21,12 @@ from contact import (
     intersects,
     make_outer_compliant_surface,
     sphere_alignment_at_normalized_location,
+    unintended_boundary_clearance_mm,
 )
 from physics import (
     IndentationSettings,
     NewtonSettings,
+    PhysicsDependencyError,
     RigidIndenter3D,
     solve_fingertip_indentation_trajectory,
     prepare_fingertip_mesh,
@@ -33,6 +35,7 @@ from physics import (
 from mesh.rigid_carrier import make_distal_phalanx_mesh
 from mesh.rigid_object import make_sphere_mesh, RigidObjectMesh
 from mesh import volume_mesh_settings_for_tier
+from mesh.volume3d import generate_volume_mesh
 from mesh.volume3d import VolumeMeshDependencyError, VolumeMeshingError
 from model import (
     Fingertip,
@@ -57,7 +60,6 @@ from optics.transport3d.optix_backend import create_runtime
 from optimization.design_space import (
     DesignSpace,
     DesignVariable,
-    OPTIMIZABLE_PARAMETER_NAMES,
     PRODUCTION_NOMINAL_VOID_HEIGHT_MM,
     PRODUCTION_SEARCH_BOUNDS,
 )
@@ -69,6 +71,7 @@ from optimization.objectives import (
     OBJECTIVE_NAME,
     TrajectoryObjectiveConfig,
     TrajectoryObservation,
+    TrajectoryObjectiveResult,
     compute_trajectory_objective,
     normalized_field_distance,
 )
@@ -76,14 +79,9 @@ from optimization.protocol import (
     DEFAULT_TRAJECTORY_PROTOCOL,
     TrajectoryEvaluationProtocol,
 )
-from validation.physics.deformed_state_artifact import restore_deformed_optical_state
-from validation.physics.multi_location_sphere_contact import (
-    _unintended_boundary_clearance_mm,
-)
-from validation.optimization.lumo3d_common import (
+from optimization.deformed_state_artifact import restore_deformed_optical_state
+from optimization.evaluator_support import (
     LUMO3D_OBSERVATION_LEVEL,
-    LUMO3D_OPTICAL_X_BOUNDS_MM,
-    LUMO3D_OPTICAL_Y_BOUNDS_MM,
     candidate_id,
     energy_record,
     material,
@@ -308,7 +306,7 @@ class Lumo3DTrajectoryEvaluation:
         "optics_failure",
     ]
     objective_value: float | None
-    objective: Mapping[str, Any]
+    objective: TrajectoryObjectiveResult | Mapping[str, Any]
     trajectory_diagnostics: tuple[Mapping[str, Any], ...]
     checkpoint_diagnostics: tuple[Mapping[str, Any], ...]
     optical_diagnostics: tuple[Mapping[str, Any], ...]
@@ -372,7 +370,6 @@ class Lumo3DTrajectoryEvaluator:
     def _trajectory_mechanics(
         self,
         tip: Fingertip,
-        volume_mesh: Any,
         prepared: Any,
         contact_surface: Any,
         carrier_mesh: RigidObjectMesh,
@@ -407,9 +404,8 @@ class Lumo3DTrajectoryEvaluator:
         )
         if intersects(contact_surface, sphere_mesh, first_contact.spawn_pose):
             raise RuntimeError(f"u={location_u:g} spawn pose is not collision-free")
-        boundary_clearance = _unintended_boundary_clearance_mm(
-            tip,
-            sphere_mesh,
+        boundary_clearance = unintended_boundary_clearance_mm(
+            tip.geometry,
             alignment,
             first_contact,
         )
@@ -525,7 +521,10 @@ class Lumo3DTrajectoryEvaluator:
                         diagnostics={"radius_mm": radius, "failure_stage": "domain_validation"},
                     )
 
-            volume_mesh = tip.volume_mesh(volume_mesh_settings_for_tier("search"))
+            volume_mesh = generate_volume_mesh(
+                tip.solid(),
+                volume_mesh_settings_for_tier("search"),
+            )
             prepared = prepare_fingertip_mesh(volume_mesh)
             contact_surface = make_outer_compliant_surface(volume_mesh.solid)
             carrier_mesh = make_distal_phalanx_mesh(volume_mesh.solid)
@@ -536,7 +535,6 @@ class Lumo3DTrajectoryEvaluator:
                     trajectory_records.extend(
                         self._trajectory_mechanics(
                             tip,
-                            volume_mesh,
                             prepared,
                             contact_surface,
                             carrier_mesh,
@@ -674,7 +672,7 @@ class Lumo3DTrajectoryEvaluator:
             summary = {
                 "schema": TRAJECTORY_EVALUATION_SCHEMA,
                 "objective_name": OBJECTIVE_NAME,
-                "objective_value": objective["objective_value"],
+                "objective_value": objective.objective_value,
                 "protocol": self.protocol.to_dict(),
                 "protocol_fingerprint": self.protocol.fingerprint,
                 "mechanics_contract": self.mechanics_contract.to_dict(),
@@ -692,7 +690,7 @@ class Lumo3DTrajectoryEvaluator:
                 "transport_configuration_fingerprint": fingerprint_mapping(configuration),
                 "trajectory_records": trajectory_records,
                 "optical_records": optical_records,
-                "objective": objective,
+                "objective": objective.to_dict(),
                 "trajectory_metrics": trajectory_metrics,
             }
             candidate_root.mkdir(parents=True, exist_ok=True)
@@ -702,27 +700,25 @@ class Lumo3DTrajectoryEvaluator:
             )
             return Lumo3DTrajectoryEvaluation(
                 status="success",
-                objective_value=float(objective["objective_value"]),
+                objective_value=float(objective.objective_value),
                 objective=objective,
                 trajectory_diagnostics=tuple(trajectory_records),
                 checkpoint_diagnostics=tuple(trajectory_records),
                 optical_diagnostics=tuple(optical_records),
                 diagnostics=summary,
             )
-        except Transport3DDependencyError:
+        except (
+            Transport3DDependencyError,
+            VolumeMeshDependencyError,
+            PhysicsDependencyError,
+        ):
             raise
         except (InvalidFingertip, InvalidFingertipParameters) as exc:
             return _failure("invalid_design", f"{type(exc).__name__}: {exc}", diagnostics={"failure_stage": stage})
-        except (VolumeMeshDependencyError, VolumeMeshingError, InvalidFingertipMesh) as exc:
+        except (VolumeMeshingError, InvalidFingertipMesh) as exc:
             return _failure("mesh_failure", f"{type(exc).__name__}: {exc}", diagnostics={"failure_stage": stage})
         except (Transport3DGeometryError, Transport3DPhysicsError, Transport3DResultError, Transport3DTraceError) as exc:
             return _failure("optics_failure", f"{type(exc).__name__}: {exc}", diagnostics={"failure_stage": stage})
-        except Exception as exc:
-            return _failure(
-                "mechanics_failure" if stage == "mechanics" else "optics_failure",
-                f"{type(exc).__name__}: {exc}",
-                diagnostics={"failure_stage": stage},
-            )
 
 
 @dataclass(frozen=True)

@@ -14,8 +14,6 @@ from pathlib import Path
 from typing import Iterable
 
 import numpy as np
-from shapely.geometry import Point
-
 from contact import (
     FirstContactResult,
     FirstContactSettings,
@@ -23,6 +21,7 @@ from contact import (
     intersects,
     make_outer_compliant_surface,
     sphere_alignment_at_normalized_location,
+    unintended_boundary_clearance_mm,
 )
 from physics import (
     IndentationResult,
@@ -32,7 +31,7 @@ from physics import (
     prepare_fingertip_mesh,
     solve_fingertip_indentation,
 )
-from mesh.rigid_object import RigidObjectMesh, make_sphere_mesh
+from mesh.rigid_object import make_sphere_mesh
 from mesh.rigid_carrier import make_distal_phalanx_mesh
 from mesh.volume3d import generate_volume_mesh
 from mesh.volume_types import volume_mesh_settings_for_tier
@@ -76,39 +75,6 @@ def _six_volumes(vertices: np.ndarray, tetrahedra: np.ndarray) -> np.ndarray:
         np.cross(points[:, 1] - points[:, 0], points[:, 2] - points[:, 0]),
         points[:, 3] - points[:, 0],
     )
-
-
-def _unintended_boundary_clearance_mm(
-    fingertip: Fingertip,
-    sphere_mesh: RigidObjectMesh,
-    alignment,
-    first_contact: FirstContactResult,
-    *,
-    samples: int = 256,
-) -> float:
-    """Measure clearance to the two non-arc external side boundaries.
-
-    The first-contact predicate is intentionally the authoritative outer arc.
-    This diagnostic checks that the sphere does not reach any other semantic
-    2D boundary earlier along the same approach path. Longitudinal end-cap
-    clearance is checked separately by the fixed 11 mm cell depth.
-    """
-
-    radius = float(alignment.radius_mm)
-    boundaries = fingertip.geometry.boundaries
-    other_segments = tuple(
-        segment.geometry
-        for name, segment in boundaries.segments.items()
-        if name != "pad_outer_arc"
-    )
-    reference = np.asarray(alignment.nominal_pose.translation_mm, dtype=float)
-    direction = np.asarray(alignment.approach_direction, dtype=float)
-    values: list[float] = []
-    for travel in np.linspace(0.0, first_contact.travel_to_contact_mm, samples):
-        center = reference + float(travel) * direction
-        point = Point(float(center[0]), float(center[1]))
-        values.extend(float(segment.distance(point) - radius) for segment in other_segments)
-    return float(min(values))
 
 
 @dataclass(frozen=True)
@@ -235,7 +201,10 @@ def run_multi_location_sphere_contact(
     if not np.isfinite(travel) or travel <= 0.0:
         raise ValueError("travel_mm must be finite and positive")
 
-    volume_mesh = fingertip.volume_mesh(volume_mesh_settings_for_tier("search"))
+    volume_mesh = generate_volume_mesh(
+        fingertip.solid(),
+        volume_mesh_settings_for_tier("search"),
+    )
     prepared = prepare_fingertip_mesh(volume_mesh)
     if sphere_subdivisions < 1:
         raise ValueError("sphere_subdivisions must be positive")
@@ -293,9 +262,8 @@ def run_multi_location_sphere_contact(
         )
         if intersects(contact_surface, sphere_mesh, first_contact.spawn_pose):
             raise RuntimeError(f"location u={location:g} spawn pose is not collision-free")
-        boundary_clearance = _unintended_boundary_clearance_mm(
-            fingertip,
-            sphere_mesh,
+        boundary_clearance = unintended_boundary_clearance_mm(
+            fingertip.geometry,
             alignment,
             first_contact,
         )

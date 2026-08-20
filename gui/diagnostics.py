@@ -11,9 +11,10 @@ from model import (
     Fingertip,
     FingertipParameters,
     LED,
-    MINIMUM_SILICONE_LIGAMENT_MM,
     OpticalMaterial,
-    silicone_ligament_measures,
+    PRODUCTION_MINIMUM_SILICONE_THICKNESS_MM,
+    ellipse_depth_at_cutout_mm,
+    silicone_thickness_measures,
 )
 from optimization.design_space import OPTIMIZABLE_PARAMETER_NAMES
 
@@ -225,17 +226,12 @@ def _geometry_corrections(values: Mapping[str, object]) -> list[Diagnostic]:
             cutout_half_width = stem_width / 2.0 + void_width
             normalized_x = cutout_half_width / half_width
             if 0.0 <= normalized_x < 1.0:
-                available_depth = silicone_ligament_measures(
-                    {
-                        "flat_pad_width": flat_width,
-                        "flat_pad_height": flat_height,
-                        "semielliptical_pad_height": ellipse_height,
-                        "stem_width": stem_width,
-                        "stem_height": stem_height,
-                        "void_width": void_width,
-                        "void_height": void_height,
-                    }
-                ).ellipse_depth_at_cutout_mm
+                available_depth = ellipse_depth_at_cutout_mm(
+                    flat_pad_width=flat_width,
+                    semielliptical_pad_height=ellipse_height,
+                    stem_width=stem_width,
+                    void_width=void_width,
+                )
                 penetration = max(0.0, stem_height + void_height - flat_height)
                 if penetration > 0.0 and penetration >= available_depth - tolerance:
                     max_stem_height = (
@@ -317,30 +313,27 @@ def diagnose_geometry(
         )
         return tuple(result)
 
-    ligament = silicone_ligament_measures(parameters)
+    thickness = silicone_thickness_measures(parameters)
     result.append(
         _message(
             "INFO",
-            "LIGAMENT",
-            "Conservative silicone ligament measures: "
-            f"side={ligament.side_ligament_mm:g} mm, "
-            f"distal={ligament.distal_ligament_mm:g} mm, "
-            f"minimum={ligament.minimum_silicone_ligament_mm:g} mm. "
-            "These are design-space measures, not an exact minimum Euclidean "
-            "wall thickness.",
+            "GEOMETRY",
+            "Production silicone wall thickness: "
+            f"global_d_min={thickness.minimum_silicone_thickness_mm:g} mm, "
+            f"boundary_pair={thickness.shortest_boundary_pair}.",
         )
     )
-    if (
-        ligament.side_ligament_mm < MINIMUM_SILICONE_LIGAMENT_MM
-        or ligament.distal_ligament_mm < MINIMUM_SILICONE_LIGAMENT_MM
-    ):
+    minimum_thickness_mm = PRODUCTION_MINIMUM_SILICONE_THICKNESS_MM
+    if thickness.minimum_silicone_thickness_mm < minimum_thickness_mm:
         result.append(
             _message(
                 "ERROR",
                 "DESIGN SPACE",
-                "The conservative 2.0 mm silicone ligament rule is violated: "
-                f"side={ligament.side_ligament_mm:g} mm, "
-                f"distal={ligament.distal_ligament_mm:g} mm. "
+                "The production "
+                f"{minimum_thickness_mm:g} mm silicone wall-thickness rule "
+                "is violated: "
+                f"global_d_min={thickness.minimum_silicone_thickness_mm:g} mm, "
+                f"boundary_pair={thickness.shortest_boundary_pair}. "
                 "Increase the surrounding pad dimensions or reduce the cutout; "
                 "no automatic repair was applied.",
             )

@@ -13,6 +13,7 @@ from mesh.indenter import (
     pose_from_fixture,
 )
 from mesh import mesh_settings_for_level
+from mesh.fingertip import generate_fingertip_mesh
 from model import Fingertip, FingertipParameters, LED
 from model.optical import OpticalMaterial
 from optics import IndenterOptics, TraceSettings
@@ -286,7 +287,10 @@ def test_indenter_optics_requires_mechanical_contact_patch() -> None:
 
 def test_production_geometry_tags_only_the_mechanical_contact_edge() -> None:
     tip = Fingertip(FingertipParameters())
-    mesh = tip.mesh(mesh_settings_for_level("medium"))
+    mesh = generate_fingertip_mesh(
+        tip.geometry,
+        mesh_settings_for_level("medium"),
+    )
     arc_edges = mesh.pad.boundary_edges_for("pad_outer_arc")
     selected_edge = arc_edges[0]
     selected_key = tuple(sorted(int(value) for value in selected_edge))
@@ -342,7 +346,10 @@ def test_production_geometry_tags_only_the_mechanical_contact_edge() -> None:
 
 def test_production_geometry_rejects_missing_active_contact_provenance() -> None:
     tip = Fingertip(FingertipParameters())
-    mesh = tip.mesh(mesh_settings_for_level("medium"))
+    mesh = generate_fingertip_mesh(
+        tip.geometry,
+        mesh_settings_for_level("medium"),
+    )
     fixture = build_normal_indenter_fixture_at_x(
         tip.geometry,
         0.0,

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from typing import Literal
 
 import numpy as np
@@ -96,242 +96,125 @@ class FingertipModel:
     """
 
     def __init__(self, parameters: FingertipParameters):
-        parameters.validate()
-        self._parameters = parameters
-        self._flat_pad_geometry = self._build_flat_pad()
-        self._left_bond_extension_geometry = self._build_bond_extension("left")
-        self._right_bond_extension_geometry = self._build_bond_extension("right")
+        self.parameters = parameters
+        self.flat_pad_geometry = self._build_flat_pad()
+        self.left_bond_extension_geometry = self._build_bond_extension("left")
+        self.right_bond_extension_geometry = self._build_bond_extension("right")
         self._pad_outer_arc_geometry = self._build_pad_outer_arc()
-        self._semielliptical_pad_geometry = self._build_semielliptical_pad()
-        self._outer_pad_geometry = self._build_outer_pad()
-        self._stem_geometry = self._build_stem()
-        self._cutout_geometry = self._build_cutout()
+        self.semielliptical_pad_geometry = self._build_semielliptical_pad()
+        self.outer_pad_geometry = self._build_outer_pad()
+        self.stem_geometry = self._build_stem()
+        self.cutout_geometry = self._build_cutout()
         self._validate_internal_geometry()
-        self._link_plate_geometry = self._build_link_plate()
-        self._link_geometry = self._build_rigid_link()
-        self._pad_material_geometry = self._validated_polygonal_geometry(
-            self._outer_pad_geometry.difference(self._cutout_geometry),
+        self.link_plate_geometry = self._build_link_plate()
+        self.link_geometry = self._build_rigid_link()
+        self.pad_material_geometry = self._validated_polygonal_geometry(
+            self.outer_pad_geometry.difference(self.cutout_geometry),
             "compliant pad material",
         )
-        self._void_geometry = self._build_void_geometry()
-        self._raw_material_geometry = self._validated_polygonal_geometry(
-            self._outer_pad_geometry.union(self._link_geometry),
+        self.void_geometry = self._build_void_geometry()
+        self.raw_material_geometry = self._validated_polygonal_geometry(
+            self.outer_pad_geometry.union(self.link_geometry),
             "raw assembly material",
         )
-        self._material_geometry = self._validated_polygonal_geometry(
-            self._pad_material_geometry.union(self._link_geometry),
+        self.material_geometry = self._validated_polygonal_geometry(
+            self.pad_material_geometry.union(self.link_geometry),
             "assembly material",
         )
-        self._boundaries = self._build_boundaries()
-        self._pad_link_interface = MultiLineString(
+        self.boundaries = self._build_boundaries()
+        self.pad_link_interface = MultiLineString(
             [
-                list(self._boundaries.pad_bond_left.geometry.coords),
-                list(self._boundaries.pad_bond_right.geometry.coords),
+                list(self.boundaries.pad_bond_left.geometry.coords),
+                list(self.boundaries.pad_bond_right.geometry.coords),
             ]
         )
-        self._symmetry_axis = LineString(
-            [(0.0, parameters.pad_tip_y), (0.0, parameters.link_thickness)]
+        self.symmetry_axis = LineString(
+            [
+                (0.0, -(parameters.flat_pad_height + parameters.semielliptical_pad_height)),
+                (0.0, parameters.link_thickness),
+            ]
         )
-        self._interface_definition = InterfaceDefinition(
+        self.interface_definition = InterfaceDefinition(
             name="pad_link_interface",
-            geometry=self._pad_link_interface,
+            geometry=self.pad_link_interface,
             interface_type="bonded",
         )
         self.validate_geometry()
 
     @property
-    def parameters(self) -> FingertipParameters:
-        """Return the immutable dimensions used to construct the model."""
-        return self._parameters
-
-    @property
-    def outer_pad_geometry(self) -> Polygon:
-        """Return the flat-pad, extension, and semi-ellipse outer envelope."""
-        return self._outer_pad_geometry
-
-    @property
-    def flat_pad_geometry(self) -> Polygon:
-        """Return the external flat rectangular pad component."""
-        return self._flat_pad_geometry
-
-    @property
-    def left_bond_extension_geometry(self) -> Polygon:
-        """Return the compliant material in the rigid link's left recess."""
-        return self._left_bond_extension_geometry
-
-    @property
-    def right_bond_extension_geometry(self) -> Polygon:
-        """Return the compliant material in the rigid link's right recess."""
-        return self._right_bond_extension_geometry
-
-    @property
-    def semielliptical_pad_geometry(self) -> Polygon:
-        """Return the external lower semi-elliptical pad component."""
-        return self._semielliptical_pad_geometry
-
-    @property
-    def pad_material_geometry(self) -> PolygonalGeometry:
-        """Return only the compliant pad after removing the full cutout."""
-        return self._pad_material_geometry
-
-    @property
-    def link_geometry(self) -> Polygon:
-        """Return the rigid top plate and centered stem as one polygon."""
-        return self._link_geometry
-
-    @property
-    def link_plate_geometry(self) -> Polygon:
-        """Return only the rigid plate above ``y = 0``."""
-        return self._link_plate_geometry
-
-    @property
-    def stem_geometry(self) -> Polygon:
-        """Return only the rigid stem inserted into the pad cutout."""
-        return self._stem_geometry
-
-    @property
-    def cutout_geometry(self) -> Polygon:
-        """Return the full rectangular region reserved around the stem."""
-        return self._cutout_geometry
-
-    @property
-    def raw_material_geometry(self) -> PolygonalGeometry:
-        """Return the exterior assembly before clearance removal."""
-        return self._raw_material_geometry
-
-    @property
-    def void_geometry(self) -> PolygonalGeometry | None:
-        """Return visible clearance, or ``None`` for a zero-clearance fit."""
-        return self._void_geometry
-
-    @property
-    def material_geometry(self) -> PolygonalGeometry:
-        """Return the union of compliant and rigid material after clearance."""
-        return self._material_geometry
-
-    @property
-    def pad_link_interface(self) -> MultiLineString:
-        """Return the two interface segments outside the centered cutout."""
-        return self._pad_link_interface
-
-    @property
-    def interface_definition(self) -> InterfaceDefinition:
-        """Return metadata for the always-bonded upper interface."""
-        return self._interface_definition
-
-    @property
-    def boundaries(self) -> FingertipBoundaries:
-        """Return analytic boundary segments and potential contact pairs."""
-        return self._boundaries
-
-    @property
     def contact_pairs(self) -> tuple[ContactPair, ContactPair, ContactPair]:
         """Return left, right, and bottom stem-pad potential contact pairs."""
-        return self._boundaries.contact_pairs
-
-    @property
-    def symmetry_axis(self) -> LineString:
-        """Return the vertical axis spanning the pad and rigid link plate."""
-        return self._symmetry_axis
+        return self.boundaries.contact_pairs
 
     def classify_void(self) -> VoidClassification:
         """Describe which independent stem-clearance dimensions are nonzero."""
-        if self._parameters.void_width == 0.0 and self._parameters.void_height == 0.0:
+        if self.parameters.void_width == 0.0 and self.parameters.void_height == 0.0:
             return "zero_clearance_fit"
-        if self._parameters.void_width > 0.0 and self._parameters.void_height == 0.0:
+        if self.parameters.void_width > 0.0 and self.parameters.void_height == 0.0:
             return "side_clearance"
-        if self._parameters.void_width == 0.0 and self._parameters.void_height > 0.0:
+        if self.parameters.void_width == 0.0 and self.parameters.void_height > 0.0:
             return "bottom_clearance"
         return "u_clearance"
 
     def pad_link_connection_length(self) -> float:
         """Return the total link-pad interface length outside the cutout."""
-        return float(self._pad_link_interface.length)
+        return float(self.pad_link_interface.length)
 
     def is_material_connected(self) -> bool:
         """Return whether the complete rigid/compliant assembly is connected."""
-        if self._material_geometry.is_empty:
+        if self.material_geometry.is_empty:
             return False
         component_count = (
-            len(self._material_geometry.geoms)
-            if isinstance(self._material_geometry, MultiPolygon)
+            len(self.material_geometry.geoms)
+            if isinstance(self.material_geometry, MultiPolygon)
             else 1
         )
         return (
             component_count == 1
-            and self.pad_link_connection_length() > self._parameters.geometry_tolerance
+            and self.pad_link_connection_length() > self.parameters.geometry_tolerance
         )
 
     def validate_geometry(self) -> None:
         """Raise if a material domain is invalid or the bonded interface vanishes."""
-        named_geometries = {
-            "outer pad": self._outer_pad_geometry,
-            "compliant pad": self._pad_material_geometry,
-            "rigid link": self._link_geometry,
-            "assembly": self._material_geometry,
-        }
-        for name, geometry in named_geometries.items():
-            if geometry.is_empty:
-                raise InvalidFingertipGeometry(f"{name} geometry is empty")
-            if not geometry.is_valid:
-                raise InvalidFingertipGeometry(f"{name} geometry is invalid")
-        if isinstance(self._pad_material_geometry, MultiPolygon):
+        if self.outer_pad_geometry.is_empty:
+            raise InvalidFingertipGeometry("outer pad geometry is empty")
+        if not self.outer_pad_geometry.is_valid:
+            raise InvalidFingertipGeometry("outer pad geometry is invalid")
+        if self.pad_material_geometry.is_empty:
+            raise InvalidFingertipGeometry("compliant pad geometry is empty")
+        if not self.pad_material_geometry.is_valid:
+            raise InvalidFingertipGeometry("compliant pad geometry is invalid")
+        if self.link_geometry.is_empty:
+            raise InvalidFingertipGeometry("rigid link geometry is empty")
+        if not self.link_geometry.is_valid:
+            raise InvalidFingertipGeometry("rigid link geometry is invalid")
+        if self.material_geometry.is_empty:
+            raise InvalidFingertipGeometry("assembly geometry is empty")
+        if not self.material_geometry.is_valid:
+            raise InvalidFingertipGeometry("assembly geometry is invalid")
+        if isinstance(self.pad_material_geometry, MultiPolygon):
             raise InvalidFingertipGeometry(
                 "the cutout creates disconnected compliant-pad fragments"
             )
-        overlap_area = self._pad_material_geometry.intersection(
-            self._link_geometry
+        overlap_area = self.pad_material_geometry.intersection(
+            self.link_geometry
         ).area
-        if overlap_area > self._parameters.geometry_tolerance:
+        if overlap_area > self.parameters.geometry_tolerance:
             raise InvalidFingertipGeometry(
                 "compliant pad and rigid link materials overlap: "
                 f"overlap_area={overlap_area:g}"
             )
-        if self.pad_link_connection_length() <= self._parameters.geometry_tolerance:
+        if self.pad_link_connection_length() <= self.parameters.geometry_tolerance:
             raise InvalidFingertipGeometry(
                 "the always-bonded upper interface has zero effective length"
             )
 
-    def summary(self) -> dict[str, object]:
-        """Return parameter values and derived geometry diagnostics."""
-        void_area = 0.0 if self._void_geometry is None else self._void_geometry.area
-        return {
-            "parameters": asdict(self._parameters),
-            "void_classification": self.classify_void(),
-            "interface_type": self._interface_definition.interface_type,
-            "boundary_tags": tuple(self._boundaries.segments),
-            "contact_gaps": {
-                pair.name: pair.initial_normal_gap for pair in self.contact_pairs
-            },
-            "cutout_width": self._parameters.cutout_width,
-            "cutout_height": self._parameters.cutout_height,
-            "bond_extension_width": self._parameters.bond_extension_width,
-            "ellipse_start_y": self._parameters.ellipse_start_y,
-            "stem_tip_y": self._parameters.stem_tip_y,
-            "void_bottom_y": self._parameters.void_bottom_y,
-            "pad_tip_y": self._parameters.pad_tip_y,
-            "total_pad_depth": self._parameters.total_pad_depth,
-            "material_area": float(self._material_geometry.area),
-            "raw_material_area": float(self._raw_material_geometry.area),
-            "outer_pad_area": float(self._outer_pad_geometry.area),
-            "pad_area": float(self._pad_material_geometry.area),
-            "link_area": float(self._link_geometry.area),
-            "void_area": float(void_area),
-            "removed_material_area": float(
-                self._raw_material_geometry.area - self._material_geometry.area
-            ),
-            "material_connected": self.is_material_connected(),
-            "pad_link_connection_length": self.pad_link_connection_length(),
-            "geometry_valid": self._material_geometry.is_valid,
-            "bounds": tuple(float(value) for value in self._material_geometry.bounds),
-        }
-
     def _build_flat_pad(self) -> Polygon:
-        parameters = self._parameters
+        parameters = self.parameters
         return orient(
             box(
                 -parameters.flat_pad_width / 2.0,
-                parameters.ellipse_start_y,
+                -parameters.flat_pad_height,
                 parameters.flat_pad_width / 2.0,
                 0.0,
             ),
@@ -339,7 +222,7 @@ class FingertipModel:
         )
 
     def _build_bond_extension(self, side: Literal["left", "right"]) -> Polygon:
-        parameters = self._parameters
+        parameters = self.parameters
         half_flat_width = parameters.flat_pad_width / 2.0
         if side == "left":
             bounds = (
@@ -360,13 +243,13 @@ class FingertipModel:
     def _build_pad_outer_arc(self) -> LineString:
         # Snap the sampled arc to the flat-pad endpoints so there is no
         # numerical shoulder at the rectangle/ellipse join.
-        half_width = self._parameters.flat_pad_width / 2.0
-        semi_axis = self._parameters.semielliptical_pad_height
-        ellipse_start_y = self._parameters.ellipse_start_y
+        half_width = self.parameters.flat_pad_width / 2.0
+        semi_axis = self.parameters.semielliptical_pad_height
+        ellipse_start_y = -self.parameters.flat_pad_height
         arc_segments = (
-            self._parameters.arc_resolution
-            if self._parameters.arc_resolution % 2 == 0
-            else self._parameters.arc_resolution + 1
+            self.parameters.arc_resolution
+            if self.parameters.arc_resolution % 2 == 0
+            else self.parameters.arc_resolution + 1
         )
         angles = np.linspace(0.0, np.pi, arc_segments + 1)
         coordinates = [
@@ -390,10 +273,10 @@ class FingertipModel:
 
     def _build_outer_pad(self) -> Polygon:
         outer_pad = self._validated_polygonal_geometry(
-            self._flat_pad_geometry.union(
-                self._semielliptical_pad_geometry
-            ).union(self._left_bond_extension_geometry).union(
-                self._right_bond_extension_geometry
+            self.flat_pad_geometry.union(
+                self.semielliptical_pad_geometry
+            ).union(self.left_bond_extension_geometry).union(
+                self.right_bond_extension_geometry
             ),
             "outer pad",
         )
@@ -405,7 +288,7 @@ class FingertipModel:
         return outer_pad
 
     def _build_link_plate(self) -> Polygon:
-        parameters = self._parameters
+        parameters = self.parameters
         half_width = parameters.flat_pad_width / 2.0
         full_link_plate = box(
             -half_width,
@@ -436,7 +319,7 @@ class FingertipModel:
         return orient(link_plate, sign=1.0)
 
     def _build_stem(self) -> Polygon:
-        parameters = self._parameters
+        parameters = self.parameters
         return orient(
             box(
                 -parameters.stem_width / 2.0,
@@ -449,7 +332,7 @@ class FingertipModel:
 
     def _build_rigid_link(self) -> Polygon:
         rigid_link = self._validated_polygonal_geometry(
-            self._link_plate_geometry.union(self._stem_geometry), "rigid link"
+            self.link_plate_geometry.union(self.stem_geometry), "rigid link"
         )
         if not isinstance(rigid_link, Polygon):
             raise InvalidFingertipGeometry(
@@ -458,47 +341,62 @@ class FingertipModel:
         return rigid_link
 
     def _build_cutout(self) -> Polygon:
-        parameters = self._parameters
+        parameters = self.parameters
+        cutout_half_width = (
+            0.5 * parameters.stem_width + parameters.void_width
+        )
+        cutout_bottom_y = -(parameters.stem_height + parameters.void_height)
         return box(
-            -parameters.cutout_half_width,
-            parameters.void_bottom_y,
-            parameters.cutout_half_width,
+            -cutout_half_width,
+            cutout_bottom_y,
+            cutout_half_width,
             0.0,
         )
 
     def _validate_internal_geometry(self) -> None:
-        tolerance = self._parameters.geometry_tolerance
-        if not self._outer_pad_geometry.buffer(tolerance).covers(
-            self._cutout_geometry
+        tolerance = self.parameters.geometry_tolerance
+        if not self.outer_pad_geometry.buffer(tolerance).covers(
+            self.cutout_geometry
         ):
+            cutout_half_width = (
+                0.5 * self.parameters.stem_width + self.parameters.void_width
+            )
+            cutout_bottom_y = -(
+                self.parameters.stem_height + self.parameters.void_height
+            )
+            ellipse_start_y = -self.parameters.flat_pad_height
+            pad_tip_y = -(
+                self.parameters.flat_pad_height
+                + self.parameters.semielliptical_pad_height
+            )
             raise InvalidFingertipGeometry(
                 "the internal cutout exits the completed outer pad envelope: "
-                f"cutout_half_width={self._parameters.cutout_half_width:g}, "
-                f"cutout_bottom_y={self._parameters.void_bottom_y:g}, "
-                f"ellipse_start_y={self._parameters.ellipse_start_y:g}, "
-                f"pad_tip_y={self._parameters.pad_tip_y:g}"
+                f"cutout_half_width={cutout_half_width:g}, "
+                f"cutout_bottom_y={cutout_bottom_y:g}, "
+                f"ellipse_start_y={ellipse_start_y:g}, "
+                f"pad_tip_y={pad_tip_y:g}"
             )
-        if not self._cutout_geometry.buffer(tolerance).covers(self._stem_geometry):
+        if not self.cutout_geometry.buffer(tolerance).covers(self.stem_geometry):
             raise InvalidFingertipGeometry(
                 "the rigid stem is not fully contained by the internal cutout"
             )
 
     def _build_void_geometry(self) -> PolygonalGeometry | None:
-        clearance = self._cutout_geometry.difference(self._stem_geometry)
+        clearance = self.cutout_geometry.difference(self.stem_geometry)
         if clearance.is_empty:
             return None
         return self._validated_polygonal_geometry(clearance, "void")
 
     def _build_boundaries(self) -> FingertipBoundaries:
-        parameters = self._parameters
+        parameters = self.parameters
         flat_pad_edge = parameters.flat_pad_width / 2.0
         recess_inner_left = -flat_pad_edge + parameters.bond_extension_width
         recess_inner_right = flat_pad_edge - parameters.bond_extension_width
-        cutout_edge = parameters.cutout_half_width
+        cutout_edge = 0.5 * parameters.stem_width + parameters.void_width
         stem_edge = parameters.stem_width / 2.0
-        ellipse_start_y = parameters.ellipse_start_y
-        stem_bottom_y = parameters.stem_tip_y
-        cutout_bottom_y = parameters.void_bottom_y
+        ellipse_start_y = -parameters.flat_pad_height
+        stem_bottom_y = -parameters.stem_height
+        cutout_bottom_y = -(parameters.stem_height + parameters.void_height)
         bond_height = parameters.bond_extension_height
 
         pad_bond_left = BoundarySegment(

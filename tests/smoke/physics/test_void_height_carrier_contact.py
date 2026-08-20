@@ -30,6 +30,7 @@ from physics import (
 )
 from mesh.rigid_carrier import make_distal_phalanx_mesh
 from mesh.rigid_object import make_sphere_mesh
+from mesh.volume3d import generate_volume_mesh
 from mesh.volume_types import volume_mesh_settings_for_tier
 from model import Fingertip, FingertipParameters
 
@@ -64,7 +65,10 @@ def test_positive_void_height_collision_off_vs_on() -> None:
         pytest.skip("carrier-contact smoke requires cuda:0")
 
     fingertip = Fingertip(FingertipParameters(void_height=1.0))
-    volume_mesh = fingertip.volume_mesh(volume_mesh_settings_for_tier("search"))
+    volume_mesh = generate_volume_mesh(
+        fingertip.solid(),
+        volume_mesh_settings_for_tier("search"),
+    )
     prepared = prepare_fingertip_mesh(volume_mesh)
     carrier = make_distal_phalanx_mesh(volume_mesh.solid)
     sphere = make_sphere_mesh(5.0, subdivisions=3)

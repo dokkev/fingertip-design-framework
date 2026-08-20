@@ -83,7 +83,7 @@ def test_decode_uses_independent_flat_and_semielliptical_heights() -> None:
     assert decoded.flat_pad_width == 30.0
     assert decoded.flat_pad_height == 6.25
     assert decoded.semielliptical_pad_height == 10.5
-    assert decoded.total_pad_depth == 16.75
+    assert decoded.flat_pad_height + decoded.semielliptical_pad_height == 16.75
     assert decoded.void_height == 1.25
     with pytest.raises(ValueError, match="missing"):
         space.decode({name: value for name, value in values.items() if name != "void_width"})
@@ -148,5 +148,4 @@ def test_void_height_decodes_into_authoritative_geometry(void_height: float) -> 
     )
     solid = Fingertip(parameters).solid()
     assert parameters.void_height == void_height
-    assert parameters.void_bottom_y == -(parameters.stem_height + void_height)
     assert solid.parameters.void_height == void_height

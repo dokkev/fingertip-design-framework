@@ -8,52 +8,42 @@ from typing import TYPE_CHECKING, Mapping, Sequence
 
 import numpy as np
 
-from mesh.rigid_object import RigidObjectMesh
+from mesh.rigid_object import RigidObjectMesh, RigidPose3D
 
 from .fingertip import PreparedFingertipMesh
-from .solve import NewtonSettings
+from .solve import NewtonSettings, _load_newton_backend
 from .types import NewtonResult
 
 if TYPE_CHECKING:
     from contact.first_contact import FirstContactResult
 
 
-_QUATERNION_NORM_TOLERANCE = 1.0e-12
 _DIRECTION_NORM_TOLERANCE = 1.0e-12
 
 
-def _finite_tuple(value: tuple[float, ...] | list[float], *, length: int, name: str) -> tuple[float, ...]:
+def _finite_tuple(
+    value: tuple[float, ...] | list[float],
+    *,
+    length: int,
+    name: str,
+) -> tuple[float, ...]:
     array = np.asarray(value, dtype=float)
     if array.shape != (length,) or not np.all(np.isfinite(array)):
         raise ValueError(f"{name} must contain {length} finite values")
     return tuple(float(component) for component in array)
 
 
-def _normalize(value: tuple[float, ...], *, tolerance: float, name: str) -> tuple[float, ...]:
+def _normalize(
+    value: tuple[float, ...],
+    *,
+    tolerance: float,
+    name: str,
+) -> tuple[float, ...]:
     array = np.asarray(value, dtype=float)
     norm = float(np.linalg.norm(array))
     if not np.isfinite(norm) or norm <= tolerance:
         raise ValueError(f"{name} must have a finite nonzero norm")
     return tuple(float(component) for component in array / norm)
-
-
-@dataclass(frozen=True)
-class RigidPose3D:
-    """Rigid-object pose in repository millimetres and quaternion ``xyzw`` order."""
-
-    translation_mm: tuple[float, float, float]
-    quaternion_xyzw: tuple[float, float, float, float]
-
-    def __post_init__(self) -> None:
-        translation = _finite_tuple(self.translation_mm, length=3, name="translation_mm")
-        quaternion = _finite_tuple(self.quaternion_xyzw, length=4, name="quaternion_xyzw")
-        quaternion = _normalize(
-            quaternion,
-            tolerance=_QUATERNION_NORM_TOLERANCE,
-            name="quaternion_xyzw",
-        )
-        object.__setattr__(self, "translation_mm", translation)
-        object.__setattr__(self, "quaternion_xyzw", quaternion)
 
 
 @dataclass(frozen=True)
@@ -220,6 +210,22 @@ class IndentationTrajectoryResult:
         return self.checkpoints[-1]
 
 
+def _validate_support_constraints(
+    prepared_fingertip: PreparedFingertipMesh,
+    mechanics_settings: NewtonSettings,
+) -> None:
+    """Require explicit mechanics supports to match prepared geometry supports."""
+
+    configured_support = tuple(sorted(mechanics_settings.fixed_vertex_indices))
+    authoritative_support = tuple(sorted(prepared_fingertip.support_vertex_indices))
+    if configured_support and configured_support != authoritative_support:
+        raise ValueError(
+            "physics indentation requires fixed_vertex_indices to be empty or "
+            "equal to prepared_fingertip.support_vertex_indices; the authoritative "
+            f"support is {authoritative_support!r}, received {configured_support!r}"
+        )
+
+
 def checkpoint_step_schedule(
     checkpoint_travels_mm: Sequence[float],
     *,
@@ -304,18 +310,10 @@ def solve_fingertip_indentation(
                 "first_contact.approach_direction must match the indenter "
                 "approach_direction"
             )
-    configured_support = tuple(sorted(mechanics_settings.fixed_vertex_indices))
-    authoritative_support = tuple(sorted(prepared_fingertip.support_vertex_indices))
-    if configured_support and configured_support != authoritative_support:
-        raise ValueError(
-            "physics indentation requires fixed_vertex_indices to be empty or "
-            "equal to prepared_fingertip.support_vertex_indices; the authoritative "
-            f"support is {authoritative_support!r}, received {configured_support!r}"
-        )
+    _validate_support_constraints(prepared_fingertip, mechanics_settings)
 
-    from .newton_vbd import solve_newton_vbd_indentation
-
-    return solve_newton_vbd_indentation(
+    backend = _load_newton_backend()
+    return backend.solve_newton_vbd_indentation(
         prepared_fingertip,
         indenter,
         mechanics_settings,
@@ -348,6 +346,7 @@ def solve_fingertip_indentation_trajectory(
         raise TypeError("mechanics_settings must be NewtonSettings")
     if not isinstance(indentation_settings, IndentationSettings):
         raise TypeError("indentation_settings must be IndentationSettings")
+    _validate_support_constraints(prepared_fingertip, mechanics_settings)
     travels = tuple(float(value) for value in checkpoint_travels_mm)
     fractions = (
         tuple(float(value) for value in checkpoint_fractions)
@@ -356,9 +355,8 @@ def solve_fingertip_indentation_trajectory(
     )
     if len(fractions) != len(travels):
         raise ValueError("checkpoint_fractions must match checkpoint_travels_mm")
-    from .newton_vbd import solve_newton_vbd_indentation_trajectory
-
-    return solve_newton_vbd_indentation_trajectory(
+    backend = _load_newton_backend()
+    return backend.solve_newton_vbd_indentation_trajectory(
         prepared_fingertip,
         indenter,
         mechanics_settings,

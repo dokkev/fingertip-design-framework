@@ -11,12 +11,11 @@ from physics import (
     NewtonSettings,
     NewtonResult,
     RigidIndenter3D,
-    RigidPose3D,
     solve_fingertip_indentation,
 )
 from physics.fingertip import PreparedFingertipMesh
 from physics.types import TetMeshData
-from mesh.rigid_object import make_cube_mesh
+from mesh.rigid_object import RigidPose3D, make_cube_mesh
 
 
 def test_pose_and_direction_are_normalized_without_solver_imports() -> None:

@@ -8,6 +8,9 @@ import pytest
 pytest.importorskip("gmsh")
 
 from mesh import FingertipVolumeState, volume_mesh_settings_for_tier
+from mesh.fingertip import generate_fingertip_mesh
+from mesh.types import mesh_settings_for_level
+from mesh.volume3d import generate_volume_mesh
 from model import Fingertip
 from optics.transport3d import build_fingertip_volume_state_geometry
 
@@ -90,13 +93,19 @@ def _tetra_by_boundary_face(state: FingertipVolumeState) -> dict[tuple[int, int,
 
 def test_volume_state_direct_adapter_builds_full3d_geometry_without_fea_artifact() -> None:
     tip = Fingertip()
-    volume_mesh = tip.volume_mesh(volume_mesh_settings_for_tier("search"))
+    volume_mesh = generate_volume_mesh(
+        tip.solid(),
+        volume_mesh_settings_for_tier("search"),
+    )
     state = FingertipVolumeState.reference(volume_mesh)
 
     geometry = build_fingertip_volume_state_geometry(
         tip,
         state,
-        reference_mesh=tip.mesh(),
+        reference_mesh=generate_fingertip_mesh(
+            tip.geometry,
+            mesh_settings_for_level("medium"),
+        ),
     )
 
     assert geometry.geometry_mode == "full3d_surface"
@@ -128,13 +137,19 @@ def test_volume_state_direct_adapter_builds_full3d_geometry_without_fea_artifact
 
 def test_surface_coordinates_use_canonical_ids_when_surface_nodes_are_not_a_prefix() -> None:
     tip = Fingertip()
-    original_mesh = tip.volume_mesh(volume_mesh_settings_for_tier("search"))
+    original_mesh = generate_volume_mesh(
+        tip.solid(),
+        volume_mesh_settings_for_tier("search"),
+    )
     volume_mesh = _relabel_with_surface_nodes_outside_the_canonical_prefix(original_mesh)
     state = FingertipVolumeState.reference(volume_mesh)
     geometry = build_fingertip_volume_state_geometry(
         tip,
         state,
-        reference_mesh=tip.mesh(),
+        reference_mesh=generate_fingertip_mesh(
+            tip.geometry,
+            mesh_settings_for_level("medium"),
+        ),
     )
 
     surface_node_ids = _surface_node_ids(volume_mesh)
@@ -149,9 +164,19 @@ def test_surface_coordinates_use_canonical_ids_when_surface_nodes_are_not_a_pref
 
 def test_external_surface_orientation_is_outward_from_canonical_tetrahedra() -> None:
     tip = Fingertip()
-    volume_mesh = tip.volume_mesh(volume_mesh_settings_for_tier("search"))
+    volume_mesh = generate_volume_mesh(
+        tip.solid(),
+        volume_mesh_settings_for_tier("search"),
+    )
     state = FingertipVolumeState.reference(volume_mesh)
-    geometry = build_fingertip_volume_state_geometry(tip, state, reference_mesh=tip.mesh())
+    geometry = build_fingertip_volume_state_geometry(
+        tip,
+        state,
+        reference_mesh=generate_fingertip_mesh(
+            tip.geometry,
+            mesh_settings_for_level("medium"),
+        ),
+    )
     surface_node_ids = _surface_node_ids(volume_mesh)
     canonical_index = {node_id: index for index, node_id in enumerate(state.source_node_ids)}
     tetra_by_face = _tetra_by_boundary_face(state)
@@ -179,16 +204,29 @@ def test_external_surface_orientation_is_outward_from_canonical_tetrahedra() -> 
 
 def test_u_material_coordinates_are_reference_based_and_backend_independent() -> None:
     tip = Fingertip()
-    volume_mesh = tip.volume_mesh(volume_mesh_settings_for_tier("search"))
+    volume_mesh = generate_volume_mesh(
+        tip.solid(),
+        volume_mesh_settings_for_tier("search"),
+    )
     state = FingertipVolumeState.reference(volume_mesh)
     deformed = state.reference_coordinates_mm.copy()
     deformed[:, 1] += 0.05
     deformed_state = FingertipVolumeState.from_deformed_coordinates(volume_mesh, deformed)
-    reference_geometry = build_fingertip_volume_state_geometry(tip, state, reference_mesh=tip.mesh())
+    reference_geometry = build_fingertip_volume_state_geometry(
+        tip,
+        state,
+        reference_mesh=generate_fingertip_mesh(
+            tip.geometry,
+            mesh_settings_for_level("medium"),
+        ),
+    )
     deformed_geometry = build_fingertip_volume_state_geometry(
         tip,
         deformed_state,
-        reference_mesh=tip.mesh(),
+        reference_mesh=generate_fingertip_mesh(
+            tip.geometry,
+            mesh_settings_for_level("medium"),
+        ),
     )
 
     np.testing.assert_array_equal(

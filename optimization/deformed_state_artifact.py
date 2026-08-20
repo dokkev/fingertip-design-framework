@@ -1,4 +1,4 @@
-"""Restore exact Newton-deformed volume states for optical handoff."""
+"""Restore exact Newton-deformed volume states for the optical handoff."""
 
 from __future__ import annotations
 
@@ -10,6 +10,8 @@ from typing import Iterable, Mapping
 import numpy as np
 
 from physics.fingertip import PreparedFingertipMesh
+from mesh.fingertip import generate_fingertip_mesh
+from mesh.types import mesh_settings_for_level
 from mesh.volume_types import FingertipVolumeMesh
 from mesh.volume_state import FingertipVolumeState
 from model.fingertip import Fingertip
@@ -144,7 +146,10 @@ def restore_deformed_optical_state(
     geometry = build_fingertip_volume_state_geometry(
         tip,
         state,
-        reference_mesh=tip.mesh(),
+        reference_mesh=generate_fingertip_mesh(
+            tip.geometry,
+            mesh_settings_for_level("medium"),
+        ),
         carrier_contact_source_node_ids=frozenset(selected_contact_ids),
         carrier_optics=carrier_optics,
         metadata=geometry_metadata,

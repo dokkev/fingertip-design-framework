@@ -47,8 +47,6 @@ def write_csv(
         writer = csv.writer(stream, lineterminator="\n")
         writer.writerow(columns)
         writer.writerows(rows)
-
-
 def write_indentation_history(
     path: Path,
     history: Sequence[Mapping[str, Any]],
@@ -145,48 +143,3 @@ def _write_indentation_profile(
         fields,
         ([record[field] for field in fields] for record in profile),
     )
-
-
-def write_indentation_case_outputs(
-    result: Mapping[str, Any],
-    artifacts: Any | None,
-    output_directory: str | Path,
-) -> dict[str, str]:
-    """Write validation artifacts without adding I/O to the FEM backend."""
-    from validation.fingertip.indentation.figures import (
-        save_deformed_mesh_plot,
-        save_history_plots,
-        save_outer_profile_plot,
-    )
-
-    directory = Path(output_directory).expanduser().resolve()
-    directory.mkdir(parents=True, exist_ok=True)
-    result_path = directory / "result.json"
-    history_path = directory / "history.csv"
-    atomic_write_json(result_path, result)
-    write_indentation_history(history_path, result.get("history", []))
-    outputs = {"result": str(result_path), "history": str(history_path)}
-    if artifacts is None:
-        return outputs
-    profiles_directory = directory / "profiles"
-    plots_directory = directory / "plots"
-    for key, snapshot in artifacts.snapshots.items():
-        label = str(key).replace(".", "p")
-        profile_path = profiles_directory / f"profile_{label}.csv"
-        _write_indentation_profile(profile_path, snapshot["profile"])
-        outputs[f"profile_{label}"] = str(profile_path)
-        deformed_path = plots_directory / f"deformed_mesh_{label}.png"
-        save_deformed_mesh_plot(artifacts, snapshot, deformed_path)
-        outputs[f"deformed_mesh_{label}"] = str(deformed_path)
-    save_history_plots(result, plots_directory)
-    save_outer_profile_plot(
-        artifacts.snapshots, plots_directory / "outer_arc_profiles.png"
-    )
-    if artifacts.snapshots:
-        final_key = max(artifacts.snapshots, key=float)
-        final_path = directory / "deformed_mesh.png"
-        save_deformed_mesh_plot(
-            artifacts, artifacts.snapshots[final_key], final_path
-        )
-        outputs["deformed_mesh"] = str(final_path)
-    return outputs

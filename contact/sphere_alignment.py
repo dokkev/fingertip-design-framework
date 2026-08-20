@@ -6,12 +6,11 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from physics.indentation import RigidPose3D
 from mesh.indenter import (
     crown_frame_from_model,
     surface_frame_from_normalized_location,
 )
-from mesh.rigid_object import RigidObjectMesh
+from mesh.rigid_object import RigidObjectMesh, RigidPose3D
 from model.fingertip_model import FingertipModel
 
 

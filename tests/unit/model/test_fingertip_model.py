@@ -13,6 +13,7 @@ from model.fingertip_model import FingertipModel, InvalidFingertipGeometry
 from model.fingertip_parameters import (
     FingertipParameters,
     InvalidFingertipParameters,
+    fingertip_parameters_fingerprint,
 )
 
 
@@ -22,6 +23,21 @@ BOTTOM_CLEARANCE = 2.0
 
 def build_model(**overrides: float | int) -> FingertipModel:
     return FingertipModel(FingertipParameters(**overrides))
+
+
+def test_physical_morphology_fingerprint_ignores_representation_and_material() -> None:
+    base = FingertipParameters()
+    assert fingertip_parameters_fingerprint(base) == fingertip_parameters_fingerprint(
+        FingertipParameters(
+            arc_resolution=16,
+            geometry_tolerance=1.0e-8,
+            young_modulus_mpa=0.8,
+            poisson_ratio=0.45,
+        )
+    )
+    assert fingertip_parameters_fingerprint(base) != fingertip_parameters_fingerprint(
+        FingertipParameters(stem_height=6.1)
+    )
 
 
 def test_complete_geometry_is_symmetric_about_vertical_axis() -> None:
@@ -60,7 +76,7 @@ def test_outer_pad_unions_flat_pad_ellipse_and_recess_extensions() -> None:
     assert model.outer_pad_geometry.bounds == pytest.approx(
         (
             -parameters.flat_pad_width / 2.0,
-            parameters.pad_tip_y,
+            -(parameters.flat_pad_height + parameters.semielliptical_pad_height),
             parameters.flat_pad_width / 2.0,
             parameters.bond_extension_height,
         )
@@ -72,8 +88,9 @@ def test_outer_pad_unions_flat_pad_ellipse_and_recess_extensions() -> None:
 def test_semiellipse_meets_flat_pad_at_exact_endpoints() -> None:
     model = build_model()
     parameters = model.parameters
-    left = (-parameters.flat_pad_width / 2.0, parameters.ellipse_start_y)
-    right = (parameters.flat_pad_width / 2.0, parameters.ellipse_start_y)
+    ellipse_start_y = -parameters.flat_pad_height
+    left = (-parameters.flat_pad_width / 2.0, ellipse_start_y)
+    right = (parameters.flat_pad_width / 2.0, ellipse_start_y)
     arc_endpoints = (
         tuple(model.boundaries.pad_outer_arc.geometry.coords)[0],
         tuple(model.boundaries.pad_outer_arc.geometry.coords)[-1],
@@ -143,10 +160,12 @@ def test_full_width_rigid_link_contains_two_recesses() -> None:
 def test_cutout_is_top_open_and_contains_the_rigid_stem() -> None:
     model = build_model(void_width=SIDE_CLEARANCE, void_height=BOTTOM_CLEARANCE)
     parameters = model.parameters
+    cutout_half_width = 0.5 * parameters.stem_width + parameters.void_width
+    cutout_bottom_y = -(parameters.stem_height + parameters.void_height)
     expected_cutout = box(
-        -parameters.cutout_half_width,
-        parameters.void_bottom_y,
-        parameters.cutout_half_width,
+        -cutout_half_width,
+        cutout_bottom_y,
+        cutout_half_width,
         0.0,
     )
     assert model.cutout_geometry.equals(expected_cutout)
@@ -173,12 +192,13 @@ def test_l_bond_boundaries_are_connected_symmetric_and_complete() -> None:
     model = build_model(void_width=SIDE_CLEARANCE)
     parameters = model.parameters
     half_width = parameters.flat_pad_width / 2.0
+    cutout_half_width = 0.5 * parameters.stem_width + parameters.void_width
     left = model.boundaries.pad_bond_left.geometry
     right = model.boundaries.pad_bond_right.geometry
     assert isinstance(left, LineString)
     assert isinstance(right, LineString)
     expected_left = (
-        (-parameters.cutout_half_width, 0.0),
+        (-cutout_half_width, 0.0),
         (-half_width + parameters.bond_extension_width, 0.0),
         (
             -half_width + parameters.bond_extension_width,
@@ -193,7 +213,7 @@ def test_l_bond_boundaries_are_connected_symmetric_and_complete() -> None:
             parameters.bond_extension_height,
         ),
         (half_width - parameters.bond_extension_width, 0.0),
-        (parameters.cutout_half_width, 0.0),
+        (cutout_half_width, 0.0),
     )
     for actual, expected in zip(left.coords, expected_left):
         assert actual == pytest.approx(expected)
@@ -201,7 +221,7 @@ def test_l_bond_boundaries_are_connected_symmetric_and_complete() -> None:
         assert actual == pytest.approx(expected)
     assert model.pad_link_connection_length() == pytest.approx(
         parameters.flat_pad_width
-        - parameters.cutout_width
+        - 2.0 * cutout_half_width
         + 2.0 * parameters.bond_extension_height
     )
     assert isinstance(model.pad_link_interface, MultiLineString)
@@ -225,10 +245,13 @@ def test_external_pad_shell_remains_one_open_connected_chain() -> None:
     assert shell.is_simple
     assert not shell.is_ring
     assert tuple(shell.coords)[0] == pytest.approx(
-        (-model.parameters.cutout_half_width, 0.0)
+        (
+            -(0.5 * model.parameters.stem_width + model.parameters.void_width),
+            0.0,
+        )
     )
     assert tuple(shell.coords)[-1] == pytest.approx(
-        (model.parameters.cutout_half_width, 0.0)
+        (0.5 * model.parameters.stem_width + model.parameters.void_width, 0.0)
     )
 
 
@@ -240,7 +263,7 @@ def test_stem_height_does_not_change_outer_envelope(stem_height: float) -> None:
     assert changed.outer_pad_geometry.area == pytest.approx(
         reference.outer_pad_geometry.area
     )
-    assert changed.parameters.stem_tip_y == pytest.approx(-stem_height)
+    assert changed.stem_geometry.bounds[1] == pytest.approx(-stem_height)
 
 
 @pytest.mark.parametrize(
@@ -316,8 +339,10 @@ def test_limiting_clearance_cases(
 ) -> None:
     model = build_model(**overrides)
     parameters = model.parameters
+    cutout_width = parameters.stem_width + 2.0 * parameters.void_width
+    cutout_height = parameters.stem_height + parameters.void_height
     expected_area = (
-        parameters.cutout_width * parameters.cutout_height
+        cutout_width * cutout_height
         - parameters.stem_width * parameters.stem_height
     )
     assert model.classify_void() == classification
@@ -329,8 +354,14 @@ def test_limiting_clearance_cases(
 
 def test_material_area_decreases_only_by_visible_clearance() -> None:
     model = build_model(void_width=SIDE_CLEARANCE, void_height=BOTTOM_CLEARANCE)
+    parameters = model.parameters
+    void_area = (
+        (parameters.stem_width + 2.0 * parameters.void_width)
+        * (parameters.stem_height + parameters.void_height)
+        - parameters.stem_width * parameters.stem_height
+    )
     assert model.raw_material_geometry.area - model.material_geometry.area == pytest.approx(
-        model.parameters.void_area
+        void_area
     )
 
 
@@ -390,20 +421,3 @@ def test_generated_domains_are_valid_and_connected(overrides: dict[str, float]) 
     assert model.material_geometry.is_valid
     assert model.is_material_connected()
     model.validate_geometry()
-
-
-def test_summary_is_internally_consistent() -> None:
-    model = build_model(void_width=SIDE_CLEARANCE, void_height=BOTTOM_CLEARANCE)
-    summary = model.summary()
-    assert summary["void_classification"] == "u_clearance"
-    assert summary["cutout_width"] == pytest.approx(model.parameters.cutout_width)
-    assert summary["cutout_height"] == pytest.approx(model.parameters.cutout_height)
-    assert summary["bond_extension_width"] == pytest.approx(
-        model.parameters.bond_extension_width
-    )
-    assert summary["total_pad_depth"] == pytest.approx(model.parameters.total_pad_depth)
-    assert summary["void_area"] == pytest.approx(model.parameters.void_area)
-    assert summary["material_area"] == pytest.approx(model.material_geometry.area)
-    assert summary["material_connected"] is True
-    assert summary["geometry_valid"] is True
-    assert set(summary["boundary_tags"]) == set(model.boundaries.segments)

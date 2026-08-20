@@ -10,11 +10,12 @@ from typing import Callable, Literal, Mapping
 from ax.api.client import Client
 from ax.api.configs import RangeParameterConfig
 
+from mesh.volume3d import VolumeMeshDependencyError
 from model import InvalidFingertipParameters
+from physics import PhysicsDependencyError
 from optics.transport3d import Transport3DDependencyError
 from optimization.design_space import (
     DesignSpace,
-    PRODUCTION_LINEAR_PARAMETER_CONSTRAINTS,
 )
 from optimization.evaluation_registry import (
     EvaluationRegistry,
@@ -25,6 +26,12 @@ AX_OBJECTIVE_NAME = "minimum_auc"
 CONTACT_STATE_SEPARATION_OBJECTIVE_NAME = "contact_state_separation"
 MAX_CONSECUTIVE_KNOWN_PROPOSALS = 20
 OPTIX_RUNTIME_FAILURE_SIGNATURE = "optix-runtime-initialization"
+GMSH_RUNTIME_FAILURE_SIGNATURE = "gmsh-runtime-initialization"
+PHYSICS_RUNTIME_FAILURE_SIGNATURE = "newton-warp-runtime-initialization"
+PRODUCTION_LINEAR_PARAMETER_CONSTRAINTS: tuple[str, ...] = (
+    "flat_pad_height + semielliptical_pad_height <= 30.0",
+    "stem_width + 2*void_width <= 20.0",
+)
 AxTrialPhase = Literal["nominal", "initialization", "search"]
 
 
@@ -167,7 +174,7 @@ def create_ax_client(study: object, settings: AxSettings) -> Client:
 
     parameters = [
         RangeParameterConfig(
-            name=variable.name,
+            name=variable.name.value,
             bounds=(variable.lower, variable.upper),
             parameter_type="float",
         )
@@ -211,14 +218,6 @@ def _evaluation_objective_value(
 
 def _mark_failed(client: Client, trial_index: int, message: str) -> None:
     client.mark_trial_failed(trial_index=trial_index, failed_reason=message)
-
-
-def _attempt_mark_failed(client: Client, trial_index: int, message: str) -> None:
-    """Preserve an unexpected exception if Ax failure reporting also fails."""
-    try:
-        _mark_failed(client, trial_index, message)
-    except Exception:
-        pass
 
 
 def _duplicate_record(
@@ -355,11 +354,24 @@ def _evaluate_trial(
         raise
     except Exception as exc:
         if isinstance(exc, Transport3DDependencyError):
+            client.mark_trial_abandoned(trial_index=trial_index)
             raise CampaignInfrastructureError(
                 f"{type(exc).__name__}: {exc}",
                 signature=OPTIX_RUNTIME_FAILURE_SIGNATURE,
             ) from exc
-        _attempt_mark_failed(client, trial_index, f"{type(exc).__name__}: {exc}")
+        if isinstance(exc, VolumeMeshDependencyError):
+            client.mark_trial_abandoned(trial_index=trial_index)
+            raise CampaignInfrastructureError(
+                f"{type(exc).__name__}: {exc}",
+                signature=GMSH_RUNTIME_FAILURE_SIGNATURE,
+            ) from exc
+        if isinstance(exc, PhysicsDependencyError):
+            client.mark_trial_abandoned(trial_index=trial_index)
+            raise CampaignInfrastructureError(
+                f"{type(exc).__name__}: {exc}",
+                signature=PHYSICS_RUNTIME_FAILURE_SIGNATURE,
+            ) from exc
+        client.mark_trial_abandoned(trial_index=trial_index)
         raise
 
 
@@ -644,8 +656,10 @@ __all__ = [
     "AX_OBJECTIVE_NAME",
     "CONTACT_STATE_SEPARATION_OBJECTIVE_NAME",
     "CampaignInfrastructureError",
+    "GMSH_RUNTIME_FAILURE_SIGNATURE",
     "MAX_CONSECUTIVE_KNOWN_PROPOSALS",
     "OPTIX_RUNTIME_FAILURE_SIGNATURE",
+    "PHYSICS_RUNTIME_FAILURE_SIGNATURE",
     "AxRunResult",
     "AxSettings",
     "AxTrialPhase",

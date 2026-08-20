@@ -1,4 +1,4 @@
-"""Newton 1.4 VBD backend for the isolated physics prototype."""
+"""Newton 1.4 VBD backend for production mechanics execution."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ import newton
 from shapely import wkt as shapely_wkt
 from shapely.geometry import Point
 
-from physics.solve import NewtonSettings
+from physics.solve import NewtonSettings, PhysicsDependencyError
 from physics.load import ParticleLoad
 from physics.types import NewtonResult, TetMeshData
 from physics.fingertip import PreparedFingertipMesh
@@ -22,10 +22,9 @@ from physics.indentation import (
     IndentationSettings,
     IndentationTrajectoryResult,
     RigidIndenter3D,
-    RigidPose3D,
     checkpoint_step_schedule,
 )
-from mesh.rigid_object import RigidObjectMesh
+from mesh.rigid_object import RigidObjectMesh, RigidPose3D
 
 if TYPE_CHECKING:
     from contact.first_contact import FirstContactResult
@@ -36,6 +35,30 @@ if TYPE_CHECKING:
 # corresponding per-body lists skip kinematic bodies in Newton 1.4.
 _RIGID_BODY_PARTICLE_CONTACT_BUFFER_SIZE = 1024
 _RIGID_CONTACT_BUFFER_SIZE = 64
+
+
+def _require_cuda_device(device_name: str):
+    """Initialize Warp and require the configured CUDA device."""
+
+    try:
+        wp.init()
+        if not wp.is_device_available(device_name):
+            raise PhysicsDependencyError(
+                f"CUDA device {device_name!r} is not available"
+            )
+        device = wp.get_device(device_name)
+    except PhysicsDependencyError:
+        raise
+    except (ImportError, OSError, RuntimeError) as exc:
+        raise PhysicsDependencyError(
+            "Warp/CUDA runtime could not initialize: "
+            f"{type(exc).__name__}: {exc}"
+        ) from exc
+    if not device.is_cuda:
+        raise PhysicsDependencyError(
+            f"physics requires a CUDA device, received {device_name!r}"
+        )
+    return device
 
 
 @wp.kernel
@@ -216,12 +239,7 @@ def _contact_shape_counts(context: _IndentationContext) -> tuple[int, int, int, 
 
 
 def _build_vbd_context(mesh: TetMeshData, settings: NewtonSettings):
-    wp.init()
-    if not wp.is_device_available(settings.device):
-        raise RuntimeError(f"CUDA device {settings.device!r} is not available")
-    device = wp.get_device(settings.device)
-    if not device.is_cuda:
-        raise ValueError("physics requires a CUDA device, for example cuda:0")
+    device = _require_cuda_device(settings.device)
     if any(index >= mesh.vertices.shape[0] for index in settings.fixed_vertex_indices):
         raise ValueError("fixed_vertex_indices contain an out-of-range vertex")
 
@@ -385,14 +403,7 @@ def _build_indentation_context(
     if not isinstance(initial_pose, RigidPose3D):
         raise TypeError("initial_pose must be RigidPose3D or None")
 
-    wp.init()
-    if not wp.is_device_available(mechanics_settings.device):
-        raise RuntimeError(
-            f"CUDA device {mechanics_settings.device!r} is not available"
-        )
-    device = wp.get_device(mechanics_settings.device)
-    if not device.is_cuda:
-        raise ValueError("physics requires a CUDA device, for example cuda:0")
+    device = _require_cuda_device(mechanics_settings.device)
 
     configured_support = tuple(sorted(mechanics_settings.fixed_vertex_indices))
     authoritative_support = tuple(sorted(prepared_fingertip.support_vertex_indices))
@@ -1021,7 +1032,7 @@ def solve_newton_vbd_indentation(
     rigid_carrier_mesh: RigidObjectMesh | None = None,
     first_contact: FirstContactResult | None = None,
 ) -> IndentationResult:
-    """Compatibility wrapper returning the final checkpoint only."""
+    """Run one indentation path and return its final checkpoint."""
 
     trajectory = _solve_newton_vbd_indentation_path(
         prepared_fingertip,
@@ -1146,12 +1157,7 @@ def solve_newton_vbd_prescribed(
 
     # Device initialization is deliberately outside the reported mechanics
     # interval.  All actual model/solver GPU work is synchronized below.
-    wp.init()
-    if not wp.is_device_available(settings.device):
-        raise RuntimeError(f"CUDA device {settings.device!r} is not available")
-    device = wp.get_device(settings.device)
-    if not device.is_cuda:
-        raise ValueError("physics requires a CUDA device, for example cuda:0")
+    device = _require_cuda_device(settings.device)
     wp.synchronize_device(device)
     mechanics_start = time.perf_counter()
     build_start = mechanics_start

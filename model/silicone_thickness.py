@@ -21,9 +21,8 @@ from shapely.ops import nearest_points
 from model.fingertip_parameters import (
     FingertipParameters,
     InvalidFingertipParameters,
+    PRODUCTION_MINIMUM_SILICONE_THICKNESS_MM,
 )
-
-PRODUCTION_MINIMUM_SILICONE_THICKNESS_MM = 5.0
 
 
 @dataclass(frozen=True)
@@ -38,6 +37,15 @@ class SiliconeThicknessMeasures:
     shortest_segment_end_mm: tuple[float, float] = (0.0, 0.0)
 
 
+@dataclass(frozen=True)
+class _BoundarySegment:
+    """Named boundary segment used by the thickness calculation."""
+
+    name: str
+    start: tuple[float, float]
+    end: tuple[float, float]
+
+
 def _corner_to_semiellipse_distance_mm(parameters: FingertipParameters) -> float:
     """Return minimum Euclidean distance from the void corner to the lower semiellipse.
 
@@ -50,8 +58,8 @@ def _corner_to_semiellipse_distance_mm(parameters: FingertipParameters) -> float
 
     a = 0.5 * parameters.flat_pad_width
     b = parameters.semielliptical_pad_height
-    px = parameters.cutout_half_width
-    py = -parameters.cutout_height
+    px = 0.5 * parameters.stem_width + parameters.void_width
+    py = -(parameters.stem_height + parameters.void_height)
     h_fp = parameters.flat_pad_height
 
     def squared(theta: float) -> float:
@@ -193,28 +201,42 @@ def _straight_segment_minimum(
 def silicone_thickness_measures(
     parameters: FingertipParameters,
 ) -> SiliconeThicknessMeasures:
-    """Return legacy diagnostics plus the true relevant-boundary minimum."""
+    """Return relevant-boundary thickness diagnostics and global d_min."""
 
     if not isinstance(parameters, FingertipParameters):
         raise TypeError("parameters must be FingertipParameters")
-    side = 0.5 * parameters.flat_pad_width - parameters.cutout_half_width
+    cutout_half_width = 0.5 * parameters.stem_width + parameters.void_width
+    cutout_height = parameters.stem_height + parameters.void_height
+    side = 0.5 * parameters.flat_pad_width - cutout_half_width
     diagonal = _corner_to_semiellipse_distance_mm(parameters)
     half_width = 0.5 * parameters.flat_pad_width
-    cutout = parameters.cutout_half_width
-    cutout_bottom = -parameters.cutout_height
+    cutout = cutout_half_width
+    cutout_bottom = -cutout_height
     outer_bottom = -parameters.flat_pad_height
     internal_segments = (
-        ("pad_cutout_left", (-cutout, 0.0), (-cutout, cutout_bottom)),
-        ("pad_cutout_right", (cutout, 0.0), (cutout, cutout_bottom)),
-        (
+        _BoundarySegment(
+            "pad_cutout_left", (-cutout, 0.0), (-cutout, cutout_bottom)
+        ),
+        _BoundarySegment(
+            "pad_cutout_right", (cutout, 0.0), (cutout, cutout_bottom)
+        ),
+        _BoundarySegment(
             "pad_cutout_bottom",
             (-cutout, cutout_bottom),
             (cutout, cutout_bottom),
         ),
     )
     external_segments = (
-        ("pad_outer_left", (-half_width, parameters.bond_extension_height), (-half_width, outer_bottom)),
-        ("pad_outer_right", (half_width, outer_bottom), (half_width, parameters.bond_extension_height)),
+        _BoundarySegment(
+            "pad_outer_left",
+            (-half_width, parameters.bond_extension_height),
+            (-half_width, outer_bottom),
+        ),
+        _BoundarySegment(
+            "pad_outer_right",
+            (half_width, outer_bottom),
+            (half_width, parameters.bond_extension_height),
+        ),
     )
     best_distance = float("inf")
     best_pair = ""
@@ -233,24 +255,24 @@ def silicone_thickness_measures(
             best_start = start
             best_end = end
 
-    for internal_name, internal_start, internal_end in internal_segments:
-        for external_name, external_start, external_end in external_segments:
+    for internal in internal_segments:
+        for external in external_segments:
             consider(
-                f"{internal_name}__{external_name}",
+                f"{internal.name}__{external.name}",
                 _straight_segment_minimum(
-                    internal_start,
-                    internal_end,
-                    external_start,
-                    external_end,
+                    internal.start,
+                    internal.end,
+                    external.start,
+                    external.end,
                 ),
             )
         ellipse_distance, internal_point, ellipse_point = _ellipse_to_segment_minimum(
             parameters,
-            internal_start,
-            internal_end,
+            internal.start,
+            internal.end,
         )
         consider(
-            f"{internal_name}__pad_outer_arc",
+            f"{internal.name}__pad_outer_arc",
             (ellipse_distance, internal_point, ellipse_point),
         )
     if abs(best_distance - diagonal) <= 1.0e-12:

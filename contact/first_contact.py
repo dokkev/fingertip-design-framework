@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 from shapely.geometry import LineString, Point
 
-from physics.indentation import RigidPose3D
-from mesh.rigid_object import RigidObjectMesh
+from mesh.rigid_object import RigidObjectMesh, RigidPose3D
+from model.fingertip_model import FingertipModel
 from model.solid import FingertipSolid
 
 
@@ -178,6 +179,39 @@ def intersects(
     return bool(distance_mm <= radius + 1.0e-12)
 
 
+def unintended_boundary_clearance_mm(
+    model: FingertipModel,
+    alignment: Any,
+    first_contact: FirstContactResult,
+    *,
+    samples: int = 256,
+) -> float:
+    """Measure clearance to non-arc boundaries along the approach path."""
+
+    if not isinstance(model, FingertipModel):
+        raise TypeError("model must be FingertipModel")
+    if not isinstance(first_contact, FirstContactResult):
+        raise TypeError("first_contact must be FirstContactResult")
+    if not isinstance(samples, int) or isinstance(samples, bool) or samples < 2:
+        raise ValueError("samples must be an integer of at least 2")
+    radius = float(alignment.radius_mm)
+    reference = np.asarray(alignment.nominal_pose.translation_mm, dtype=float)
+    direction = np.asarray(alignment.approach_direction, dtype=float)
+    other_segments = tuple(
+        segment.geometry
+        for name, segment in model.boundaries.segments.items()
+        if name != "pad_outer_arc"
+    )
+    clearances: list[float] = []
+    for travel in np.linspace(0.0, first_contact.travel_to_contact_mm, samples):
+        center = reference + float(travel) * direction
+        point = Point(float(center[0]), float(center[1]))
+        clearances.extend(
+            float(segment.distance(point) - radius) for segment in other_segments
+        )
+    return float(min(clearances))
+
+
 def _pose_at_travel(
     reference_pose: RigidPose3D,
     approach_direction: np.ndarray,
@@ -266,4 +300,5 @@ __all__ = [
     "find_first_contact",
     "intersects",
     "make_outer_compliant_surface",
+    "unintended_boundary_clearance_mm",
 ]

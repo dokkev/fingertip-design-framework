@@ -22,11 +22,11 @@ from physics import (
     IndentationSettings,
     NewtonSettings,
     RigidIndenter3D,
-    RigidPose3D,
     make_fingertip_volume_state,
     prepare_fingertip_mesh,
     solve_fingertip_indentation,
 )
+from mesh.rigid_object import RigidPose3D
 from physics.newton_vbd import solve_newton_vbd_indentation
 from mesh.rigid_carrier import make_distal_phalanx_mesh
 from mesh.rigid_object import make_box_mesh, make_cylinder_mesh, make_sphere_mesh

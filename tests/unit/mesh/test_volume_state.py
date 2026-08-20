@@ -16,10 +16,10 @@ from model import Fingertip
 def search_mesh():
     tip = Fingertip()
     settings = volume_mesh_settings_for_tier("search")
-    return tip, tip.volume_mesh(settings)
+    return tip, generate_volume_mesh(tip.solid(), settings)
 
 
-def test_facade_matches_manual_volume_mesh_generation(search_mesh) -> None:
+def test_direct_volume_mesh_matches_repeated_generation(search_mesh) -> None:
     tip, facade_mesh = search_mesh
     manual_mesh = generate_volume_mesh(tip.solid(), volume_mesh_settings_for_tier("search"))
 

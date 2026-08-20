@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
-from importlib import import_module
 import json
 from pathlib import Path
 import time
@@ -14,9 +13,11 @@ import numpy as np
 
 from physics import (
     InvalidFingertipMesh,
+    PhysicsDependencyError,
     prepare_fingertip_mesh,
 )
 from mesh import volume_mesh_settings_for_tier
+from mesh.volume3d import generate_volume_mesh
 from mesh.volume3d import VolumeMeshDependencyError, VolumeMeshingError
 from model import (
     Fingertip,
@@ -47,7 +48,7 @@ from optimization.design_space import (
     DesignVariable,
     OPTIMIZABLE_PARAMETER_NAMES,
 )
-from validation.physics.deformed_state_artifact import restore_deformed_optical_state
+from optimization.deformed_state_artifact import restore_deformed_optical_state
 from validation.physics.multi_location_sphere_contact import (
     DEFAULT_LOCATION_U,
     DEFAULT_RADIUS_MM,
@@ -59,7 +60,7 @@ from validation.physics.multi_location_sphere_contact import (
     VALIDATION_VBD_ITERATIONS,
     run_multi_location_sphere_contact,
 )
-from validation.optimization.lumo3d_common import (
+from optimization.evaluator_support import (
     LUMO3D_OPTICAL_X_BOUNDS_MM,
     LUMO3D_OPTICAL_Y_BOUNDS_MM,
     candidate_id as make_candidate_id,
@@ -183,7 +184,7 @@ def _contact_state(
 class Lumo3DEvaluation:
     """Ax-compatible result without aliasing the 3D score to ``minimum_auc``."""
 
-    status: Literal["success", "invalid_design", "mesh_failure", "fea_failure", "optics_failure"]
+    status: Literal["success", "invalid_design", "mesh_failure", "mechanics_failure", "optics_failure"]
     objective_value: float | None
     pairwise_distance_matrix: tuple[tuple[float | None, ...], ...]
     contact_states: tuple[Mapping[str, Any], ...]
@@ -198,7 +199,7 @@ class Lumo3DEvaluation:
 
 
 def _failure(
-    status: Literal["invalid_design", "mesh_failure", "fea_failure", "optics_failure"],
+    status: Literal["invalid_design", "mesh_failure", "mechanics_failure", "optics_failure"],
     message: str,
     *,
     diagnostics: Mapping[str, Any] | None = None,
@@ -277,7 +278,10 @@ class Lumo3DEvaluator:
             self._validate_mechanics(mechanics_records)
             mechanics_runtime_s = time.perf_counter() - evaluation_started
 
-            volume_mesh = tip.volume_mesh(volume_mesh_settings_for_tier("search"))
+            volume_mesh = generate_volume_mesh(
+                tip.solid(),
+                volume_mesh_settings_for_tier("search"),
+            )
             prepared = prepare_fingertip_mesh(volume_mesh)
             material = make_material(tip)
             configuration = transport_configuration(
@@ -442,15 +446,15 @@ class Lumo3DEvaluator:
                 optical_diagnostics=tuple(optical_records),
                 diagnostics=summary,
             )
-        except Transport3DDependencyError:
+        except (
+            Transport3DDependencyError,
+            VolumeMeshDependencyError,
+            PhysicsDependencyError,
+        ):
             raise
         except (InvalidFingertip, InvalidFingertipParameters) as exc:
             return _failure("invalid_design", f"{type(exc).__name__}: {exc}")
-        except (
-            VolumeMeshDependencyError,
-            VolumeMeshingError,
-            InvalidFingertipMesh,
-        ) as exc:
+        except (VolumeMeshingError, InvalidFingertipMesh) as exc:
             return _failure("mesh_failure", f"{type(exc).__name__}: {exc}")
         except (
             Transport3DGeometryError,
@@ -459,9 +463,6 @@ class Lumo3DEvaluator:
             Transport3DTraceError,
         ) as exc:
             return _failure("optics_failure", f"{type(exc).__name__}: {exc}", diagnostics={"failure_stage": stage})
-        except Exception as exc:
-            status = "optics_failure" if stage == "optics" else "fea_failure"
-            return _failure(status, f"{type(exc).__name__}: {exc}", diagnostics={"failure_stage": stage})
 
     @staticmethod
     def _validate_mechanics(records: tuple[Mapping[str, Any], ...]) -> None:
@@ -530,26 +531,4 @@ __all__ = [
     "Lumo3DEvaluator",
     "Lumo3DStudy",
     "create_lumo3d_study",
-]
-
-def __getattr__(name: str):
-    """Lazily expose the configurable evaluator beside the legacy path."""
-
-    if name in {
-        "Lumo3DTrajectoryEvaluation",
-        "Lumo3DTrajectoryEvaluator",
-        "Lumo3DTrajectoryStudy",
-        "create_lumo3d_trajectory_study",
-    }:
-        module = import_module("validation.optimization.lumo3d_trajectory_evaluator")
-        value = getattr(module, name)
-        globals()[name] = value
-        return value
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
-__all__ += [
-    "Lumo3DTrajectoryEvaluation",
-    "Lumo3DTrajectoryEvaluator",
-    "Lumo3DTrajectoryStudy",
-    "create_lumo3d_trajectory_study",
 ]

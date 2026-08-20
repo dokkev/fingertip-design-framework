@@ -95,7 +95,7 @@ def test_exact_key_uses_lossless_float_hex_without_nearby_deduplication(
     _register(
         registry,
         first,
-        status="fea_failure",
+        status="mechanics_failure",
         trial_index=0,
         minimum_auc=None,
     )
@@ -120,7 +120,7 @@ def test_registry_never_overwrites_an_existing_exact_result(tmp_path) -> None:
         _register(
             registry,
             MORPHOLOGY,
-            status="fea_failure",
+            status="mechanics_failure",
             trial_index=2,
             minimum_auc=None,
         )
@@ -130,7 +130,7 @@ def test_registry_never_overwrites_an_existing_exact_result(tmp_path) -> None:
     ("status", "minimum_auc", "message"),
     [
         ("success", None, "requires minimum_auc"),
-        ("fea_failure", 0.2, "must not carry minimum_auc"),
+        ("mechanics_failure", 0.2, "must not carry minimum_auc"),
         ("unknown", None, "unsupported registry status"),
     ],
 )

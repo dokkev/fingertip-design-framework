@@ -25,6 +25,7 @@ from mesh.volume_types import (
 )
 from mesh.volume_state import FingertipVolumeState, make_fingertip_volume_state
 from mesh.rigid_object import (
+    RigidPose3D,
     RigidObjectMesh,
     make_box_mesh,
     make_cube_mesh,
@@ -55,6 +56,7 @@ __all__ = [
     "FingertipVolumeState",
     "make_fingertip_volume_state",
     "RigidObjectMesh",
+    "RigidPose3D",
     "make_box_mesh",
     "make_cube_mesh",
     "make_cylinder_mesh",

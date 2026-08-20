@@ -67,9 +67,9 @@ def test_objective_compares_all_cross_location_states_and_radius_nuisance() -> N
                     TrajectoryObservation(location, radius, depth, field)
                 )
     result = compute_trajectory_objective(observations)
-    assert result["D_inter"] >= 0.0
-    assert result["D_radius"] >= 0.0
-    assert result["objective_value"] == pytest.approx(result["D_inter"] - result["D_radius"])
+    assert result.d_inter is not None and result.d_inter >= 0.0
+    assert result.d_radius is not None and result.d_radius >= 0.0
+    assert result.objective_value == pytest.approx(result.d_inter - result.d_radius)
 
 
 def test_one_radius_has_zero_radius_nuisance_term() -> None:
@@ -78,8 +78,8 @@ def test_one_radius_has_zero_radius_nuisance_term() -> None:
         TrajectoryObservation(0.50, 5.0, 1.0, np.array([0.0, 1.0])),
     ]
     result = compute_trajectory_objective(observations)
-    assert result["D_radius"] == 0.0
-    assert result["D_inter"] == normalized_field_distance(observations[0].field, observations[1].field)
+    assert result.d_radius == 0.0
+    assert result.d_inter == normalized_field_distance(observations[0].field, observations[1].field)
 
 
 def test_optimization_import_does_not_initialize_heavy_runtimes() -> None:

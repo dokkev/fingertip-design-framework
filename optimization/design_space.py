@@ -34,10 +34,6 @@ _OPTIMIZABLE_PARAMETER_SET = frozenset(OptimizableParameterName)
 _FIXED_FLAT_PAD_WIDTH_MM = 30.0
 PRODUCTION_MAX_TOTAL_PAD_DEPTH_MM = MAX_TOTAL_PAD_DEPTH_MM
 PRODUCTION_NOMINAL_VOID_HEIGHT_MM = 0.25
-PRODUCTION_LINEAR_PARAMETER_CONSTRAINTS: tuple[str, ...] = (
-    "flat_pad_height + semielliptical_pad_height <= 30.0",
-    "stem_width + 2*void_width <= 20.0",
-)
 
 
 def _finite_real(name: str, value: object) -> float:
@@ -202,9 +198,7 @@ class DesignSpace:
             **updates,
             flat_pad_width=_FIXED_FLAT_PAD_WIDTH_MM,
         )
-        # Invalid candidates fail here, before meshing/mechanics/optics. The
-        # Legacy side/distal ligament measures remain diagnostics; they are not
-        # allowed to replace or silently tighten the production d_min contract.
+        # Invalid candidates fail here, before meshing/mechanics/optics.
         validate_minimum_silicone_thickness(
             candidate,
             minimum_mm=PRODUCTION_MINIMUM_SILICONE_THICKNESS_MM,
@@ -232,7 +226,6 @@ __all__ = [
     "ParameterSpec",
     "OPTIMIZABLE_PARAMETER_NAMES",
     "PRODUCTION_SEARCH_BOUNDS",
-    "PRODUCTION_LINEAR_PARAMETER_CONSTRAINTS",
     "PRODUCTION_MAX_TOTAL_PAD_DEPTH_MM",
     "PRODUCTION_NOMINAL_VOID_HEIGHT_MM",
     "OptimizableParameterName",

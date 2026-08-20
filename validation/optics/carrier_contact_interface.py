@@ -18,7 +18,10 @@ from typing import Any, Iterable
 import numpy as np
 
 from physics import prepare_fingertip_mesh
+from mesh.fingertip import generate_fingertip_mesh
 from mesh import FingertipVolumeState, volume_mesh_settings_for_tier
+from mesh.types import mesh_settings_for_level
+from mesh.volume3d import generate_volume_mesh
 from model import Fingertip, FingertipParameters
 from optics.contact_object import CarrierOptics
 from optics.transport3d import (
@@ -31,7 +34,7 @@ from optics.transport3d import (
     transport_configuration,
 )
 from optics.transport3d.optix_backend import create_runtime
-from validation.physics.deformed_state_artifact import (
+from optimization.deformed_state_artifact import (
     restore_deformed_optical_state,
 )
 from validation.physics.multi_location_sphere_contact import (
@@ -183,7 +186,10 @@ def _trace_bundle(
     legacy_geometry = build_fingertip_volume_state_geometry(
         tip,
         restored.state,
-        reference_mesh=tip.mesh(),
+        reference_mesh=generate_fingertip_mesh(
+            tip.geometry,
+            mesh_settings_for_level("medium"),
+        ),
         metadata={
             "contact_state_fingerprint": contact_state["contact_state_fingerprint"],
             "carrier_mapping_tolerance_mm": mapping_tolerance_mm,
@@ -363,7 +369,10 @@ def run_validation(
         raise ValueError("travels_mm must contain three positive values")
     parameters = FingertipParameters(void_height=float(void_height_mm))
     tip = Fingertip(parameters)
-    volume_mesh = tip.volume_mesh(volume_mesh_settings_for_tier("search"))
+    volume_mesh = generate_volume_mesh(
+        tip.solid(),
+        volume_mesh_settings_for_tier("search"),
+    )
     prepared = prepare_fingertip_mesh(volume_mesh)
     runtime = create_runtime()
     settings = _settings(ray_count=ray_count)

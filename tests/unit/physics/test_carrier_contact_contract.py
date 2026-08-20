@@ -33,7 +33,9 @@ def test_positive_void_height_preserves_support_bonds_and_free_void_bottom() -> 
     assert void_bottom.isdisjoint(support)
     assert all(
         prepared.tet_mesh.vertices[index, 1]
-        == pytest.approx(fingertip.parameters.void_bottom_y)
+        == pytest.approx(
+            -(fingertip.parameters.stem_height + fingertip.parameters.void_height)
+        )
         for index in void_bottom
     )
 

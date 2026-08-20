@@ -46,6 +46,7 @@ from physics import (
     solve_fingertip_indentation,
 )
 from mesh import make_distal_phalanx_mesh, make_sphere_mesh
+from mesh.volume3d import generate_volume_mesh
 from mesh.volume_types import volume_mesh_settings_for_tier
 from model import Fingertip, FingertipParameters
 
@@ -679,7 +680,10 @@ def run_validation(
         cached = mesh_cache.get(parameters)
         if cached is None:
             fingertip = Fingertip(parameters)
-            volume_mesh = fingertip.volume_mesh(volume_mesh_settings_for_tier("search"))
+            volume_mesh = generate_volume_mesh(
+                fingertip.solid(),
+                volume_mesh_settings_for_tier("search"),
+            )
             prepared = prepare_fingertip_mesh(volume_mesh)
             carrier = make_distal_phalanx_mesh(volume_mesh.solid)
             cached = (volume_mesh, prepared, carrier)

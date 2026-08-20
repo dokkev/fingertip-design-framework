@@ -9,7 +9,6 @@ from optimization.design_space import (
     OPTIMIZABLE_PARAMETER_NAMES,
     OptimizableParameterName,
     ParameterSpec,
-    PRODUCTION_LINEAR_PARAMETER_CONSTRAINTS,
     PRODUCTION_MAX_TOTAL_PAD_DEPTH_MM,
     PRODUCTION_NOMINAL_VOID_HEIGHT_MM,
     PRODUCTION_SEARCH_BOUNDS,
@@ -23,6 +22,7 @@ from optimization.objectives import (
     OBJECTIVE_NAME,
     TrajectoryObjectiveConfig,
     TrajectoryObservation,
+    TrajectoryObjectiveResult,
     compute_trajectory_objective,
     normalized_field_distance,
 )
@@ -44,7 +44,6 @@ __all__ = [
     "OPTIMIZABLE_PARAMETER_NAMES",
     "OptimizableParameterName",
     "ParameterSpec",
-    "PRODUCTION_LINEAR_PARAMETER_CONSTRAINTS",
     "PRODUCTION_MAX_TOTAL_PAD_DEPTH_MM",
     "PRODUCTION_NOMINAL_VOID_HEIGHT_MM",
     "PRODUCTION_SEARCH_BOUNDS",
@@ -52,6 +51,7 @@ __all__ = [
     "TrajectoryEvaluationProtocol",
     "TrajectoryObjectiveConfig",
     "TrajectoryObservation",
+    "TrajectoryObjectiveResult",
     "compute_trajectory_objective",
     "normalized_field_distance",
 ]

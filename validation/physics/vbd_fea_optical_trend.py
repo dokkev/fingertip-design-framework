@@ -30,6 +30,8 @@ from physics import (
     make_fingertip_volume_state as make_vbd_volume_state,
     prepare_fingertip_mesh,
 )
+from mesh.fingertip import generate_fingertip_mesh
+from mesh.types import mesh_settings_for_level
 from mesh.volume3d import generate_volume_mesh
 from mesh.volume_types import volume_mesh_settings_for_tier
 from model.fingertip import Fingertip
@@ -381,7 +383,10 @@ def _prepare_candidate(group: Mapping[str, Any], morphology_id: str) -> dict[str
         volume_mesh_settings_for_tier("search"),
     )
     prepared = prepare_fingertip_mesh(volume_mesh)
-    reference_mesh = tip.mesh()
+    reference_mesh = generate_fingertip_mesh(
+        tip.geometry,
+        mesh_settings_for_level("medium"),
+    )
     state: dict[str, Any] = {
         "morphology_id": morphology_id,
         "parameters": dict(sides["left"]["parameters"]),

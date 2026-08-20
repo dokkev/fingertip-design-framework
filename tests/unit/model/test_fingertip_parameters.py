@@ -27,9 +27,9 @@ def test_default_parameters_use_the_canonical_geometry_api() -> None:
     assert parameters.stem_height == 6.0
     assert parameters.void_width == 1.0
     assert parameters.void_height == 0.0
-    assert parameters.cutout_width == parameters.stem_width + 2.0
-    assert parameters.cutout_height == parameters.stem_height
-    assert parameters.void_area == 12.0
+    assert not hasattr(parameters, "cutout_width")
+    assert not hasattr(parameters, "cutout_height")
+    assert not hasattr(parameters, "void_area")
     assert parameters.young_modulus_mpa == 0.55
     assert parameters.poisson_ratio == 0.49
 
@@ -45,7 +45,7 @@ def test_link_and_ellipse_widths_are_not_constructor_parameters() -> None:
         FingertipParameters(**{_removed_width_name("semielliptical_pad"): 20.0})
 
 
-def test_derived_coordinates_and_dimensions_have_one_definition() -> None:
+def test_derived_coordinates_and_dimensions_are_not_parameter_attributes() -> None:
     parameters = FingertipParameters(
         flat_pad_height=5.0,
         semielliptical_pad_height=9.0,
@@ -56,14 +56,20 @@ def test_derived_coordinates_and_dimensions_have_one_definition() -> None:
         void_width=1.5,
         void_height=2.0,
     )
-    assert parameters.ellipse_start_y == pytest.approx(-5.0)
-    assert parameters.stem_tip_y == pytest.approx(-7.0)
-    assert parameters.void_bottom_y == pytest.approx(-9.0)
-    assert parameters.pad_tip_y == pytest.approx(-14.0)
-    assert parameters.cutout_width == pytest.approx(9.0)
-    assert parameters.cutout_half_width == pytest.approx(4.5)
-    assert parameters.cutout_height == pytest.approx(9.0)
-    assert parameters.total_pad_depth == pytest.approx(14.0)
+    for name in (
+        "ellipse_start_y",
+        "stem_tip_y",
+        "void_bottom_y",
+        "pad_tip_y",
+        "total_pad_depth",
+        "cutout_width",
+        "cutout_half_width",
+        "cutout_height",
+        "cutout_depth",
+        "bonded_segment_length",
+        "void_area",
+    ):
+        assert not hasattr(parameters, name)
 
 
 @pytest.mark.parametrize(
@@ -105,12 +111,12 @@ def test_extensions_and_cutout_must_fit_within_the_full_width() -> None:
 
 def test_cutout_inside_flat_region_is_valid() -> None:
     parameters = FingertipParameters(stem_height=2.0)
-    assert parameters.cutout_height <= parameters.flat_pad_height
+    assert parameters.stem_height + parameters.void_height <= parameters.flat_pad_height
 
 
 def test_cutout_penetrating_semiellipse_can_remain_inside() -> None:
     parameters = FingertipParameters()
-    assert parameters.cutout_height > parameters.flat_pad_height
+    assert parameters.stem_height + parameters.void_height > parameters.flat_pad_height
 
 
 def test_cutout_too_deep_for_semiellipse_is_rejected() -> None:

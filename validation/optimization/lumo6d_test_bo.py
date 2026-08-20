@@ -20,28 +20,33 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
+from mesh.volume3d import VolumeMeshDependencyError
 from model import FingertipParameters, silicone_thickness_measures
-from optics.transport3d import fingerprint_mapping
+from optics.transport3d import Transport3DDependencyError, fingerprint_mapping
 from optics.optix.smoke import run_production_optix_smoke
 from optimization.ax_adapter import (
     AxSettings,
     CONTACT_STATE_SEPARATION_OBJECTIVE_NAME,
     CampaignInfrastructureError,
+    GMSH_RUNTIME_FAILURE_SIGNATURE,
+    OPTIX_RUNTIME_FAILURE_SIGNATURE,
+    PHYSICS_RUNTIME_FAILURE_SIGNATURE,
+    PRODUCTION_LINEAR_PARAMETER_CONSTRAINTS,
     create_ax_client,
     run_ax_optimization,
 )
 from optimization.design_space import (
     OPTIMIZABLE_PARAMETER_NAMES,
-    PRODUCTION_LINEAR_PARAMETER_CONSTRAINTS,
     PRODUCTION_SEARCH_BOUNDS,
 )
+from physics import PhysicsDependencyError
 from optimization.evaluation_registry import EvaluationRegistry, REGISTRY_SCHEMA_VERSION
-from validation.optimization.lumo3d_common import (
+from optimization.evaluator_support import (
     LUMO3D_OBSERVATION_LEVEL,
     LUMO3D_OPTICAL_X_BOUNDS_MM,
     LUMO3D_OPTICAL_Y_BOUNDS_MM,
 )
-from validation.optimization.lumo3d_trajectory_evaluator import (
+from optimization.evaluator import (
     Lumo3DTrajectoryStudy,
     TRAJECTORY_EVALUATION_CONTRACT_ID,
     TRAJECTORY_EVALUATION_SCHEMA,
@@ -200,7 +205,8 @@ def _status_contract(status: str) -> str:
     return {
         "success": "valid_success",
         "invalid_design": "geometry_rejected",
-        "fea_failure": "mechanics_failed",
+        "domain_incompatible": "domain_incompatible",
+        "mechanics_failure": "mechanics_failed",
         "optics_failure": "optics_failed",
         "mesh_failure": "geometry_rejected",
         "duplicate_skipped": "duplicate_skipped",
@@ -270,7 +276,9 @@ def _trial_payload(
         "raw_status": record.status,
         **parameters,
         "total_pad_depth_mm": (
-            None if candidate is None else float(candidate.total_pad_depth)
+            None
+            if candidate is None
+            else float(candidate.flat_pad_height + candidate.semielliptical_pad_height)
         ),
         "minimum_silicone_thickness_mm": (
             None if measures is None else float(measures.minimum_silicone_thickness_mm)
@@ -279,11 +287,20 @@ def _trial_payload(
             None if measures is None else measures.shortest_boundary_pair
         ),
         "geometry_valid": status == "valid_success" or (
-            status not in {"geometry_rejected", "infrastructure_failed"}
+            status not in {
+                "geometry_rejected",
+                "domain_incompatible",
+                "infrastructure_failed",
+            }
             and candidate is not None
         ),
         "geometry_failure_reason": (
-            None if status not in {"geometry_rejected", "invalid_design"}
+            None
+            if status not in {
+                "geometry_rejected",
+                "domain_incompatible",
+                "invalid_design",
+            }
             else record.failure_message
         ),
         "objective": (
@@ -292,7 +309,11 @@ def _trial_payload(
         "pairwise_contact_state_distances": (
             None
             if evaluation is None
-            else getattr(evaluation, "objective", {}).get("all_pairwise_distances")
+            else getattr(
+                getattr(evaluation, "objective", None),
+                "all_pairwise_distances",
+                None,
+            )
         ),
         **mechanics,
         **optics,
@@ -539,8 +560,18 @@ def _diagnostics(
         )
     return {
         "successful_count": len(successful),
-        "geometry_valid_count": sum(item.get("status") != "geometry_rejected" for item in records),
+        "geometry_valid_count": sum(
+            item.get("status") not in {
+                "geometry_rejected",
+                "domain_incompatible",
+                "infrastructure_failed",
+            }
+            for item in records
+        ),
         "geometry_rejected_count": sum(item.get("status") == "geometry_rejected" for item in records),
+        "domain_incompatible_count": sum(
+            item.get("status") == "domain_incompatible" for item in records
+        ),
         "mechanics_failure_count": sum(item.get("status") == "mechanics_failed" for item in records),
         "optics_failure_count": sum(item.get("status") == "optics_failed" for item in records),
         "sobol_successful_count": len(sobol),
@@ -637,7 +668,25 @@ def run_lumo6d_test_bo(output_dir: str | Path = OUTPUT_DIRECTORY) -> dict[str, A
             for name in OPTIMIZABLE_PARAMETER_NAMES
         })
         nominal_started = time.perf_counter()
-        nominal_evaluation = nominal_evaluator.evaluate(study.design_space.nominal_parameters)
+        try:
+            nominal_evaluation = nominal_evaluator.evaluate(
+                study.design_space.nominal_parameters
+            )
+        except Transport3DDependencyError as exc:
+            raise CampaignInfrastructureError(
+                f"{type(exc).__name__}: {exc}",
+                signature=OPTIX_RUNTIME_FAILURE_SIGNATURE,
+            ) from exc
+        except VolumeMeshDependencyError as exc:
+            raise CampaignInfrastructureError(
+                f"{type(exc).__name__}: {exc}",
+                signature=GMSH_RUNTIME_FAILURE_SIGNATURE,
+            ) from exc
+        except PhysicsDependencyError as exc:
+            raise CampaignInfrastructureError(
+                f"{type(exc).__name__}: {exc}",
+                signature=PHYSICS_RUNTIME_FAILURE_SIGNATURE,
+            ) from exc
         nominal_record = type("NominalRecord", (), {
             "parameters": nominal_parameters,
             "phase": "nominal",
