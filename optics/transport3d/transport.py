@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
@@ -30,6 +31,68 @@ from optics.transport3d.physics import (
 from optics.transport3d.result import Transport3DResult
 from optics.transport3d.sampling import sample_directions
 from optics.transport3d.settings import Transport3DSettings
+
+
+@dataclass(frozen=True)
+class _RayBatch:
+    """State carried by active branches between transport events."""
+
+    origins: Any
+    directions: Any
+    weights: Any
+    media: Any
+    primary_indices: Any
+    interaction_counts: Any
+    path_lengths: Any
+    periodic_wraps: Any
+
+
+@dataclass(frozen=True)
+class _SegmentBatch:
+    """One batch of segments booked into the native path field."""
+
+    starts: Any
+    ends: Any
+    media: Any
+    start_weights: Any
+    end_weights: Any
+
+
+@dataclass(frozen=True)
+class _EscapeBatch:
+    """Escapes retained for surface diagnostics and downstream analysis."""
+
+    positions: Any
+    directions: Any
+    weights: Any
+    primary_indices: Any
+    path_lengths: Any
+    interaction_counts: Any
+    normals: Any
+    surface_u: Any
+    surface_z: Any
+    primitive_indices: Any
+
+
+@dataclass
+class _InternalPathAccumulator:
+    x_edges: np.ndarray
+    y_edges: np.ndarray
+    z_edges: np.ndarray
+    optical_mask: np.ndarray
+    density: np.ndarray
+    maximum_spacing: float
+    maximum_samples_per_segment: int = 32
+    processed_segments: int = 0
+
+
+@dataclass(frozen=True)
+class _InternalField:
+    x_edges: np.ndarray
+    y_edges: np.ndarray
+    z_edges: np.ndarray
+    density: np.ndarray
+    metadata: dict[str, Any]
 
 
 def _xy_edges(
@@ -85,7 +148,8 @@ def _concatenate(cp: Any, arrays: list[Any], *, dtype: Any, width: int | None = 
 
 def _surface_coordinates(
     cp: Any,
-    surface: Any,
+    u_start: Any,
+    u_end: Any,
     primitive: Any,
     barycentrics: Any,
     vertices: Any,
@@ -105,7 +169,7 @@ def _surface_coordinates(
     edge = second[:, :2] - first[:, :2]
     denominator = cp.sum(edge * edge, axis=1)
     along = cp.sum((points[:, :2] - first[:, :2]) * edge, axis=1) / cp.maximum(denominator, 1.0e-30)
-    u = surface.u_start[primitive] + along * (surface.u_end[primitive] - surface.u_start[primitive])
+    u = u_start[primitive] + along * (u_end[primitive] - u_start[primitive])
     return points, cp.clip(u, 0.0, 1.0), points[:, 2]
 
 
@@ -166,7 +230,7 @@ def _accumulate_segment_path_3d(
 def _new_internal_path_context(
     geometry: ExtrudedTransportGeometry,
     settings: Transport3DSettings,
- ) -> dict[str, Any]:
+ ) -> _InternalPathAccumulator:
     x_edges, y_edges, z_edges = _internal_field_edges(geometry, settings)
     # A direct 3D surface artifact has no authoritative 2D projection.  The
     # native accumulator therefore books every sampled transport segment.
@@ -183,58 +247,55 @@ def _new_internal_path_context(
         float(y_edges[1] - y_edges[0]),
         float(z_edges[1] - z_edges[0]),
     )
-    return {
-        "x_edges": x_edges,
-        "y_edges": y_edges,
-        "z_edges": z_edges,
-        "optical_mask": optical_mask,
-        "density": density,
-        "maximum_spacing": maximum_spacing,
-        "maximum_samples_per_segment": 32,
-        "processed_segments": 0,
-    }
+    return _InternalPathAccumulator(
+        x_edges=x_edges,
+        y_edges=y_edges,
+        z_edges=z_edges,
+        optical_mask=optical_mask,
+        density=density,
+        maximum_spacing=maximum_spacing,
+    )
 
 
 def _accumulate_internal_chunk(
-    context: dict[str, Any],
-    chunk: tuple[Any, Any, Any, Any, Any],
+    context: _InternalPathAccumulator,
+    chunk: _SegmentBatch,
     cp: Any,
 ) -> None:
-    starts, ends, _media, start_weights, end_weights = chunk
-    starts_np = cp.asnumpy(starts)
-    ends_np = cp.asnumpy(ends)
-    start_np = cp.asnumpy(start_weights)
-    end_np = cp.asnumpy(end_weights)
+    starts_np = cp.asnumpy(chunk.starts)
+    ends_np = cp.asnumpy(chunk.ends)
+    start_np = cp.asnumpy(chunk.start_weights)
+    end_np = cp.asnumpy(chunk.end_weights)
     if not len(starts_np):
         return
     displacement = ends_np - starts_np
     lengths = np.linalg.norm(displacement, axis=1)
     counts = np.maximum(
         1,
-        np.ceil(lengths / context["maximum_spacing"]).astype(np.int64),
+        np.ceil(lengths / context.maximum_spacing).astype(np.int64),
     )
-    counts = np.minimum(counts, context["maximum_samples_per_segment"])
+    counts = np.minimum(counts, context.maximum_samples_per_segment)
     sample_count = int(np.max(counts))
     sample_indices = np.arange(sample_count, dtype=float)[None, :]
     fractions = (sample_indices + 0.5) / counts[:, None]
     samples = starts_np[:, None, :] + fractions[:, :, None] * displacement[:, None, :]
-    x_indices = np.searchsorted(context["x_edges"], samples[:, :, 0], side="right") - 1
-    y_indices = np.searchsorted(context["y_edges"], samples[:, :, 1], side="right") - 1
-    z_indices = np.searchsorted(context["z_edges"], samples[:, :, 2], side="right") - 1
+    x_indices = np.searchsorted(context.x_edges, samples[:, :, 0], side="right") - 1
+    y_indices = np.searchsorted(context.y_edges, samples[:, :, 1], side="right") - 1
+    z_indices = np.searchsorted(context.z_edges, samples[:, :, 2], side="right") - 1
     valid = sample_indices < counts[:, None]
     valid &= (
         (x_indices >= 0)
-        & (x_indices < len(context["x_edges"]) - 1)
+        & (x_indices < len(context.x_edges) - 1)
         & (y_indices >= 0)
-        & (y_indices < len(context["y_edges"]) - 1)
+        & (y_indices < len(context.y_edges) - 1)
         & (z_indices >= 0)
-        & (z_indices < len(context["z_edges"]) - 1)
+        & (z_indices < len(context.z_edges) - 1)
     )
     if np.any(valid):
         valid_x = x_indices[valid]
         valid_y = y_indices[valid]
         valid_z = z_indices[valid]
-        inside = context["optical_mask"][valid_y, valid_x]
+        inside = context.optical_mask[valid_y, valid_x]
         if np.any(inside):
             representative_weight = 0.5 * (start_np + end_np)
             represented = representative_weight * lengths / counts
@@ -243,37 +304,23 @@ def _accumulate_internal_chunk(
                 valid.shape,
             )
             np.add.at(
-                context["density"],
+                context.density,
                 (valid_z[inside], valid_y[inside], valid_x[inside]),
                 contributions[valid][inside],
             )
-    context["processed_segments"] += len(starts_np)
-
-
-def _internal_path_density(
-    geometry: ExtrudedTransportGeometry,
-    settings: Transport3DSettings,
-    chunks: list[tuple[Any, Any, Any, Any, Any]],
-    cp: Any,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, dict[str, Any]]:
-    """Build the raw P3 field and its z-integrated bridge field."""
-    context = _new_internal_path_context(geometry, settings)
-    for starts, ends, _media, start_weights, end_weights in chunks:
-        _accumulate_internal_chunk(context, (starts, ends, _media, start_weights, end_weights), cp)
-    return _finalize_internal_path_context(context, settings)
+    context.processed_segments += len(starts_np)
 
 
 def _finalize_internal_path_context(
-    context: dict[str, Any],
+    context: _InternalPathAccumulator,
     settings: Transport3DSettings,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, dict[str, Any]]:
-    x_edges = context["x_edges"]
-    y_edges = context["y_edges"]
-    z_edges = context["z_edges"]
-    density = context["density"]
+) -> _InternalField:
+    x_edges = context.x_edges
+    y_edges = context.y_edges
+    z_edges = context.z_edges
+    density = context.density
     if not np.all(np.isfinite(density)) or np.any(density < 0.0):
         raise Transport3DTraceError("3D internal path field is non-finite or negative")
-    integrated = np.sum(density, axis=0)
     metadata = {
         "domain": {
             "x_min_mm": float(x_edges[0]),
@@ -290,16 +337,23 @@ def _finalize_internal_path_context(
         },
         "normalization": "raw weighted path length per voxel; no TV normalization",
         "z_integration": "sum of raw z-bin path masses; no extra width factor",
-        "segment_medium_scope": "air and silicone segments in the accessible optical domain, matching P2",
+        "segment_medium_scope": "air and silicone segments in the native FULL_3D field",
         "line_sampling": {
             "method": "deterministic segment midpoint sampling",
             "maximum_spacing_fraction_of_smallest_bin": 0.5,
-            "maximum_samples_per_segment": context["maximum_samples_per_segment"],
+            "maximum_samples_per_segment": context.maximum_samples_per_segment,
         },
         "total_accumulated_weighted_path_length_mm": float(np.sum(density)),
-        "processed_segment_count": context["processed_segments"],
+        "processed_segment_count": context.processed_segments,
     }
-    return x_edges, y_edges, z_edges, density, integrated, metadata
+    density_xyz = np.transpose(density, (2, 1, 0))
+    return _InternalField(
+        x_edges=x_edges,
+        y_edges=y_edges,
+        z_edges=z_edges,
+        density=density_xyz,
+        metadata=metadata,
+    )
 
 
 def _trace_with_runtime(
@@ -315,9 +369,9 @@ def _trace_with_runtime(
         )
     scene = OptixScene(runtime, geometry.silicone, geometry.rigid, geometry.envelope)
     carrier_coincidence_tolerance_mm = float(
-        geometry.metadata.get(
-            "carrier_mapping_tolerance_mm", settings.intersection_epsilon_mm
-        )
+        geometry.carrier_mapping_tolerance_mm
+        if geometry.carrier_mapping_tolerance_mm is not None
+        else settings.intersection_epsilon_mm
     )
     if not np.isfinite(carrier_coincidence_tolerance_mm) or carrier_coincidence_tolerance_mm < 0.0:
         raise Transport3DGeometryError(
@@ -335,48 +389,29 @@ def _trace_with_runtime(
         * float(np.finfo(np.float32).eps)
         * max(1.0, settings.extrusion_depth_mm),
     )
-    device_arrays = {
-        "silicone_vertices": cp.asarray(geometry.silicone.vertices),
-        "silicone_faces": cp.asarray(geometry.silicone.faces),
-        "silicone_normals": cp.asarray(geometry.silicone.normals),
-        "silicone_external": cp.asarray(geometry.silicone.external_surface),
-        "silicone_u_start": cp.asarray(geometry.silicone.u_start),
-        "silicone_u_end": cp.asarray(geometry.silicone.u_end),
-        "silicone_object_contact": cp.asarray(
-            np.asarray(
-                [
-                    tag == OBJECT_CONTACT_INTERFACE
-                    for tag in geometry.silicone.interface_tags
-                ],
-                dtype=bool,
-            )
-            if geometry.silicone.interface_tags is not None
-            else np.zeros(len(geometry.silicone.faces), dtype=bool)
-        ),
-        "silicone_carrier_contact": cp.asarray(
-            np.asarray(
-                [
-                    tag == CARRIER_CONTACT_INTERFACE
-                    for tag in geometry.silicone.interface_tags
-                ],
-                dtype=bool,
-            )
-            if geometry.silicone.interface_tags is not None
-            else np.zeros(len(geometry.silicone.faces), dtype=bool)
-        ),
-    }
-    silicone_surface = type(
-        "_DeviceSurface",
-        (),
-        {
-            "normals": device_arrays["silicone_normals"],
-            "external_surface": device_arrays["silicone_external"],
-            "u_start": device_arrays["silicone_u_start"],
-            "u_end": device_arrays["silicone_u_end"],
-            "object_contact": device_arrays["silicone_object_contact"],
-            "carrier_contact": device_arrays["silicone_carrier_contact"],
-        },
-    )()
+    silicone_vertices = cp.asarray(geometry.silicone.vertices)
+    silicone_faces = cp.asarray(geometry.silicone.faces)
+    silicone_normals = cp.asarray(geometry.silicone.normals)
+    silicone_external = cp.asarray(geometry.silicone.external_surface)
+    silicone_u_start = cp.asarray(geometry.silicone.u_start)
+    silicone_u_end = cp.asarray(geometry.silicone.u_end)
+    interface_tags = geometry.silicone.interface_tags
+    object_contact_mask = cp.asarray(
+        np.asarray(
+            [tag == OBJECT_CONTACT_INTERFACE for tag in interface_tags],
+            dtype=bool,
+        )
+        if interface_tags is not None
+        else np.zeros(len(geometry.silicone.faces), dtype=bool)
+    )
+    carrier_contact_mask = cp.asarray(
+        np.asarray(
+            [tag == CARRIER_CONTACT_INTERFACE for tag in interface_tags],
+            dtype=bool,
+        )
+        if interface_tags is not None
+        else np.zeros(len(geometry.silicone.faces), dtype=bool)
+    )
     source = cp.asarray(geometry.source_position_mm, dtype=cp.float32)
     axis = cp.asarray([tip.emission_axis[0], tip.emission_axis[1], 0.0], dtype=cp.float32)
     directions_np = sample_directions(
@@ -418,7 +453,7 @@ def _trace_with_runtime(
         if settings.retain_internal_path_field
         else None
     )
-    escape_chunks: list[tuple[Any, ...]] = []
+    escape_chunks: list[_EscapeBatch] = []
     surface_field = cp.zeros((settings.surface_z_bins, settings.surface_u_bins), dtype=cp.float64)
     surface_u_edges = cp.linspace(0.0, 1.0, settings.surface_u_bins + 1, dtype=cp.float64)
     surface_z_edges = cp.linspace(geometry.z_min_mm, geometry.z_max_mm, settings.surface_z_bins + 1, dtype=cp.float64)
@@ -492,7 +527,7 @@ def _trace_with_runtime(
         event = cp.where(periodic_selected, 3, event)
         best_distance = cp.where(periodic_selected, periodic_distance, best_distance)
         safe_silicone_primitive = cp.maximum(silicone_primitive, 0)
-        carrier_patch = device_arrays["silicone_carrier_contact"][safe_silicone_primitive]
+        carrier_patch = carrier_contact_mask[safe_silicone_primitive]
         carrier_coincident = (
             (silicone_found != 0)
             & (rigid_found != 0)
@@ -544,10 +579,16 @@ def _trace_with_runtime(
         if internal_context is not None:
             _accumulate_internal_chunk(
                 internal_context,
-                (origins, hit_positions, medium, weights, end_weights),
+                _SegmentBatch(
+                    starts=origins,
+                    ends=hit_positions,
+                    media=medium,
+                    start_weights=weights,
+                    end_weights=end_weights,
+                ),
                 cp,
             )
-        new_states: list[tuple[Any, Any, Any, Any, Any, Any, Any, Any]] = []
+        new_states: list[_RayBatch] = []
 
         periodic = event == 3
         if bool(cp.any(periodic)):
@@ -575,7 +616,16 @@ def _trace_with_runtime(
                     z_max_mm=geometry.z_max_mm,
                     offset_mm=ray_offset,
                 )
-                new_states.append((selected_origins, selected_directions, periodic_weight[keep_periodic], medium[periodic][keep_periodic], primary[periodic][keep_periodic], interactions[periodic][keep_periodic], path_lengths[periodic][keep_periodic] + best_distance[periodic][keep_periodic], periodic_wrapped[keep_periodic]))
+                new_states.append(_RayBatch(
+                    origins=selected_origins,
+                    directions=selected_directions,
+                    weights=periodic_weight[keep_periodic],
+                    media=medium[periodic][keep_periodic],
+                    primary_indices=primary[periodic][keep_periodic],
+                    interaction_counts=interactions[periodic][keep_periodic],
+                    path_lengths=path_lengths[periodic][keep_periodic] + best_distance[periodic][keep_periodic],
+                    periodic_wraps=periodic_wrapped[keep_periodic],
+                ))
 
         physical = ~periodic
         if bool(cp.any(physical)):
@@ -617,13 +667,13 @@ def _trace_with_runtime(
                 interface_paths = physical_paths[indices]
                 interface_primitive = physical_silicone_primitive[indices]
                 interface_bary = physical_silicone_bary[indices]
-                outward = device_arrays["silicone_normals"][interface_primitive]
+                outward = silicone_normals[interface_primitive]
                 silicone_object_contact = (
-                    silicone_surface.object_contact[interface_primitive]
+                    object_contact_mask[interface_primitive]
                     & (interface_medium == 1)
                 )
                 silicone_carrier_contact = (
-                    silicone_surface.carrier_contact[interface_primitive]
+                    carrier_contact_mask[interface_primitive]
                     & (interface_medium == 1)
                 )
                 tagged_contact = silicone_object_contact | silicone_carrier_contact
@@ -770,27 +820,28 @@ def _trace_with_runtime(
                 if bool(cp.any(reflected_terminate)):
                     terminated_weight += float(cp.asnumpy(cp.sum(reflected_weight[reflected_terminate])))
                 if bool(cp.any(reflected_keep)):
-                    new_states.append((
-                        interface_positions[reflected_keep] + ray_offset * reflected[reflected_keep],
-                        reflected[reflected_keep],
-                        reflected_weight[reflected_keep],
-                        interface_medium[reflected_keep],
-                        interface_primary[reflected_keep],
-                        next_interaction[reflected_keep],
-                        interface_paths[reflected_keep],
-                        wraps[physical][indices][reflected_keep],
+                    new_states.append(_RayBatch(
+                        origins=interface_positions[reflected_keep] + ray_offset * reflected[reflected_keep],
+                        directions=reflected[reflected_keep],
+                        weights=reflected_weight[reflected_keep],
+                        media=interface_medium[reflected_keep],
+                        primary_indices=interface_primary[reflected_keep],
+                        interaction_counts=next_interaction[reflected_keep],
+                        path_lengths=interface_paths[reflected_keep],
+                        periodic_wraps=wraps[physical][indices][reflected_keep],
                     ))
                 interface_points, interface_u, interface_z = _surface_coordinates(
                     cp,
-                    silicone_surface,
+                    silicone_u_start,
+                    silicone_u_end,
                     interface_primitive,
                     interface_bary,
-                    device_arrays["silicone_vertices"],
-                    device_arrays["silicone_faces"],
+                    silicone_vertices,
+                    silicone_faces,
                 )
                 external_escape = (
                     (interface_medium == 1)
-                    & silicone_surface.external_surface[interface_primitive]
+                    & silicone_external[interface_primitive]
                     & ~tagged_contact
                 )
                 # Contact-only optics is defined for silicone rays reaching
@@ -807,17 +858,17 @@ def _trace_with_runtime(
                     escaped_weight += float(cp.asnumpy(cp.sum(outgoing_weight)))
                     positive_outgoing = outgoing_weight > 0.0
                     if bool(cp.any(positive_outgoing)):
-                        escape_chunks.append((
-                            interface_points[external_escape][positive_outgoing],
-                            transmitted[external_escape][positive_outgoing],
-                            outgoing_weight[positive_outgoing],
-                            interface_primary[external_escape][positive_outgoing],
-                            interface_paths[external_escape][positive_outgoing],
-                            next_interaction[external_escape][positive_outgoing],
-                            outward[external_escape][positive_outgoing],
-                            interface_u[external_escape][positive_outgoing],
-                            interface_z[external_escape][positive_outgoing],
-                            interface_primitive[external_escape][positive_outgoing],
+                        escape_chunks.append(_EscapeBatch(
+                            positions=interface_points[external_escape][positive_outgoing],
+                            directions=transmitted[external_escape][positive_outgoing],
+                            weights=outgoing_weight[positive_outgoing],
+                            primary_indices=interface_primary[external_escape][positive_outgoing],
+                            path_lengths=interface_paths[external_escape][positive_outgoing],
+                            interaction_counts=next_interaction[external_escape][positive_outgoing],
+                            normals=outward[external_escape][positive_outgoing],
+                            surface_u=interface_u[external_escape][positive_outgoing],
+                            surface_z=interface_z[external_escape][positive_outgoing],
+                            primitive_indices=interface_primitive[external_escape][positive_outgoing],
                         ))
                     u_indices = cp.searchsorted(surface_u_edges, interface_u[external_escape], side="right") - 1
                     z_indices = cp.searchsorted(surface_z_edges, interface_z[external_escape], side="right") - 1
@@ -832,40 +883,40 @@ def _trace_with_runtime(
                 if bool(cp.any(transmission_terminate)):
                     terminated_weight += float(cp.asnumpy(cp.sum(transmitted_weight[transmission_terminate])))
                 if bool(cp.any(transmission_keep)):
-                    new_states.append((
-                        interface_positions[transmission_keep] + ray_offset * transmitted[transmission_keep],
-                        transmitted[transmission_keep],
-                        transmitted_weight[transmission_keep],
-                        cp.where(interface_medium[transmission_keep] == 0, 1, 0).astype(cp.uint8),
-                        interface_primary[transmission_keep],
-                        next_interaction[transmission_keep],
-                        interface_paths[transmission_keep],
-                        wraps[physical][indices][transmission_keep],
+                    new_states.append(_RayBatch(
+                        origins=interface_positions[transmission_keep] + ray_offset * transmitted[transmission_keep],
+                        directions=transmitted[transmission_keep],
+                        weights=transmitted_weight[transmission_keep],
+                        media=cp.where(interface_medium[transmission_keep] == 0, 1, 0).astype(cp.uint8),
+                        primary_indices=interface_primary[transmission_keep],
+                        interaction_counts=next_interaction[transmission_keep],
+                        path_lengths=interface_paths[transmission_keep],
+                        periodic_wraps=wraps[physical][indices][transmission_keep],
                     ))
 
         if new_states:
-            origins = _concatenate(cp, [state[0] for state in new_states], dtype=cp.float32, width=3)
-            directions = _concatenate(cp, [state[1] for state in new_states], dtype=cp.float32, width=3)
-            weights = _concatenate(cp, [state[2] for state in new_states], dtype=cp.float64)
-            medium = _concatenate(cp, [state[3] for state in new_states], dtype=cp.uint8)
-            primary = _concatenate(cp, [state[4] for state in new_states], dtype=cp.int64)
-            interactions = _concatenate(cp, [state[5] for state in new_states], dtype=cp.int64)
-            path_lengths = _concatenate(cp, [state[6] for state in new_states], dtype=cp.float64)
-            wraps = _concatenate(cp, [state[7] for state in new_states], dtype=cp.int64)
+            origins = _concatenate(cp, [state.origins for state in new_states], dtype=cp.float32, width=3)
+            directions = _concatenate(cp, [state.directions for state in new_states], dtype=cp.float32, width=3)
+            weights = _concatenate(cp, [state.weights for state in new_states], dtype=cp.float64)
+            medium = _concatenate(cp, [state.media for state in new_states], dtype=cp.uint8)
+            primary = _concatenate(cp, [state.primary_indices for state in new_states], dtype=cp.int64)
+            interactions = _concatenate(cp, [state.interaction_counts for state in new_states], dtype=cp.int64)
+            path_lengths = _concatenate(cp, [state.path_lengths for state in new_states], dtype=cp.float64)
+            wraps = _concatenate(cp, [state.periodic_wraps for state in new_states], dtype=cp.int64)
         else:
             weights = cp.empty(0, dtype=cp.float64)
 
     postprocessing_started = time.perf_counter()
-    escaped_positions = _concatenate(cp, [chunk[0] for chunk in escape_chunks], dtype=cp.float32, width=3)
-    escaped_directions = _concatenate(cp, [chunk[1] for chunk in escape_chunks], dtype=cp.float32, width=3)
-    escaped_weights = _concatenate(cp, [chunk[2] for chunk in escape_chunks], dtype=cp.float64)
-    escaped_primary = _concatenate(cp, [chunk[3] for chunk in escape_chunks], dtype=cp.int64)
-    escaped_paths = _concatenate(cp, [chunk[4] for chunk in escape_chunks], dtype=cp.float64)
-    escaped_interactions = _concatenate(cp, [chunk[5] for chunk in escape_chunks], dtype=cp.int64)
-    escaped_normals = _concatenate(cp, [chunk[6] for chunk in escape_chunks], dtype=cp.float32, width=3)
-    escaped_u = _concatenate(cp, [chunk[7] for chunk in escape_chunks], dtype=cp.float64)
-    escaped_z = _concatenate(cp, [chunk[8] for chunk in escape_chunks], dtype=cp.float64)
-    escaped_primitives = _concatenate(cp, [chunk[9] for chunk in escape_chunks], dtype=cp.int64)
+    escaped_positions = _concatenate(cp, [chunk.positions for chunk in escape_chunks], dtype=cp.float32, width=3)
+    escaped_directions = _concatenate(cp, [chunk.directions for chunk in escape_chunks], dtype=cp.float32, width=3)
+    escaped_weights = _concatenate(cp, [chunk.weights for chunk in escape_chunks], dtype=cp.float64)
+    escaped_primary = _concatenate(cp, [chunk.primary_indices for chunk in escape_chunks], dtype=cp.int64)
+    escaped_paths = _concatenate(cp, [chunk.path_lengths for chunk in escape_chunks], dtype=cp.float64)
+    escaped_interactions = _concatenate(cp, [chunk.interaction_counts for chunk in escape_chunks], dtype=cp.int64)
+    escaped_normals = _concatenate(cp, [chunk.normals for chunk in escape_chunks], dtype=cp.float32, width=3)
+    escaped_u = _concatenate(cp, [chunk.surface_u for chunk in escape_chunks], dtype=cp.float64)
+    escaped_z = _concatenate(cp, [chunk.surface_z for chunk in escape_chunks], dtype=cp.float64)
+    escaped_primitives = _concatenate(cp, [chunk.primitive_indices for chunk in escape_chunks], dtype=cp.int64)
     if geometry.silicone.semantic_tags is None:
         raise Transport3DGeometryError(
             "silicone surface is missing semantic boundary tags"
@@ -874,7 +925,7 @@ def _trace_with_runtime(
         geometry.silicone.semantic_tags[int(primitive)]
         for primitive in cp.asnumpy(escaped_primitives)
     )
-    internal = (None, None, None, None, None, None)
+    internal: _InternalField | None = None
     if internal_context is not None:
         internal = _finalize_internal_path_context(internal_context, settings)
     geometry_metadata = dict(geometry.metadata)
@@ -906,8 +957,8 @@ def _trace_with_runtime(
         "absorption_per_mm": float(tip.optical.absorption_per_mm),
         "scattering_per_mm": float(tip.optical.scattering_per_mm),
     }
-    if internal[5] is not None:
-        internal_metadata = dict(internal[5])
+    if internal is not None:
+        internal_metadata = dict(internal.metadata)
         internal_metadata.update(
             {
                 "source_position_mm": list(geometry.source_position_mm),
@@ -996,11 +1047,10 @@ def _trace_with_runtime(
         carrier_transmitted_weight=carrier_transmitted_weight,
         carrier_interface_incident_weight=carrier_interface_incident_weight,
         carrier_reflected_weight=carrier_reflected_weight,
-        internal_path_x_edges_mm=None if internal[0] is None else internal[0],
-        internal_path_y_edges_mm=None if internal[1] is None else internal[1],
-        internal_path_z_edges_mm=None if internal[2] is None else internal[2],
-        internal_weighted_path_density_3d=None if internal[3] is None else internal[3],
-        internal_z_integrated_path_density=None if internal[4] is None else internal[4],
+        field_x_edges_mm=None if internal is None else internal.x_edges,
+        field_y_edges_mm=None if internal is None else internal.y_edges,
+        field_z_edges_mm=None if internal is None else internal.z_edges,
+        field_density_3d=None if internal is None else internal.density,
         geometry_metadata=geometry_metadata,
         timings_seconds={
             "gas_build": scene.gas_build_seconds,

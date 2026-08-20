@@ -25,17 +25,18 @@ from mesh.volume.mesh import generate_volume_mesh
 from model import Fingertip, FingertipParameters
 from optics.contracts.objects import CarrierOptics
 from optics.transport3d import (
-    OptiXTransport,
     Transport3DSettings,
     build_fingertip_volume_state_geometry,
-    fingerprint_mapping,
-    native_field_separability,
-    save_case_artifact,
-    transport_configuration,
+    trace_geometry,
 )
 from optics.transport3d.optix_backend import create_runtime
 from optimization.deformed_state_artifact import (
     restore_deformed_optical_state,
+)
+from optimization.optical_artifact import (
+    fingerprint_mapping,
+    save_case_artifact,
+    transport_configuration,
 )
 from validation.physics.multi_location_sphere_contact import (
     DEFAULT_RADIUS_MM,
@@ -149,6 +150,8 @@ class StateBundle:
     carrier_geometry: Any
     legacy_result: Any
     carrier_result: Any
+    legacy_configuration_fingerprint: str
+    carrier_configuration_fingerprint: str
 
 
 def _trace_bundle(
@@ -204,19 +207,26 @@ def _trace_bundle(
         material=material,
         source={"model": "existing Fingertip optical source"},
     )
-    transport = OptiXTransport()
-    trace_kwargs = {
-        "settings": settings,
-        "morphology_id": "carrier-contact-validation",
-        "morphology_fingerprint": volume_mesh.morphology_fingerprint,
-        "mechanics_source": str(restored.artifact_path),
-        "mechanics_dimension": "3D",
-        "contact_state": contact_state,
-        "transport_configuration": configuration,
-        "runtime": runtime,
+    legacy_configuration = {
+        **configuration,
+        "carrier_contact_geometry": {"enabled": False},
     }
-    legacy_result = transport.trace(tip, legacy_geometry, **trace_kwargs)
-    carrier_result = transport.trace(tip, restored.geometry, **trace_kwargs)
+    carrier_configuration = {
+        **configuration,
+        "carrier_contact_geometry": {
+            "enabled": True,
+            "boundary_model": "absorber",
+            "mapping_tolerance_mm": mapping_tolerance_mm,
+        },
+    }
+    legacy_configuration_fingerprint = fingerprint_mapping(legacy_configuration)
+    carrier_configuration_fingerprint = fingerprint_mapping(carrier_configuration)
+    legacy_result = trace_geometry(
+        tip, legacy_geometry, settings=settings, runtime=runtime
+    )
+    carrier_result = trace_geometry(
+        tip, restored.geometry, settings=settings, runtime=runtime
+    )
 
     state_root = candidate_root / label
     contract_base = {
@@ -227,6 +237,7 @@ def _trace_bundle(
         "mechanics_artifact_sha256": restored.artifact_sha256,
         "mapping_method": "exact_semantic_surface_triangle_any_contact_vertex",
         "carrier_boundary_model": "absorber",
+        "transport_configuration_fingerprint": legacy_configuration_fingerprint,
     }
     save_case_artifact(
         state_root / "legacy_air.json",
@@ -236,7 +247,11 @@ def _trace_bundle(
     save_case_artifact(
         state_root / "carrier_absorber.json",
         carrier_result,
-        {**contract_base, "interface_semantics": "contacted_patch_absorber"},
+        {
+            **contract_base,
+            "interface_semantics": "contacted_patch_absorber",
+            "transport_configuration_fingerprint": carrier_configuration_fingerprint,
+        },
     )
     return StateBundle(
         label=label,
@@ -248,6 +263,8 @@ def _trace_bundle(
         carrier_geometry=restored.geometry,
         legacy_result=legacy_result,
         carrier_result=carrier_result,
+        legacy_configuration_fingerprint=legacy_configuration_fingerprint,
+        carrier_configuration_fingerprint=carrier_configuration_fingerprint,
     )
 
 
@@ -282,11 +299,11 @@ def _result_summary(bundle: StateBundle) -> dict[str, Any]:
             "energy_balance_error": carrier.energy_balance_error,
         },
         "transport_configuration_fingerprints": {
-            "legacy_air": legacy.transport_configuration_fingerprint,
-            "carrier_absorber": carrier.transport_configuration_fingerprint,
+            "legacy_air": bundle.legacy_configuration_fingerprint,
+            "carrier_absorber": bundle.carrier_configuration_fingerprint,
             "changed": bool(
-                legacy.transport_configuration_fingerprint
-                != carrier.transport_configuration_fingerprint
+                bundle.legacy_configuration_fingerprint
+                != bundle.carrier_configuration_fingerprint
             ),
         },
         "same_geometry_ab": {

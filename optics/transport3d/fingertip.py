@@ -336,6 +336,7 @@ def build_fingertip_volume_state_geometry(
     source_epsilon_mm: float = 1.0e-5,
     carrier_contact_source_node_ids: frozenset[int] | set[int] | tuple[int, ...] = frozenset(),
     carrier_optics: CarrierOptics | None = None,
+    carrier_mapping_tolerance_mm: float | None = None,
     metadata: Mapping[str, Any] | None = None,
 ) -> Any:
     """Build direct ``full3d_surface`` geometry without FEA artifacts.
@@ -370,6 +371,14 @@ def build_fingertip_volume_state_geometry(
         [tag == CARRIER_CONTACT_INTERFACE for tag in silicone.interface_tags or ()],
         dtype=bool,
     )
+    metadata_values = {} if metadata is None else dict(metadata)
+    if carrier_mapping_tolerance_mm is None:
+        raw_tolerance = metadata_values.pop("carrier_mapping_tolerance_mm", None)
+        carrier_mapping_tolerance_mm = (
+            None if raw_tolerance is None else float(raw_tolerance)
+        )
+    else:
+        metadata_values.pop("carrier_mapping_tolerance_mm", None)
     geometry_metadata = {
         "morphology_fingerprint": state.morphology_fingerprint,
         "mechanics_source": "solver_neutral.FingertipVolumeState",
@@ -385,8 +394,7 @@ def build_fingertip_volume_state_geometry(
         ),
         "carrier_mapping_method": "exact_semantic_surface_triangle_any_contact_vertex",
     }
-    if metadata is not None:
-        geometry_metadata.update(dict(metadata))
+    geometry_metadata.update(metadata_values)
     return build_full3d_transport_geometry(
         tip,
         silicone=silicone,
@@ -396,6 +404,7 @@ def build_fingertip_volume_state_geometry(
         source_medium=source_medium,
         metadata=geometry_metadata,
         carrier_optics=carrier_optics,
+        carrier_mapping_tolerance_mm=carrier_mapping_tolerance_mm,
     )
 
 

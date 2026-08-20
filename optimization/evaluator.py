@@ -48,16 +48,13 @@ from model import (
 )
 from optics.contracts.objects import CarrierOptics
 from optics.transport3d import (
-    OptiXTransport,
     Transport3DDependencyError,
     Transport3DGeometryError,
     Transport3DPhysicsError,
     Transport3DResultError,
     Transport3DTraceError,
     Transport3DSettings,
-    fingerprint_mapping,
-    save_case_artifact,
-    transport_configuration,
+    trace_geometry,
 )
 from optics.transport3d.optix_backend import create_runtime
 from optimization.design_space import (
@@ -86,6 +83,12 @@ from optimization.deformed_state_artifact import (
     build_contact_state_record,
     restore_deformed_optical_state,
     write_mechanics_artifact,
+)
+from optimization.optical_artifact import (
+    fingerprint_mapping,
+    optical_material_parameters,
+    save_case_artifact,
+    transport_configuration,
 )
 
 
@@ -419,7 +422,7 @@ class Lumo3DTrajectoryEvaluator:
             stage = "optics"
             configuration = transport_configuration(
                 self.settings,
-                material=tip.optical.to_dict(),
+                material=optical_material_parameters(tip.optical),
                 source={"model": "existing Fingertip optical source", "evaluator": TRAJECTORY_EVALUATION_SCHEMA},
             )
             objective_contract = {
@@ -435,7 +438,6 @@ class Lumo3DTrajectoryEvaluator:
                 "objective_contract_fingerprint": fingerprint_mapping(objective_contract),
             }
             runtime = create_runtime()
-            transport = OptiXTransport()
             optical_records: list[Mapping[str, Any]] = []
             observations: list[TrajectoryObservation] = []
             optics_started = time.perf_counter()
@@ -475,18 +477,13 @@ class Lumo3DTrajectoryEvaluator:
                         "carrier_mapping_tolerance_mm": contact_state["carrier_mapping_tolerance_mm"],
                     },
                 )
-                result = transport.trace(
+                result = trace_geometry(
                     tip,
                     restored.geometry,
                     settings=self.settings,
-                    morphology_id=morphology_id,
-                    morphology_fingerprint=volume_mesh.morphology_fingerprint,
-                    mechanics_source=str(restored.artifact_path),
-                    mechanics_dimension="3D",
-                    contact_state=contact_state,
-                    transport_configuration=configuration,
                     runtime=runtime,
                 )
+                configuration_fingerprint = fingerprint_mapping(configuration)
                 artifact = (
                     candidate_root
                     / f"location_u_{float(record['normalized_location']):.3f}"
@@ -510,7 +507,7 @@ class Lumo3DTrajectoryEvaluator:
                     "full3d_surface_provenance": "actual_deformed_3d_volume_state",
                     "contact_state": contact_state,
                     "transport_configuration": configuration,
-                    "transport_configuration_fingerprint": result.transport_configuration_fingerprint,
+                    "transport_configuration_fingerprint": configuration_fingerprint,
                 }
                 save_case_artifact(artifact, result, contract)
                 energy = result.energy_record()
@@ -524,7 +521,7 @@ class Lumo3DTrajectoryEvaluator:
                         "contact_state_fingerprint": contact_state["contact_state_fingerprint"],
                         "carrier_contact_active": contact_state["carrier_contact_active"],
                         "carrier_contact_occurred": contact_state["carrier_contact_occurred"],
-                        "transport_configuration_fingerprint": result.transport_configuration_fingerprint,
+                        "transport_configuration_fingerprint": configuration_fingerprint,
                         "evaluation_identity": evaluation_identity,
                     }
                 )

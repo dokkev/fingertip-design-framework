@@ -182,7 +182,8 @@ evaluator, GUI, or validation scripts.
 `optics.transport3d` owns production FULL_3D geometry construction, field/path
 accumulation, carrier-interface handling, and trace results. The actual runtime
 boundary is `optics.optix.runtime.OptixRuntime.create()` and the production
-trace path is `OptiXTransport.trace()` / `trace_geometry()`.
+trace path is `trace_geometry()`. Artifact persistence and contract
+fingerprints belong to `optimization/optical_artifact.py`.
 
 `optics.optix.doctor` diagnoses an environment. The production smoke uses the
 same runtime implementation and performs a real setup/launch. The BO preflight

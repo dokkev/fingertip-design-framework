@@ -17,17 +17,19 @@ from mesh.fingertip.contracts import mesh_settings_for_level
 from mesh.volume.mesh import generate_volume_mesh
 from model import Fingertip
 from optics.transport3d import (
-    OptiXTransport,
     Transport3DSettings,
     build_fingertip_volume_state_geometry,
+    trace_geometry,
+)
+from optics.transport3d.optix_backend import create_runtime
+from optics.optix.smoke import run_production_optix_smoke
+from optimization.deformed_state_artifact import restore_deformed_optical_state
+from optimization.optical_artifact import (
     fingerprint_mapping,
     native_field_separability,
     save_case_artifact,
     transport_configuration,
 )
-from optics.transport3d.optix_backend import create_runtime
-from optics.optix.smoke import run_production_optix_smoke
-from optimization.deformed_state_artifact import restore_deformed_optical_state
 
 
 def _settings(
@@ -84,8 +86,8 @@ def _result_summary(result, *, artifact: Path, contract: dict[str, Any]) -> dict
         "artifact_field": str(artifact.with_suffix(".npz")),
         "contract_fingerprint": fingerprint_mapping(contract),
         "geometry_provenance": contract.get("geometry_provenance"),
-        "optical_mode": result.optical_mode,
-        "ray_count": result.ray_count,
+        "optical_mode": "FULL_3D",
+        "ray_count": result.launched_ray_count,
         "field_shape": list(field.shape),
         "field_axis_order": "x,y,z",
         "field_finite_nonnegative": bool(np.all(np.isfinite(field)) and np.all(field >= 0.0)),
@@ -147,7 +149,6 @@ def run_lumo3d_optix_stage(
     )
     material = _material(tip)
     runtime = create_runtime()
-    transport = OptiXTransport()
     output = root / "observations" / "stage4_optix"
     output.mkdir(parents=True, exist_ok=True)
     reference_state = FingertipVolumeState.reference(volume_mesh)
@@ -189,16 +190,10 @@ def run_lumo3d_optix_stage(
         "transport_configuration": configuration,
         "transport_configuration_fingerprint": fingerprint_mapping(configuration),
     }
-    reference_result = transport.trace(
+    reference_result = trace_geometry(
         tip,
         reference_geometry,
         settings=settings,
-        morphology_id="nominal",
-        morphology_fingerprint=volume_mesh.morphology_fingerprint,
-        mechanics_source="reference_volume_state",
-        mechanics_dimension="3D",
-        contact_state=reference_contact,
-        transport_configuration=configuration,
         runtime=runtime,
     )
     reference_path = output / "reference.json"
@@ -251,16 +246,10 @@ def run_lumo3d_optix_stage(
             "transport_configuration": configuration,
             "transport_configuration_fingerprint": fingerprint_mapping(configuration),
         }
-        result = transport.trace(
+        result = trace_geometry(
             tip,
             restored.geometry,
             settings=settings,
-            morphology_id="nominal",
-            morphology_fingerprint=volume_mesh.morphology_fingerprint,
-            mechanics_source=str(restored.artifact_path),
-            mechanics_dimension="3D",
-            contact_state=contact_state,
-            transport_configuration=configuration,
             runtime=runtime,
         )
         path = output / f"location_u_{location:.3f}.json"

@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
-
 from util import require_finite, require_nonnegative, require_positive
 
 
@@ -78,15 +76,5 @@ class OpticalMaterial:
     def single_scattering_albedo(self) -> float:
         extinction = self.extinction_per_mm
         return 0.0 if extinction == 0.0 else self.scattering_per_mm / extinction
-
-    def to_dict(self) -> dict[str, Any]:
-        """Return the scalar material contract consumed by optical adapters."""
-        return {
-            "refractive_index_air": float(self.refractive_index_air),
-            "refractive_index_silicone": float(self.refractive_index_silicone),
-            "absorption_per_mm": float(self.absorption_per_mm),
-            "scattering_per_mm": float(self.scattering_per_mm),
-        }
-
 
 __all__ = ["LED", "OpticalMaterial"]

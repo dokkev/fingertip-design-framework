@@ -5,7 +5,7 @@ from validation.physics.vbd_fea_optical_trend import (
     rank_statistics,
     selection_summary,
 )
-from optics.transport3d import fingerprint_mapping
+from optimization.optical_artifact import fingerprint_mapping
 
 
 def _rows() -> list[dict[str, object]]:
@@ -50,7 +50,7 @@ def test_selection_summary_is_sign_safe_for_minimize_objective() -> None:
 def test_reuse_contract_requires_exact_fingerprint_and_payload() -> None:
     contract = {"schema": "comparison-v1", "branch": "FEA", "ray_count": 1024}
     metadata = {
-        "schema": "unified-optix-transport-case-v3",
+        "schema": "unified-optix-transport-case-v4",
         "contract": contract,
         "contract_fingerprint": fingerprint_mapping(contract),
     }

@@ -16,7 +16,7 @@ from mesh.volume.contracts import FingertipVolumeMesh
 from mesh.volume.state import FingertipVolumeState
 from model.fingertip import Fingertip
 from optics.transport3d import build_fingertip_volume_state_geometry
-from optics.transport3d import fingerprint_mapping
+from optimization.optical_artifact import fingerprint_mapping
 from optics.contracts.objects import CarrierOptics
 from optimization.protocol import TrajectoryEvaluationProtocol
 

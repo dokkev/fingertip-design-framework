@@ -158,6 +158,7 @@ class ExtrudedTransportGeometry:
     source_position_mm: tuple[float, float, float]
     source_medium: int
     metadata: Mapping[str, Any]
+    carrier_mapping_tolerance_mm: float | None = None
     indenter_optics: ObjectBoundaryOptics | None = None
     carrier_optics: ObjectBoundaryOptics | None = None
 
@@ -171,6 +172,13 @@ class ExtrudedTransportGeometry:
             raise Transport3DGeometryError("the single source must be at z=0")
         if self.source_medium not in (0, 1):
             raise Transport3DGeometryError("source_medium must be air=0 or silicone=1")
+        if self.carrier_mapping_tolerance_mm is not None:
+            tolerance = float(self.carrier_mapping_tolerance_mm)
+            if not math.isfinite(tolerance) or tolerance < 0.0:
+                raise Transport3DGeometryError(
+                    "carrier_mapping_tolerance_mm must be finite and non-negative"
+                )
+            object.__setattr__(self, "carrier_mapping_tolerance_mm", tolerance)
         object.__setattr__(self, "source_position_mm", source)
         object.__setattr__(self, "metadata", MappingProxyType(dict(self.metadata)))
 
@@ -350,6 +358,7 @@ def build_full3d_transport_geometry(
     source_medium: int,
     metadata: Mapping[str, Any],
     carrier_optics: ObjectBoundaryOptics | None = None,
+    carrier_mapping_tolerance_mm: float | None = None,
     depth_mm: float = 11.0,
 ) -> ExtrudedTransportGeometry:
     """Build transport geometry from a direct deformed 3D surface artifact.
@@ -365,6 +374,11 @@ def build_full3d_transport_geometry(
         raise TypeError("tip must be a Fingertip")
     if not isinstance(metadata, Mapping):
         raise TypeError("metadata must be a mapping")
+    if carrier_mapping_tolerance_mm is None:
+        raw_tolerance = metadata.get("carrier_mapping_tolerance_mm")
+        carrier_mapping_tolerance_mm = (
+            None if raw_tolerance is None else float(raw_tolerance)
+        )
     source = tuple(float(value) for value in source_position_mm)
     if len(source) != 3 or not np.all(np.isfinite(source)):
         raise Transport3DGeometryError("full 3D source position must be finite")
@@ -386,6 +400,7 @@ def build_full3d_transport_geometry(
         if not np.all(np.isfinite(surface.vertices[:, 2])):
             raise Transport3DGeometryError(f"{name} surface has a non-finite longitudinal coordinate")
     enriched_metadata = dict(metadata)
+    enriched_metadata.pop("carrier_mapping_tolerance_mm", None)
     enriched_metadata["geometry_mode"] = "full3d_surface"
     provenance = str(
         enriched_metadata.get(
@@ -435,6 +450,7 @@ def build_full3d_transport_geometry(
         source_position_mm=source,
         source_medium=source_medium,
         metadata=enriched_metadata,
+        carrier_mapping_tolerance_mm=carrier_mapping_tolerance_mm,
         carrier_optics=carrier_optics,
     )
 

@@ -1,12 +1,6 @@
 """Deterministic camera-independent OptiX 3D transport."""
 
 from optics.transport3d.result import Transport3DResult, Transport3DResultError
-from optics.transport3d.artifact import (
-    FULL3D_SURFACE_SCHEMA,
-    NATIVE_3D_FEA_STATE_SCHEMA,
-    Full3DSurfaceArtifact,
-    load_full3d_surface_artifact,
-)
 from optics.transport3d.geometry import (
     CARRIER_CONTACT_INTERFACE,
     build_full3d_transport_geometry,
@@ -21,16 +15,6 @@ from optics.transport3d.transport import (
     Transport3DTraceError,
     trace_geometry,
 )
-from optics.transport3d.unified import (
-    OptiXTransport,
-    UNIFIED_ARTIFACT_SCHEMA,
-    UnifiedTransportResult,
-    fingerprint_mapping,
-    load_case_artifact,
-    native_field_separability,
-    save_case_artifact,
-    transport_configuration,
-)
 
 __all__ = [
     "Transport3DDependencyError",
@@ -40,21 +24,9 @@ __all__ = [
     "Transport3DResultError",
     "Transport3DSettings",
     "Transport3DTraceError",
-    "FULL3D_SURFACE_SCHEMA",
-    "NATIVE_3D_FEA_STATE_SCHEMA",
-    "Full3DSurfaceArtifact",
-    "OptiXTransport",
-    "UNIFIED_ARTIFACT_SCHEMA",
-    "UnifiedTransportResult",
     "build_full3d_transport_geometry",
     "CARRIER_CONTACT_INTERFACE",
     "build_fixed_transport_surfaces",
     "build_fingertip_volume_state_geometry",
-    "fingerprint_mapping",
-    "load_case_artifact",
-    "load_full3d_surface_artifact",
-    "native_field_separability",
-    "save_case_artifact",
     "trace_geometry",
-    "transport_configuration",
 ]

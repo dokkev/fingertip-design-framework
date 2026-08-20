@@ -71,11 +71,10 @@ class Transport3DResult:
     carrier_transmitted_weight: float = 0.0
     carrier_interface_incident_weight: float = 0.0
     carrier_reflected_weight: float = 0.0
-    internal_path_x_edges_mm: np.ndarray | None = None
-    internal_path_y_edges_mm: np.ndarray | None = None
-    internal_path_z_edges_mm: np.ndarray | None = None
-    internal_weighted_path_density_3d: np.ndarray | None = None
-    internal_z_integrated_path_density: np.ndarray | None = None
+    field_x_edges_mm: np.ndarray | None = None
+    field_y_edges_mm: np.ndarray | None = None
+    field_z_edges_mm: np.ndarray | None = None
+    field_density_3d: np.ndarray | None = None
     geometry_metadata: Mapping[str, Any] = field(default_factory=dict)
     timings_seconds: Mapping[str, float] = field(default_factory=dict)
 
@@ -243,74 +242,51 @@ class Transport3DResult:
         interactions.setflags(write=False)
         primitive_indices.setflags(write=False)
 
-        internal_values = (
-            self.internal_path_x_edges_mm,
-            self.internal_path_y_edges_mm,
-            self.internal_path_z_edges_mm,
-            self.internal_weighted_path_density_3d,
-            self.internal_z_integrated_path_density,
+        field_values = (
+            self.field_x_edges_mm,
+            self.field_y_edges_mm,
+            self.field_z_edges_mm,
+            self.field_density_3d,
         )
-        internal: list[np.ndarray] = []
-        if any(value is not None for value in internal_values):
-            if any(value is None for value in internal_values):
+        field_arrays: list[np.ndarray] = []
+        if any(value is not None for value in field_values):
+            if any(value is None for value in field_values):
                 raise Transport3DResultError(
-                    "internal path arrays must be supplied together"
+                    "FULL_3D field arrays must be supplied together"
                 )
-            internal_x = _owned_array(
-                self.internal_path_x_edges_mm,
+            field_x = _owned_array(
+                self.field_x_edges_mm,
                 dtype=float,
-                name="internal_path_x_edges_mm",
+                name="field_x_edges_mm",
             )
-            internal_y = _owned_array(
-                self.internal_path_y_edges_mm,
+            field_y = _owned_array(
+                self.field_y_edges_mm,
                 dtype=float,
-                name="internal_path_y_edges_mm",
+                name="field_y_edges_mm",
             )
-            internal_z = _owned_array(
-                self.internal_path_z_edges_mm,
+            field_z = _owned_array(
+                self.field_z_edges_mm,
                 dtype=float,
-                name="internal_path_z_edges_mm",
+                name="field_z_edges_mm",
             )
-            internal_density = _owned_array(
-                self.internal_weighted_path_density_3d,
+            field_density = _owned_array(
+                self.field_density_3d,
                 dtype=float,
-                name="internal_weighted_path_density_3d",
-            )
-            integrated_density = _owned_array(
-                self.internal_z_integrated_path_density,
-                dtype=float,
-                name="internal_z_integrated_path_density",
+                name="field_density_3d",
             )
             if (
-                len(internal_x) < 2
-                or len(internal_y) < 2
-                or len(internal_z) < 2
-                or np.any(np.diff(internal_x) <= 0.0)
-                or np.any(np.diff(internal_y) <= 0.0)
-                or np.any(np.diff(internal_z) <= 0.0)
-                or internal_density.shape
-                != (len(internal_z) - 1, len(internal_y) - 1, len(internal_x) - 1)
-                or integrated_density.shape != (len(internal_y) - 1, len(internal_x) - 1)
-                or np.any(internal_density < 0.0)
-                or np.any(integrated_density < 0.0)
+                len(field_x) < 2
+                or len(field_y) < 2
+                or len(field_z) < 2
+                or np.any(np.diff(field_x) <= 0.0)
+                or np.any(np.diff(field_y) <= 0.0)
+                or np.any(np.diff(field_z) <= 0.0)
+                or field_density.shape
+                != (len(field_x) - 1, len(field_y) - 1, len(field_z) - 1)
+                or np.any(field_density < 0.0)
             ):
-                raise Transport3DResultError("internal path field shape is invalid")
-            if not np.allclose(
-                integrated_density,
-                np.sum(internal_density, axis=0),
-                rtol=1.0e-12,
-                atol=1.0e-12,
-            ):
-                raise Transport3DResultError(
-                    "z-integrated internal path field does not match P3"
-                )
-            internal = [
-                internal_x,
-                internal_y,
-                internal_z,
-                internal_density,
-                integrated_density,
-            ]
+                raise Transport3DResultError("FULL_3D field shape is invalid")
+            field_arrays = [field_x, field_y, field_z, field_density]
 
         for array in (
             u_edges,
@@ -340,12 +316,11 @@ class Transport3DResult:
         object.__setattr__(self, "escape_primary_ray_indices", primary)
         object.__setattr__(self, "escape_path_lengths_mm", paths)
         object.__setattr__(self, "escape_interaction_counts", interactions)
-        if internal:
-            object.__setattr__(self, "internal_path_x_edges_mm", internal[0])
-            object.__setattr__(self, "internal_path_y_edges_mm", internal[1])
-            object.__setattr__(self, "internal_path_z_edges_mm", internal[2])
-            object.__setattr__(self, "internal_weighted_path_density_3d", internal[3])
-            object.__setattr__(self, "internal_z_integrated_path_density", internal[4])
+        if field_arrays:
+            object.__setattr__(self, "field_x_edges_mm", field_arrays[0])
+            object.__setattr__(self, "field_y_edges_mm", field_arrays[1])
+            object.__setattr__(self, "field_z_edges_mm", field_arrays[2])
+            object.__setattr__(self, "field_density_3d", field_arrays[3])
         object.__setattr__(self, "geometry_metadata", _freeze_metadata(self.geometry_metadata))
         object.__setattr__(
             self,
@@ -354,6 +329,68 @@ class Transport3DResult:
                 {key: float(value) for key, value in self.timings_seconds.items()}
             ),
         )
+
+    @property
+    def field(self) -> np.ndarray:
+        """Return the authoritative native field in ``(x, y, z)`` order."""
+        if self.field_density_3d is None:
+            raise Transport3DResultError("FULL_3D result has no retained native field")
+        return self.field_density_3d
+
+    @property
+    def total_transport(self) -> float:
+        """Return the escaped transport mass used by optimization metrics."""
+        return float(self.escaped_weight)
+
+    @property
+    def field_axes(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Return native field edges in public ``(x, y, z)`` order."""
+        if (
+            self.field_x_edges_mm is None
+            or self.field_y_edges_mm is None
+            or self.field_z_edges_mm is None
+        ):
+            raise Transport3DResultError("FULL_3D result has no native field axes")
+        return self.field_x_edges_mm, self.field_y_edges_mm, self.field_z_edges_mm
+
+    @property
+    def z_integrated_field(self) -> np.ndarray:
+        """Return the derived field obtained by summing native z bins."""
+        return np.sum(self.field, axis=2)
+
+    def energy_record(self) -> dict[str, Any]:
+        """Return scalar transport diagnostics for evaluator persistence."""
+        launched = float(self.launched_weight)
+        carrier_absorbed = float(self.carrier_absorbed_weight)
+        escaped = float(self.escaped_weight)
+        return {
+            "launched_weight": launched,
+            "escaped_weight": escaped,
+            "escaped_transport_fraction": escaped / max(launched, 1.0e-30),
+            "absorbed_weight": float(self.absorbed_weight),
+            "terminated_weight": float(self.terminated_weight),
+            "total_transport": escaped,
+            "object_interface_optics": "disabled_in_deformation_only_scene",
+            "object_interface_incident_weight": float(self.object_interface_incident_weight),
+            "object_absorbed_weight": float(self.object_absorbed_weight),
+            "object_transmitted_weight": float(self.object_transmitted_weight),
+            "object_reflected_weight": float(self.object_reflected_weight),
+            "carrier_absorbed_weight": carrier_absorbed,
+            "carrier_absorption_fraction": carrier_absorbed / max(launched, 1.0e-30),
+            "carrier_transmitted_weight": float(self.carrier_transmitted_weight),
+            "carrier_interface_incident_weight": float(self.carrier_interface_incident_weight),
+            "carrier_reflected_weight": float(self.carrier_reflected_weight),
+            "carrier_optical_contact_triangle_count": int(
+                self.geometry_metadata.get("carrier_interface", {}).get(
+                    "contact_triangle_count", 0
+                )
+            ),
+            "energy_balance_error": float(self.energy_balance_error),
+            "field_shape": list(self.field.shape),
+            "field_finite_nonnegative": bool(
+                np.all(np.isfinite(self.field)) and np.all(self.field >= 0.0)
+            ),
+        }
 
     def lateral_outgoing_profiles(
         self,

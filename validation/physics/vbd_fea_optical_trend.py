@@ -39,20 +39,22 @@ from model.fingertip_model import FingertipModel
 from model.fingertip_model import FingertipParameters
 from model.solid import build_fingertip_solid
 from optics.transport3d import (
-    OptiXTransport,
-    UnifiedTransportResult,
     build_fingertip_volume_state_geometry,
-    fingerprint_mapping,
-    load_case_artifact,
-    load_full3d_surface_artifact,
-    native_field_separability,
-    save_case_artifact,
-    transport_configuration,
+    trace_geometry,
 )
 from optics.transport3d.optix_backend import create_runtime
 from optics.transport3d.settings import Transport3DSettings
 from validation.common.io import atomic_write_json, strict_read_json
 from validation.common.provenance import sha256_file
+from optimization.optical_artifact import (
+    UNIFIED_ARTIFACT_SCHEMA,
+    fingerprint_mapping,
+    load_case_artifact,
+    native_field_separability,
+    save_case_artifact,
+    transport_configuration,
+)
+from validation.optics.fea_surface_artifact import load_full3d_surface_artifact
 from mesh.volume.state import make_fingertip_volume_state as make_volume_state
 
 from .correspondence import (
@@ -314,13 +316,12 @@ def _material(tip: Any) -> dict[str, Any]:
 
 def artifact_contract_is_exact(metadata: Mapping[str, Any], expected: Mapping[str, Any]) -> bool:
     """Check the reusable-artifact contract before attempting field loading."""
+    expected_payload = json.loads(
+        json.dumps(dict(expected), sort_keys=True, allow_nan=False)
+    )
     return bool(
-        metadata.get("schema") in {
-            "unified-optix-transport-case-v3",
-            "unified-optix-transport-case-v2",
-            "unified-optix-transport-case-v1",
-        }
-        and metadata.get("contract") == dict(expected)
+        metadata.get("schema") == UNIFIED_ARTIFACT_SCHEMA
+        and metadata.get("contract") == expected_payload
         and metadata.get("contract_fingerprint") == fingerprint_mapping(dict(expected))
     )
 
@@ -332,37 +333,22 @@ def _trace_or_reuse(
     tip: Any,
     geometry: Any,
     settings: Transport3DSettings,
-    morphology_id: str,
-    morphology_fingerprint: str,
-    mechanics_source: str,
-    contact_state: Mapping[str, Any],
-    transport_config: Mapping[str, Any],
     runtime: Any,
-    tracer: OptiXTransport,
-    reuse_paths: Sequence[Path] = (),
-) -> tuple[UnifiedTransportResult, bool, float, Path]:
-    for candidate_path in (path, *reuse_paths):
-        if not candidate_path.exists():
-            continue
+) -> tuple[Any, bool, float, Path]:
+    if path.exists():
         try:
-            metadata = strict_read_json(candidate_path)
+            metadata = strict_read_json(path)
             if artifact_contract_is_exact(metadata, expected_contract):
                 started = time.perf_counter()
-                result = load_case_artifact(candidate_path, expected_contract=expected_contract)
-                return result, True, time.perf_counter() - started, candidate_path
+                result = load_case_artifact(path, expected_contract=expected_contract)
+                return result, True, time.perf_counter() - started, path
         except (OSError, ValueError, TypeError):
             pass
     started = time.perf_counter()
-    result = tracer.trace(
+    result = trace_geometry(
         tip,
         geometry,
         settings=settings,
-        morphology_id=morphology_id,
-        morphology_fingerprint=morphology_fingerprint,
-        mechanics_source=mechanics_source,
-        mechanics_dimension="3D",
-        contact_state=contact_state,
-        transport_configuration=transport_config,
         runtime=runtime,
     )
     save_case_artifact(path, result, expected_contract)
@@ -767,7 +753,6 @@ def run_comparison(
 
     bounds = _bounds(all_geometries)
     optix_settings = _optix_settings(bounds)
-    tracer = OptiXTransport()
     runtime = create_runtime()
     output_root.mkdir(parents=True, exist_ok=True)
     optix_root = output_root / "vbd_fea_optical_optix"
@@ -821,21 +806,13 @@ def run_comparison(
                 }
                 fea_path = optix_root / f"{state['morphology_id']}__{side}__FEA.json"
                 vbd_path = optix_root / f"{state['morphology_id']}__{side}__VBD.json"
-                legacy_path = Path("output/validation/overnight_force_localized_trend/optix_cases") / f"{side_state['case']['case_id']}__FULL_3D__{RAY_COUNT}.json"
                 fea_result, fea_reused, fea_seconds, fea_used_path = _trace_or_reuse(
                     path=fea_path,
                     expected_contract=fea_contract,
                     tip=tip,
                     geometry=fea_geometry,
                     settings=optix_settings,
-                    morphology_id=state["morphology_id"],
-                    morphology_fingerprint=state["morphology_fingerprint"],
-                    mechanics_source=str(artifact.artifact_path),
-                    contact_state={"localized_load_only": True, "side": side, "contact_state_fingerprint": artifact.contact_state_fingerprint},
-                    transport_config=config,
                     runtime=runtime,
-                    tracer=tracer,
-                    reuse_paths=(legacy_path,),
                 )
                 vbd_result, vbd_reused, vbd_seconds, vbd_used_path = _trace_or_reuse(
                     path=vbd_path,
@@ -843,13 +820,7 @@ def run_comparison(
                     tip=tip,
                     geometry=side_state["vbd_geometry"],
                     settings=optix_settings,
-                    morphology_id=state["morphology_id"],
-                    morphology_fingerprint=state["morphology_fingerprint"],
-                    mechanics_source="physics.NewtonSession",
-                    contact_state={"localized_load_only": True, "side": side, "contact_state_fingerprint": side_state["vbd_fp"]},
-                    transport_config=config,
                     runtime=runtime,
-                    tracer=tracer,
                 )
                 optical[side] = {
                     "FEA": fea_result,
@@ -960,7 +931,7 @@ def run_comparison(
             "settings": asdict(prepared_groups[0]["prepared_candidates"][0]["vbd_settings"]),
         },
         "optics": {
-            "runtime": "optics.transport3d.OptiXTransport",
+            "runtime": "optics.transport3d.trace_geometry",
             "settings": asdict(optix_settings),
             "configuration_scope": "one frozen full-3D transport configuration and common field bounds for all states",
             "source_configuration": "existing Fingertip optical source carried by each exact morphology; identical FEA/VBD within each state",

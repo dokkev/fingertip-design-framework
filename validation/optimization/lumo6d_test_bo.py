@@ -22,7 +22,8 @@ import numpy as np
 
 from mesh.volume.mesh import VolumeMeshDependencyError
 from model import FingertipParameters, silicone_thickness_measures
-from optics.transport3d import Transport3DDependencyError, fingerprint_mapping
+from optics.transport3d import Transport3DDependencyError
+from optimization.optical_artifact import fingerprint_mapping
 from optics.optix.smoke import run_production_optix_smoke
 from optimization.adapters.ax import (
     AxSettings,

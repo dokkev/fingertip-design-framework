@@ -190,7 +190,6 @@ def test_unexpected_objective_error_propagates(
 
     class _Result:
         field = np.ones((2, 2), dtype=float)
-        transport_configuration_fingerprint = "transport"
 
         def energy_record(self):
             return {
@@ -200,11 +199,11 @@ def test_unexpected_objective_error_propagates(
                 "escaped_weight": 1.0,
             }
 
-    class _Transport:
-        def trace(self, *_args, **_kwargs):
-            return _Result()
-
-    monkeypatch.setattr(evaluator_module, "OptiXTransport", _Transport)
+    monkeypatch.setattr(
+        evaluator_module,
+        "trace_geometry",
+        lambda *_args, **_kwargs: _Result(),
+    )
 
     def fail_objective(*_args, **_kwargs):
         raise RuntimeError("unexpected objective implementation error")
