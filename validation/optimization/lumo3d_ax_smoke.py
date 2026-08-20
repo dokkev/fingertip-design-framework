@@ -19,10 +19,7 @@ from optimization.design_space import (
     PRODUCTION_SEARCH_BOUNDS,
 )
 from model import Fingertip, FingertipParameters
-from optimization.evaluator import (
-    TRAJECTORY_EVALUATION_CONTRACT_ID,
-    create_lumo3d_trajectory_study,
-)
+from optimization.evaluator import create_lumo3d_trajectory_study
 from lumo.simulation import LUMO3D_OBSERVATION_LEVEL
 
 
@@ -81,6 +78,7 @@ def run_lumo3d_ax_smoke(output_dir: str | Path) -> dict[str, Any]:
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
     wiring = create_lumo3d_trajectory_study(output)
+    contract_id = wiring.evaluation_contract_id
     evaluator = _SyntheticEvaluator()
     study = _SyntheticStudy(wiring.design_space, evaluator)
     registry_path = output / "registry.json"
@@ -98,7 +96,7 @@ def run_lumo3d_ax_smoke(output_dir: str | Path) -> dict[str, Any]:
             objective_name=CONTACT_STATE_SEPARATION_OBJECTIVE_NAME,
         ),
         evaluation_registry=registry,
-        evaluation_contract_id=TRAJECTORY_EVALUATION_CONTRACT_ID,
+        evaluation_contract_id=contract_id,
         campaign_id="lumo3d-ax-smoke",
         result_artifact_path=str(output / "checkpoint.json"),
     )
@@ -114,7 +112,7 @@ def run_lumo3d_ax_smoke(output_dir: str | Path) -> dict[str, Any]:
         raise RuntimeError("Ax smoke did not retain a successful best record")
     if len(evaluator.calls) != 3:
         raise RuntimeError("synthetic Ax smoke did not evaluate exactly three records")
-    stored = registry.records_for_contract(TRAJECTORY_EVALUATION_CONTRACT_ID)
+    stored = registry.records_for_contract(contract_id)
     if len(stored) != 3 or any(record.objective_value is None for record in stored):
         raise RuntimeError("Ax smoke registry did not persist objective_value")
     summary = {

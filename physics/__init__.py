@@ -16,6 +16,8 @@ from .trajectory.fingertip import (
 from .newton.solve import NewtonSettings, PhysicsDependencyError
 from .contracts.types import NewtonResult, TetMeshData
 from .trajectory.indentation import (
+    CandidateMechanicsError,
+    CheckpointStep,
     IndentationCheckpoint,
     IndentationResult,
     IndentationSettings,
@@ -27,6 +29,8 @@ from .trajectory.indentation import (
 )
 
 __all__ = [
+    "CandidateMechanicsError",
+    "CheckpointStep",
     "NewtonResult",
     "NewtonSettings",
     "PhysicsDependencyError",

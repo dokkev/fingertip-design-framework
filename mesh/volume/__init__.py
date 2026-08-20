@@ -11,10 +11,15 @@ from .contracts import (
     volume_mesh_settings_for_tier,
 )
 from .mesh import VolumeMeshDependencyError, VolumeMeshingError, generate_volume_mesh
-from .state import FingertipVolumeState, make_fingertip_volume_state
+from .state import (
+    FingertipVolumeState,
+    InvalidDeformedFingertipState,
+    make_fingertip_volume_state,
+)
 
 __all__ = [
     "FingertipVolumeState",
+    "InvalidDeformedFingertipState",
     "FingertipVolumeMesh",
     "SurfaceTriangle",
     "Tetrahedron",

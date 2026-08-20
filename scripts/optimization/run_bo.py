@@ -42,7 +42,10 @@ from optimization.evaluator import (
     create_lumo3d_trajectory_study,
 )
 from optimization.objectives import OBJECTIVE_NAME
-from optimization.protocol import TrajectoryEvaluationProtocol
+from optimization.protocol import (
+    DEFAULT_TRAJECTORY_PROTOCOL,
+    TrajectoryEvaluationProtocol,
+)
 
 
 # ------------------------------ USER CONFIG ------------------------------
@@ -68,7 +71,8 @@ USER_OPTICAL_MATERIAL = OpticalMaterial(
     refractive_index_silicone=1.41,
     absorption_per_mm=0.02,
 )
-USER_PROTOCOL = TrajectoryEvaluationProtocol(
+USER_PROTOCOL = DEFAULT_TRAJECTORY_PROTOCOL
+SMOKE_PROTOCOL = TrajectoryEvaluationProtocol(
     contact_locations_u=(0.25, 0.75),
     indenter_radii_mm=(5.0,),
     checkpoint_depths_mm=(1.0,),
@@ -93,7 +97,12 @@ def _run_optix_smoke() -> Any:
     return run()
 
 
-def _user_config_payload(*, trials: int | None = None) -> dict[str, Any]:
+def _user_config_payload(
+    *,
+    trials: int | None = None,
+    protocol: TrajectoryEvaluationProtocol = USER_PROTOCOL,
+    campaign_mode: str = "production",
+) -> dict[str, Any]:
     tip = Fingertip(
         USER_PARAMETERS,
         led=USER_LED,
@@ -103,10 +112,11 @@ def _user_config_payload(*, trials: int | None = None) -> dict[str, Any]:
         "schema": "lumo-production-bo-user-config-v1",
         "device": DEVICE,
         "seed": SEED,
+        "campaign_mode": campaign_mode,
         "nominal_parameters": asdict(USER_PARAMETERS),
         "led": asdict(USER_LED),
         "optical_material": asdict(USER_OPTICAL_MATERIAL),
-        "trajectory_protocol": USER_PROTOCOL.to_dict(),
+        "trajectory_protocol": protocol.to_dict(),
         "mechanics_contract": USER_MECHANICS_CONTRACT.to_dict(),
         "transport_3d_settings": asdict(USER_OPTICAL_SETTINGS),
         "objective": {
@@ -130,7 +140,11 @@ def _user_config_payload(*, trials: int | None = None) -> dict[str, Any]:
     return payload
 
 
-def _preflight_payload(output: str | Path | None = None) -> dict[str, Any]:
+def _preflight_payload(
+    output: str | Path | None = None,
+    *,
+    protocol: TrajectoryEvaluationProtocol = USER_PROTOCOL,
+) -> dict[str, Any]:
     """Check Python dependencies, domain construction, and one real OptiX launch."""
     preflight_root = DEFAULT_OUTPUT if output is None else Path(output)
     checks: dict[str, Any] = {}
@@ -156,7 +170,7 @@ def _preflight_payload(output: str | Path | None = None) -> dict[str, Any]:
         Fingertip(USER_PARAMETERS, led=USER_LED, optical=USER_OPTICAL_MATERIAL)
         study = create_lumo3d_trajectory_study(
             preflight_root / "preflight-artifacts",
-            protocol=USER_PROTOCOL,
+            protocol=protocol,
             mechanics_contract=USER_MECHANICS_CONTRACT,
             device=DEVICE,
             optical_settings=USER_OPTICAL_SETTINGS,
@@ -169,7 +183,7 @@ def _preflight_payload(output: str | Path | None = None) -> dict[str, Any]:
             "active_variables": [
                 variable.name.value for variable in study.design_space.active_variables
             ],
-            "protocol_fingerprint": USER_PROTOCOL.fingerprint,
+            "protocol_fingerprint": protocol.fingerprint,
             "mechanics_contract_fingerprint": USER_MECHANICS_CONTRACT.fingerprint,
         }
     except Exception as exc:
@@ -216,7 +230,13 @@ def _record_payload(record: Any) -> dict[str, Any]:
     }
 
 
-def run_campaign(output: str | Path, *, trials: int) -> dict[str, Any]:
+def run_campaign(
+    output: str | Path,
+    *,
+    trials: int,
+    smoke: bool = False,
+    registry_path: str | Path | None = None,
+) -> dict[str, Any]:
     if not isinstance(trials, int) or isinstance(trials, bool) or trials < 1:
         raise ValueError("trials must be a positive integer")
     root = Path(output)
@@ -224,7 +244,8 @@ def run_campaign(output: str | Path, *, trials: int) -> dict[str, Any]:
         raise FileExistsError(f"refusing to overwrite non-empty output: {root}")
     root.mkdir(parents=True, exist_ok=True)
 
-    preflight = _preflight_payload(root)
+    protocol = SMOKE_PROTOCOL if smoke else USER_PROTOCOL
+    preflight = _preflight_payload(root, protocol=protocol)
     _json_write(root / "preflight.json", preflight)
     if preflight["status"] != "PASS":
         raise RuntimeError(
@@ -234,7 +255,7 @@ def run_campaign(output: str | Path, *, trials: int) -> dict[str, Any]:
 
     study = create_lumo3d_trajectory_study(
         root / "artifacts",
-        protocol=USER_PROTOCOL,
+        protocol=protocol,
         mechanics_contract=USER_MECHANICS_CONTRACT,
         device=DEVICE,
         optical_settings=USER_OPTICAL_SETTINGS,
@@ -242,16 +263,24 @@ def run_campaign(output: str | Path, *, trials: int) -> dict[str, Any]:
         optical_material=USER_OPTICAL_MATERIAL,
         nominal_parameters=USER_PARAMETERS,
     )
-    config = _user_config_payload(trials=trials)
+    selected_registry_path = (
+        root / "registry.json" if registry_path is None else Path(registry_path)
+    )
+    config = _user_config_payload(
+        trials=trials,
+        protocol=protocol,
+        campaign_mode="smoke" if smoke else "production",
+    )
     config.update(
         {
             "contract_id": study.evaluation_contract_id,
             "evaluation_schema": TRAJECTORY_EVALUATION_SCHEMA,
             "output": str(root),
+            "registry": str(selected_registry_path),
         }
     )
     _json_write(root / "config.json", config)
-    registry = EvaluationRegistry(root / "registry.json")
+    registry = EvaluationRegistry(selected_registry_path)
     records: list[dict[str, Any]] = []
 
     def persist(_client: Any, observed: tuple[Any, ...]) -> None:
@@ -310,10 +339,23 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--preflight", action="store_true")
     parser.add_argument("--trials", type=int, default=0)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
+    parser.add_argument(
+        "--smoke",
+        action="store_true",
+        help="use the explicit reduced two-state protocol",
+    )
+    parser.add_argument(
+        "--registry",
+        type=Path,
+        help="reuse an existing exact-result registry outside the output directory",
+    )
     args = parser.parse_args(argv)
 
     if args.preflight:
-        preflight = _preflight_payload(args.output)
+        preflight = _preflight_payload(
+            args.output,
+            protocol=SMOKE_PROTOCOL if args.smoke else USER_PROTOCOL,
+        )
         print(json.dumps(preflight, indent=2, sort_keys=True, allow_nan=False))
         if args.trials == 0:
             return 0 if preflight["status"] == "PASS" else 2
@@ -321,7 +363,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.trials < 1:
         parser.error("provide --trials N for a campaign, or use --preflight")
     try:
-        summary = run_campaign(args.output, trials=args.trials)
+        summary = run_campaign(
+            args.output,
+            trials=args.trials,
+            smoke=args.smoke,
+            registry_path=args.registry,
+        )
     except CampaignInfrastructureError as exc:
         print(f"INFRASTRUCTURE_FAILED [{exc.signature}]: {exc}", file=sys.stderr)
         return 2

@@ -8,7 +8,7 @@ from typing import Any, Literal
 
 import numpy as np
 
-from model.fingertip_model import FingertipParameters
+from model.fingertip_parameters import FingertipParameters
 from model.solid import FingertipSolid
 
 

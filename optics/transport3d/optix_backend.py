@@ -52,7 +52,7 @@ def create_runtime() -> OptixRuntime:
 
 
 class OptixScene:
-    """One rebuilt GAS collection for one deformed FEM state."""
+    """One rebuilt GAS collection for one deformed volume state."""
 
     def __init__(
         self,

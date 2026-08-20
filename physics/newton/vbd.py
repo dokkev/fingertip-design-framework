@@ -16,6 +16,8 @@ from physics.contracts.load import ParticleLoad
 from physics.contracts.types import NewtonResult, TetMeshData
 from physics.trajectory.fingertip import PreparedFingertipMesh
 from physics.trajectory.indentation import (
+    CandidateMechanicsError,
+    CheckpointStep,
     IndentationCheckpoint,
     IndentationResult,
     IndentationSettings,
@@ -402,16 +404,16 @@ def _build_indentation_context(
     if not isinstance(initial_pose, RigidPose3D):
         raise TypeError("initial_pose must be RigidPose3D or None")
 
-    device = _require_cuda_device(mechanics_settings.device)
-
     configured_support = tuple(sorted(mechanics_settings.fixed_vertex_indices))
     authoritative_support = tuple(sorted(prepared_fingertip.support_vertex_indices))
-    if configured_support and configured_support != authoritative_support:
+    if configured_support != authoritative_support:
         raise ValueError(
-            "physics indentation requires fixed_vertex_indices to be empty or "
-            "equal to prepared_fingertip.support_vertex_indices; the authoritative "
+            "physics indentation requires fixed_vertex_indices to exactly equal "
+            "prepared_fingertip.support_vertex_indices; the authoritative "
             f"support is {authoritative_support!r}, received {configured_support!r}"
         )
+
+    device = _require_cuda_device(mechanics_settings.device)
 
     vertices_m = np.asarray(prepared_fingertip.tet_mesh.vertices, dtype=np.float32) * 1.0e-3
     rigid_vertices_m = np.asarray(indenter.mesh.vertices_mm, dtype=np.float32) * 1.0e-3
@@ -646,7 +648,7 @@ def _solve_newton_vbd_indentation_path(
     checkpoint_fractions = (1.0,)
     if indentation_settings.travel_mm == 0.0:
         schedule = tuple(
-            (0.0, step, step)
+            CheckpointStep(0.0, step, step)
             for step in range(1, indentation_settings.load_steps + 1)
         )
     else:
@@ -675,7 +677,7 @@ def _solve_newton_vbd_indentation_path_with_schedule(
     indenter: RigidIndenter3D,
     mechanics_settings: NewtonSettings,
     indentation_settings: IndentationSettings,
-    schedule: tuple[tuple[float, int, int], ...],
+    schedule: tuple[CheckpointStep, ...],
     *,
     checkpoint_travels: tuple[float, ...],
     checkpoint_fractions: tuple[float, ...],
@@ -716,7 +718,11 @@ def _solve_newton_vbd_indentation_path_with_schedule(
     # load-step fraction.
     checkpoint_indices = {}
     for target in checkpoint_travels:
-        matching = [cumulative for travel, _, cumulative in schedule if np.isclose(travel, target, rtol=0.0, atol=1.0e-12)]
+        matching = [
+            step.cumulative_step
+            for step in schedule
+            if np.isclose(step.travel_mm, target, rtol=0.0, atol=1.0e-12)
+        ]
         if not matching:
             raise ValueError(f"checkpoint travel {target:g} is absent from the schedule")
         checkpoint_indices[matching[-1]] = checkpoint_travels.index(target)
@@ -770,7 +776,10 @@ def _solve_newton_vbd_indentation_path_with_schedule(
         )
     timestep_s = float(mechanics_settings.dt)
     checkpoints: list[IndentationCheckpoint] = []
-    for target_travel, interval_step, cumulative_step in schedule:
+    for scheduled_step in schedule:
+        target_travel = scheduled_step.travel_mm
+        interval_step = scheduled_step.interval_step
+        cumulative_step = scheduled_step.cumulative_step
         if first_contact is None:
             target_pose = indenter.pose_at_travel(target_travel)
         else:
@@ -848,7 +857,7 @@ def _solve_newton_vbd_indentation_path_with_schedule(
             sphere_carrier_rigid_count,
         )
         if sphere_carrier_rigid_count:
-            raise RuntimeError(
+            raise CandidateMechanicsError(
                 "sphere-carrier rigid collision is active; carrier collision must "
                 "be particle-only for this indentation experiment"
             )
@@ -898,17 +907,17 @@ def _solve_newton_vbd_indentation_path_with_schedule(
         # Newton's counters are the only valid overflow signal here.  The
         # per-body lists skip static/kinematic bodies, so total soft-contact
         # records must not be compared with their capacities.
-        if max_soft_contact_overflow > _RIGID_BODY_PARTICLE_CONTACT_BUFFER_SIZE:
-            raise RuntimeError(
+        if max_soft_contact_overflow > 0:
+            raise CandidateMechanicsError(
                 "Newton reported rigid body particle contact buffer overflow: "
-                f"{max_soft_contact_overflow} > "
-                f"{_RIGID_BODY_PARTICLE_CONTACT_BUFFER_SIZE}"
+                f"overflow_count={max_soft_contact_overflow}, "
+                f"capacity={_RIGID_BODY_PARTICLE_CONTACT_BUFFER_SIZE}"
             )
-        if max_rigid_contact_overflow > _RIGID_CONTACT_BUFFER_SIZE:
-            raise RuntimeError(
+        if max_rigid_contact_overflow > 0:
+            raise CandidateMechanicsError(
                 "Newton reported rigid contact buffer overflow: "
-                f"{max_rigid_contact_overflow} > "
-                f"{_RIGID_CONTACT_BUFFER_SIZE}"
+                f"overflow_count={max_rigid_contact_overflow}, "
+                f"capacity={_RIGID_CONTACT_BUFFER_SIZE}"
             )
         context.state_in, context.state_out = context.state_out, context.state_in
         previous_pose_for_velocity = target_pose
@@ -935,6 +944,19 @@ def _solve_newton_vbd_indentation_path_with_schedule(
                 np.cross(points[:, 1] - points[:, 0], points[:, 2] - points[:, 0]),
                 points[:, 3] - points[:, 0],
             )
+            actual_body_translation_mm = np.asarray(
+                context.state_in.body_q.numpy()[context.indenter_body][:3],
+                dtype=np.float32,
+            ) * 1.0e3
+            target_body_translation_mm = np.asarray(
+                target_pose.translation_mm,
+                dtype=np.float32,
+            )
+            final_pose_error_mm = float(
+                np.linalg.norm(
+                    actual_body_translation_mm - target_body_translation_mm
+                )
+            )
             snapshot_diagnostics: dict[str, object] = {
                 "device": mechanics_settings.device,
                 "full_surface_contact": True,
@@ -945,8 +967,14 @@ def _solve_newton_vbd_indentation_path_with_schedule(
                 "max_load_increment_mm": max(
                     travel - previous
                     for previous, travel in zip(
-                        (0.0,) + tuple(item[0] for item in schedule[: cumulative_step - 1]),
-                        tuple(item[0] for item in schedule[:cumulative_step]),
+                        (0.0,)
+                        + tuple(
+                            item.travel_mm
+                            for item in schedule[: cumulative_step - 1]
+                        ),
+                        tuple(
+                            item.travel_mm for item in schedule[:cumulative_step]
+                        ),
                     )
                 ),
                 "rigid_sdf_target_voxel_mm": indentation_settings.rigid_sdf_target_voxel_mm,
@@ -984,9 +1012,10 @@ def _solve_newton_vbd_indentation_path_with_schedule(
                 "max_support_displacement_mm": float(np.max(np.linalg.norm(support_displacement, axis=1))) if len(support_displacement) else 0.0,
                 "inverted_tetrahedra": int(np.count_nonzero(six_volumes <= 0.0)),
                 "min_six_volume": float(np.min(six_volumes)),
-                "final_body_x_mm": float(np.asarray(context.state_in.body_q.numpy()[context.indenter_body][:3], dtype=np.float32)[0] * 1.0e3),
-                "final_body_y_mm": float(np.asarray(context.state_in.body_q.numpy()[context.indenter_body][:3], dtype=np.float32)[1] * 1.0e3),
-                "final_body_z_mm": float(np.asarray(context.state_in.body_q.numpy()[context.indenter_body][:3], dtype=np.float32)[2] * 1.0e3),
+                "final_body_x_mm": float(actual_body_translation_mm[0]),
+                "final_body_y_mm": float(actual_body_translation_mm[1]),
+                "final_body_z_mm": float(actual_body_translation_mm[2]),
+                "final_pose_error_mm": final_pose_error_mm,
             }
             if first_contact is not None:
                 snapshot_diagnostics.update(

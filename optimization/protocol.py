@@ -86,20 +86,6 @@ class TrajectoryEvaluationProtocol:
             raise ValueError("radius_mm must be positive")
         return tuple(depth / radius for depth in self.checkpoint_depths_mm)
 
-    def checkpoint_travels_mm(self, radius_mm: float | None = None) -> tuple[float, ...]:
-        """Return absolute post-contact travels independent of radius.
-
-        The optional radius argument is accepted only as a migration aid for
-        callers that used the old derived-travel method. It is validated when
-        supplied but cannot affect the returned fixed-depth values.
-        """
-
-        if radius_mm is not None:
-            radius = _finite("radius_mm", radius_mm)
-            if radius <= 0.0:
-                raise ValueError("radius_mm must be positive")
-        return self.checkpoint_depths_mm
-
     @property
     def maximum_depth_mm(self) -> float:
         return self.checkpoint_depths_mm[-1]

@@ -475,7 +475,12 @@ def generate_fingertip_mesh(
 ) -> FingertipMesh:
     """Mesh the model's Shapely pad/link domains with distinct Gmsh topology."""
     gmsh = _import_gmsh()
-    gmsh.initialize(["phase4m"])
+    try:
+        gmsh.initialize(["phase4m"])
+    except Exception as exc:
+        raise GmshDependencyError(
+            f"Gmsh runtime could not initialize: {type(exc).__name__}: {exc}"
+        ) from exc
     try:
         gmsh.model.add(f"lit_fingertip_{settings.level}")
         pad_entities = _add_domain(
@@ -581,5 +586,11 @@ def generate_fingertip_mesh(
         )
         report = validate_fingertip_mesh(mesh, model)
         return replace(mesh, validation=report)
+    except FingertipMeshingError:
+        raise
+    except RuntimeError as exc:
+        raise FingertipMeshingError(
+            f"Gmsh could not mesh this fingertip geometry: {exc}"
+        ) from exc
     finally:
         gmsh.finalize()

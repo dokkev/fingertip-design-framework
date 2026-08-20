@@ -193,6 +193,7 @@ def test_candidate_failure_is_registered_in_real_evaluation_registry(monkeypatch
     evaluator = _CandidateFailureEvaluator()
     study = SimpleNamespace(design_space=_space(), create_evaluator=lambda: evaluator)
     registry = EvaluationRegistry(tmp_path / "registry.json")
+    registered_counts: list[int] = []
     monkeypatch.setattr(ax_adapter, "create_ax_client", lambda *_: client)
 
     result = run_ax_optimization(
@@ -206,12 +207,16 @@ def test_candidate_failure_is_registered_in_real_evaluation_registry(monkeypatch
         evaluation_registry=registry,
         evaluation_contract_id="candidate-contact-test-v1",
         campaign_id="candidate-contact-campaign",
+        on_record=lambda _client, _records: registered_counts.append(
+            len(registry.records_for_contract("candidate-contact-test-v1"))
+        ),
     )
 
     assert all(record.status == "mechanics_failure" for record in result.records)
     stored = registry.records_for_contract("candidate-contact-test-v1")
     assert len(stored) == 2
     assert all(record.status == "mechanics_failure" for record in stored)
+    assert registered_counts == [1, 2]
     assert all(trial.status == "FAILED" for trial in client.trials.values())
     assert all(trial.status != "ABANDONED" for trial in client.trials.values())
 

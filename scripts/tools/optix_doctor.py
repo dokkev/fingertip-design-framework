@@ -6,11 +6,52 @@ import argparse
 import importlib.metadata
 import importlib.util
 import json
+import os
 from pathlib import Path
 import sys
 from typing import Any
 
-from optics.optix._paths import _diagnose_include_paths
+from optics.optix._paths import _cuda_candidates, _optix_candidates
+
+
+def _header_status(
+    candidates: tuple[Path, ...],
+    required_headers: tuple[str, ...],
+) -> dict[str, Any]:
+    records = []
+    resolved: Path | None = None
+    for candidate in candidates:
+        missing = [
+            header
+            for header in required_headers
+            if not (candidate / header).is_file()
+        ]
+        records.append(
+            {
+                "path": str(candidate),
+                "missing_required_headers": missing,
+            }
+        )
+        if resolved is None and candidate.is_dir() and not missing:
+            resolved = candidate.resolve()
+    return {
+        "resolved": resolved is not None,
+        "directory": None if resolved is None else str(resolved),
+        "candidates": records,
+    }
+
+
+def _diagnose_include_paths() -> dict[str, Any]:
+    return {
+        "optix": _header_status(
+            _optix_candidates(os.environ),
+            ("optix.h", "optix_device.h"),
+        ),
+        "cuda": _header_status(
+            _cuda_candidates(os.environ),
+            ("cuda.h", "cuda_runtime.h"),
+        ),
+    }
 
 
 def _module_status(name: str) -> dict[str, Any]:

@@ -551,7 +551,7 @@ def run_ax_optimization(
             wall_time_seconds=time.perf_counter() - started,
         )
         records.append(record)
-        if on_record is not None:
+        if evaluation_registry is None and on_record is not None:
             on_record(client, tuple(records))
 
         if evaluation_registry is not None:

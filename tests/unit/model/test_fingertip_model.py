@@ -10,9 +10,11 @@ from shapely.geometry import LineString, MultiLineString, MultiPolygon, Polygon,
 from shapely.ops import linemerge, unary_union
 
 from model.fingertip_model import (
-    FingertipParameters,
     FingertipModel,
     InvalidFingertipGeometry,
+)
+from model.fingertip_parameters import (
+    FingertipParameters,
     InvalidFingertipParameters,
     fingertip_parameters_fingerprint,
 )
@@ -26,14 +28,12 @@ def build_model(**overrides: float | int) -> FingertipModel:
     return FingertipModel(FingertipParameters(**overrides))
 
 
-def test_physical_morphology_fingerprint_ignores_representation_and_material() -> None:
+def test_physical_morphology_fingerprint_ignores_representation() -> None:
     base = FingertipParameters()
     assert fingertip_parameters_fingerprint(base) == fingertip_parameters_fingerprint(
         FingertipParameters(
             arc_resolution=16,
             geometry_tolerance=1.0e-8,
-            young_modulus_mpa=0.8,
-            poisson_ratio=0.45,
         )
     )
     assert fingertip_parameters_fingerprint(base) != fingertip_parameters_fingerprint(

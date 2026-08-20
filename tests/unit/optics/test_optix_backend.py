@@ -9,7 +9,7 @@ from optics.transport3d.optix_backend import (
     OptixScene,
     Transport3DDependencyError,
 )
-from optics.optix.runtime import OptixRuntimeError
+from optics.optix.runtime import OptixRuntime, OptixRuntimeError
 
 
 def _surface() -> SimpleNamespace:
@@ -39,3 +39,44 @@ def test_optix_scene_translates_explicit_runtime_operation_failure() -> None:
 
     with pytest.raises(Transport3DDependencyError, match="device synchronization"):
         OptixScene(_Runtime(), _surface(), _surface(), _surface())
+
+
+def test_trace_translates_contiguous_cuda_allocation_failure() -> None:
+    runtime = object.__new__(OptixRuntime)
+
+    def fail_allocation(*_args, **_kwargs):
+        raise RuntimeError("CUDA out of memory")
+
+    runtime.cp = SimpleNamespace(
+        float32=np.float32,
+        ascontiguousarray=fail_allocation,
+    )
+
+    with pytest.raises(OptixRuntimeError, match="contiguous origin allocation"):
+        runtime.trace(
+            1,
+            np.zeros((1, 3), dtype=np.float32),
+            np.zeros((1, 3), dtype=np.float32),
+            tmin=1.0e-5,
+        )
+
+
+def test_trace_translates_empty_cuda_allocation_failure() -> None:
+    runtime = object.__new__(OptixRuntime)
+
+    def fail_allocation(*_args, **_kwargs):
+        raise RuntimeError("CUDA runtime unavailable")
+
+    runtime.cp = SimpleNamespace(
+        float32=np.float32,
+        uint32=np.uint32,
+        empty=fail_allocation,
+    )
+
+    with pytest.raises(OptixRuntimeError, match="empty trace allocation"):
+        runtime.trace(
+            1,
+            np.zeros((0, 3), dtype=np.float32),
+            np.zeros((0, 3), dtype=np.float32),
+            tmin=1.0e-5,
+        )

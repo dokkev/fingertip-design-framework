@@ -198,7 +198,7 @@ def _plot_outputs(root: Path, evaluations: dict[str, Any]) -> None:
     plots = root / "plots"
     plots.mkdir(parents=True, exist_ok=True)
     for label, evaluation in evaluations.items():
-        records = evaluation.trajectory_diagnostics
+        records = evaluation.checkpoint_diagnostics
         figure, axis = plt.subplots(figsize=(6, 4))
         grouped: dict[str, list[Mapping[str, Any]]] = {}
         for record in records:
@@ -314,7 +314,7 @@ def run_validation(output: str | Path, *, device: str = "cuda:0") -> dict[str, A
         evaluations[label] = result
 
     all_trajectory_records = {
-        label: list(result.trajectory_diagnostics) for label, result in evaluations.items()
+        label: list(result.checkpoint_diagnostics) for label, result in evaluations.items()
     }
     _write_json(root / "trajectories.json", all_trajectory_records)
     with (root / "checkpoints.csv").open("w", newline="", encoding="utf-8") as handle:
@@ -347,13 +347,12 @@ def run_validation(output: str | Path, *, device: str = "cuda:0") -> dict[str, A
         root / "legacy_reduction_legacy",
         device=device,
         normalized_locations=(0.25, 0.50, 0.75),
-        mechanics_mode="search",
     ).evaluate(_nominal())
     legacy_comparison = _compare_legacy_reduction(reduced_new, legacy)
     _write_json(root / "legacy_reduction_check.json", legacy_comparison)
 
     new_final = next(
-        record for record in evaluations["nominal"].trajectory_diagnostics
+        record for record in evaluations["nominal"].checkpoint_diagnostics
         if record["normalized_location"] == 0.5 and record["radius_mm"] == 5.0 and record["checkpoint_depth_mm"] == 1.5
     )
     old_root = root / "mechanics_final_state_old"
@@ -441,7 +440,7 @@ def run_validation(output: str | Path, *, device: str = "cuda:0") -> dict[str, A
             label: {
                 "status": result.status,
                 "objective": _objective_payload(result),
-                "trajectory_count": len({record["trajectory_id"] for record in result.trajectory_diagnostics}),
+                "trajectory_count": len({record["trajectory_id"] for record in result.checkpoint_diagnostics}),
                 "checkpoint_count": len(result.checkpoint_diagnostics),
                 "optical_state_count": len(result.optical_diagnostics),
                 "minimum_transport": min(record["total_transport"] for record in result.optical_diagnostics),
@@ -449,7 +448,7 @@ def run_validation(output: str | Path, *, device: str = "cuda:0") -> dict[str, A
             }
             for label, result in evaluations.items()
         },
-        "total_newton_trajectory_count": sum(len({record["trajectory_id"] for record in result.trajectory_diagnostics}) for result in evaluations.values()),
+        "total_newton_trajectory_count": sum(len({record["trajectory_id"] for record in result.checkpoint_diagnostics}) for result in evaluations.values()),
         "total_full3d_optical_state_count": sum(len(result.optical_diagnostics) for result in evaluations.values()),
         "legacy_reduction": legacy_comparison,
         "legacy_reduction_absolute_error": legacy_comparison.get("objective_abs_error"),

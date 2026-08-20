@@ -26,7 +26,11 @@ from mesh.volume.contracts import (
     VolumeNode,
     volume_mesh_settings_for_tier,
 )
-from mesh.volume.state import FingertipVolumeState, make_fingertip_volume_state
+from mesh.volume.state import (
+    FingertipVolumeState,
+    InvalidDeformedFingertipState,
+    make_fingertip_volume_state,
+)
 from mesh.rigid.object import (
     RigidPose3D,
     RigidObjectMesh,
@@ -64,6 +68,7 @@ __all__ = [
     "generate_volume_mesh",
     "volume_mesh_settings_for_tier",
     "FingertipVolumeState",
+    "InvalidDeformedFingertipState",
     "make_fingertip_volume_state",
     "RigidObjectMesh",
     "RigidCarrierMesh",

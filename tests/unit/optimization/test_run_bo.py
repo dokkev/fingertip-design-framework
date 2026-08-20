@@ -17,7 +17,13 @@ def test_user_config_contains_the_production_search_controls() -> None:
         "void_width",
         "void_height",
     }.issubset(payload["nominal_parameters"])
-    assert payload["trajectory_protocol"]["contact_locations_u"] == [0.25, 0.75]
+    assert payload["campaign_mode"] == "production"
+    assert payload["trajectory_protocol"] == run_bo.USER_PROTOCOL.to_dict()
+    assert payload["trajectory_protocol"]["contact_locations_u"] == [
+        0.25,
+        0.5,
+        0.75,
+    ]
     assert payload["ax"]["initialization_trials"] == run_bo.INITIALIZATION_TRIALS
     assert payload["ax"]["search_trials"] == 4 - run_bo.INITIALIZATION_TRIALS
     json.dumps(payload, allow_nan=False)
@@ -34,7 +40,7 @@ def test_preflight_only_reports_external_failure_without_starting_campaign(
     monkeypatch.setattr(
         run_bo,
         "_preflight_payload",
-        lambda output: seen_outputs.append(output)
+        lambda output, **_kwargs: seen_outputs.append(output)
         or {
             "schema": "test",
             "status": "FAIL_EXTERNAL_PREREQUISITE",
@@ -53,7 +59,7 @@ def test_preflight_success_is_a_read_only_exit(monkeypatch, capsys) -> None:
     monkeypatch.setattr(
         run_bo,
         "_preflight_payload",
-        lambda _output: {
+        lambda _output, **_kwargs: {
             "schema": "test",
             "status": "PASS",
             "failed_checks": [],

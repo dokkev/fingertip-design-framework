@@ -38,7 +38,9 @@ def test_supported_variables_are_exactly_the_current_six() -> None:
     assert tuple(
         (variable.name, variable.lower, variable.upper)
         for variable in _space().active_variables
-    ) == tuple(spec.to_tuple() for spec in PRODUCTION_SEARCH_BOUNDS)
+    ) == tuple(
+        (spec.name, spec.lower, spec.upper) for spec in PRODUCTION_SEARCH_BOUNDS
+    )
 
 
 def test_design_variable_rejects_invalid_metadata() -> None:
@@ -93,13 +95,11 @@ def test_decode_uses_independent_flat_and_semielliptical_heights() -> None:
         space.decode({**values, "void_width": 10.1})
 
 
-def test_decode_preserves_fixed_material_and_link_fields() -> None:
+def test_decode_preserves_fixed_geometry_and_representation_fields() -> None:
     nominal = FingertipParameters(
         link_thickness=4.0,
         bond_extension_width=3.0,
         bond_extension_height=1.5,
-        young_modulus_mpa=0.8,
-        poisson_ratio=0.2,
         arc_resolution=64,
         void_height=0.25,
     )
@@ -118,8 +118,6 @@ def test_decode_preserves_fixed_material_and_link_fields() -> None:
         "link_thickness",
         "bond_extension_width",
         "bond_extension_height",
-        "young_modulus_mpa",
-        "poisson_ratio",
         "arc_resolution",
     ):
         assert getattr(decoded, name) == before[name]

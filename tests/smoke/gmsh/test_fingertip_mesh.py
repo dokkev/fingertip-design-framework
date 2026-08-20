@@ -13,7 +13,7 @@ from shapely.geometry import MultiLineString
 from mesh.fingertip.geometry import generate_fingertip_mesh
 from mesh.fingertip.contracts import InvalidMeshSettings, MeshSettings, mesh_settings_for_level
 from model.fingertip_model import FingertipModel
-from model.fingertip_model import FingertipParameters
+from model.fingertip_parameters import FingertipParameters
 
 
 def test_geometry_mesh_api_imports_without_kratos() -> None:

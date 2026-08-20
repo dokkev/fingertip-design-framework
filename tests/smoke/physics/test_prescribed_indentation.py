@@ -19,7 +19,7 @@ from physics.trajectory.fingertip import (
 from mesh.volume.mesh import generate_volume_mesh
 from mesh.volume.contracts import volume_mesh_settings_for_tier
 from model.fingertip_model import FingertipModel
-from model.fingertip_model import FingertipParameters
+from model.fingertip_parameters import FingertipParameters
 from model.solid import build_fingertip_solid
 
 

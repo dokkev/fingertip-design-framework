@@ -1,7 +1,7 @@
 """Public physical fingertip model."""
 
 from model.fingertip import Fingertip, InvalidFingertip
-from model.fingertip_model import (
+from model.fingertip_parameters import (
     FingertipParameters,
     InvalidFingertipParameters,
     MAX_TOTAL_PAD_DEPTH_MM,

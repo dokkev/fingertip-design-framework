@@ -238,7 +238,12 @@ def generate_volume_mesh(solid: FingertipSolid, settings: VolumeMeshSettings) ->
     if not solid.watertight:
         raise VolumeMeshingError("refusing a semantic solid that failed its closed-volume gate")
     gmsh = _import_gmsh()
-    gmsh.initialize()
+    try:
+        gmsh.initialize()
+    except Exception as exc:
+        raise VolumeMeshDependencyError(
+            f"Gmsh runtime could not initialize: {type(exc).__name__}: {exc}"
+        ) from exc
     try:
         gmsh.model.add("fingertip_pad_3d")
         _configure(gmsh, settings)
@@ -390,6 +395,12 @@ def generate_volume_mesh(solid: FingertipSolid, settings: VolumeMeshSettings) ->
             validation=VolumeMeshValidation(not errors, checks, errors),
             gmsh_version=str(gmsh.option.getString("General.Version")),
         )
+    except VolumeMeshingError:
+        raise
+    except RuntimeError as exc:
+        raise VolumeMeshingError(
+            f"Gmsh could not mesh this fingertip solid: {exc}"
+        ) from exc
     finally:
         gmsh.finalize()
 

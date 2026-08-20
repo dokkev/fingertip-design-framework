@@ -58,13 +58,11 @@ def transport_configuration(
     material: Mapping[str, Any],
     source: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Serialize the common settings/material contract for case fingerprints."""
+    """Serialize only inputs that can change FULL_3D transport."""
     configuration: dict[str, Any] = {
+        "schema": "full3d-transport-configuration-v1",
         "settings": asdict(settings),
         "material": dict(material),
-        "source_sampling": "optics.transport3d.sampling.sample_directions",
-        "physics": "optics.transport3d.physics.interface_split+attenuation",
-        "accumulation": "native P3(x,y,z)",
     }
     if source is not None:
         configuration["source"] = dict(source)
@@ -105,7 +103,7 @@ class OpticalFieldArtifact:
     optical_mode: str = "FULL_3D"
 
 
-def energy_record(result: Transport3DResult | OpticalFieldArtifact) -> dict[str, Any]:
+def energy_record(result: Transport3DResult) -> dict[str, Any]:
     """Serialize scalar transport diagnostics at the optimization boundary."""
     launched = float(result.launched_weight)
     carrier_absorbed = float(result.carrier_absorbed_weight)
@@ -116,6 +114,44 @@ def energy_record(result: Transport3DResult | OpticalFieldArtifact) -> dict[str,
         "escaped_transport_fraction": escaped / max(launched, 1.0e-30),
         "absorbed_weight": float(result.absorbed_weight),
         "terminated_weight": float(result.terminated_weight),
+        "processed_segment_count": int(result.processed_segment_count),
+        "periodic_wrap_termination_count": int(
+            result.periodic_wrap_termination_count
+        ),
+        "periodic_wrap_termination_weight": float(
+            result.periodic_wrap_termination_weight
+        ),
+        "no_event_termination_count": int(result.no_event_termination_count),
+        "no_event_termination_weight": float(
+            result.no_event_termination_weight
+        ),
+        "branch_cutoff_termination_count": int(
+            result.branch_cutoff_termination_count
+        ),
+        "branch_cutoff_termination_weight": float(
+            result.branch_cutoff_termination_weight
+        ),
+        "max_interaction_termination_count": int(
+            result.max_interaction_termination_count
+        ),
+        "max_interaction_termination_weight": float(
+            result.max_interaction_termination_weight
+        ),
+        "segment_budget_termination_count": int(
+            result.segment_budget_termination_count
+        ),
+        "segment_budget_termination_weight": float(
+            result.segment_budget_termination_weight
+        ),
+        "rigid_surface_termination_count": int(
+            result.rigid_surface_termination_count
+        ),
+        "rigid_surface_termination_weight": float(
+            result.rigid_surface_termination_weight
+        ),
+        "interface_normal_fallback_count": int(
+            result.interface_normal_fallback_count
+        ),
         "total_transport": float(result.total_transport),
         "object_interface_optics": "disabled_in_deformation_only_scene",
         "object_interface_incident_weight": float(result.object_interface_incident_weight),
@@ -152,6 +188,23 @@ def _path_diagnostics(
             "convention": "cutoff applies to branches with interaction_count > 1",
         },
         "processed_segment_count": int(result.processed_segment_count),
+        "branch_cutoff_termination": {
+            "count": int(result.branch_cutoff_termination_count),
+            "weight": float(result.branch_cutoff_termination_weight),
+        },
+        "max_interaction_termination": {
+            "count": int(result.max_interaction_termination_count),
+            "weight": float(result.max_interaction_termination_weight),
+        },
+        "segment_budget_termination": {
+            "count": int(result.segment_budget_termination_count),
+            "weight": float(result.segment_budget_termination_weight),
+            "maximum_segment_count": settings.get("maximum_segment_count"),
+        },
+        "rigid_surface_termination": {
+            "count": int(result.rigid_surface_termination_count),
+            "weight": float(result.rigid_surface_termination_weight),
+        },
         "periodic_wrap_termination": {
             "enabled": bool(settings.get("terminate_on_periodic_wrap_limit", False)),
             "count": int(result.periodic_wrap_termination_count),

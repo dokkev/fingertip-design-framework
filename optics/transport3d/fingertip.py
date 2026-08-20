@@ -15,6 +15,7 @@ from model.fingertip import Fingertip
 from .geometry import (
     AIR_INTERFACE,
     CARRIER_CONTACT_INTERFACE,
+    ExtrudedTransportGeometry,
     Full3DSurfaceProvenance,
     INTERNAL_INTERFACE,
     TriangleSurface,
@@ -340,7 +341,7 @@ def build_fingertip_volume_state_geometry(
     carrier_mapping_tolerance_mm: float | None = None,
     full3d_surface_provenance: Full3DSurfaceProvenance,
     metadata: Mapping[str, Any] | None = None,
-) -> Any:
+) -> ExtrudedTransportGeometry:
     """Build direct ``full3d_surface`` geometry without FEA artifacts.
 
     ``reference_mesh`` is only the fixed-carrier/envelope view used by the

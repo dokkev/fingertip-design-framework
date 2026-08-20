@@ -9,7 +9,6 @@ from gui.diagnostics import (
     diagnose_design_space,
     diagnose_geometry,
     diagnose_led,
-    diagnose_mechanical,
     diagnose_optical,
 )
 
@@ -68,20 +67,9 @@ def test_led_fit_diagnostics_include_width_and_height_alternatives() -> None:
     assert "Increase stem_height or reduce LED height" in height_text
 
 
-def test_mechanical_diagnostics_report_model_supported_intervals() -> None:
-    text = _text(diagnose_mechanical({"young_modulus_mpa": -1.0, "poisson_ratio": 0.5}))
-    assert "young_modulus_mpa must be > 0 MPa" in text
-    assert "-1 < poisson_ratio < 0.5" in text
-
-
-def test_optical_diagnostics_report_nonnegative_and_anisotropy_intervals() -> None:
-    text = _text(
-        diagnose_optical(
-            {"absorption_per_mm": -0.1, "anisotropy_g": 1.0}
-        )
-    )
+def test_optical_diagnostics_report_nonnegative_absorption() -> None:
+    text = _text(diagnose_optical({"absorption_per_mm": -0.1}))
     assert "absorption_per_mm must be >= 0" in text
-    assert "-1 < anisotropy_g < 1" in text
 
 
 def test_active_bounds_must_enclose_nominal_in_the_correct_direction() -> None:

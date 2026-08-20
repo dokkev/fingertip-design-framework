@@ -41,6 +41,8 @@ def _result() -> Transport3DResult:
         escape_interaction_counts=np.asarray([1]),
         energy_balance_error=0.0,
         energy_balance_tolerance=1.0e-6,
+        branch_cutoff_termination_count=1,
+        branch_cutoff_termination_weight=0.1,
         object_absorbed_weight=0.05,
         object_interface_incident_weight=0.05,
         carrier_absorbed_weight=0.4,
@@ -87,7 +89,7 @@ def test_direct_result_keeps_carrier_energy_channels_distinct() -> None:
 def test_optical_fingerprint_inputs_match_full3d_transport_inputs() -> None:
     tip = Fingertip(
         led=LED(relative_radiant_power=2.0, emission_half_angle_deg=60.0),
-        optical=OpticalMaterial(scattering_per_mm=9.0),
+        optical=OpticalMaterial(),
     )
 
     parameters = optical_physics_parameters(tip)

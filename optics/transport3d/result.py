@@ -68,10 +68,18 @@ class Transport3DResult:
     periodic_wrap_termination_weight: float = 0.0
     no_event_termination_count: int = 0
     no_event_termination_weight: float = 0.0
+    branch_cutoff_termination_count: int = 0
+    branch_cutoff_termination_weight: float = 0.0
+    max_interaction_termination_count: int = 0
+    max_interaction_termination_weight: float = 0.0
+    segment_budget_termination_count: int = 0
+    segment_budget_termination_weight: float = 0.0
+    rigid_surface_termination_count: int = 0
+    rigid_surface_termination_weight: float = 0.0
     interface_normal_fallback_count: int = 0
     carrier_contact_triangle_count: int = 0
-    escape_event_count: int | None = None
-    escaped_primary_count: int | None = None
+    escape_event_count: int = field(init=False)
+    escaped_primary_count: int = field(init=False)
     object_absorbed_weight: float = 0.0
     object_transmitted_weight: float = 0.0
     object_interface_incident_weight: float = 0.0
@@ -120,6 +128,10 @@ class Transport3DResult:
             "carrier_reflected_weight",
             "periodic_wrap_termination_weight",
             "no_event_termination_weight",
+            "branch_cutoff_termination_weight",
+            "max_interaction_termination_weight",
+            "segment_budget_termination_weight",
+            "rigid_surface_termination_weight",
         )
         scalars = {name: float(getattr(self, name)) for name in scalar_names}
         if any(not np.isfinite(value) for value in scalars.values()):
@@ -144,6 +156,10 @@ class Transport3DResult:
             "processed_segment_count",
             "periodic_wrap_termination_count",
             "no_event_termination_count",
+            "branch_cutoff_termination_count",
+            "max_interaction_termination_count",
+            "segment_budget_termination_count",
+            "rigid_surface_termination_count",
             "interface_normal_fallback_count",
             "carrier_contact_triangle_count",
         )
@@ -151,7 +167,14 @@ class Transport3DResult:
             value = getattr(self, name)
             if not isinstance(value, int) or isinstance(value, bool) or value < 0:
                 raise Transport3DResultError(f"{name} must be a non-negative integer")
-        for name in ("periodic_wrap_termination_weight", "no_event_termination_weight"):
+        for name in (
+            "periodic_wrap_termination_weight",
+            "no_event_termination_weight",
+            "branch_cutoff_termination_weight",
+            "max_interaction_termination_weight",
+            "segment_budget_termination_weight",
+            "rigid_surface_termination_weight",
+        ):
             if scalars[name] < 0.0:
                 raise Transport3DResultError(f"{name} must be non-negative")
         terminal_weight = sum(
@@ -172,6 +195,24 @@ class Transport3DResult:
         if calculated_error > scalars["energy_balance_tolerance"]:
             raise Transport3DResultError(
                 "terminal energy channels do not match the declared balance"
+            )
+        detailed_termination_weight = sum(
+            scalars[name]
+            for name in (
+                "periodic_wrap_termination_weight",
+                "no_event_termination_weight",
+                "branch_cutoff_termination_weight",
+                "max_interaction_termination_weight",
+                "segment_budget_termination_weight",
+                "rigid_surface_termination_weight",
+            )
+        )
+        termination_error = abs(
+            scalars["terminated_weight"] - detailed_termination_weight
+        ) / max(scalars["launched_weight"], 1.0e-30)
+        if termination_error > scalars["energy_balance_tolerance"]:
+            raise Transport3DResultError(
+                "explicit termination channels do not match terminated_weight"
             )
 
         u_edges = _owned_array(self.surface_u_edges, dtype=float, name="surface_u_edges")
@@ -257,26 +298,8 @@ class Transport3DResult:
             raise Transport3DResultError("escape metadata contains invalid values")
         observed_escape_events = len(weights)
         observed_escaped_primaries = len(np.unique(primary))
-        if self.escape_event_count is None:
-            object.__setattr__(self, "escape_event_count", observed_escape_events)
-        elif (
-            not isinstance(self.escape_event_count, int)
-            or isinstance(self.escape_event_count, bool)
-            or self.escape_event_count != observed_escape_events
-        ):
-            raise Transport3DResultError(
-                "escape_event_count must match the number of escape events"
-            )
-        if self.escaped_primary_count is None:
-            object.__setattr__(self, "escaped_primary_count", observed_escaped_primaries)
-        elif (
-            not isinstance(self.escaped_primary_count, int)
-            or isinstance(self.escaped_primary_count, bool)
-            or self.escaped_primary_count != observed_escaped_primaries
-        ):
-            raise Transport3DResultError(
-                "escaped_primary_count must match unique escaping primary rays"
-            )
+        object.__setattr__(self, "escape_event_count", observed_escape_events)
+        object.__setattr__(self, "escaped_primary_count", observed_escaped_primaries)
         normals_norm = np.linalg.norm(normals, axis=1)
         if len(normals) and np.any(~np.isfinite(normals_norm) | (normals_norm <= 0.0)):
             raise Transport3DResultError("escape surface normals must be nonzero")
@@ -399,34 +422,5 @@ class Transport3DResult:
         ):
             raise Transport3DResultError("FULL_3D result has no native field axes")
         return self.field_x_edges_mm, self.field_y_edges_mm, self.field_z_edges_mm
-
-    @property
-    def z_integrated_field(self) -> np.ndarray:
-        """Return the derived field obtained by summing native z bins."""
-        return np.sum(self.field, axis=2)
-
-    def lateral_outgoing_profiles(
-        self,
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """Return outgoing profiles for the two lateral pad surfaces."""
-        left = np.asarray(self.escape_surface_tags, dtype=object) == "pad_outer_left"
-        right = np.asarray(self.escape_surface_tags, dtype=object) == "pad_outer_right"
-        left_profile = np.histogram(
-            self.escape_surface_u[left],
-            bins=self.surface_u_edges,
-            weights=self.escape_weights[left],
-        )[0].astype(float, copy=False)
-        right_profile = np.histogram(
-            self.escape_surface_u[right],
-            bins=self.surface_u_edges,
-            weights=self.escape_weights[right],
-        )[0].astype(float, copy=False)
-        edges = np.array(self.surface_u_edges, dtype=float, copy=True)
-        left_profile = np.array(left_profile, dtype=float, copy=True)
-        right_profile = np.array(right_profile, dtype=float, copy=True)
-        for array in (edges, left_profile, right_profile):
-            array.setflags(write=False)
-        return edges, left_profile, right_profile
-
 
 __all__ = ["Transport3DResult", "Transport3DResultError"]

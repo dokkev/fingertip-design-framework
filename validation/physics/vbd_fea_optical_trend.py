@@ -36,7 +36,7 @@ from mesh.volume.mesh import generate_volume_mesh
 from mesh.volume.contracts import volume_mesh_settings_for_tier
 from model.fingertip import Fingertip
 from model.fingertip_model import FingertipModel
-from model.fingertip_model import FingertipParameters
+from model.fingertip_parameters import FingertipParameters
 from model.solid import build_fingertip_solid
 from optics.transport3d import (
     build_fingertip_volume_state_geometry,
@@ -766,7 +766,6 @@ def run_comparison(
                 source = {
                     "position_mm": list(fea_geometry.source_position_mm),
                     "medium": fea_geometry.source_medium,
-                    "model": "existing Fingertip optical source",
                 }
                 config = transport_configuration(optix_settings, material=material, source=source)
                 common_contract = {

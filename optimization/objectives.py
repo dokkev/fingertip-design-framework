@@ -53,23 +53,8 @@ class TrajectoryObservation:
             raise ValueError("checkpoint_depth_mm must be positive")
 
 
-def _as_observation(value: TrajectoryObservation | Mapping[str, Any]) -> TrajectoryObservation:
-    if isinstance(value, TrajectoryObservation):
-        return value
-    return TrajectoryObservation(
-        location_u=value.get("location_u", value.get("normalized_location")),
-        radius_mm=value.get("radius_mm", value.get("indenter_radius_mm")),
-        checkpoint_depth_mm=value.get(
-            "checkpoint_depth_mm",
-            value.get("post_contact_travel_mm", value.get("depth_mm")),
-        ),
-        field=value["field"],
-        diagnostics=value.get("diagnostics"),
-    )
-
-
 def normalized_field_distance(first: np.ndarray, second: np.ndarray) -> float:
-    """Return the legacy native normalized redistribution L1 distance."""
+    """Return the native normalized redistribution L1 distance."""
 
     left = np.asarray(first, dtype=float)
     right = np.asarray(second, dtype=float)
@@ -143,15 +128,17 @@ def _pair_record(first: TrajectoryObservation, second: TrajectoryObservation, di
 
 
 def compute_trajectory_objective(
-    observations: Iterable[TrajectoryObservation | Mapping[str, Any]],
+    observations: Iterable[TrajectoryObservation],
     config: TrajectoryObjectiveConfig | None = None,
 ) -> TrajectoryObjectiveResult:
     """Compute inter-location separation minus radius nuisance variation."""
 
     selected_config = config or TrajectoryObjectiveConfig()
-    items = tuple(_as_observation(value) for value in observations)
+    items = tuple(observations)
     if not items:
         raise ValueError("at least one trajectory observation is required")
+    if any(not isinstance(item, TrajectoryObservation) for item in items):
+        raise TypeError("observations must contain TrajectoryObservation values")
     field_masses = tuple(float(np.sum(item.field)) for item in items)
     diagnostics = tuple(item.diagnostics or {} for item in items)
     zero_mass_indices = [index for index, mass in enumerate(field_masses) if mass <= 1.0e-12]

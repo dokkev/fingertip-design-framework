@@ -8,7 +8,9 @@ import pytest
 
 from contact import CandidateContactError
 from mesh.volume.mesh import VolumeMeshDependencyError
+from lumo import MechanicsContract
 from model import FingertipParameters, LED, OpticalMaterial
+from physics import CandidateMechanicsError
 from optimization.objectives import TrajectoryObservation, compute_trajectory_objective
 from optimization.protocol import DEFAULT_TRAJECTORY_PROTOCOL, TrajectoryEvaluationProtocol
 from optimization.evaluator import (
@@ -52,20 +54,33 @@ def test_evaluation_contract_id_changes_with_fixed_scientific_inputs(tmp_path) -
         tmp_path / "led",
         led=LED(emission_half_angle_deg=60.0),
     )
+    changed_led_size = create_lumo3d_trajectory_study(
+        tmp_path / "led-size",
+        led=LED(width_mm=5.0),
+    )
     changed_material = create_lumo3d_trajectory_study(
         tmp_path / "material",
         optical_material=OpticalMaterial(absorption_per_mm=0.03),
     )
-    changed_unused_material = create_lumo3d_trajectory_study(
-        tmp_path / "unused-material",
-        optical_material=OpticalMaterial(scattering_per_mm=9.0),
+    changed_fixed_geometry = create_lumo3d_trajectory_study(
+        tmp_path / "fixed-geometry",
+        nominal_parameters=FingertipParameters(
+            link_thickness=4.0,
+            void_height=0.25,
+        ),
+    )
+    changed_mechanics = create_lumo3d_trajectory_study(
+        tmp_path / "mechanics",
+        mechanics_contract=MechanicsContract(k_mu_pa=2.0e5),
     )
 
-    assert len(base.evaluation_contract_id.split(":", 1)[1]) == 16
+    assert len(base.evaluation_contract_id.split(":", 1)[1]) == 64
     assert base.evaluation_contract_id != changed_protocol.evaluation_contract_id
     assert base.evaluation_contract_id != changed_led.evaluation_contract_id
+    assert base.evaluation_contract_id != changed_led_size.evaluation_contract_id
     assert base.evaluation_contract_id != changed_material.evaluation_contract_id
-    assert base.evaluation_contract_id == changed_unused_material.evaluation_contract_id
+    assert base.evaluation_contract_id != changed_fixed_geometry.evaluation_contract_id
+    assert base.evaluation_contract_id != changed_mechanics.evaluation_contract_id
 
 
 def test_radius_six_is_rejected_as_domain_incompatible_before_mesh_or_newton(tmp_path) -> None:
@@ -73,7 +88,22 @@ def test_radius_six_is_rejected_as_domain_incompatible_before_mesh_or_newton(tmp
     result = Lumo3DTrajectoryEvaluator(tmp_path, protocol=protocol).evaluate(FingertipParameters())
     assert result.status == "domain_incompatible"
     assert result.diagnostics["failure_stage"] == "domain_validation"
-    assert result.trajectory_diagnostics == ()
+    assert result.checkpoint_diagnostics == ()
+
+
+def test_candidate_fixed_inputs_must_match_the_evaluation_contract(tmp_path) -> None:
+    evaluator = Lumo3DTrajectoryEvaluator(
+        tmp_path,
+        fixed_parameters=FingertipParameters(link_thickness=4.0),
+    )
+
+    with pytest.raises(ValueError, match="fixed fingertip inputs"):
+        evaluator.evaluate(FingertipParameters())
+
+
+def test_evaluator_requires_a_named_execution_device(tmp_path) -> None:
+    with pytest.raises(ValueError, match="device"):
+        Lumo3DTrajectoryEvaluator(tmp_path, device="")
 
 
 def test_shared_mesh_dependency_is_not_recorded_as_candidate_failure(
@@ -166,6 +196,33 @@ def test_candidate_contact_error_is_translated_to_candidate_failure(
     assert "candidate contact is impossible" in (result.failure_message or "")
 
 
+def test_candidate_mechanics_error_is_translated_to_candidate_failure(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    protocol = TrajectoryEvaluationProtocol((0.5,), (5.0,), (1.5,))
+    evaluator = Lumo3DTrajectoryEvaluator(tmp_path, protocol=protocol)
+
+    class _Simulation:
+        volume_mesh = SimpleNamespace(morphology_fingerprint="mesh")
+
+        @staticmethod
+        def run_sphere_contact(*_args, **_kwargs):
+            raise CandidateMechanicsError("candidate state is inverted")
+
+    class _SimulationFactory:
+        @staticmethod
+        def from_fingertip(*_args, **_kwargs):
+            return _Simulation()
+
+    monkeypatch.setattr(evaluator_module, "LumoSimulation", _SimulationFactory)
+
+    result = evaluator.evaluate(FingertipParameters())
+    assert result.status == "mechanics_failure"
+    assert result.diagnostics["failure_scenario"] == "candidate_mechanics_state"
+    assert "candidate state is inverted" in (result.failure_message or "")
+
+
 def test_unexpected_objective_error_propagates(
     tmp_path,
     monkeypatch,
@@ -197,6 +254,20 @@ def test_unexpected_objective_error_propagates(
         escaped_weight = 1.0
         absorbed_weight = 0.0
         terminated_weight = 0.0
+        processed_segment_count = 1
+        periodic_wrap_termination_count = 0
+        periodic_wrap_termination_weight = 0.0
+        no_event_termination_count = 0
+        no_event_termination_weight = 0.0
+        branch_cutoff_termination_count = 0
+        branch_cutoff_termination_weight = 0.0
+        max_interaction_termination_count = 0
+        max_interaction_termination_weight = 0.0
+        segment_budget_termination_count = 0
+        segment_budget_termination_weight = 0.0
+        rigid_surface_termination_count = 0
+        rigid_surface_termination_weight = 0.0
+        interface_normal_fallback_count = 0
         object_interface_incident_weight = 0.0
         object_absorbed_weight = 0.0
         object_transmitted_weight = 0.0

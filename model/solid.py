@@ -11,13 +11,11 @@ from typing import Literal
 from shapely.geometry import MultiLineString, MultiPolygon, Polygon
 from shapely.geometry.base import BaseGeometry
 
-from model.fingertip_model import (
+from model.fingertip_model import FingertipModel, PolygonalGeometry
+from model.fingertip_parameters import (
     FingertipParameters,
-    FingertipModel,
-    PolygonalGeometry,
     fingertip_parameters_fingerprint,
 )
-from util import require_finite
 
 
 DEFAULT_EXTRUSION_DEPTH_MM = 11.0
@@ -63,8 +61,10 @@ class FingertipSolid:
     def __post_init__(self) -> None:
         if not isinstance(self.parameters, FingertipParameters):
             raise TypeError("parameters must be FingertipParameters")
-        require_finite("z_min_mm", self.z_min_mm)
-        require_finite("z_max_mm", self.z_max_mm)
+        if not math.isfinite(self.z_min_mm):
+            raise ValueError("z_min_mm must be finite")
+        if not math.isfinite(self.z_max_mm):
+            raise ValueError("z_max_mm must be finite")
         if self.z_min_mm >= self.z_max_mm:
             raise ValueError("z_min_mm must be smaller than z_max_mm")
         if not math.isclose(

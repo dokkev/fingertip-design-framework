@@ -7,7 +7,10 @@ import math
 
 import pytest
 
-from model.fingertip_model import FingertipParameters, InvalidFingertipParameters
+from model.fingertip_parameters import (
+    FingertipParameters,
+    InvalidFingertipParameters,
+)
 
 
 def _removed_width_name(prefix: str) -> str:
@@ -30,8 +33,6 @@ def test_default_parameters_use_the_canonical_geometry_api() -> None:
     assert not hasattr(parameters, "cutout_width")
     assert not hasattr(parameters, "cutout_height")
     assert not hasattr(parameters, "void_area")
-    assert parameters.young_modulus_mpa == 0.55
-    assert parameters.poisson_ratio == 0.49
 
 
 def test_link_and_ellipse_widths_are_not_constructor_parameters() -> None:
@@ -164,23 +165,9 @@ def test_cutout_on_or_within_tolerance_of_ellipse_is_rejected() -> None:
         ("bond_extension_height", math.nan),
         ("stem_width", math.nan),
         ("void_height", math.nan),
-        ("young_modulus_mpa", math.inf),
-        ("poisson_ratio", math.nan),
         ("geometry_tolerance", math.inf),
     ],
 )
 def test_nonfinite_values_are_rejected(name: str, value: float) -> None:
     with pytest.raises(InvalidFingertipParameters):
         FingertipParameters(**{name: value})
-
-
-@pytest.mark.parametrize("value", [0.0, -1.0])
-def test_nonpositive_young_modulus_is_rejected(value: float) -> None:
-    with pytest.raises(InvalidFingertipParameters, match="young_modulus_mpa"):
-        FingertipParameters(young_modulus_mpa=value)
-
-
-@pytest.mark.parametrize("value", [-1.0, 0.5])
-def test_poisson_ratio_must_be_in_open_physical_range(value: float) -> None:
-    with pytest.raises(InvalidFingertipParameters, match="poisson_ratio"):
-        FingertipParameters(poisson_ratio=value)

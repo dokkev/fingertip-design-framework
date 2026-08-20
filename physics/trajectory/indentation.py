@@ -22,6 +22,19 @@ if TYPE_CHECKING:
 _DIRECTION_NORM_TOLERANCE = 1.0e-12
 
 
+class CandidateMechanicsError(RuntimeError):
+    """Raised when one candidate produces an unacceptable mechanics state."""
+
+
+@dataclass(frozen=True)
+class CheckpointStep:
+    """One named step in an exact prescribed-travel schedule."""
+
+    travel_mm: float
+    interval_step: int
+    cumulative_step: int
+
+
 def _finite_tuple(
     value: tuple[float, ...] | list[float],
     *,
@@ -231,12 +244,11 @@ def checkpoint_step_schedule(
     checkpoint_travels_mm: Sequence[float],
     *,
     max_load_increment_mm: float,
-) -> tuple[tuple[float, int, int], ...]:
+) -> tuple[CheckpointStep, ...]:
     """Return exact cumulative steps for a monotonic checkpoint path.
 
-    Each tuple is ``(travel_mm, interval_step, cumulative_step)``.  The
-    interval is split with ``ceil(distance / max_increment)`` and therefore
-    always lands exactly on the requested checkpoint.
+    The interval is split with ``ceil(distance / max_increment)`` and
+    therefore always lands exactly on the requested checkpoint.
     """
 
     travels = tuple(float(value) for value in checkpoint_travels_mm)
@@ -247,7 +259,7 @@ def checkpoint_step_schedule(
         raise ValueError("checkpoint travels must be strictly increasing")
     if not np.isfinite(increment_limit) or increment_limit <= 0.0:
         raise ValueError("max_load_increment_mm must be finite and positive")
-    schedule: list[tuple[float, int, int]] = []
+    schedule: list[CheckpointStep] = []
     previous = 0.0
     cumulative = 0
     for target in travels:
@@ -259,7 +271,9 @@ def checkpoint_step_schedule(
         for interval_step in range(1, interval_steps + 1):
             cumulative += 1
             current = target if interval_step == interval_steps else previous + actual_increment * interval_step
-            schedule.append((float(current), interval_step, cumulative))
+            schedule.append(
+                CheckpointStep(float(current), interval_step, cumulative)
+            )
         previous = target
     return tuple(schedule)
 
@@ -377,6 +391,8 @@ def solve_fingertip_indentation_trajectory(
 
 
 __all__ = [
+    "CandidateMechanicsError",
+    "CheckpointStep",
     "IndentationResult",
     "IndentationCheckpoint",
     "IndentationTrajectoryResult",

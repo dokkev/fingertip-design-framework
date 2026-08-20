@@ -14,14 +14,12 @@ from optimization.objectives import (
 from optimization.protocol import DEFAULT_TRAJECTORY_PROTOCOL, TrajectoryEvaluationProtocol
 
 
-def test_default_protocol_counts_and_derived_travels() -> None:
+def test_default_protocol_counts_and_absolute_depths() -> None:
     protocol = DEFAULT_TRAJECTORY_PROTOCOL
     assert protocol.trajectory_count == 6
     assert protocol.checkpoint_count == 3
     assert protocol.optical_state_count == 18
     assert protocol.checkpoint_depths_mm == pytest.approx((0.5, 1.0, 1.5))
-    assert protocol.checkpoint_travels_mm(4.0) == pytest.approx((0.5, 1.0, 1.5))
-    assert protocol.checkpoint_travels_mm(5.0) == pytest.approx((0.5, 1.0, 1.5))
     assert protocol.normalized_indentation_ratios(4.0) == pytest.approx((0.125, 0.25, 0.375))
     assert protocol.normalized_indentation_ratios(5.0) == pytest.approx((0.1, 0.2, 0.3))
 
@@ -35,7 +33,7 @@ def test_custom_protocol_changes_only_protocol_derived_values() -> None:
     assert protocol.trajectory_count == 9
     assert protocol.checkpoint_count == 4
     assert protocol.optical_state_count == 36
-    assert protocol.checkpoint_travels_mm(4.0) == pytest.approx((0.5, 1.0, 1.5, 2.0))
+    assert protocol.checkpoint_depths_mm == pytest.approx((0.5, 1.0, 1.5, 2.0))
 
 
 def test_protocol_fingerprint_is_sensitive_to_every_field() -> None:

@@ -168,16 +168,15 @@ The external shell tags remain `pad_bond_left`, `pad_outer_left`,
 recess interfaces, the outer sidewalls, and the lower semi-ellipse, remaining
 open only at the cutout mouth for loaded optical-domain closure.
 
-## Mechanical material
+## Mechanics inputs
 
-`FingertipParameters` also owns the compliant-pad material values used by the
-production FEM path:
+`FingertipParameters` owns geometry only. Production mechanics uses the actual
+Newton numerical coefficients in `lumo.mechanics_contract.MechanicsContract`,
+including density, `k_mu`, `k_lambda`, damping, timestep, contact coefficients,
+and checkpoint-acceptance thresholds.
 
-| Parameter | Meaning | Default |
-| --- | --- | --- |
-| `young_modulus_mpa` | pad Young's modulus [MPa] | `0.55` |
-| `poisson_ratio` | pad Poisson ratio [-] | `0.49` |
-
-These are the current validated FEM baseline values, not an experimentally
-calibrated silicone characterization. The rigid carrier and indenter remain
-backend-constrained parts.
+The repository does not currently define or calibrate a Young's-modulus and
+Poisson-ratio material model, and therefore does not expose disconnected
+`E, nu` fields on the fingertip morphology. Adding such physical inputs requires
+an explicit constitutive mapping and scientific validation rather than a
+cleanup-only conversion.

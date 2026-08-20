@@ -210,14 +210,13 @@ def _prepare_case() -> _PreparedCase:
     from mesh.volume.mesh import generate_volume_mesh
     from mesh.volume.contracts import volume_mesh_settings_for_tier
     from model.fingertip_model import FingertipModel
-    from model.fingertip_model import FingertipParameters
+    from model.fingertip_parameters import FingertipParameters
     from model.solid import build_fingertip_solid
 
     model = FingertipModel(
         FingertipParameters(
             void_width=1.0,
             void_height=0.0,
-            poisson_ratio=0.49,
         )
     )
     solid = build_fingertip_solid(model)

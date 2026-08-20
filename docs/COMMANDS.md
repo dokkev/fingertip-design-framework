@@ -90,14 +90,18 @@ For a minimal production-path smoke only:
 
 ```bash
 conda run -n lit python scripts/optimization/run_bo.py \
+  --smoke \
   --trials 1 \
   --output output/optimization/bo_smoke
 ```
 
-It uses the production evaluator, Ax adapter, and exact-contract evaluation
-registry. A shared CUDA/OptiX/Gmsh/Newton prerequisite failure aborts before
-candidate registration; a morphology failure is recorded as a candidate
-result.
+Without `--smoke`, the runner uses the authoritative 18-state production
+protocol. `--smoke` is the only route to the reduced two-state protocol. Both
+use the production evaluator, Ax adapter, and exact-contract evaluation
+registry. Pass `--registry PATH` to reuse exact results across output
+directories; contract IDs prevent reuse across different fixed inputs. A
+shared CUDA/OptiX/Gmsh/Newton prerequisite failure aborts before candidate
+registration; a morphology failure is recorded as a candidate result.
 
 ## Newton viewer helpers
 

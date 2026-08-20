@@ -176,8 +176,6 @@ class OptixRuntime:
                 )[0:2],
                 "optix_include": str(paths.optix),
                 "cuda_include": str(paths.cuda),
-                "optix_include_resolution_source": paths.optix_source,
-                "cuda_include_resolution_source": paths.cuda_source,
                 "module_setup_seconds": time.perf_counter() - started,
                 "module_log": module_log,
                 "program_group_log": group_log,
@@ -229,15 +227,11 @@ class OptixRuntime:
             return callback()
         except OptixRuntimeError:
             raise
-        except (MemoryError, RuntimeError) as exc:
+        except Exception as exc:
             raise OptixRuntimeError(
                 f"{operation} failed: {exc}",
                 stage="optix_runtime_execution",
             ) from exc
-
-    def make_sbt(self, groups: list[Any]) -> tuple[Any, list[Any]]:
-        """Pack a shader binding table for an alternate caller-owned program set."""
-        return self._make_sbt(self.optix, self.cp, groups)
 
     def build_gas(
         self,
@@ -352,18 +346,32 @@ class OptixRuntime:
         """Trace the standard vectorized transport parameter record."""
         count = int(origins.shape[0])
         if count == 0:
-            return (
-                self.cp.empty((0,), dtype=self.cp.float32),
-                self.cp.empty((0,), dtype=self.cp.uint32),
-                self.cp.empty((0, 2), dtype=self.cp.float32),
-                self.cp.empty((0,), dtype=self.cp.uint32),
+            return self._backend_call(
+                "CUDA empty trace allocation",
+                lambda: (
+                    self.cp.empty((0,), dtype=self.cp.float32),
+                    self.cp.empty((0,), dtype=self.cp.uint32),
+                    self.cp.empty((0, 2), dtype=self.cp.float32),
+                    self.cp.empty((0,), dtype=self.cp.uint32),
+                ),
             )
-        origins = self.cp.ascontiguousarray(origins, dtype=self.cp.float32)
-        directions = self.cp.ascontiguousarray(directions, dtype=self.cp.float32)
-        distances = self.cp.empty(count, dtype=self.cp.float32)
-        primitives = self.cp.empty(count, dtype=self.cp.uint32)
-        barycentrics = self.cp.empty((count, 2), dtype=self.cp.float32)
-        hits = self.cp.empty(count, dtype=self.cp.uint32)
+        origins = self._backend_call(
+            "CUDA contiguous origin allocation",
+            lambda: self.cp.ascontiguousarray(origins, dtype=self.cp.float32),
+        )
+        directions = self._backend_call(
+            "CUDA contiguous direction allocation",
+            lambda: self.cp.ascontiguousarray(directions, dtype=self.cp.float32),
+        )
+        distances, primitives, barycentrics, hits = self._backend_call(
+            "CUDA trace-output allocation",
+            lambda: (
+                self.cp.empty(count, dtype=self.cp.float32),
+                self.cp.empty(count, dtype=self.cp.uint32),
+                self.cp.empty((count, 2), dtype=self.cp.float32),
+                self.cp.empty(count, dtype=self.cp.uint32),
+            ),
+        )
         params_host = np.zeros(1, dtype=self.params_dtype)
         params_host["handle"] = handle
         params_host["origins"] = int(origins.data.ptr)

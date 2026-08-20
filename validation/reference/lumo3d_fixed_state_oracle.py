@@ -46,7 +46,7 @@ from optimization.design_space import (
     PRODUCTION_SEARCH_BOUNDS,
     OPTIMIZABLE_PARAMETER_NAMES,
 )
-from optimization.deformed_state_artifact import restore_deformed_optical_state
+from validation.optics.deformed_state_restore import restore_deformed_optical_state
 from optimization.optical_artifact import (
     energy_record,
     fingerprint_mapping,
@@ -329,7 +329,6 @@ class FixedStateLumo3DOracle:
             configuration = transport_configuration(
                 self.settings,
                 material=material,
-                source={"model": "existing Fingertip optical source"},
             )
             runtime = create_runtime()
             optical_records: list[dict[str, Any]] = []

@@ -271,7 +271,11 @@ class EvaluationRegistry:
             created_at=_now(),
         )
         self._records[key] = record
-        self._persist()
+        try:
+            self._persist()
+        except Exception:
+            del self._records[key]
+            raise
         return record
 
     def note_duplicate(
@@ -292,7 +296,11 @@ class EvaluationRegistry:
             last_duplicate_campaign_id=campaign_id,
         )
         self._records[record.key] = updated
-        self._persist()
+        try:
+            self._persist()
+        except Exception:
+            self._records[record.key] = current
+            raise
         return updated
 
     def _load(self) -> dict[str, EvaluationRegistryRecord]:

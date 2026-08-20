@@ -13,7 +13,7 @@ from physics import prepare_fingertip_mesh
 from mesh import volume_mesh_settings_for_tier
 from mesh.volume.mesh import generate_volume_mesh
 from model import Fingertip
-from optimization.deformed_state_artifact import restore_deformed_optical_state
+from validation.optics.deformed_state_restore import restore_deformed_optical_state
 
 
 def _write_artifact(path, prepared, deformed) -> str:
@@ -22,6 +22,8 @@ def _write_artifact(path, prepared, deformed) -> str:
         "deformed_vertices_mm": np.asarray(deformed, dtype=np.float32),
         "tetrahedra": np.asarray(prepared.tet_mesh.tetrahedra, dtype=np.int32),
         "source_node_ids": np.asarray(prepared.source_node_ids, dtype=np.int64),
+        "carrier_contact_vertex_indices": np.asarray([], dtype=np.int64),
+        "carrier_contact_source_node_ids": np.asarray([], dtype=np.int64),
     }
     arrays.update(
         {

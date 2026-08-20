@@ -44,7 +44,6 @@ include = [
   "optimization*",
   "lumo*",
   "gui*",
-  "util*",
 ]
 
 [tool.setuptools.package-data]

@@ -365,6 +365,14 @@ def _trace_with_runtime(
     periodic_wrap_termination_weight = 0.0
     no_event_termination_count = 0
     no_event_termination_weight = 0.0
+    branch_cutoff_termination_count = 0
+    branch_cutoff_termination_weight = 0.0
+    max_interaction_termination_count = 0
+    max_interaction_termination_weight = 0.0
+    segment_budget_termination_count = 0
+    segment_budget_termination_weight = 0.0
+    rigid_surface_termination_count = 0
+    rigid_surface_termination_weight = 0.0
     interface_normal_orientation_fallback_count = 0
     segment_count = 0
     internal_context = (
@@ -390,7 +398,11 @@ def _trace_with_runtime(
         # physical escape or termination event can be booked.
         low = (weights < threshold) & (interactions > 1)
         if bool(cp.any(low)):
-            terminated_weight += float(cp.asnumpy(cp.sum(weights[low])))
+            low_count = int(cp.asnumpy(cp.count_nonzero(low)))
+            low_weight = float(cp.asnumpy(cp.sum(weights[low])))
+            branch_cutoff_termination_count += low_count
+            branch_cutoff_termination_weight += low_weight
+            terminated_weight += low_weight
             keep = ~low
             origins, directions, weights, medium = origins[keep], directions[keep], weights[keep], medium[keep]
             primary, interactions, path_lengths, wraps = primary[keep], interactions[keep], path_lengths[keep], wraps[keep]
@@ -398,14 +410,21 @@ def _trace_with_runtime(
             break
         maxed = interactions >= settings.max_interactions
         if bool(cp.any(maxed)):
-            terminated_weight += float(cp.asnumpy(cp.sum(weights[maxed])))
+            maxed_count = int(cp.asnumpy(cp.count_nonzero(maxed)))
+            maxed_weight = float(cp.asnumpy(cp.sum(weights[maxed])))
+            max_interaction_termination_count += maxed_count
+            max_interaction_termination_weight += maxed_weight
+            terminated_weight += maxed_weight
             keep = ~maxed
             origins, directions, weights, medium = origins[keep], directions[keep], weights[keep], medium[keep]
             primary, interactions, path_lengths, wraps = primary[keep], interactions[keep], path_lengths[keep], wraps[keep]
         if not int(weights.size):
             break
         if segment_count + int(weights.size) > settings.maximum_segment_count:
-            terminated_weight += float(cp.asnumpy(cp.sum(weights)))
+            segment_budget_termination_count += int(weights.size)
+            segment_budget_weight = float(cp.asnumpy(cp.sum(weights)))
+            segment_budget_termination_weight += segment_budget_weight
+            terminated_weight += segment_budget_weight
             break
         segment_count += int(weights.size)
 
@@ -560,7 +579,14 @@ def _trace_with_runtime(
             physical_silicone_bary = silicone_bary[physical]
             rigid = physical_event == 1
             if bool(cp.any(rigid)):
-                terminated_weight += float(cp.asnumpy(cp.sum(physical_end_weights[rigid])))
+                rigid_surface_termination_count += int(
+                    cp.asnumpy(cp.count_nonzero(rigid))
+                )
+                rigid_weight = float(
+                    cp.asnumpy(cp.sum(physical_end_weights[rigid]))
+                )
+                rigid_surface_termination_weight += rigid_weight
+                terminated_weight += rigid_weight
             carrier_air_absorber = physical_event == 4
             if bool(cp.any(carrier_air_absorber)):
                 carrier_weight = physical_end_weights[carrier_air_absorber]
@@ -737,7 +763,19 @@ def _trace_with_runtime(
                 )
                 reflected_terminate = ~reflected_keep
                 if bool(cp.any(reflected_terminate)):
-                    terminated_weight += float(cp.asnumpy(cp.sum(reflected_weight[reflected_terminate])))
+                    positive_reflected_terminate = reflected_terminate & (
+                        reflected_weight > 0.0
+                    )
+                    branch_cutoff_termination_count += int(
+                        cp.asnumpy(cp.count_nonzero(positive_reflected_terminate))
+                    )
+                    reflected_termination_weight = float(
+                        cp.asnumpy(
+                            cp.sum(reflected_weight[positive_reflected_terminate])
+                        )
+                    )
+                    branch_cutoff_termination_weight += reflected_termination_weight
+                    terminated_weight += reflected_termination_weight
                 if bool(cp.any(reflected_keep)):
                     new_states.append(_RayBatch(
                         origins=interface_positions[reflected_keep] + ray_offset * reflected[reflected_keep],
@@ -800,7 +838,19 @@ def _trace_with_runtime(
                 ) & (~tir)
                 transmission_terminate = ordinary_transmission & ~transmission_keep
                 if bool(cp.any(transmission_terminate)):
-                    terminated_weight += float(cp.asnumpy(cp.sum(transmitted_weight[transmission_terminate])))
+                    positive_transmission_terminate = transmission_terminate & (
+                        transmitted_weight > 0.0
+                    )
+                    branch_cutoff_termination_count += int(
+                        cp.asnumpy(cp.count_nonzero(positive_transmission_terminate))
+                    )
+                    transmission_termination_weight = float(
+                        cp.asnumpy(
+                            cp.sum(transmitted_weight[positive_transmission_terminate])
+                        )
+                    )
+                    branch_cutoff_termination_weight += transmission_termination_weight
+                    terminated_weight += transmission_termination_weight
                 if bool(cp.any(transmission_keep)):
                     new_states.append(_RayBatch(
                         origins=interface_positions[transmission_keep] + ray_offset * transmitted[transmission_keep],
@@ -898,10 +948,16 @@ def _trace_with_runtime(
         periodic_wrap_termination_weight=periodic_wrap_termination_weight,
         no_event_termination_count=no_event_termination_count,
         no_event_termination_weight=no_event_termination_weight,
+        branch_cutoff_termination_count=branch_cutoff_termination_count,
+        branch_cutoff_termination_weight=branch_cutoff_termination_weight,
+        max_interaction_termination_count=max_interaction_termination_count,
+        max_interaction_termination_weight=max_interaction_termination_weight,
+        segment_budget_termination_count=segment_budget_termination_count,
+        segment_budget_termination_weight=segment_budget_termination_weight,
+        rigid_surface_termination_count=rigid_surface_termination_count,
+        rigid_surface_termination_weight=rigid_surface_termination_weight,
         interface_normal_fallback_count=interface_normal_orientation_fallback_count,
         carrier_contact_triangle_count=carrier_contact_triangle_count,
-        escape_event_count=len(escaped_weights),
-        escaped_primary_count=len(np.unique(cp.asnumpy(escaped_primary))),
         object_absorbed_weight=object_absorbed_weight,
         object_transmitted_weight=object_transmitted_weight,
         object_interface_incident_weight=object_interface_incident_weight,

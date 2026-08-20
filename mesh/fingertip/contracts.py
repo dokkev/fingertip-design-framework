@@ -6,7 +6,7 @@ from dataclasses import asdict, dataclass
 import math
 from typing import Any, Literal
 
-from model.fingertip_model import FingertipParameters
+from model.fingertip_parameters import FingertipParameters
 
 MeshLevel = Literal["medium", "fine"]
 MeshDomain = Literal["pad", "rigid_carrier"]

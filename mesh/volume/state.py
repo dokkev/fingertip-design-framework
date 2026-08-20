@@ -12,6 +12,12 @@ from mesh.volume.contracts import FingertipVolumeMesh
 
 _TET_VOLUME_TOLERANCE_MM3 = 1.0e-12
 _SURFACE_CROSS_TOLERANCE_MM2 = 1.0e-12
+
+
+class InvalidDeformedFingertipState(ValueError):
+    """Raised when solver output cannot define a valid deformed volume state."""
+
+
 def _readonly_array(value: np.ndarray) -> np.ndarray:
     array = np.array(value, dtype=float, copy=True)
     array.setflags(write=False)
@@ -76,7 +82,14 @@ def _validate_topology(
                 )
             )
             if not np.isfinite(six_volume) or six_volume <= 6.0 * _TET_VOLUME_TOLERANCE_MM3:
-                raise ValueError(f"{label} volume mesh contains an inverted or degenerate tetrahedron")
+                error_type = (
+                    InvalidDeformedFingertipState
+                    if label == "deformed"
+                    else ValueError
+                )
+                raise error_type(
+                    f"{label} volume mesh contains an inverted or degenerate tetrahedron"
+                )
 
     if not volume_mesh.surface_triangles:
         raise ValueError("FingertipVolumeMesh must contain semantic surface topology")
@@ -102,15 +115,16 @@ def _validate_topology(
             )
             reference_norm = float(np.linalg.norm(reference_cross))
             deformed_norm = float(np.linalg.norm(deformed_cross))
-            if (
-                not np.isfinite(reference_norm)
-                or not np.isfinite(deformed_norm)
-                or reference_norm <= _SURFACE_CROSS_TOLERANCE_MM2
-                or deformed_norm <= _SURFACE_CROSS_TOLERANCE_MM2
-            ):
+            if not np.isfinite(reference_norm) or reference_norm <= _SURFACE_CROSS_TOLERANCE_MM2:
                 raise ValueError(f"semantic surface {tag!r} contains a degenerate triangle")
+            if not np.isfinite(deformed_norm) or deformed_norm <= _SURFACE_CROSS_TOLERANCE_MM2:
+                raise InvalidDeformedFingertipState(
+                    f"deformed semantic surface {tag!r} contains a degenerate triangle"
+                )
             if float(np.dot(reference_cross, deformed_cross)) <= 0.0:
-                raise ValueError(f"semantic surface {tag!r} changed orientation")
+                raise InvalidDeformedFingertipState(
+                    f"semantic surface {tag!r} changed orientation"
+                )
 
 
 @dataclass(frozen=True)
@@ -139,9 +153,13 @@ class FingertipVolumeState:
         reference = _coordinates_for_node_ids(self.volume_mesh, node_ids)
         deformed = np.asarray(self.deformed_coordinates_mm, dtype=float)
         if deformed.shape != (len(node_ids), 3):
-            raise ValueError("deformed_coordinates_mm must have shape (N, 3) in canonical node order")
+            raise InvalidDeformedFingertipState(
+                "deformed_coordinates_mm must have shape (N, 3) in canonical node order"
+            )
         if not np.all(np.isfinite(deformed)):
-            raise ValueError("deformed_coordinates_mm must contain only finite coordinates")
+            raise InvalidDeformedFingertipState(
+                "deformed_coordinates_mm must contain only finite coordinates"
+            )
         _validate_topology(self.volume_mesh, node_ids, reference, deformed)
         object.__setattr__(self, "deformed_coordinates_mm", _readonly_array(deformed))
         object.__setattr__(self, "_source_node_ids", node_ids)
@@ -216,4 +234,8 @@ def make_fingertip_volume_state(
     )
 
 
-__all__ = ["FingertipVolumeState", "make_fingertip_volume_state"]
+__all__ = [
+    "FingertipVolumeState",
+    "InvalidDeformedFingertipState",
+    "make_fingertip_volume_state",
+]

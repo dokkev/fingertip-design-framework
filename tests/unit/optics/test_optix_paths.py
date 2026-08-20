@@ -4,8 +4,8 @@ import json
 import inspect
 from pathlib import Path
 
-from scripts.tools.optix_doctor import main as doctor_main
-from optics.optix._paths import _diagnose_include_paths, _discover_include_paths
+from optics.optix._paths import _discover_include_paths
+from scripts.tools.optix_doctor import _diagnose_include_paths, main as doctor_main
 from scripts.tools import optix_smoke
 
 
@@ -29,8 +29,6 @@ def test_direct_include_overrides_are_resolved_first(tmp_path, monkeypatch) -> N
     )
     assert paths.optix == optix.resolve()
     assert paths.cuda == cuda.resolve()
-    assert paths.optix_source == "explicit argument"
-    assert paths.cuda_source == "explicit argument"
 
 
 def test_environment_direct_include_overrides_are_supported(tmp_path) -> None:
@@ -46,8 +44,6 @@ def test_environment_direct_include_overrides_are_supported(tmp_path) -> None:
     )
     assert paths.optix == optix.resolve()
     assert paths.cuda == cuda.resolve()
-    assert paths.optix_source == "OPTIX_INCLUDE_DIR"
-    assert paths.cuda_source == "CUDA_INCLUDE_DIR"
 
 
 def test_optix_install_root_and_optix_root_include_are_supported(tmp_path) -> None:
@@ -76,18 +72,17 @@ def test_optix_install_root_and_optix_root_include_are_supported(tmp_path) -> No
     assert root_paths.optix == root_include.resolve()
 
 
-def test_missing_header_diagnostic_lists_candidate_source_and_headers(tmp_path) -> None:
+def test_missing_header_diagnostic_lists_candidates_and_headers(
+    tmp_path,
+    monkeypatch,
+) -> None:
     optix = tmp_path / "incomplete"
     optix.mkdir()
-    diagnostics = _diagnose_include_paths(
-        {
-            "OPTIX_INCLUDE_DIR": str(optix),
-            "CUDA_INCLUDE_DIR": str(tmp_path / "missing-cuda"),
-        }
-    )
+    monkeypatch.setenv("OPTIX_INCLUDE_DIR", str(optix))
+    monkeypatch.setenv("CUDA_INCLUDE_DIR", str(tmp_path / "missing-cuda"))
+    diagnostics = _diagnose_include_paths()
     optix_candidates = diagnostics["optix"]["candidates"]
     assert optix_candidates[0]["path"] == str(optix)
-    assert optix_candidates[0]["source"] == "OPTIX_INCLUDE_DIR"
     assert optix_candidates[0]["missing_required_headers"] == [
         "optix.h",
         "optix_device.h",

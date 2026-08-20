@@ -44,7 +44,6 @@ from physics import PhysicsDependencyError
 from optimization.evaluation_registry import EvaluationRegistry, REGISTRY_SCHEMA_VERSION
 from optimization.evaluator import (
     Lumo3DTrajectoryStudy,
-    TRAJECTORY_EVALUATION_CONTRACT_ID,
     TRAJECTORY_EVALUATION_SCHEMA,
     create_lumo3d_trajectory_study,
 )
@@ -630,7 +629,8 @@ def run_lumo6d_test_bo(output_dir: str | Path = OUTPUT_DIRECTORY) -> dict[str, A
     plots = output / "plots"
     plots.mkdir(parents=True, exist_ok=True)
     started = time.perf_counter()
-    study = create_lumo3d_trajectory_study(output / "artifacts", mechanics_mode="search")
+    study = create_lumo3d_trajectory_study(output / "artifacts")
+    contract_id = study.evaluation_contract_id
     search_mechanics = _search_mechanics(study)
     sanity = _pre_run_sanity(study)
     grid = _optical_grid()
@@ -647,7 +647,7 @@ def run_lumo6d_test_bo(output_dir: str | Path = OUTPUT_DIRECTORY) -> dict[str, A
         "active_variables": list(OPTIMIZABLE_PARAMETER_NAMES),
         "numerical_envelopes": [spec.to_dict() for spec in PRODUCTION_SEARCH_BOUNDS],
         "linear_constraints": list(PRODUCTION_LINEAR_PARAMETER_CONSTRAINTS),
-        "contract_id": TRAJECTORY_EVALUATION_CONTRACT_ID,
+        "contract_id": contract_id,
         "registry_schema_version": REGISTRY_SCHEMA_VERSION,
         "evaluation_contract": TRAJECTORY_EVALUATION_CONTRACT,
         "observation_level": LUMO3D_OBSERVATION_LEVEL,
@@ -715,7 +715,7 @@ def run_lumo6d_test_bo(output_dir: str | Path = OUTPUT_DIRECTORY) -> dict[str, A
         # Ax adapter can bootstrap its observation without reevaluating it.
         registry = EvaluationRegistry(output / "registry.json")
         nominal_registry = registry.register(
-            TRAJECTORY_EVALUATION_CONTRACT_ID,
+            contract_id,
             nominal_parameters,
             status="success",
             first_trial_index=0,
@@ -760,7 +760,7 @@ def run_lumo6d_test_bo(output_dir: str | Path = OUTPUT_DIRECTORY) -> dict[str, A
             settings,
             on_record=persist,
             evaluation_registry=registry,
-            evaluation_contract_id=TRAJECTORY_EVALUATION_CONTRACT_ID,
+            evaluation_contract_id=contract_id,
             campaign_id=output.name,
             result_artifact_path=str((output / "checkpoint.json").resolve()),
             max_consecutive_known_proposals=20,
@@ -813,7 +813,7 @@ def run_lumo6d_test_bo(output_dir: str | Path = OUTPUT_DIRECTORY) -> dict[str, A
             "diagnostics": diagnostics,
             "objective_name": CONTACT_STATE_SEPARATION_OBJECTIVE_NAME,
             "objective_direction": "maximize",
-            "contract_id": TRAJECTORY_EVALUATION_CONTRACT_ID,
+            "contract_id": contract_id,
             "artifact_directory": str(output),
             "total_wall_clock_runtime_s": time.perf_counter() - started,
             "plots": sorted(str(path.relative_to(output)) for path in plots.glob("*.png")),

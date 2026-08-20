@@ -45,7 +45,6 @@ _FIXED_GEOMETRY_LABELS = {
     "bond_extension_width": "Connector-pad width (w_cp)",
     "bond_extension_height": "Connector-pad height (h_cp)",
 }
-_MECHANICAL_NAMES = ("young_modulus_mpa", "poisson_ratio")
 _LED_NAMES = (
     "width_mm",
     "height_mm",
@@ -56,8 +55,6 @@ _OPTICAL_NAMES = (
     "refractive_index_air",
     "refractive_index_silicone",
     "absorption_per_mm",
-    "scattering_per_mm",
-    "anisotropy_g",
 )
 _GEOMETRY_PRECISION = {
     name: 2 for name in (*OPTIMIZABLE_PARAMETER_NAMES, *_FIXED_GEOMETRY_NAMES)
@@ -123,11 +120,7 @@ def _initial_state() -> dict[str, object]:
     }
     return {
         "geometry": geometry,
-        "mechanical": {
-            "young_modulus_mpa": parameters["young_modulus_mpa"],
-            "poisson_ratio": parameters["poisson_ratio"],
-        },
-        "led": {**asdict(LED()), "emission_rgb": list(LED().emission_rgb)},
+        "led": asdict(LED()),
         "optical": asdict(OpticalMaterial()),
         "variables": variables,
     }
@@ -135,22 +128,19 @@ def _initial_state() -> dict[str, object]:
 
 def _parameters(
     geometry: Mapping[str, object],
-    mechanical: Mapping[str, object],
 ) -> FingertipParameters:
     defaults = asdict(FingertipParameters())
     defaults.update(geometry)
-    defaults.update(mechanical)
     return FingertipParameters(**defaults)
 
 
 def _tip_for_preview(
     geometry: Mapping[str, object],
-    mechanical: Mapping[str, object],
     led_values: Mapping[str, object],
     optical_values: Mapping[str, object],
     optical_valid: bool,
 ) -> Fingertip | None:
-    parameters = _parameters(geometry, mechanical)
+    parameters = _parameters(geometry)
     led = build_led(led_values)
     optical = (
         build_optical_material({})
@@ -201,12 +191,11 @@ def _corner_values(state: Mapping[str, object]) -> tuple[dict[str, float], ...] 
 def _state_with_corner(
     state: Mapping[str, object],
     values: Mapping[str, object],
-) -> tuple[dict[str, object], dict[str, object], dict[str, object]]:
+) -> tuple[dict[str, object], dict[str, object]]:
     geometry = dict(state["geometry"])
     geometry.update(values)
-    mechanical = dict(state["mechanical"])
     led = dict(state["led"])
-    return geometry, mechanical, led
+    return geometry, led
 
 
 def _preview(
@@ -217,8 +206,8 @@ def _preview(
     optical_valid: bool,
     missing_bound_message: str | None = None,
 ) -> Preview:
-    geometry, mechanical, led = _state_with_corner(state, values)
-    diagnostics = list(diagnose_physical_state(geometry, mechanical, led))
+    geometry, led = _state_with_corner(state, values)
+    diagnostics = list(diagnose_physical_state(geometry, led))
     if missing_bound_message is not None:
         diagnostics.append(Diagnostic("ERROR", label, missing_bound_message))
     tip = None
@@ -228,7 +217,6 @@ def _preview(
         try:
             tip = _tip_for_preview(
                 geometry,
-                mechanical,
                 led,
                 optical,
                 optical_valid,
@@ -248,7 +236,7 @@ def _preview(
 
 def _build_design_space(state: Mapping[str, object]) -> DesignSpace | None:
     try:
-        nominal_parameters = _parameters(state["geometry"], state["mechanical"])
+        nominal_parameters = _parameters(state["geometry"])
         variables = tuple(
             DesignVariable(
                 name=name,
@@ -265,15 +253,13 @@ def _build_design_space(state: Mapping[str, object]) -> DesignSpace | None:
 
 def _analyze(state: Mapping[str, object]) -> Analysis:
     geometry = state["geometry"]
-    mechanical = state["mechanical"]
     led = state["led"]
     optical = state["optical"]
     assert isinstance(geometry, Mapping)
-    assert isinstance(mechanical, Mapping)
     assert isinstance(led, Mapping)
     assert isinstance(optical, Mapping)
 
-    state_diagnostics = diagnose_state(geometry, mechanical, led, optical)
+    state_diagnostics = diagnose_state(geometry, led, optical)
     variables = state["variables"]
     assert isinstance(variables, Mapping)
     nominal_values = {name: geometry[name] for name in OPTIMIZABLE_PARAMETER_NAMES}
@@ -334,12 +320,11 @@ def _analyze(state: Mapping[str, object]) -> Analysis:
         )
         corner_results: list[bool] = []
         for corner in bounds:
-            corner_geometry, corner_mechanical, corner_led = _state_with_corner(
+            corner_geometry, corner_led = _state_with_corner(
                 state, corner
             )
             diagnostics = diagnose_physical_state(
                 corner_geometry,
-                corner_mechanical,
                 corner_led,
             )
             corner_results.append(
@@ -365,8 +350,8 @@ def _corner_diagnostics(state: Mapping[str, object]) -> tuple[Diagnostic, ...]:
         return ()
     result: list[Diagnostic] = []
     for corner in bounds:
-        geometry, mechanical, led = _state_with_corner(state, corner)
-        diagnostics = diagnose_physical_state(geometry, mechanical, led)
+        geometry, led = _state_with_corner(state, corner)
+        diagnostics = diagnose_physical_state(geometry, led)
         details = tuple(
             item
             for item in diagnostics
@@ -584,30 +569,6 @@ def _render_fixed_geometry(state: dict[str, object]) -> None:
         ).classes("text-caption")
 
 
-def _render_mechanical(state: dict[str, object]) -> None:
-    with ui.expansion(
-        "Mechanical Properties", icon="engineering", value=True
-    ).classes("w-full"):
-        with ui.grid(columns=2).classes("w-full"):
-            _number_input(
-                state,
-                "mechanical",
-                "young_modulus_mpa",
-                label="Young's modulus",
-                suffix="MPa",
-                precision=3,
-                step=0.01,
-            )
-            _number_input(
-                state,
-                "mechanical",
-                "poisson_ratio",
-                label="Poisson ratio",
-                precision=3,
-                step=0.01,
-            )
-
-
 def _render_led(state: dict[str, object]) -> None:
     with ui.expansion("LED PCB Dimension", icon="lightbulb", value=True).classes(
         "w-full"
@@ -632,32 +593,6 @@ def _render_led(state: dict[str, object]) -> None:
                 precision=2,
                 step=1.0,
             )
-        ui.label("Emission RGB").classes("text-subtitle2")
-        rgb = state["led"]["emission_rgb"]
-        assert isinstance(rgb, list)
-        with ui.row():
-            for index in range(3):
-                control = ui.number(
-                    f"RGB {index}",
-                    value=rgb[index],
-                    precision=3,
-                    step=0.05,
-                    on_change=lambda event, index=index: _set_rgb_and_refresh(
-                        state, index, event.value
-                    ),
-                )
-                control.classes("w-28")
-
-
-def _set_rgb_and_refresh(state: dict[str, object], index: int, value: object) -> None:
-    led = state["led"]
-    assert isinstance(led, dict)
-    rgb = list(led["emission_rgb"])
-    rgb[index] = value
-    led["emission_rgb"] = rgb
-    _refresh_state(state)
-
-
 def _render_optical(state: dict[str, object]) -> None:
     with ui.expansion("Optical Properties", icon="blur_on", value=True).classes(
         "w-full"
@@ -667,8 +602,6 @@ def _render_optical(state: dict[str, object]) -> None:
                 "refractive_index_air": "Refractive index (air)",
                 "refractive_index_silicone": "Refractive index (silicone)",
                 "absorption_per_mm": "Absorption / mm",
-                "scattering_per_mm": "Scattering / mm",
-                "anisotropy_g": "Anisotropy g",
             }
             for name in _OPTICAL_NAMES:
                 _number_input(
@@ -838,7 +771,6 @@ def _render_page(state: dict[str, object]) -> None:
         with ui.column().style("width: 40%; min-width: 0;"):
             _render_geometry_editor(state)
             _render_fixed_geometry(state)
-            _render_mechanical(state)
             _render_led(state)
             _render_optical(state)
             ui.button("Reset to nominal LIT geometry", on_click=lambda: _reset_state(state))

@@ -78,7 +78,7 @@ directories named `case/`, `examples/`, `fem/`, `visualization/`, or
 
 | If you need to understand... | Start here | Then inspect |
 | --- | --- | --- |
-| morphology and constraints | `model/fingertip_model.py::FingertipParameters` | `model/fingertip.py`, `model/solid.py` |
+| morphology and constraints | `model/fingertip_parameters.py::FingertipParameters` | `model/fingertip_model.py`, `model/fingertip.py`, `model/solid.py` |
 | neutral volume mesh | `mesh/volume/contracts.py` | `mesh/volume/mesh.py`, `mesh/volume/state.py` |
 | rigid object/carrier mesh | `mesh/rigid/object.py` | `mesh/rigid/carrier.py` |
 | neutral rigid pose | `mesh/rigid/object.py::RigidPose3D` | `contact/`, `physics/` |
@@ -93,7 +93,7 @@ directories named `case/`, `examples/`, `fem/`, `visualization/`, or
 | reusable LUMO simulation | `lumo/simulation.py` | `optimization/evaluator.py` |
 | Ax campaign boundary | `optimization/adapters/ax.py` | `validation/optimization/lumo6d_test_bo.py` |
 | production trajectory evaluator | `optimization/evaluator.py` | `lumo/simulation.py`, `validation/optimization/lumo3d_trajectory_validation.py` |
-| persisted mechanics state | `optimization/deformed_state_artifact.py` | evaluator artifact writers |
+| persisted mechanics state | `optimization/deformed_state_artifact.py` | evaluator artifact writers; validation replay is in `validation/optics/deformed_state_restore.py` |
 | reference comparison | `validation/physics/correspondence.py` | `validation/reference/kratos3d/` |
 | interactive Newton view | `physics/newton/viewer.py` | example callers, if reintroduced explicitly |
 
@@ -117,12 +117,14 @@ The current package exports in `model/__init__.py`, `mesh/__init__.py`,
 `optimization/__init__.py` are the primary lightweight API surfaces. Prefer
 those exports or the canonical module named above over new wrapper layers.
 
-`FingertipParameters` stores constructor-level morphology, geometry, and
-mechanics-material inputs. Coordinates and dimensions derived from those fields
-are computed explicitly by the owning geometry, thickness, or reporting
-consumer; they are not duplicated as public parameter properties. The physical
-morphology fingerprint intentionally excludes representation and material
-fields, as documented by `fingertip_parameters_fingerprint()`.
+`FingertipParameters` stores constructor-level morphology and representation
+inputs only. Coordinates and dimensions derived from those fields are computed
+explicitly by the owning geometry, thickness, or reporting consumer; they are
+not duplicated as public parameter properties. The physical morphology
+fingerprint intentionally excludes representation fields, as documented by
+`fingertip_parameters_fingerprint()`. Newton numerical inputs belong to
+`MechanicsContract`; the model does not expose disconnected Young's-modulus or
+Poisson-ratio fields.
 
 
 ## Primary execution path
@@ -183,8 +185,12 @@ the sole Newton implementation. `physics.newton.viewer` is debug-only and must n
 change solver state or become a general visualization framework.
 
 `lumo.mechanics_contract.DEFAULT_MECHANICS_CONTRACT` owns the frozen
-search numerical settings. Do not duplicate or retune those settings in the
-evaluator, GUI, or validation scripts.
+search numerical settings and checkpoint-acceptance thresholds. This includes
+the actual density, `k_mu`, `k_lambda`, damping, timestep, contact coefficients,
+iteration count, and admissibility limits passed to or checked around Newton.
+These are backend numerical coefficients, not a calibrated `E, nu` material
+model. Do not duplicate or retune them in the evaluator, GUI, or validation
+scripts.
 
 ### Optics
 
@@ -231,7 +237,7 @@ infrastructure failure.
 | first-contact result | `contact` | `physics`, `validation` | geometry-derived poses and post-contact travel; `T_spawn` is clear-side initialization only |
 | mechanics result/checkpoint | `physics` | `validation`, `optics` | NumPy arrays and immutable diagnostics; Newton state does not cross into optics |
 | in-memory deformed state | `lumo.ContactOpticalState` | `optics.transport3d` | exact `FingertipVolumeState` checkpoint; authoritative production handoff |
-| persisted mechanics artifact | `optimization/deformed_state_artifact` | reports/reference recovery | exact checkpoint mesh plus digest and source-node provenance; not required by production optics |
+| persisted mechanics artifact | `optimization/deformed_state_artifact` | evaluator writers | exact checkpoint mesh plus digest and source-node provenance; validation-only restoration belongs to `validation/optics/deformed_state_restore` |
 | optical result | `optics.transport3d` | `optimization`, `validation` | raw transport fields/weights, energy bookkeeping, and configuration fingerprints |
 | objective observation | `optimization.objectives` | `validation`, `optimization.adapters.ax` | trajectory observations preserve location, radius, depth, raw field, and diagnostics |
 | registry record | `optimization.evaluation_registry` | Ax adapter/campaign reports | exact contract + morphology identity; failed records carry no successful objective |
@@ -322,8 +328,10 @@ the Ax boundary can stop before registering a candidate failure.
 - Generated validation, benchmark, campaign, and plot files belong under
   `output/` and remain untracked.
 - A morphology cache key includes the contract identity and canonical exact
-  six-field morphology values. Do not reuse records across incompatible
-  protocol, mechanics, transport, or objective fingerprints.
+  six-field morphology values. The contract identity includes all non-search
+  model inputs, LED geometry and active emission inputs, mesh policies,
+  mechanics settings, transport settings, device, protocol, and objective.
+  Do not reuse records across incompatible contracts.
 - Mechanics artifacts are raw solver outputs plus provenance; optics consumes
   the exact checkpoint named by its identity and digest.
 - Optical fields and weights used by objective calculation remain raw. Any

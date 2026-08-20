@@ -93,11 +93,6 @@ class ParameterSpec:
     def to_dict(self) -> dict[str, object]:
         return {"name": self.name.value, "lower": self.lower, "upper": self.upper}
 
-    def to_tuple(self) -> tuple[str, float, float]:
-        """Return the external Ax-compatible representation."""
-        return self.name.value, self.lower, self.upper
-
-
 PRODUCTION_SEARCH_BOUNDS: tuple[ParameterSpec, ...] = (
     ParameterSpec(OptimizableParameterName.FLAT_PAD_HEIGHT, 0.5, 29.5),
     ParameterSpec(OptimizableParameterName.SEMIELLIPTICAL_PAD_HEIGHT, 0.5, 29.5),

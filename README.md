@@ -24,11 +24,11 @@ per morphology.
 
 ## Repository map
 
-- `model/`: parametric morphology and material records;
+- `model/`: parametric morphology and optical source/material records;
 - `mesh/`: semantic geometry and volume/rigid meshes;
 - `contact/`: geometry-derived alignment and first-contact search;
 - `physics/`: the single Newton/Warp mechanics implementation;
-- `optics/`: FULL_3D OptiX transport and runtime smoke;
+- `optics/`: FULL_3D OptiX transport and production runtime;
 - `optimization/`: named design space, protocol, objective, registry, and Ax;
 - `validation/`: current scientific runners and validation-only references;
 - `gui/`: deferred design-space diagnostics.

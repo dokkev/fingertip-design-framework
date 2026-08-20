@@ -292,13 +292,10 @@ def _geometry_corrections(values: Mapping[str, object]) -> list[Diagnostic]:
 def diagnose_geometry(
     values: Mapping[str, object],
     *,
-    mechanical: Mapping[str, object] | None = None,
     led: LED | None = None,
 ) -> tuple[Diagnostic, ...]:
     """Validate actual fingertip construction and add known geometry guidance."""
     payload = _merged(_PARAMETER_DEFAULTS, values)
-    if mechanical is not None:
-        payload.update(mechanical)
     result = _geometry_corrections(payload)
     try:
         parameters = FingertipParameters(**payload)
@@ -379,39 +376,6 @@ def diagnose_geometry(
     return tuple(result)
 
 
-def diagnose_mechanical(values: Mapping[str, object]) -> tuple[Diagnostic, ...]:
-    """Report model-supported intervals for mechanical material inputs."""
-    result: list[Diagnostic] = []
-    young = _number(values.get("young_modulus_mpa"))
-    if young is None or young <= 0.0:
-        result.append(
-            _message(
-                "ERROR",
-                "MECHANICAL",
-                f"young_modulus_mpa must be > 0 MPa; current value is "
-                f"{_display(values.get('young_modulus_mpa'), ' MPa')}.",
-            )
-        )
-    poisson = _number(values.get("poisson_ratio"))
-    if poisson is None or not -1.0 < poisson < 0.5:
-        result.append(
-            _message(
-                "ERROR",
-                "MECHANICAL",
-                f"Poisson ratio must satisfy -1 < poisson_ratio < 0.5; "
-                f"current value is {_display(values.get('poisson_ratio'))}.",
-            )
-        )
-    try:
-        FingertipParameters(
-            young_modulus_mpa=values.get("young_modulus_mpa", _PARAMETER_DEFAULTS["young_modulus_mpa"]),
-            poisson_ratio=values.get("poisson_ratio", _PARAMETER_DEFAULTS["poisson_ratio"]),
-        )
-    except Exception as exc:
-        result.append(_message("ERROR", "MECHANICAL", f"{type(exc).__name__}: {exc}"))
-    return tuple(result)
-
-
 def diagnose_led(values: Mapping[str, object]) -> tuple[Diagnostic, ...]:
     """Report model-supported LED value intervals."""
     payload = _merged(_LED_DEFAULTS, values)
@@ -446,25 +410,6 @@ def diagnose_led(values: Mapping[str, object]) -> tuple[Diagnostic, ...]:
                 f"current value is {_display(payload['emission_half_angle_deg'])} deg.",
             )
         )
-    rgb = payload["emission_rgb"]
-    if not isinstance(rgb, (tuple, list)) or len(rgb) != 3:
-        result.append(_message("ERROR", "LED", "emission_rgb must contain three components."))
-    else:
-        for index, component in enumerate(rgb):
-            number = _number(component)
-            if number is None or number < 0.0:
-                result.append(
-                    _message(
-                        "ERROR",
-                        "LED",
-                        f"emission_rgb[{index}] must be >= 0; current value is "
-                        f"{_display(component)}.",
-                    )
-                )
-        if all((_number(component) or 0.0) <= 0.0 for component in rgb):
-            result.append(
-                _message("ERROR", "LED", "at least one emission_rgb component must be > 0.")
-            )
     try:
         LED(**payload)
     except Exception as exc:
@@ -486,24 +431,14 @@ def diagnose_optical(values: Mapping[str, object]) -> tuple[Diagnostic, ...]:
                     f"{name} must be > 0; current value is {_display(payload[name])}.",
                 )
             )
-    for name in ("absorption_per_mm", "scattering_per_mm"):
-        value = _number(payload[name])
-        if value is None or value < 0.0:
-            result.append(
-                _message(
-                    "ERROR",
-                    "OPTICAL",
-                    f"{name} must be >= 0; current value is {_display(payload[name])}.",
-                )
-            )
-    anisotropy = _number(payload["anisotropy_g"])
-    if anisotropy is None or not -1.0 < anisotropy < 1.0:
+    absorption = _number(payload["absorption_per_mm"])
+    if absorption is None or absorption < 0.0:
         result.append(
             _message(
                 "ERROR",
                 "OPTICAL",
-                "anisotropy_g must satisfy -1 < anisotropy_g < 1; "
-                f"current value is {_display(payload['anisotropy_g'])}.",
+                "absorption_per_mm must be >= 0; current value is "
+                f"{_display(payload['absorption_per_mm'])}.",
             )
         )
     try:
@@ -515,30 +450,27 @@ def diagnose_optical(values: Mapping[str, object]) -> tuple[Diagnostic, ...]:
 
 def diagnose_physical_state(
     geometry: Mapping[str, object],
-    mechanical: Mapping[str, object],
     led_values: Mapping[str, object],
 ) -> tuple[Diagnostic, ...]:
-    """Validate geometry, mechanical values, and LED fit for one state."""
+    """Validate geometry and LED fit for one state."""
     led_diagnostics = diagnose_led(led_values)
     selected_led: LED | None = None
     if not led_diagnostics:
         selected_led = LED(**_merged(_LED_DEFAULTS, led_values))
     return (
-        *diagnose_geometry(geometry, mechanical=mechanical, led=selected_led),
-        *diagnose_mechanical(mechanical),
+        *diagnose_geometry(geometry, led=selected_led),
         *led_diagnostics,
     )
 
 
 def diagnose_state(
     geometry: Mapping[str, object],
-    mechanical: Mapping[str, object],
     led_values: Mapping[str, object],
     optical: Mapping[str, object],
 ) -> tuple[Diagnostic, ...]:
     """Validate all editable state; optical checks remain separate from shape."""
     return (
-        *diagnose_physical_state(geometry, mechanical, led_values),
+        *diagnose_physical_state(geometry, led_values),
         *diagnose_optical(optical),
     )
 
@@ -623,8 +555,6 @@ def diagnose_design_space(
 def build_led(values: Mapping[str, object]) -> LED:
     """Construct the current LED after callers have handled diagnostics."""
     payload = _merged(_LED_DEFAULTS, values)
-    if isinstance(payload.get("emission_rgb"), list):
-        payload["emission_rgb"] = tuple(payload["emission_rgb"])
     return LED(**payload)
 
 
@@ -641,7 +571,6 @@ __all__ = [
     "diagnose_design_space",
     "diagnose_geometry",
     "diagnose_led",
-    "diagnose_mechanical",
     "diagnose_optical",
     "diagnose_physical_state",
     "diagnose_state",

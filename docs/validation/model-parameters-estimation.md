@@ -1,60 +1,22 @@
-## Fixed Material and Optical Parameters
+## Fixed Mechanics and Optical Parameters
 
-The fingertip geometry is optimized while the silicone material properties are
-held fixed. The compliant pad is fabricated using Smooth-On Solaris, Shore A15.
-Because a full material-identification experiment was outside the scope and
-time constraints of this study, representative material parameters were chosen
-from manufacturer data and simple physically motivated estimates.
+The fingertip geometry is optimized while the Newton numerical mechanics
+contract and optical inputs are held fixed. The compliant pad is fabricated
+using Smooth-On Solaris, Shore A15, but a constitutive material-identification
+experiment is not represented by the current production code.
 
-These values should therefore be interpreted as **model parameters used for
-design optimization**, rather than experimentally calibrated material
-constants.
+### Mechanics contract
 
-### Mechanical parameters
+Production evaluation uses the values serialized by
+`lumo.mechanics_contract.DEFAULT_MECHANICS_CONTRACT`. In particular, the
+current Newton path receives `density_kg_m3`, `k_mu_pa`, `k_lambda_pa`, and
+`k_damp` directly. These values are frozen numerical inputs for reproducible
+search; this document does not reinterpret them as an experimentally calibrated
+Young's modulus or Poisson ratio.
 
-| Parameter | Value | Basis |
-| --- | ---: | --- |
-| Young's modulus, `E` | `0.55 MPa` | Representative estimate for a Shore A15 elastomer |
-| Poisson ratio, `ν` | `0.49` | Nearly incompressible silicone assumption |
-
-#### Young's modulus
-
-The Solaris datasheet specifies a Shore A hardness of approximately 15 but does
-not directly provide a small-strain Young's modulus.
-
-A nominal value of
-
-\[
-E = 0.55\ \text{MPa}
-\]
-
-is used based on empirical hardness-to-modulus estimates for soft elastomers.
-
-This value is not treated as an experimentally identified property of Solaris.
-Instead, it provides a representative stiffness for geometry optimization.
-
-Because silicone stiffness can vary with strain state, curing conditions, and
-the constitutive model used in FEM, sensitivity to the assumed modulus should
-be checked using a small range such as
-
-\[
-E \in \{0.30,\ 0.55,\ 0.80\}\ \text{MPa}.
-\]
-
-The purpose of this sensitivity study is not to estimate the true modulus of
-Solaris, but to verify that the relative performance of candidate fingertip
-geometries is not strongly dependent on the nominal stiffness assumption.
-
-#### Poisson ratio
-
-Silicone elastomers are approximately incompressible. The FEM therefore uses
-
-\[
-\nu = 0.49.
-\]
-
-This value avoids the exact incompressible limit while representing the
-near-incompressible mechanical response of the silicone pad.
+Any future `E, nu` inputs must first define a reviewed constitutive mapping to
+the Newton backend and validation evidence. Until then, they are deliberately
+absent from `FingertipParameters` and from the optimization design space.
 
 ---
 
@@ -165,16 +127,16 @@ geometries is robust to uncertainty in optical attenuation.
 
 ### Optimization treatment
 
-Mechanical and optical material properties are **not optimization variables**.
+Mechanics and optical inputs are **not optimization variables**.
 
 The optimization changes only the fingertip morphology while keeping the
 nominal material parameters fixed:
 
 ```python
-young_modulus_mpa = 0.55
-poisson_ratio = 0.49
-
 refractive_index_air = 1.00
 refractive_index_silicone = 1.41
 absorption_per_mm = 0.02
 ```
+
+The complete mechanics values are taken from `DEFAULT_MECHANICS_CONTRACT` and
+are included in the evaluation contract fingerprint.

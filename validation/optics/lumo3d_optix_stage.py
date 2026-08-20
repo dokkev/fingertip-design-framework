@@ -23,7 +23,7 @@ from optics.transport3d import (
 )
 from optics.transport3d.optix_backend import create_runtime
 from scripts.tools.optix_smoke import run as run_optix_smoke
-from optimization.deformed_state_artifact import restore_deformed_optical_state
+from validation.optics.deformed_state_restore import restore_deformed_optical_state
 from optimization.optical_artifact import (
     optical_physics_parameters,
     fingerprint_mapping,
@@ -175,7 +175,6 @@ def run_lumo3d_optix_stage(
     configuration = transport_configuration(
         settings,
         material=material,
-        source={"model": "existing Fingertip optical source"},
     )
     reference_contract = {
         "schema": "lumo3d-optix-stage-v1",

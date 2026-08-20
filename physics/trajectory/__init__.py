@@ -10,6 +10,8 @@ from .fingertip import (
     solve_prescribed_indentation,
 )
 from .indentation import (
+    CandidateMechanicsError,
+    CheckpointStep,
     IndentationCheckpoint,
     IndentationResult,
     IndentationSettings,
@@ -21,6 +23,8 @@ from .indentation import (
 )
 
 __all__ = [
+    "CandidateMechanicsError",
+    "CheckpointStep",
     "IndentationCheckpoint",
     "IndentationResult",
     "IndentationSettings",

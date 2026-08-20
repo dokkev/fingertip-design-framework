@@ -30,15 +30,13 @@ from optics.transport3d import (
     trace_geometry,
 )
 from optics.transport3d.optix_backend import create_runtime
-from optimization.deformed_state_artifact import (
-    restore_deformed_optical_state,
-)
 from optimization.optical_artifact import (
     fingerprint_mapping,
     optical_physics_parameters,
     save_case_artifact,
     transport_configuration,
 )
+from validation.optics.deformed_state_restore import restore_deformed_optical_state
 from validation.physics.multi_location_sphere_contact import (
     DEFAULT_RADIUS_MM,
     DEFAULT_TRAVEL_MM,
@@ -202,7 +200,6 @@ def _trace_bundle(
     configuration = transport_configuration(
         settings,
         material=material,
-        source={"model": "existing Fingertip optical source"},
     )
     legacy_configuration = {
         **configuration,

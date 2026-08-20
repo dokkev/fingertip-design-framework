@@ -8,7 +8,7 @@ import math
 
 @dataclass(frozen=True)
 class MechanicsContract:
-    """Numerical VBD settings, kept separate from physical protocol conditions."""
+    """Complete numerical VBD and checkpoint-acceptance contract."""
 
     sphere_subdivisions: int = 3
     max_load_increment_mm: float = 0.05
@@ -17,6 +17,13 @@ class MechanicsContract:
     soft_contact_margin_mm: float = 0.02
     soft_contact_ke: float = 1.0e3
     soft_contact_kd: float = 10.0
+    density_kg_m3: float = 1.0e3
+    k_mu_pa: float = 1.0e5
+    k_lambda_pa: float = 1.0e5
+    k_damp: float = 10.0
+    max_support_displacement_mm: float = 1.0e-9
+    max_final_pose_error_mm: float = 1.0e-6
+    max_carrier_penetration_voxel_fraction: float = 0.5
 
     def __post_init__(self) -> None:
         for name, value in (
@@ -33,14 +40,35 @@ class MechanicsContract:
             "soft_contact_margin_mm",
             "soft_contact_ke",
             "soft_contact_kd",
+            "density_kg_m3",
+            "k_mu_pa",
+            "k_lambda_pa",
+            "k_damp",
+            "max_support_displacement_mm",
+            "max_final_pose_error_mm",
+            "max_carrier_penetration_voxel_fraction",
         ):
             value = float(getattr(self, name))
             if not math.isfinite(value):
                 raise ValueError(f"{name} must be finite")
             object.__setattr__(self, name, value)
-        if self.max_load_increment_mm <= 0.0 or self.dt_s <= 0.0:
+        if (
+            self.max_load_increment_mm <= 0.0
+            or self.dt_s <= 0.0
+            or self.density_kg_m3 <= 0.0
+            or self.k_mu_pa <= 0.0
+            or self.k_lambda_pa <= 0.0
+        ):
             raise ValueError("mechanics iteration settings must be positive")
-        if self.soft_contact_margin_mm < 0.0 or self.soft_contact_ke < 0.0 or self.soft_contact_kd < 0.0:
+        if (
+            self.soft_contact_margin_mm < 0.0
+            or self.soft_contact_ke < 0.0
+            or self.soft_contact_kd < 0.0
+            or self.k_damp < 0.0
+            or self.max_support_displacement_mm < 0.0
+            or self.max_final_pose_error_mm < 0.0
+            or self.max_carrier_penetration_voxel_fraction < 0.0
+        ):
             raise ValueError("contact settings must be non-negative")
 
     def to_dict(self) -> dict[str, object]:

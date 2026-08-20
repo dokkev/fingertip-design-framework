@@ -11,7 +11,7 @@ from contact import (
 )
 from mesh.rigid.object import make_sphere_mesh
 from model.fingertip_model import FingertipModel
-from model.fingertip_model import FingertipParameters
+from model.fingertip_parameters import FingertipParameters
 
 
 @pytest.fixture(scope="module")
