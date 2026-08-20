@@ -10,12 +10,9 @@ from typing import Any, Mapping
 
 import numpy as np
 
-from physics import (
-    NewtonSession,
-    NewtonSettings,
-    ParticleLoad,
-    prepare_fingertip_mesh,
-)
+from physics import NewtonSettings, prepare_fingertip_mesh
+from physics.load import ParticleLoad
+from physics.session import NewtonSession
 from mesh.volume3d import generate_volume_mesh
 from mesh.volume_types import volume_mesh_settings_for_tier
 from model.fingertip_model import FingertipModel

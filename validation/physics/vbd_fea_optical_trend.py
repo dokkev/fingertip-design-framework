@@ -25,11 +25,11 @@ import numpy as np
 from scipy.stats import kendalltau, rankdata, spearmanr
 
 from physics import (
-    NewtonSession,
     NewtonSettings,
     make_fingertip_volume_state as make_vbd_volume_state,
     prepare_fingertip_mesh,
 )
+from physics.session import NewtonSession
 from mesh.fingertip import generate_fingertip_mesh
 from mesh.types import mesh_settings_for_level
 from mesh.volume3d import generate_volume_mesh

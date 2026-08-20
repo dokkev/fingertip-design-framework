@@ -288,7 +288,7 @@ def run_lumo3d_optix_stage(
         "generated_artifact_directory": str(output),
     }
     (root / "stage4_full3d_optix.json").write_text(
-        json.dumps(summary, indent=2, sort_keys=True, default=str) + "\n"
+        json.dumps(summary, indent=2, sort_keys=True, allow_nan=False) + "\n"
     )
     return summary
 

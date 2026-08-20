@@ -10,6 +10,7 @@ from typing import Callable, Literal, Mapping
 from ax.api.client import Client
 from ax.api.configs import RangeParameterConfig
 
+from mesh.fingertip import GmshDependencyError
 from mesh.volume3d import VolumeMeshDependencyError
 from model import InvalidFingertipParameters
 from physics import PhysicsDependencyError
@@ -359,7 +360,7 @@ def _evaluate_trial(
                 f"{type(exc).__name__}: {exc}",
                 signature=OPTIX_RUNTIME_FAILURE_SIGNATURE,
             ) from exc
-        if isinstance(exc, VolumeMeshDependencyError):
+        if isinstance(exc, (VolumeMeshDependencyError, GmshDependencyError)):
             client.mark_trial_abandoned(trial_index=trial_index)
             raise CampaignInfrastructureError(
                 f"{type(exc).__name__}: {exc}",

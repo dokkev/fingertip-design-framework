@@ -31,10 +31,15 @@ class _OpticalDomain:
     source_position_mm: tuple[float, float]
     source_emission_axis_2d: tuple[float, float]
     geometry_tolerance_mm: float
+
+
     indenter_region: Polygon | None = None
     contact_patch: LineString | MultiLineString | None = None
     indenter_optics: IndenterOptics | None = None
     indenter_center_mm: tuple[float, float] | None = None
+
+
+OpticalDomain = _OpticalDomain
 
 
 _OUTER_ENVELOPE_TAGS = (
@@ -233,7 +238,7 @@ def _validate_domain(
     )
 
 
-def _build_no_load_domain(
+def build_no_load_domain(
     tip: Fingertip,
     *,
     indenter_pose: IndenterPose2D | None = None,
@@ -249,7 +254,7 @@ def _build_no_load_domain(
     )
 
 
-def _build_mesh_domain(
+def build_mesh_domain(
     tip: Fingertip,
     mesh: PadMesh,
     *,
@@ -285,3 +290,9 @@ def _build_mesh_domain(
         indenter_pose=indenter_pose,
         indenter_optics=indenter_optics,
     )
+
+
+# Retained for validation-only imports while production owners use the public
+# name above.
+_build_mesh_domain = build_mesh_domain
+_build_no_load_domain = build_no_load_domain

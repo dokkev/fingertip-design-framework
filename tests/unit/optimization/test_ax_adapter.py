@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 import optimization.ax_adapter as ax_adapter
+from mesh.fingertip import GmshDependencyError
 from model import FingertipParameters
 from optimization.ax_adapter import (
     AxSettings,
@@ -16,6 +17,8 @@ from optimization.ax_adapter import (
     run_ax_optimization,
 )
 from optimization.design_space import DesignSpace, DesignVariable, PRODUCTION_SEARCH_BOUNDS
+from optimization.evaluation_registry import EvaluationRegistry
+from optics.transport3d import Transport3DDependencyError
 from physics import PhysicsDependencyError
 
 
@@ -144,6 +147,16 @@ class _PhysicsDependencyEvaluator:
         raise PhysicsDependencyError("Warp runtime unavailable")
 
 
+class _CandidateFailureEvaluator:
+    def evaluate(self, parameters):
+        return _Evaluation(
+            status="mechanics_failure",
+            objective_value=None,
+            diagnostics={"failure_scenario": "candidate_contact"},
+            failure_message="CandidateContactError: candidate contact is impossible",
+        )
+
+
 def test_shared_physics_dependency_abandons_ax_trial_and_aborts_campaign(monkeypatch) -> None:
     client = _ClientDouble([_candidate(5.5)])
     evaluator = _PhysicsDependencyEvaluator()
@@ -163,4 +176,76 @@ def test_shared_physics_dependency_abandons_ax_trial_and_aborts_campaign(monkeyp
 
     assert raised.value.signature == "newton-warp-runtime-initialization"
     assert client.trials
+    assert all(trial.status == "ABANDONED" for trial in client.trials.values())
+
+
+def test_candidate_failure_is_registered_in_real_evaluation_registry(monkeypatch, tmp_path) -> None:
+    client = _ClientDouble([_candidate(5.5)])
+    evaluator = _CandidateFailureEvaluator()
+    study = SimpleNamespace(design_space=_space(), create_evaluator=lambda: evaluator)
+    registry = EvaluationRegistry(tmp_path / "registry.json")
+    monkeypatch.setattr(ax_adapter, "create_ax_client", lambda *_: client)
+
+    result = run_ax_optimization(
+        study,
+        AxSettings(
+            initialization_trials=1,
+            search_trials=1,
+            seed=7,
+            objective_name="contact_state_separation",
+        ),
+        evaluation_registry=registry,
+        evaluation_contract_id="candidate-contact-test-v1",
+        campaign_id="candidate-contact-campaign",
+    )
+
+    assert all(record.status == "mechanics_failure" for record in result.records)
+    stored = registry.records_for_contract("candidate-contact-test-v1")
+    assert len(stored) == 2
+    assert all(record.status == "mechanics_failure" for record in stored)
+    assert all(trial.status == "FAILED" for trial in client.trials.values())
+    assert all(trial.status != "ABANDONED" for trial in client.trials.values())
+
+
+@pytest.mark.parametrize(
+    ("exception", "signature"),
+    (
+        (GmshDependencyError("gmsh unavailable"), "gmsh-runtime-initialization"),
+        (PhysicsDependencyError("Warp runtime unavailable"), "newton-warp-runtime-initialization"),
+        (Transport3DDependencyError("OptiX unavailable"), "optix-runtime-initialization"),
+    ),
+)
+def test_infrastructure_failure_is_not_registered_in_real_evaluation_registry(
+    monkeypatch,
+    tmp_path,
+    exception: Exception,
+    signature: str,
+) -> None:
+    client = _ClientDouble([_candidate(5.5)])
+
+    class _InfrastructureFailureEvaluator:
+        def evaluate(self, parameters):
+            raise exception
+
+    evaluator = _InfrastructureFailureEvaluator()
+    study = SimpleNamespace(design_space=_space(), create_evaluator=lambda: evaluator)
+    registry = EvaluationRegistry(tmp_path / "registry.json")
+    monkeypatch.setattr(ax_adapter, "create_ax_client", lambda *_: client)
+
+    with pytest.raises(CampaignInfrastructureError) as raised:
+        run_ax_optimization(
+            study,
+            AxSettings(
+                initialization_trials=1,
+                search_trials=1,
+                seed=7,
+                objective_name="contact_state_separation",
+            ),
+            evaluation_registry=registry,
+            evaluation_contract_id="infrastructure-test-v1",
+            campaign_id="infrastructure-campaign",
+        )
+
+    assert raised.value.signature == signature
+    assert registry.records_for_contract("infrastructure-test-v1") == ()
     assert all(trial.status == "ABANDONED" for trial in client.trials.values())

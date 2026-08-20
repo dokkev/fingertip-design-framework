@@ -41,7 +41,7 @@ from optimization.design_space import (
 )
 from physics import PhysicsDependencyError
 from optimization.evaluation_registry import EvaluationRegistry, REGISTRY_SCHEMA_VERSION
-from optimization.evaluator_support import (
+from optimization.evaluator import (
     LUMO3D_OBSERVATION_LEVEL,
     LUMO3D_OPTICAL_X_BOUNDS_MM,
     LUMO3D_OPTICAL_Y_BOUNDS_MM,
@@ -75,7 +75,7 @@ def _write_json(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(path.name + ".tmp")
     temporary.write_text(
-        json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n",
+        json.dumps(payload, indent=2, sort_keys=True, allow_nan=False) + "\n",
         encoding="utf-8",
     )
     temporary.replace(path)
@@ -98,6 +98,11 @@ def _optical_grid() -> dict[str, Any]:
         **grid,
         "fingerprint": fingerprint_mapping(grid),
     }
+
+
+def _search_mechanics(study: Lumo3DTrajectoryStudy) -> dict[str, object]:
+    """Return the serializable mechanics contract for campaign metadata."""
+    return study.create_evaluator().mechanics_contract.to_dict()
 
 
 def _rms_displacement_from_artifact(path: object) -> float | None:
@@ -625,7 +630,7 @@ def run_lumo6d_test_bo(output_dir: str | Path = OUTPUT_DIRECTORY) -> dict[str, A
     plots.mkdir(parents=True, exist_ok=True)
     started = time.perf_counter()
     study = create_lumo3d_trajectory_study(output / "artifacts", mechanics_mode="search")
-    search_mechanics = dict(study.create_evaluator().mechanics_contract)
+    search_mechanics = _search_mechanics(study)
     sanity = _pre_run_sanity(study)
     grid = _optical_grid()
     configuration = {
@@ -844,4 +849,4 @@ if __name__ == "__main__":
     parser.add_argument("--output", type=Path, default=OUTPUT_DIRECTORY)
     args = parser.parse_args()
     result = run_lumo6d_test_bo(args.output)
-    print(json.dumps(result, indent=2, sort_keys=True, default=str))
+    print(json.dumps(result, indent=2, sort_keys=True, allow_nan=False))

@@ -8,7 +8,7 @@ import numpy as np
 
 from model.optical import LED
 from optics.cross_section.settings import TraceSettings
-from optics.cross_section.transport import _sample_primary_directions
+from optics.cross_section.transport import sample_primary_directions
 
 
 def _radical_inverse_base_two(indices: np.ndarray) -> np.ndarray:
@@ -37,7 +37,7 @@ def sample_directions(
     radiation pattern.
     """
     if mode == "planar":
-        directions = _sample_primary_directions(
+        directions = sample_primary_directions(
             led,
             emission_axis_2d,
             TraceSettings(ray_count=ray_count),

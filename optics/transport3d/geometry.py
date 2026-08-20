@@ -15,7 +15,7 @@ from mesh.indenter import IndenterPose2D
 from mesh.types import FingertipMesh
 from model.fingertip import Fingertip
 from optics.contact_object import IndenterOptics, ObjectBoundaryOptics
-from optics.cross_section.domain import _build_mesh_domain
+from optics.cross_section.domain import build_mesh_domain
 from optics.geometry.extrusion import (
     InvalidExtrudedOpticalMesh,
     _ExtrudedMesh,
@@ -442,7 +442,7 @@ def build_transport_geometry(
         extrusion = _ExtrudedMesh.from_pad_mesh(reference_pad, depth_mm=depth_mm)
     except InvalidExtrudedOpticalMesh as exc:
         raise Transport3DGeometryError(str(exc)) from exc
-    domain = _build_mesh_domain(
+    domain = build_mesh_domain(
         tip,
         pad_mesh,
         indenter_pose=indenter_pose,

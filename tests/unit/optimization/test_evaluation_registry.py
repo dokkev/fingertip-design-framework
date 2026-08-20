@@ -31,6 +31,7 @@ def _register(
     status: str,
     trial_index: int,
     minimum_auc: float | None,
+    objective_value: float | None = None,
 ):
     return registry.register(
         CONTRACT,
@@ -44,6 +45,7 @@ def _register(
         failure_message=None if status == "success" else "synthetic failure",
         failure_scenario=None,
         evaluation_wall_time_seconds=3.5,
+        objective_value=objective_value,
     )
 
 
@@ -124,6 +126,24 @@ def test_registry_never_overwrites_an_existing_exact_result(tmp_path) -> None:
             trial_index=2,
             minimum_auc=None,
         )
+
+
+def test_registry_persists_negative_objective_value(tmp_path) -> None:
+    path = tmp_path / "registry.json"
+    registry = EvaluationRegistry(path)
+    record = _register(
+        registry,
+        MORPHOLOGY,
+        status="success",
+        trial_index=3,
+        minimum_auc=None,
+        objective_value=-0.1,
+    )
+
+    assert record.objective_value == -0.1
+    reloaded = EvaluationRegistry(path).lookup(CONTRACT, MORPHOLOGY)
+    assert reloaded is not None
+    assert reloaded.objective_value == -0.1
 
 
 @pytest.mark.parametrize(

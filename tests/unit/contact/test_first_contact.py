@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 from contact import (
+    CandidateContactError,
     FirstContactSettings,
     canonical_sphere_alignment,
     find_first_contact,
@@ -143,7 +144,7 @@ def test_first_contact_rejects_overlapping_reference_and_unreachable_search(cont
             FirstContactSettings(0.25, 1.0e-3, 0.05, 20.0),
         )
 
-    with pytest.raises(RuntimeError, match="exceeded max_travel_mm"):
+    with pytest.raises(CandidateContactError, match="exceeded max_travel_mm"):
         find_first_contact(
             surface,
             sphere,

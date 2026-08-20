@@ -14,6 +14,10 @@ from model.fingertip_model import FingertipModel
 from model.solid import FingertipSolid
 
 
+class CandidateContactError(RuntimeError):
+    """Raised when a candidate cannot satisfy the expected contact geometry."""
+
+
 @dataclass(frozen=True)
 class FingertipContactSurface:
     """Extruded compliant outer arc used by the sphere MVP predicate."""
@@ -255,7 +259,7 @@ def find_first_contact(
         s_clear = s_hit
         s_hit += settings.coarse_step_mm
     else:
-        raise RuntimeError(
+        raise CandidateContactError(
             "sphere first-contact search exceeded max_travel_mm without a hit: "
             f"max_travel_mm={settings.max_travel_mm:g}"
         )
@@ -278,7 +282,7 @@ def find_first_contact(
         settings.spawn_clearance_mm,
     )
     if intersects(fingertip_surface, object_mesh, spawn_pose):
-        raise RuntimeError(
+        raise CandidateContactError(
             "spawn_clearance_mm is insufficient to produce a collision-free pose"
         )
     return FirstContactResult(
@@ -294,6 +298,7 @@ def find_first_contact(
 
 
 __all__ = [
+    "CandidateContactError",
     "FirstContactResult",
     "FirstContactSettings",
     "FingertipContactSurface",

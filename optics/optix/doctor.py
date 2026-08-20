@@ -85,7 +85,7 @@ def main(argv: list[str] | None = None) -> int:
     arguments = parser.parse_args(argv)
     diagnostics = collect_diagnostics()
     if arguments.json:
-        print(json.dumps(diagnostics, indent=2, sort_keys=True, default=str))
+        print(json.dumps(diagnostics, indent=2, sort_keys=True, allow_nan=False))
     else:
         print(f"Python executable: {diagnostics['python_executable']}")
         for name in ("pyoptix", "cupy", "cuda_python_nvrtc"):

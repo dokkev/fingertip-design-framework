@@ -64,20 +64,22 @@ class OptixScene:
         import time
 
         started = time.perf_counter()
-        try:
-            self.runtime = runtime
-            self.handles = {}
-            self._owners: list[object] = []
-            for name, surface in (
-                ("silicone", silicone),
-                ("rigid", rigid),
-                ("envelope", envelope),
-            ):
+        self.runtime = runtime
+        self.handles = {}
+        self._owners: list[object] = []
+        for name, surface in (
+            ("silicone", silicone),
+            ("rigid", rigid),
+            ("envelope", envelope),
+        ):
+            try:
                 handle, owners = runtime.build_gas(surface.vertices, surface.faces)
-                self.handles[name] = handle
-                self._owners.extend(owners)
-        except Exception as exc:
-            raise Transport3DTraceError(f"OptiX GAS construction failed: {exc}") from exc
+            except OptixRuntimeError as exc:
+                raise Transport3DDependencyError(
+                    f"OptiX GAS construction failed: {exc}"
+                ) from exc
+            self.handles[name] = handle
+            self._owners.extend(owners)
         self.gas_build_seconds = time.perf_counter() - started
 
     def trace(
@@ -92,9 +94,10 @@ class OptixScene:
             return self.runtime.trace(
                 self.handles[name], origins, directions, tmin=tmin
             )
-        except Exception as exc:
-            raise Transport3DTraceError(f"OptiX {name} traversal failed: {exc}") from exc
-
+        except OptixRuntimeError as exc:
+            raise Transport3DDependencyError(
+                f"OptiX {name} traversal failed: {exc}"
+            ) from exc
 
 __all__ = [
     "OptixRuntime",

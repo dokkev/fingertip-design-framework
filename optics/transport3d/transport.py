@@ -1,4 +1,10 @@
-"""Deterministic camera-independent 3D optical transport."""
+"""Deterministic camera-independent 3D optical transport.
+
+FULL_3D owns its scene, CUDA traversal, and native 3D accumulation here.  It
+reuses the cross-section package only for the canonical 2D domain preparation
+and weighted projected-path reporting boundary; the explicit public functions
+make that coupling intentional rather than depending on private helpers.
+"""
 
 from __future__ import annotations
 
@@ -9,9 +15,9 @@ import numpy as np
 from shapely import contains_xy
 
 from model.fingertip import Fingertip
-from optics.cross_section.result import _RawRaySegment
+from optics.cross_section.result import RawRaySegment
 from optics.cross_section.settings import TraceSettings
-from optics.cross_section.transport import _build_path_density_grid, _prepare_geometry
+from optics.cross_section.transport import build_path_density_grid, prepare_geometry
 from optics.transport3d.geometry import (
     CARRIER_CONTACT_INTERFACE,
     OBJECT_CONTACT_INTERFACE,
@@ -176,7 +182,7 @@ def _projected_density(
     cp: Any,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     x_edges, y_edges = _field_edges(geometry, settings)
-    raw_segments: list[_RawRaySegment] = []
+    raw_segments: list[RawRaySegment] = []
     for starts, ends, media, start_weights, end_weights in chunks:
         starts_np = cp.asnumpy(starts)
         ends_np = cp.asnumpy(ends)
@@ -185,7 +191,7 @@ def _projected_density(
         end_np = cp.asnumpy(end_weights)
         for index in range(len(starts_np)):
             raw_segments.append(
-                _RawRaySegment(
+                RawRaySegment(
                     start_mm=(float(starts_np[index, 0]), float(starts_np[index, 1])),
                     end_mm=(float(ends_np[index, 0]), float(ends_np[index, 1])),
                     medium="silicone" if int(media_np[index]) else "air",
@@ -195,7 +201,7 @@ def _projected_density(
                     interaction_index=0,
                 )
             )
-    prepared = _prepare_geometry(geometry.optical_domain)
+    prepared = prepare_geometry(geometry.optical_domain)
     trace_settings = TraceSettings(
         ray_count=settings.ray_count,
         max_interactions=settings.max_interactions,
@@ -206,7 +212,7 @@ def _projected_density(
         source_epsilon_mm=settings.source_epsilon_mm,
         intersection_epsilon_mm=settings.intersection_epsilon_mm,
     )
-    return _build_path_density_grid(
+    return build_path_density_grid(
         geometry.optical_domain,
         prepared,
         trace_settings,
@@ -285,7 +291,7 @@ def _new_internal_path_context(
             dtype=bool,
         )
     else:
-        prepared = _prepare_geometry(geometry.optical_domain)
+        prepared = prepare_geometry(geometry.optical_domain)
         x_centers = 0.5 * (x_edges[:-1] + x_edges[1:])
         y_centers = 0.5 * (y_edges[:-1] + y_edges[1:])
         center_x, center_y = np.meshgrid(x_centers, y_centers)

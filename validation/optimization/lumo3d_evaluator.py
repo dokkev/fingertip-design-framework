@@ -60,20 +60,56 @@ from validation.physics.multi_location_sphere_contact import (
     VALIDATION_VBD_ITERATIONS,
     run_multi_location_sphere_contact,
 )
-from optimization.evaluator_support import (
-    LUMO3D_OPTICAL_X_BOUNDS_MM,
-    LUMO3D_OPTICAL_Y_BOUNDS_MM,
-    candidate_id as make_candidate_id,
-    energy_record as make_energy_record,
-    material as make_material,
-    optical_settings as make_optical_settings,
-)
 
 
 LUMO3D_OBSERVATION_LEVEL = "FULL_3D native internal transport redistribution proxy"
 CONTACT_STATE_SEPARATION_OBJECTIVE_NAME = "contact_state_separation"
 LUMO3D_OPTICAL_X_BOUNDS_MM = (-16.0, 16.0)
 LUMO3D_OPTICAL_Y_BOUNDS_MM = (-31.0, 4.5)
+
+
+def make_optical_settings() -> Transport3DSettings:
+    """Return the fixed-state oracle's independent optical contract."""
+    return Transport3DSettings(
+        mode="full3d",
+        ray_count=256,
+        max_interactions=6,
+        maximum_segment_count=4096,
+        maximum_periodic_wraps=8,
+        surface_u_bins=32,
+        surface_z_bins=16,
+        internal_grid_width=32,
+        internal_grid_height=32,
+        internal_z_bins=8,
+        x_bounds_mm=LUMO3D_OPTICAL_X_BOUNDS_MM,
+        y_bounds_mm=LUMO3D_OPTICAL_Y_BOUNDS_MM,
+        terminate_on_periodic_wrap_limit=True,
+        terminate_on_no_event=True,
+        retain_internal_path_field=True,
+        retain_projected_segments=False,
+    )
+
+
+def make_candidate_id(parameters: FingertipParameters) -> str:
+    payload = {
+        "flat_pad_height": float(parameters.flat_pad_height),
+        "semielliptical_pad_height": float(parameters.semielliptical_pad_height),
+        "stem_width": float(parameters.stem_width),
+        "stem_height": float(parameters.stem_height),
+        "void_width": float(parameters.void_width),
+        "void_height": float(parameters.void_height),
+    }
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()[:16]
+
+
+def make_material(tip: Fingertip) -> dict[str, float]:
+    return tip.optical.to_dict()
+
+
+def make_energy_record(result: Any) -> dict[str, Any]:
+    return result.energy_record()
 LUMO3D_EVALUATION_CONTRACT: dict[str, Any] = {
     "schema": "lumo3d-multi-contact-evaluation-v1",
     "bounds_mm": [spec.to_dict() for spec in PRODUCTION_SEARCH_BOUNDS],
@@ -110,7 +146,7 @@ LUMO3D_EVALUATION_CONTRACT_ID = (
             LUMO3D_EVALUATION_CONTRACT,
             sort_keys=True,
             separators=(",", ":"),
-            default=str,
+            allow_nan=False,
         ).encode()
     ).hexdigest()[:16]
 )
@@ -423,7 +459,7 @@ class Lumo3DEvaluator:
                     {"summary": summary, "mechanics": mechanics_records, "optics": optical_records},
                     indent=2,
                     sort_keys=True,
-                    default=str,
+                    allow_nan=False,
                 )
                 + "\n"
             )

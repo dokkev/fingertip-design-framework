@@ -73,7 +73,7 @@ def _iter_polygons(geometry: PolygonalGeometry) -> Iterable[Polygon]:
     return geometry.geoms
 
 
-def _prepare_geometry(domain: _OpticalDomain) -> _PreparedGeometry:
+def prepare_geometry(domain: _OpticalDomain) -> _PreparedGeometry:
     accessible_region = domain.accessible_region
     if accessible_region.is_empty or not accessible_region.is_valid:
         raise CrossSectionOpticsError("the accessible optical region is invalid")
@@ -111,7 +111,7 @@ def _prepare_geometry(domain: _OpticalDomain) -> _PreparedGeometry:
     )
 
 
-def _sample_primary_directions(
+def sample_primary_directions(
     led: LED,
     emission_axis_2d: tuple[float, float],
     settings: TraceSettings,
@@ -302,7 +302,7 @@ def _refractive_index(
     return material.refractive_index_silicone
 
 
-def _build_path_density_grid(
+def build_path_density_grid(
     domain: _OpticalDomain,
     prepared: _PreparedGeometry,
     settings: TraceSettings,
@@ -386,7 +386,7 @@ def _build_path_density_grid(
     return x_edges, y_edges, density, optical_mask
 
 
-def _trace_transport(
+def trace_transport(
     domain: _OpticalDomain,
     *,
     led: LED,
@@ -398,7 +398,7 @@ def _trace_transport(
     led_properties = led
     material_properties = material
     trace_settings.validate(geometry_tolerance_mm=domain.geometry_tolerance_mm)
-    prepared = _prepare_geometry(domain)
+    prepared = prepare_geometry(domain)
 
     source = np.asarray(domain.source_position_mm, dtype=float)
     emission_axis = _normalize(
@@ -422,7 +422,7 @@ def _trace_transport(
             primary_ray_index=index,
         )
         for index, direction in enumerate(
-            _sample_primary_directions(
+            sample_primary_directions(
                 led_properties,
                 domain.source_emission_axis_2d,
                 trace_settings,
@@ -701,7 +701,7 @@ def _trace_transport(
             terminated_weight += transmitted_weight
 
     retained_segments = tuple(segments)
-    x_edges, y_edges, density, optical_mask = _build_path_density_grid(
+    x_edges, y_edges, density, optical_mask = build_path_density_grid(
         domain,
         prepared,
         trace_settings,
@@ -756,3 +756,11 @@ def _trace_transport(
         object_interface_incident_weight=float(object_interface_incident_weight),
         object_reflected_weight=float(object_reflected_weight),
     )
+
+
+# Compatibility aliases for existing validation-only callers. Production
+# transport code imports the explicit public owner names above.
+_prepare_geometry = prepare_geometry
+_sample_primary_directions = sample_primary_directions
+_build_path_density_grid = build_path_density_grid
+_trace_transport = trace_transport

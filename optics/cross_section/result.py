@@ -23,6 +23,11 @@ class _RawRaySegment:
     interaction_index: int
 
 
+# The cross-section package owns this shared path representation. FULL_3D uses
+# it only at the explicit projected-reporting boundary.
+RawRaySegment = _RawRaySegment
+
+
 @dataclass(frozen=True)
 class _RawExitEvent:
     """One outgoing air escape event retained for later side-view analysis."""
@@ -33,6 +38,9 @@ class _RawExitEvent:
     boundary_tag: str | None
     primary_ray_index: int
     interaction_index: int
+
+
+RawExitEvent = _RawExitEvent
 
 
 @dataclass(frozen=True)

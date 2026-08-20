@@ -16,6 +16,7 @@ from model.fingertip_parameters import (
     FingertipParameters,
     fingertip_parameters_fingerprint,
 )
+from model.validation import require_finite
 
 
 DEFAULT_EXTRUSION_DEPTH_MM = 11.0
@@ -61,10 +62,8 @@ class FingertipSolid:
     def __post_init__(self) -> None:
         if not isinstance(self.parameters, FingertipParameters):
             raise TypeError("parameters must be FingertipParameters")
-        if not math.isfinite(float(self.z_min_mm)):
-            raise ValueError("z_min_mm must be finite")
-        if not math.isfinite(float(self.z_max_mm)):
-            raise ValueError("z_max_mm must be finite")
+        require_finite("z_min_mm", self.z_min_mm)
+        require_finite("z_max_mm", self.z_max_mm)
         if self.z_min_mm >= self.z_max_mm:
             raise ValueError("z_min_mm must be smaller than z_max_mm")
         if not math.isclose(

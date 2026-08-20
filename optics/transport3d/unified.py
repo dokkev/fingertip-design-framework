@@ -30,7 +30,7 @@ LEGACY_UNIFIED_ARTIFACT_SCHEMA = "unified-optix-transport-case-v1"
 
 
 def _canonical_json(value: Any) -> str:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
 
 
 def fingerprint_mapping(value: Mapping[str, Any]) -> str:
@@ -136,6 +136,40 @@ class UnifiedTransportResult:
         object.__setattr__(self, "field_axes", axes)
         object.__setattr__(self, "contact_state", dict(self.contact_state))
         object.__setattr__(self, "path_diagnostics", dict(self.path_diagnostics))
+
+    def energy_record(self) -> dict[str, Any]:
+        """Return scalar transport diagnostics for evaluator persistence."""
+        launched = float(self.launched_weight)
+        carrier_absorbed = float(self.carrier_absorbed_weight)
+        escaped = float(self.escaped_weight)
+        return {
+            "launched_weight": launched,
+            "escaped_weight": escaped,
+            "escaped_transport_fraction": escaped / max(launched, 1.0e-30),
+            "absorbed_weight": float(self.absorbed_weight),
+            "terminated_weight": float(self.terminated_weight),
+            "total_transport": float(self.total_transport),
+            "object_interface_optics": "disabled_in_deformation_only_scene",
+            "object_interface_incident_weight": float(self.object_interface_incident_weight),
+            "object_absorbed_weight": float(self.object_absorbed_weight),
+            "object_transmitted_weight": float(self.object_transmitted_weight),
+            "object_reflected_weight": float(self.object_reflected_weight),
+            "carrier_absorbed_weight": carrier_absorbed,
+            "carrier_absorption_fraction": carrier_absorbed / max(launched, 1.0e-30),
+            "carrier_transmitted_weight": float(self.carrier_transmitted_weight),
+            "carrier_interface_incident_weight": float(self.carrier_interface_incident_weight),
+            "carrier_reflected_weight": float(self.carrier_reflected_weight),
+            "carrier_optical_contact_triangle_count": int(
+                self.path_diagnostics.get("carrier_interface", {}).get(
+                    "contact_triangle_count", 0
+                )
+            ),
+            "energy_balance_error": float(self.energy_balance_error),
+            "field_shape": list(self.field.shape),
+            "field_finite_nonnegative": bool(
+                np.all(np.isfinite(self.field)) and np.all(self.field >= 0.0)
+            ),
+        }
 
     @classmethod
     def from_transport_result(
@@ -413,7 +447,7 @@ def save_case_artifact(path: Path, result: UnifiedTransportResult, contract: Map
         },
     }
     metadata_tmp.write_text(
-        json.dumps(metadata, indent=2, sort_keys=True, default=str) + "\n",
+        json.dumps(metadata, indent=2, sort_keys=True, allow_nan=False) + "\n",
         encoding="utf-8",
     )
     field_tmp.replace(field_path)

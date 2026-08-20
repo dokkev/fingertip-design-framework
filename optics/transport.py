@@ -12,16 +12,16 @@ from model import Fingertip
 from mesh.indenter import IndenterPose2D
 from optics.contact_object import IndenterOptics
 from optics.cross_section.domain import (
-    _build_mesh_domain,
-    _build_no_load_domain,
+    build_mesh_domain,
+    build_no_load_domain,
 )
 from optics.cross_section.result import (
     OpticalMedium,
-    _RawExitEvent,
-    _RawRaySegment,
+    RawExitEvent,
+    RawRaySegment,
 )
 from optics.cross_section.settings import TraceSettings
-from optics.cross_section.transport import _trace_transport
+from optics.cross_section.transport import trace_transport
 
 
 @dataclass(frozen=True)
@@ -37,7 +37,7 @@ class RaySegment:
     interaction_index: int
 
     @classmethod
-    def _from_engine(cls, segment: _RawRaySegment) -> RaySegment:
+    def _from_engine(cls, segment: RawRaySegment) -> RaySegment:
         return cls(
             start=segment.start_mm,
             end=segment.end_mm,
@@ -61,7 +61,7 @@ class ExitEvent:
     interaction_index: int
 
     @classmethod
-    def _from_engine(cls, event: _RawExitEvent) -> ExitEvent:
+    def _from_engine(cls, event: RawExitEvent) -> ExitEvent:
         return cls(
             position=event.position_mm,
             direction=event.direction,
@@ -185,20 +185,20 @@ def trace(
     if not isinstance(tip, Fingertip):
         raise TypeError("tip must be a Fingertip")
     domain = (
-        _build_no_load_domain(
+        build_no_load_domain(
             tip,
             indenter_pose=indenter_pose,
             indenter_optics=indenter_optics,
         )
         if mesh is None
-        else _build_mesh_domain(
+        else build_mesh_domain(
             tip,
             _pad_view(mesh),
             indenter_pose=indenter_pose,
             indenter_optics=indenter_optics,
         )
     )
-    raw = _trace_transport(
+    raw = trace_transport(
         domain,
         led=tip.led,
         material=tip.optical,

@@ -20,8 +20,8 @@ from physics import (
     NewtonSettings,
     make_fingertip_volume_state,
     prepare_fingertip_mesh,
-    solve,
 )
+from physics.solve import solve
 from model import Fingertip
 from optics.transport3d import (
     Transport3DSettings,

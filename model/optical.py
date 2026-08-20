@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import isfinite
+from typing import Any
+
+from model.validation import require_finite
 
 
 @dataclass(frozen=True)
@@ -17,13 +19,10 @@ class LED:
     emission_rgb: tuple[float, float, float] = (1.0, 1.0, 1.0)
 
     def __post_init__(self) -> None:
-        if (
-            not isfinite(self.width_mm)
-            or not isfinite(self.height_mm)
-            or not isfinite(self.relative_radiant_power)
-            or not isfinite(self.emission_half_angle_deg)
-        ):
-            raise ValueError("LED properties must be finite")
+        require_finite("width_mm", self.width_mm)
+        require_finite("height_mm", self.height_mm)
+        require_finite("relative_radiant_power", self.relative_radiant_power)
+        require_finite("emission_half_angle_deg", self.emission_half_angle_deg)
         if self.width_mm <= 0.0 or self.height_mm <= 0.0:
             raise ValueError("LED width and height must be greater than zero")
         if self.relative_radiant_power < 0.0:
@@ -34,7 +33,10 @@ class LED:
             )
         if len(self.emission_rgb) != 3:
             raise ValueError("emission_rgb must contain three components")
-        if any(not isfinite(value) or value < 0.0 for value in self.emission_rgb):
+        require_finite("emission_rgb[0]", self.emission_rgb[0])
+        require_finite("emission_rgb[1]", self.emission_rgb[1])
+        require_finite("emission_rgb[2]", self.emission_rgb[2])
+        if any(value < 0.0 for value in self.emission_rgb):
             raise ValueError("emission_rgb must be finite and nonnegative")
         if not any(value > 0.0 for value in self.emission_rgb):
             raise ValueError("at least one emission_rgb component must be positive")
@@ -51,15 +53,13 @@ class OpticalMaterial:
     anisotropy_g: float = 0.0
 
     def __post_init__(self) -> None:
-        values = (
-            self.refractive_index_air,
-            self.refractive_index_silicone,
-            self.absorption_per_mm,
-            self.scattering_per_mm,
-            self.anisotropy_g,
+        require_finite("refractive_index_air", self.refractive_index_air)
+        require_finite(
+            "refractive_index_silicone", self.refractive_index_silicone
         )
-        if any(not isfinite(value) for value in values):
-            raise ValueError("optical material properties must be finite")
+        require_finite("absorption_per_mm", self.absorption_per_mm)
+        require_finite("scattering_per_mm", self.scattering_per_mm)
+        require_finite("anisotropy_g", self.anisotropy_g)
         if self.refractive_index_air <= 0.0:
             raise ValueError("refractive_index_air must be greater than zero")
         if self.refractive_index_silicone <= 0.0:
@@ -79,6 +79,15 @@ class OpticalMaterial:
     def single_scattering_albedo(self) -> float:
         extinction = self.extinction_per_mm
         return 0.0 if extinction == 0.0 else self.scattering_per_mm / extinction
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return the scalar material contract consumed by optical adapters."""
+        return {
+            "refractive_index_air": float(self.refractive_index_air),
+            "refractive_index_silicone": float(self.refractive_index_silicone),
+            "absorption_per_mm": float(self.absorption_per_mm),
+            "scattering_per_mm": float(self.scattering_per_mm),
+        }
 
 
 __all__ = ["LED", "OpticalMaterial"]

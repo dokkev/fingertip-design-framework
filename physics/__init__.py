@@ -1,4 +1,11 @@
-"""GPU mechanics API with a neutral NumPy boundary."""
+"""Neutral mechanics contracts and the canonical fingertip indentation API.
+
+Production evaluation enters through ``prepare_fingertip_mesh`` and
+``solve_fingertip_indentation_trajectory``.  The generic ``NewtonSession``,
+``ParticleLoad``, and ``solve`` boundaries remain available from their owning
+modules for validation and smoke workflows, but are intentionally not part of
+the production-facing package export.
+"""
 
 from .fingertip import (
     PreparedFingertipMesh,
@@ -9,9 +16,7 @@ from .fingertip import (
     prepare_fingertip_mesh,
     solve_prescribed_indentation,
 )
-from .load import ParticleLoad
-from .session import NewtonSession
-from .solve import NewtonSettings, PhysicsDependencyError, solve
+from .solve import NewtonSettings, PhysicsDependencyError
 from .types import NewtonResult, TetMeshData
 from .indentation import (
     IndentationCheckpoint,
@@ -28,7 +33,6 @@ __all__ = [
     "NewtonResult",
     "NewtonSettings",
     "PhysicsDependencyError",
-    "NewtonSession",
     "IndentationResult",
     "IndentationCheckpoint",
     "IndentationSettings",
@@ -36,7 +40,6 @@ __all__ = [
     "PreparedFingertipMesh",
     "InvalidFingertipMesh",
     "PrescribedVertexDisplacement",
-    "ParticleLoad",
     "RigidIndenter3D",
     "checkpoint_step_schedule",
     "TetMeshData",
@@ -46,5 +49,4 @@ __all__ = [
     "solve_prescribed_indentation",
     "solve_fingertip_indentation",
     "solve_fingertip_indentation_trajectory",
-    "solve",
 ]

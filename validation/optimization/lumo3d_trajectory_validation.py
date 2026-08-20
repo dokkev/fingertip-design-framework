@@ -60,7 +60,24 @@ def _probe() -> FingertipParameters:
 
 
 def _write_json(path: Path, payload: Any) -> None:
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8")
+    path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True, allow_nan=False) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _objective_payload(evaluation: Any) -> dict[str, Any]:
+    """Convert the domain objective at the validation persistence boundary."""
+    objective = evaluation.objective
+    if hasattr(objective, "to_dict"):
+        payload = objective.to_dict()
+    elif isinstance(objective, Mapping):
+        payload = dict(objective)
+    else:
+        raise TypeError("evaluation objective must be a structured domain result")
+    if not isinstance(payload, dict):
+        raise TypeError("objective to_dict() must return an object")
+    return payload
 
 
 def _fields(evaluation: Any) -> tuple[np.ndarray, ...]:
@@ -310,7 +327,10 @@ def run_validation(output: str | Path, *, device: str = "cuda:0") -> dict[str, A
         root / "trajectory_metrics.json",
         {label: result.diagnostics.get("trajectory_metrics", {}) for label, result in evaluations.items()},
     )
-    _write_json(root / "trajectory_objective.json", {label: result.objective for label, result in evaluations.items()})
+    _write_json(
+        root / "trajectory_objective.json",
+        {label: _objective_payload(result) for label, result in evaluations.items()},
+    )
     _write_json(root / "optics_diagnostics.json", {label: result.optical_diagnostics for label, result in evaluations.items()})
     _plot_outputs(root, evaluations)
 
@@ -419,7 +439,7 @@ def run_validation(output: str | Path, *, device: str = "cuda:0") -> dict[str, A
         "morphologies": {
             label: {
                 "status": result.status,
-                "objective": result.objective,
+                "objective": _objective_payload(result),
                 "trajectory_count": len({record["trajectory_id"] for record in result.trajectory_diagnostics}),
                 "checkpoint_count": len(result.checkpoint_diagnostics),
                 "optical_state_count": len(result.optical_diagnostics),
@@ -450,7 +470,6 @@ def run_validation(output: str | Path, *, device: str = "cuda:0") -> dict[str, A
                 "optimization/mechanics_contract.py",
                 "optimization/objectives.py",
                 "optimization/evaluator.py",
-                "optimization/evaluator_support.py",
                 "optimization/deformed_state_artifact.py",
             ],
             "duplicate_constants_removed_from_active_path": True,

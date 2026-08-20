@@ -1,6 +1,9 @@
-"""Status translation contracts for the bounded validation BO report."""
+"""Status and setup contracts for the bounded validation BO report."""
 
-from validation.optimization.lumo6d_test_bo import _status_contract
+from types import SimpleNamespace
+
+from optimization.mechanics_contract import MechanicsContract
+from validation.optimization.lumo6d_test_bo import _search_mechanics, _status_contract
 
 
 def test_status_contract_preserves_current_evaluation_taxonomy() -> None:
@@ -15,3 +18,14 @@ def test_status_contract_preserves_current_evaluation_taxonomy() -> None:
 
 def test_removed_failure_vocabulary_is_not_silently_current() -> None:
     assert _status_contract("fea_failure") == "infrastructure_failed"
+
+
+def test_test_bo_serializes_the_mechanics_contract_at_the_setup_boundary() -> None:
+    contract = MechanicsContract()
+    study = SimpleNamespace(
+        create_evaluator=lambda: SimpleNamespace(mechanics_contract=contract)
+    )
+
+    search_mechanics = _search_mechanics(study)
+
+    assert search_mechanics == contract.to_dict()

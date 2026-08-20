@@ -1,6 +1,7 @@
 """Solver-neutral geometric contact initialization contracts."""
 
 from .first_contact import (
+    CandidateContactError,
     FirstContactResult,
     FirstContactSettings,
     FingertipContactSurface,
@@ -16,6 +17,7 @@ from .sphere_alignment import (
 )
 
 __all__ = [
+    "CandidateContactError",
     "FirstContactResult",
     "FirstContactSettings",
     "FingertipContactSurface",

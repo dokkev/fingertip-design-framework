@@ -218,10 +218,10 @@ def _validate_support_constraints(
 
     configured_support = tuple(sorted(mechanics_settings.fixed_vertex_indices))
     authoritative_support = tuple(sorted(prepared_fingertip.support_vertex_indices))
-    if configured_support and configured_support != authoritative_support:
+    if configured_support != authoritative_support:
         raise ValueError(
-            "physics indentation requires fixed_vertex_indices to be empty or "
-            "equal to prepared_fingertip.support_vertex_indices; the authoritative "
+            "physics indentation requires fixed_vertex_indices to exactly equal "
+            "prepared_fingertip.support_vertex_indices; the authoritative "
             f"support is {authoritative_support!r}, received {configured_support!r}"
         )
 

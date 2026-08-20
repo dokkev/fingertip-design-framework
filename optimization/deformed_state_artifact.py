@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 from pathlib import Path
-from typing import Iterable, Mapping
+from typing import Any, Iterable, Mapping
 
 import numpy as np
 
@@ -16,7 +16,9 @@ from mesh.volume_types import FingertipVolumeMesh
 from mesh.volume_state import FingertipVolumeState
 from model.fingertip import Fingertip
 from optics.transport3d import build_fingertip_volume_state_geometry
+from optics.transport3d import fingerprint_mapping
 from optics.contact_object import CarrierOptics
+from optimization.protocol import TrajectoryEvaluationProtocol
 
 
 @dataclass(frozen=True)
@@ -98,6 +100,143 @@ def _load_state(
     return state, state_id, stored_contact_ids
 
 
+def _state_identity(
+    morphology_fingerprint: str,
+    protocol: TrajectoryEvaluationProtocol,
+    *,
+    location_u: float,
+    radius_mm: float,
+    checkpoint_depth_mm: float,
+    checkpoint_fraction: float,
+    normalized_indentation_ratio: float,
+    post_contact_travel_mm: float,
+    unintended_boundary_clearance_mm: float,
+    mechanics_artifact_sha256: str,
+) -> dict[str, Any]:
+    return {
+        "morphology_fingerprint": morphology_fingerprint,
+        "protocol_fingerprint": protocol.fingerprint,
+        "contact_location_u": float(location_u),
+        "indenter_radius_mm": float(radius_mm),
+        "checkpoint_depth_mm": float(checkpoint_depth_mm),
+        "checkpoint_fraction": float(checkpoint_fraction),
+        "normalized_indentation_ratio": float(normalized_indentation_ratio),
+        "post_contact_travel_mm": float(post_contact_travel_mm),
+        "unintended_boundary_clearance_mm": float(unintended_boundary_clearance_mm),
+        "mechanics_artifact_sha256": mechanics_artifact_sha256,
+        "mechanics_artifact_fingerprint": mechanics_artifact_sha256,
+    }
+
+
+def build_contact_state_record(
+    *,
+    morphology_fingerprint: str,
+    protocol: TrajectoryEvaluationProtocol,
+    location_u: float,
+    radius_mm: float,
+    checkpoint_depth_mm: float,
+    checkpoint_fraction: float,
+    normalized_indentation_ratio: float,
+    post_contact_travel_mm: float,
+    unintended_boundary_clearance_mm: float,
+    checkpoint_diagnostics: Mapping[str, Any],
+    source_node_ids: tuple[int, ...],
+    mechanics_artifact_sha256: str,
+) -> dict[str, Any]:
+    """Build the persisted mechanics-to-optics contact-state certificate."""
+    local_indices = tuple(
+        int(index)
+        for index in checkpoint_diagnostics.get("active_carrier_contact_vertex_indices", ())
+    )
+    source_ids = tuple(
+        int(source_node_ids[index])
+        for index in local_indices
+        if 0 <= index < len(source_node_ids)
+    )
+    identity = _state_identity(
+        morphology_fingerprint,
+        protocol,
+        location_u=location_u,
+        radius_mm=radius_mm,
+        checkpoint_depth_mm=checkpoint_depth_mm,
+        checkpoint_fraction=checkpoint_fraction,
+        normalized_indentation_ratio=normalized_indentation_ratio,
+        post_contact_travel_mm=post_contact_travel_mm,
+        unintended_boundary_clearance_mm=unintended_boundary_clearance_mm,
+        mechanics_artifact_sha256=mechanics_artifact_sha256,
+    )
+    return {
+        "state_identity": identity,
+        "contact_state_fingerprint": fingerprint_mapping(
+            identity | {"carrier_contact_source_node_ids": source_ids}
+        ),
+        "normalized_location": float(location_u),
+        "indenter_radius_mm": float(radius_mm),
+        "initial_gap_mm": protocol.initial_gap_mm,
+        "checkpoint_depth_mm": float(checkpoint_depth_mm),
+        "checkpoint_fraction": float(checkpoint_fraction),
+        "normalized_indentation_ratio": float(normalized_indentation_ratio),
+        "post_contact_travel_mm": float(post_contact_travel_mm),
+        "unintended_boundary_clearance_mm": float(unintended_boundary_clearance_mm),
+        "first_contact_travel_mm": float(
+            checkpoint_diagnostics.get("first_contact_travel_mm", 0.0)
+        ),
+        "spawn_clearance_mm": float(checkpoint_diagnostics.get("spawn_clearance_mm", 0.0)),
+        "carrier_contact_active": bool(
+            checkpoint_diagnostics.get("carrier_contact_active", False)
+        ),
+        "carrier_contact_occurred": bool(
+            checkpoint_diagnostics.get("carrier_contact_occurred", False)
+        ),
+        "carrier_mechanical_contact_count": int(
+            checkpoint_diagnostics.get("carrier_interface_contact_count", 0)
+        ),
+        "carrier_mechanical_contact_vertex_count": len(source_ids),
+        "first_carrier_contact_step": checkpoint_diagnostics.get(
+            "first_carrier_contact_step"
+        ),
+        "carrier_contact_source_node_ids": list(source_ids),
+        "carrier_mapping_tolerance_mm": 0.5
+        * float(checkpoint_diagnostics.get("rigid_sdf_target_voxel_mm", 0.125)),
+        "mechanics_artifact_sha256": mechanics_artifact_sha256,
+    }
+
+
+def write_mechanics_artifact(
+    path: Path,
+    checkpoint: Any,
+    prepared: PreparedFingertipMesh,
+) -> str:
+    """Persist one checkpoint and return its content hash."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    arrays: dict[str, np.ndarray] = {
+        "rest_vertices_mm": np.asarray(
+            checkpoint.mechanics_result.rest_vertices, dtype=np.float32
+        ),
+        "deformed_vertices_mm": np.asarray(
+            checkpoint.mechanics_result.deformed_vertices, dtype=np.float32
+        ),
+        "tetrahedra": np.asarray(checkpoint.mechanics_result.tetrahedra, dtype=np.int32),
+        "source_node_ids": np.asarray(prepared.source_node_ids, dtype=np.int64),
+        "carrier_contact_vertex_indices": np.asarray(
+            checkpoint.diagnostics.get("active_carrier_contact_vertex_indices", ()),
+            dtype=np.int64,
+        ),
+    }
+    arrays["carrier_contact_source_node_ids"] = np.asarray(
+        [prepared.source_node_ids[index] for index in arrays["carrier_contact_vertex_indices"]],
+        dtype=np.int64,
+    )
+    arrays.update(
+        {
+            f"surface_{tag}": np.asarray(triangles, dtype=np.int32)
+            for tag, triangles in prepared.surface_triangles.items()
+        }
+    )
+    np.savez_compressed(path, **arrays)
+    return _sha256(path)
+
+
 def restore_deformed_optical_state(
     tip: Fingertip,
     volume_mesh: FingertipVolumeMesh,
@@ -163,4 +302,9 @@ def restore_deformed_optical_state(
     )
 
 
-__all__ = ["RestoredDeformedOpticalState", "restore_deformed_optical_state"]
+__all__ = [
+    "RestoredDeformedOpticalState",
+    "build_contact_state_record",
+    "restore_deformed_optical_state",
+    "write_mechanics_artifact",
+]

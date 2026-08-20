@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 import time
 from typing import Any
@@ -12,7 +13,7 @@ from optics.optix.paths import discover_paths
 
 
 class OptixRuntimeError(RuntimeError):
-    """Raised when the optional CUDA/OptiX runtime cannot be created."""
+    """Raised when optional CUDA/OptiX setup or execution fails."""
 
     def __init__(
         self,
@@ -221,6 +222,19 @@ class OptixRuntime:
         sbt.hitgroupRecordCount = 1
         return sbt, records
 
+    @staticmethod
+    def _backend_call(operation: str, callback: Callable[[], Any]) -> Any:
+        """Translate direct CUDA/OptiX operation failures to runtime errors."""
+        try:
+            return callback()
+        except OptixRuntimeError:
+            raise
+        except (MemoryError, RuntimeError) as exc:
+            raise OptixRuntimeError(
+                f"{operation} failed: {exc}",
+                stage="optix_runtime_execution",
+            ) from exc
+
     def make_sbt(self, groups: list[Any]) -> tuple[Any, list[Any]]:
         """Pack a shader binding table for an alternate caller-owned program set."""
         return self._make_sbt(self.optix, self.cp, groups)
@@ -231,9 +245,18 @@ class OptixRuntime:
         faces: np.ndarray,
     ) -> tuple[int, list[Any]]:
         """Build one triangle GAS and return handles plus device-memory owners."""
-        vertices_device = self.cp.asarray(vertices, dtype=self.cp.float32)
-        faces_device = self.cp.asarray(faces, dtype=self.cp.uint32)
-        triangle = self.optix.BuildInputTriangleArray()
+        vertices_device = self._backend_call(
+            "CUDA vertex allocation",
+            lambda: self.cp.asarray(vertices, dtype=self.cp.float32),
+        )
+        faces_device = self._backend_call(
+            "CUDA index allocation",
+            lambda: self.cp.asarray(faces, dtype=self.cp.uint32),
+        )
+        triangle = self._backend_call(
+            "OptiX triangle description",
+            self.optix.BuildInputTriangleArray,
+        )
         triangle.vertexBuffers = [int(vertices_device.data.ptr)]
         triangle.numVertices = len(vertices_device)
         triangle.vertexFormat = self.optix.VERTEX_FORMAT_FLOAT3
@@ -244,22 +267,46 @@ class OptixRuntime:
         triangle.indexStrideInBytes = int(faces_device.strides[0])
         triangle.numSbtRecords = 1
         triangle.flags = [self.optix.GEOMETRY_FLAG_NONE]
-        build_options = self.optix.AccelBuildOptions()
-        build_options.buildFlags = self.optix.BUILD_FLAG_NONE
-        sizes = self.context.accelComputeMemoryUsage([build_options], [triangle])
-        temporary = self.cp.empty(int(sizes.tempSizeInBytes), dtype=self.cp.uint8)
-        output = self.cp.empty(int(sizes.outputSizeInBytes), dtype=self.cp.uint8)
-        handle = self.context.accelBuild(
-            int(self.cp.cuda.Stream.null.ptr),
-            [build_options],
-            [triangle],
-            int(temporary.data.ptr),
-            int(temporary.nbytes),
-            int(output.data.ptr),
-            int(output.nbytes),
-            [],
+        build_options = self._backend_call(
+            "OptiX acceleration-build options",
+            self.optix.AccelBuildOptions,
         )
-        self.cp.cuda.runtime.deviceSynchronize()
+        build_options.buildFlags = self.optix.BUILD_FLAG_NONE
+        sizes = self._backend_call(
+            "OptiX GAS memory query",
+            lambda: self.context.accelComputeMemoryUsage(
+                [build_options], [triangle]
+            ),
+        )
+        temporary = self._backend_call(
+            "CUDA temporary GAS allocation",
+            lambda: self.cp.empty(
+                int(sizes.tempSizeInBytes), dtype=self.cp.uint8
+            ),
+        )
+        output = self._backend_call(
+            "CUDA output GAS allocation",
+            lambda: self.cp.empty(
+                int(sizes.outputSizeInBytes), dtype=self.cp.uint8
+            ),
+        )
+        handle = self._backend_call(
+            "OptiX GAS build",
+            lambda: self.context.accelBuild(
+                int(self.cp.cuda.Stream.null.ptr),
+                [build_options],
+                [triangle],
+                int(temporary.data.ptr),
+                int(temporary.nbytes),
+                int(output.data.ptr),
+                int(output.nbytes),
+                [],
+            ),
+        )
+        self._backend_call(
+            "CUDA GAS synchronization",
+            lambda: self.cp.cuda.runtime.deviceSynchronize(),
+        )
         return int(handle), [vertices_device, faces_device, temporary, output]
 
     def launch(
@@ -272,18 +319,27 @@ class OptixRuntime:
         sbt: Any | None = None,
     ) -> None:
         """Launch the configured pipeline with a caller-owned parameter record."""
-        params_device = self.cp.asarray(params_host)
-        self.optix.launch(
-            self.pipeline,
-            int(self.cp.cuda.Stream.null.ptr),
-            int(params_device.data.ptr),
-            int(params_device.nbytes),
-            self.sbt if sbt is None else sbt,
-            width,
-            height,
-            depth,
+        params_device = self._backend_call(
+            "CUDA launch-parameter allocation",
+            lambda: self.cp.asarray(params_host),
         )
-        self.cp.cuda.runtime.deviceSynchronize()
+        self._backend_call(
+            "OptiX launch",
+            lambda: self.optix.launch(
+                self.pipeline,
+                int(self.cp.cuda.Stream.null.ptr),
+                int(params_device.data.ptr),
+                int(params_device.nbytes),
+                self.sbt if sbt is None else sbt,
+                width,
+                height,
+                depth,
+            ),
+        )
+        self._backend_call(
+            "CUDA launch synchronization",
+            lambda: self.cp.cuda.runtime.deviceSynchronize(),
+        )
 
     def trace(
         self,

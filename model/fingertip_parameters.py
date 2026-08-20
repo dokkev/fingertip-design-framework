@@ -5,7 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 import json
-from math import isfinite, sqrt
+from math import sqrt
+
+from model.validation import require_finite
 
 
 class InvalidFingertipParameters(ValueError):
@@ -30,6 +32,14 @@ def ellipse_depth_at_cutout_mm(
     if not 0.0 <= normalized_x < 1.0:
         raise ValueError("cutout must lie strictly inside the pad half-width")
     return float(semielliptical_pad_height) * sqrt(1.0 - normalized_x**2)
+
+
+def _require_finite(name: str, value: float) -> None:
+    require_finite(
+        name,
+        value,
+        error_type=InvalidFingertipParameters,
+    )
 
 
 @dataclass(frozen=True)
@@ -66,38 +76,19 @@ class FingertipParameters:
 
     def validate(self) -> None:
         """Raise ``InvalidFingertipParameters`` for inconsistent dimensions."""
-        if not isfinite(self.flat_pad_width):
-            raise InvalidFingertipParameters("flat_pad_width must be finite")
-        if not isfinite(self.flat_pad_height):
-            raise InvalidFingertipParameters("flat_pad_height must be finite")
-        if not isfinite(self.semielliptical_pad_height):
-            raise InvalidFingertipParameters(
-                "semielliptical_pad_height must be finite"
-            )
-        if not isfinite(self.link_thickness):
-            raise InvalidFingertipParameters("link_thickness must be finite")
-        if not isfinite(self.bond_extension_width):
-            raise InvalidFingertipParameters(
-                "bond_extension_width must be finite"
-            )
-        if not isfinite(self.bond_extension_height):
-            raise InvalidFingertipParameters(
-                "bond_extension_height must be finite"
-            )
-        if not isfinite(self.stem_width):
-            raise InvalidFingertipParameters("stem_width must be finite")
-        if not isfinite(self.stem_height):
-            raise InvalidFingertipParameters("stem_height must be finite")
-        if not isfinite(self.void_width):
-            raise InvalidFingertipParameters("void_width must be finite")
-        if not isfinite(self.void_height):
-            raise InvalidFingertipParameters("void_height must be finite")
-        if not isfinite(self.geometry_tolerance):
-            raise InvalidFingertipParameters("geometry_tolerance must be finite")
-        if not isfinite(self.young_modulus_mpa):
-            raise InvalidFingertipParameters("young_modulus_mpa must be finite")
-        if not isfinite(self.poisson_ratio):
-            raise InvalidFingertipParameters("poisson_ratio must be finite")
+        _require_finite("flat_pad_width", self.flat_pad_width)
+        _require_finite("flat_pad_height", self.flat_pad_height)
+        _require_finite("semielliptical_pad_height", self.semielliptical_pad_height)
+        _require_finite("link_thickness", self.link_thickness)
+        _require_finite("bond_extension_width", self.bond_extension_width)
+        _require_finite("bond_extension_height", self.bond_extension_height)
+        _require_finite("stem_width", self.stem_width)
+        _require_finite("stem_height", self.stem_height)
+        _require_finite("void_width", self.void_width)
+        _require_finite("void_height", self.void_height)
+        _require_finite("geometry_tolerance", self.geometry_tolerance)
+        _require_finite("young_modulus_mpa", self.young_modulus_mpa)
+        _require_finite("poisson_ratio", self.poisson_ratio)
 
         if self.flat_pad_width <= 0.0:
             raise InvalidFingertipParameters(

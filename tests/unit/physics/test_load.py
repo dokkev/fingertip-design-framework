@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from physics import ParticleLoad
+from physics.load import ParticleLoad
 
 
 def test_particle_load_is_read_only_and_reports_resultant() -> None:

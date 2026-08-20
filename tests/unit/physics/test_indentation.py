@@ -15,6 +15,7 @@ from physics import (
 )
 from physics.fingertip import PreparedFingertipMesh
 from physics.types import TetMeshData
+from physics.indentation import _validate_support_constraints
 from mesh.rigid_object import RigidPose3D, make_cube_mesh
 
 
@@ -55,7 +56,7 @@ def test_indentation_settings_and_result_are_neutral() -> None:
         IndentationSettings(travel_mm=0.1, rigid_sdf_target_voxel_mm=0.0)
 
 
-def test_indentation_rejects_non_authoritative_fixed_vertices_before_backend_load() -> None:
+def _prepared_with_support(support: tuple[int, ...]) -> PreparedFingertipMesh:
     prepared = PreparedFingertipMesh(
         TetMeshData(
             np.array(
@@ -65,18 +66,24 @@ def test_indentation_rejects_non_authoritative_fixed_vertices_before_backend_loa
             np.array([[0, 1, 2, 3]], dtype=np.int32),
         ),
         np.arange(4, dtype=np.int64),
-        (0, 1),
+        support,
         {},
         "support-contract",
     )
+    return prepared
+
+
+def test_indentation_accepts_exact_authoritative_fixed_vertices() -> None:
+    _validate_support_constraints(
+        _prepared_with_support((0, 1)),
+        NewtonSettings(fixed_vertex_indices=(1, 0)),
+    )
+
+
+@pytest.mark.parametrize("fixed", ((), (0, 2)))
+def test_indentation_rejects_any_support_mismatch_before_backend_load(
+    fixed: tuple[int, ...],
+) -> None:
+    prepared = _prepared_with_support((0, 1))
     with pytest.raises(ValueError, match="fixed_vertex_indices"):
-        solve_fingertip_indentation(
-            prepared,
-            RigidIndenter3D(
-                make_cube_mesh(1.0),
-                RigidPose3D((0.0, 2.0, 0.0), (0.0, 0.0, 0.0, 1.0)),
-                (0.0, -1.0, 0.0),
-            ),
-            NewtonSettings(fixed_vertex_indices=(0, 2)),
-            IndentationSettings(travel_mm=0.1),
-        )
+        _validate_support_constraints(prepared, NewtonSettings(fixed_vertex_indices=fixed))

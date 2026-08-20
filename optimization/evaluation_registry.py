@@ -114,8 +114,6 @@ class EvaluationRegistryRecord:
             object.__setattr__(self, "minimum_auc", minimum_auc)
         if self.objective_value is not None:
             objective_value = _finite_float("objective_value", self.objective_value)
-            if objective_value < 0.0:
-                raise ValueError("objective_value must be nonnegative")
             object.__setattr__(self, "objective_value", objective_value)
         if self.status == "success" and (
             self.minimum_auc is None and self.objective_value is None
