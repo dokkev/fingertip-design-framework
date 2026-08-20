@@ -1,1 +1,0 @@
-"""Mesh validation entrypoints."""

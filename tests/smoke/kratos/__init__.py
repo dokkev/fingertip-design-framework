@@ -1,1 +1,0 @@
-"""Kratos smoke tests."""
