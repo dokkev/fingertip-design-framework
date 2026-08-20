@@ -30,20 +30,19 @@ from physics import (
     prepare_fingertip_mesh,
 )
 from physics.newton.session import NewtonSession
-from mesh.fingertip.geometry import generate_fingertip_mesh
-from mesh.fingertip.contracts import mesh_settings_for_level
+from mesh.rigid.carrier import make_distal_phalanx_mesh
 from mesh.volume.mesh import generate_volume_mesh
 from mesh.volume.contracts import volume_mesh_settings_for_tier
-from model.fingertip import Fingertip
-from model.fingertip_model import FingertipModel
-from model.fingertip_parameters import FingertipParameters
-from model.solid import build_fingertip_solid
-from optics.transport3d import (
+from finger.fingertip import Fingertip
+from finger.fingertip_geometry import FingertipModel
+from finger.fingertip_parameters import FingertipParameters
+from finger.extrusion import build_fingertip_solid
+from ray_tracing.optical_mechanics import (
     build_fingertip_volume_state_geometry,
     trace_geometry,
 )
-from optics.transport3d.optix_backend import create_runtime
-from optics.transport3d.settings import Transport3DSettings
+from ray_tracing.optical_mechanics.optix_backend import create_runtime
+from ray_tracing.optical_mechanics.settings import Transport3DSettings
 from validation.common.io import atomic_write_json, strict_read_json
 from validation.common.provenance import sha256_file
 from optimization.optical_artifact import (
@@ -55,7 +54,7 @@ from optimization.optical_artifact import (
     save_case_artifact,
     transport_configuration,
 )
-from validation.optics.fea_surface_artifact import load_full3d_surface_artifact
+from validation.ray_tracing.fea_surface_artifact import load_full3d_surface_artifact
 from mesh.volume.state import make_fingertip_volume_state as make_volume_state
 
 from .correspondence import (
@@ -361,10 +360,7 @@ def _prepare_candidate(group: Mapping[str, Any], morphology_id: str) -> dict[str
         volume_mesh_settings_for_tier("search"),
     )
     prepared = prepare_fingertip_mesh(volume_mesh)
-    reference_mesh = generate_fingertip_mesh(
-        tip.geometry,
-        mesh_settings_for_level("medium"),
-    )
+    carrier_mesh = make_distal_phalanx_mesh(volume_mesh.solid)
     state: dict[str, Any] = {
         "morphology_id": morphology_id,
         "parameters": dict(sides["left"]["parameters"]),
@@ -372,7 +368,7 @@ def _prepare_candidate(group: Mapping[str, Any], morphology_id: str) -> dict[str
         "tip": tip,
         "volume_mesh": volume_mesh,
         "prepared": prepared,
-        "reference_mesh": reference_mesh,
+        "carrier_mesh": carrier_mesh,
         "sides": {},
     }
     for side in ("left", "right"):
@@ -711,7 +707,7 @@ def run_comparison(
                 fea_geometry = build_fingertip_volume_state_geometry(
                     state["tip"],
                     side_state["fea_state"],
-                    reference_mesh=state["reference_mesh"],
+                    carrier_mesh=state["carrier_mesh"],
                     full3d_surface_provenance="actual_deformed_3d_volume_state",
                     metadata={
                         "morphology_id": state["morphology_id"],
@@ -722,7 +718,7 @@ def run_comparison(
                 geometry = build_fingertip_volume_state_geometry(
                     state["tip"],
                     vbd_state,
-                    reference_mesh=state["reference_mesh"],
+                    carrier_mesh=state["carrier_mesh"],
                     full3d_surface_provenance="actual_deformed_3d_vbd_surface",
                     metadata={
                         "morphology_id": state["morphology_id"],
@@ -926,7 +922,7 @@ def run_comparison(
             "settings": asdict(prepared_groups[0]["prepared_candidates"][0]["vbd_settings"]),
         },
         "optics": {
-            "runtime": "optics.transport3d.trace_geometry",
+            "runtime": "ray_tracing.optical_mechanics.trace_geometry",
             "settings": asdict(optix_settings),
             "configuration_scope": "one frozen full-3D transport configuration and common field bounds for all states",
             "source_configuration": "existing Fingertip optical source carried by each exact morphology; identical FEA/VBD within each state",

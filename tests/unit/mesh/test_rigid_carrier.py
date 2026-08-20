@@ -7,9 +7,9 @@ from shapely.geometry import Polygon, box
 from shapely.ops import unary_union
 
 from mesh.rigid.carrier import make_distal_phalanx_mesh
-from model.fingertip_model import FingertipModel
-from model.fingertip_parameters import FingertipParameters
-from model.solid import FingertipSolid, build_fingertip_solid
+from finger.fingertip_geometry import FingertipModel
+from finger.fingertip_parameters import FingertipParameters
+from finger.extrusion import FingertipSolid, build_fingertip_solid
 
 
 def _solid():
@@ -67,6 +67,26 @@ def test_distal_phalanx_mesh_is_closed_deterministic_and_outward() -> None:
     assert first_surface.metadata["source_geometry"] == "FingertipSolid.rigid_geometry"
     assert first.z_min_mm == -5.5
     assert first.z_max_mm == 5.5
+    assert first.morphology_fingerprint == _solid().morphology_fingerprint
+    assert set(first.lateral_face_indices).isdisjoint(
+        first.longitudinal_end_face_indices
+    )
+    assert set(first.lateral_face_indices) | set(
+        first.longitudinal_end_face_indices
+    ) == set(range(len(first_surface.faces)))
+    lateral_triangles = first_surface.vertices_mm[
+        first_surface.faces[np.asarray(first.lateral_face_indices, dtype=np.int64)]
+    ]
+    assert not np.any(
+        np.all(
+            np.isclose(
+                lateral_triangles[:, :, 2],
+                lateral_triangles[:, :1, 2],
+                atol=1.0e-12,
+            ),
+            axis=1,
+        )
+    )
 
 
 def test_distal_phalanx_cross_section_matches_authoritative_rigid_geometry() -> None:

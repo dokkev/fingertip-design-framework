@@ -9,7 +9,7 @@ from math import isfinite
 from numbers import Real
 from typing import Mapping
 
-from model import (
+from finger import (
     FingertipParameters,
     MAX_TOTAL_PAD_DEPTH_MM,
     PRODUCTION_MINIMUM_SILICONE_THICKNESS_MM,

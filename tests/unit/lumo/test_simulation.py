@@ -1,14 +1,78 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
 import lumo.simulation as simulation_module
+from contact import make_outer_compliant_surface
 from lumo import MechanicsContract
 from lumo.simulation import LumoSimulation
+from mesh import generate_volume_mesh, volume_mesh_settings_for_tier
+from mesh.rigid.carrier import make_distal_phalanx_mesh
+from finger import Fingertip
 from physics import CandidateMechanicsError
+from physics import prepare_fingertip_mesh
+
+
+@pytest.fixture(scope="module")
+def prepared_simulation_parts():
+    pytest.importorskip("gmsh")
+    tip = Fingertip()
+    volume_mesh = generate_volume_mesh(
+        tip.solid(),
+        volume_mesh_settings_for_tier("search"),
+    )
+    return (
+        tip,
+        volume_mesh,
+        prepare_fingertip_mesh(volume_mesh),
+        make_outer_compliant_surface(volume_mesh.solid),
+        make_distal_phalanx_mesh(volume_mesh.solid),
+    )
+
+
+def test_simulation_accepts_one_canonical_prepared_morphology(
+    prepared_simulation_parts,
+) -> None:
+    tip, volume_mesh, prepared, contact_surface, carrier_mesh = (
+        prepared_simulation_parts
+    )
+
+    simulation = LumoSimulation(
+        tip=tip,
+        volume_mesh=volume_mesh,
+        prepared=prepared,
+        contact_surface=contact_surface,
+        carrier_mesh=carrier_mesh,
+        initial_gap_mm=0.25,
+    )
+
+    assert simulation.prepared is prepared
+
+
+def test_simulation_rejects_reordered_prepared_source_provenance(
+    prepared_simulation_parts,
+) -> None:
+    tip, volume_mesh, prepared, contact_surface, carrier_mesh = (
+        prepared_simulation_parts
+    )
+    mismatched = replace(
+        prepared,
+        source_node_ids=prepared.source_node_ids[::-1],
+    )
+
+    with pytest.raises(ValueError, match="coordinates/topology"):
+        LumoSimulation(
+            tip=tip,
+            volume_mesh=volume_mesh,
+            prepared=mismatched,
+            contact_surface=contact_surface,
+            carrier_mesh=carrier_mesh,
+            initial_gap_mm=0.25,
+        )
 
 
 def test_checkpoint_values_are_absolute_depths_with_derived_annotations() -> None:

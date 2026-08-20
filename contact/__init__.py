@@ -2,6 +2,7 @@
 
 from .first_contact import (
     CandidateContactError,
+    DEFAULT_FIRST_CONTACT_SETTINGS,
     FirstContactResult,
     FirstContactSettings,
     FingertipContactSurface,
@@ -24,6 +25,7 @@ from .surface_frame import (
 
 __all__ = [
     "CandidateContactError",
+    "DEFAULT_FIRST_CONTACT_SETTINGS",
     "FirstContactResult",
     "FirstContactSettings",
     "FingertipContactSurface",

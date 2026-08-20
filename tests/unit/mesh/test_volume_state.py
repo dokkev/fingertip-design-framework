@@ -9,7 +9,7 @@ pytest.importorskip("gmsh")
 
 from mesh import FingertipVolumeState, generate_volume_mesh, volume_mesh_settings_for_tier
 from mesh.volume.contracts import SurfaceTriangle
-from model import Fingertip
+from finger import Fingertip
 
 
 @pytest.fixture(scope="module")
@@ -45,6 +45,18 @@ def test_reference_state_uses_sorted_source_order_and_identity_coordinates(searc
     assert state.surface_triangles == volume_mesh.surface_triangles
     assert state.morphology_fingerprint == volume_mesh.morphology_fingerprint
     assert not state.deformed_coordinates_mm.flags.writeable
+
+
+def test_volume_mesh_topology_and_validation_mappings_are_immutable(search_mesh) -> None:
+    _, volume_mesh = search_mesh
+    with pytest.raises(TypeError):
+        volume_mesh.nodes[0] = next(iter(volume_mesh.nodes.values()))  # type: ignore[index]
+    with pytest.raises(TypeError):
+        volume_mesh.surface_triangles["changed"] = ()  # type: ignore[index]
+    with pytest.raises(TypeError):
+        volume_mesh.volume_element_ids["pad"] = ()  # type: ignore[index]
+    with pytest.raises(TypeError):
+        volume_mesh.validation.checks["positive_volume"] = False  # type: ignore[index]
 
 
 @pytest.mark.parametrize("bad_coordinates", [

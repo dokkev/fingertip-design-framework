@@ -18,7 +18,7 @@ from optimization.design_space import (
     PRODUCTION_NOMINAL_VOID_HEIGHT_MM,
     PRODUCTION_SEARCH_BOUNDS,
 )
-from model import Fingertip, FingertipParameters
+from finger import Fingertip, FingertipParameters
 from optimization.evaluator import create_lumo3d_trajectory_study
 from lumo.simulation import LUMO3D_OBSERVATION_LEVEL
 

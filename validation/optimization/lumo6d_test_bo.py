@@ -21,8 +21,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from mesh.volume.mesh import VolumeMeshDependencyError
-from model import FingertipParameters, silicone_thickness_measures
-from optics.transport3d import Transport3DDependencyError
+from finger import silicone_thickness_measures
+from ray_tracing.optical_mechanics import Transport3DDependencyError
 from optimization.optical_artifact import fingerprint_mapping
 from scripts.tools.optix_smoke import run as run_optix_smoke
 from optimization.adapters.ax import (
@@ -481,7 +481,9 @@ def _plot_history(records: list[Mapping[str, Any]], plots: Path) -> None:
     ax.set_ylabel("minimum pairwise normalized FULL_3D separation")
     ax.set_title("6D Test BO objective history")
     ax.grid(alpha=0.2)
-    fig.tight_layout(); fig.savefig(plots / "objective_history.png", dpi=160); plt.close(fig)
+    fig.tight_layout()
+    fig.savefig(plots / "objective_history.png", dpi=160)
+    plt.close(fig)
 
     running: list[float] = []
     best = -float("inf")
@@ -495,7 +497,9 @@ def _plot_history(records: list[Mapping[str, Any]], plots: Path) -> None:
     ax.set_ylabel("running best objective")
     ax.set_title("Running best (bounded Test BO)")
     ax.grid(alpha=0.2)
-    fig.tight_layout(); fig.savefig(plots / "running_best.png", dpi=160); plt.close(fig)
+    fig.tight_layout()
+    fig.savefig(plots / "running_best.png", dpi=160)
+    plt.close(fig)
 
 
 def _plot_parameter_history(records: list[Mapping[str, Any]], plots: Path) -> None:

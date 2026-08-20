@@ -11,11 +11,10 @@ from typing import Callable, Literal, Mapping
 from ax.api.client import Client
 from ax.api.configs import RangeParameterConfig
 
-from mesh.fingertip.geometry import GmshDependencyError
 from mesh.volume.mesh import VolumeMeshDependencyError
-from model import InvalidFingertipParameters
+from finger import InvalidFingertipParameters
 from physics import PhysicsDependencyError
-from optics.transport3d import Transport3DDependencyError
+from ray_tracing.optical_mechanics import Transport3DDependencyError
 from optimization.design_space import (
     DesignSpace,
 )
@@ -369,7 +368,7 @@ def _evaluate_trial(
                 f"{type(exc).__name__}: {exc}",
                 signature=OPTIX_RUNTIME_FAILURE_SIGNATURE,
             ) from exc
-        if isinstance(exc, (VolumeMeshDependencyError, GmshDependencyError)):
+        if isinstance(exc, VolumeMeshDependencyError):
             client.mark_trial_abandoned(trial_index=trial_index)
             raise CampaignInfrastructureError(
                 f"{type(exc).__name__}: {exc}",
@@ -562,7 +561,15 @@ def run_ax_optimization(
                 status="invalid_design" if evaluation is None else evaluation.status,
                 first_trial_index=record.trial_index,
                 first_campaign_id=campaign_id,  # type: ignore[arg-type]
-                result_artifact_path=result_artifact_path,
+                result_artifact_path=(
+                    result_artifact_path
+                    if evaluation is None
+                    else getattr(
+                        evaluation,
+                        "result_artifact_path",
+                        result_artifact_path,
+                    )
+                ),
                 minimum_auc=(
                     None
                     if evaluation is None or settings.objective_name != AX_OBJECTIVE_NAME

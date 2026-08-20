@@ -24,11 +24,11 @@ per morphology.
 
 ## Repository map
 
-- `model/`: parametric morphology and optical source/material records;
+- `finger/`: parametric morphology and optical source/material records;
 - `mesh/`: semantic geometry and volume/rigid meshes;
 - `contact/`: geometry-derived alignment and first-contact search;
 - `physics/`: the single Newton/Warp mechanics implementation;
-- `optics/`: FULL_3D OptiX transport and production runtime;
+- `ray_tracing/`: FULL_3D OptiX transport and production runtime;
 - `optimization/`: named design space, protocol, objective, registry, and Ax;
 - `validation/`: current scientific runners and validation-only references;
 - `gui/`: deferred design-space diagnostics.
@@ -51,7 +51,7 @@ externally managed runtime dependencies.
 ## First checks
 
 ```bash
-conda run -n lit ./scripts/tools/pytest_lit tests/unit/model tests/unit/mesh -q
+conda run -n lit ./scripts/tools/pytest_lit tests/unit/finger tests/unit/mesh -q
 conda run -n lit ./scripts/tools/pytest_lit tests/unit/physics -q
 conda run -n lit python scripts/tools/optix_doctor.py --json
 conda run -n lit python -m scripts.tools.optix_smoke

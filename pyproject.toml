@@ -35,19 +35,20 @@ physics = [
 
 [tool.setuptools.packages.find]
 include = [
-  "model*",
+  "finger*",
   "mesh*",
   "contact*",
   "physics*",
   "validation*",
-  "optics*",
+  "ray_tracing*",
   "optimization*",
   "lumo*",
   "gui*",
+  "util*",
 ]
 
 [tool.setuptools.package-data]
-"optics.transport3d" = ["kernels/*.cu"]
+"ray_tracing.optical_mechanics" = ["kernels/*.cu"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests/unit", "tests/smoke"]

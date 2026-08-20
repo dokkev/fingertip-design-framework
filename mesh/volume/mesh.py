@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from dataclasses import dataclass
 import math
 from typing import Any, Iterable
 
@@ -19,7 +18,7 @@ from mesh.volume.contracts import (
     VolumeMeshValidation,
     VolumeNode,
 )
-from model.solid import FingertipSolid
+from finger.extrusion import FingertipSolid
 
 
 class VolumeMeshDependencyError(RuntimeError):
@@ -28,13 +27,6 @@ class VolumeMeshDependencyError(RuntimeError):
 
 class VolumeMeshingError(RuntimeError):
     """Raised when the authoritative solid cannot be meshed safely."""
-
-
-@dataclass(frozen=True)
-class _VolumeRecord:
-    tag: int
-    domain: str
-    center: tuple[float, float, float]
 
 
 def _import_gmsh() -> Any:
@@ -121,7 +113,10 @@ def _surface_tag(solid: FingertipSolid, points: np.ndarray, *, z_tolerance: floa
     line = _projected_line(points)
     if line is None:
         raise VolumeMeshingError("could not project a lateral surface triangle")
-    tolerance = max(1.0e-7, 100.0 * solid.parameters.geometry_tolerance)
+    tolerance = max(
+        1.0e-7,
+        100.0 * solid.parameters.geometry_length_tolerance_mm,
+    )
     definitions = [definition for definition in solid.surfaces if definition.source_geometry is not None]
     matches = [
         definition.name
@@ -144,12 +139,58 @@ def _surface_tag(solid: FingertipSolid, points: np.ndarray, *, z_tolerance: floa
     return "outer_compliant_other"
 
 
+def _tetrahedra_by_face(
+    tetrahedra: tuple[Tetrahedron, ...] | list[Tetrahedron],
+) -> dict[tuple[int, int, int], list[Tetrahedron]]:
+    result: dict[tuple[int, int, int], list[Tetrahedron]] = defaultdict(list)
+    for tetrahedron in tetrahedra:
+        first, second, third, fourth = tetrahedron.node_ids
+        for face in (
+            (first, second, third),
+            (first, second, fourth),
+            (first, third, fourth),
+            (second, third, fourth),
+        ):
+            result[tuple(sorted(face))].append(tetrahedron)
+    return result
+
+
+def _surface_orientation(
+    node_ids: tuple[int, int, int],
+    *,
+    nodes: dict[int, VolumeNode],
+    tetrahedra_by_face: dict[tuple[int, int, int], list[Tetrahedron]],
+) -> float:
+    adjacent = tetrahedra_by_face.get(tuple(sorted(node_ids)), [])
+    if len(adjacent) != 1:
+        raise VolumeMeshingError(
+            "surface triangle is not a unique tetrahedral boundary face"
+        )
+    points = np.asarray(
+        [
+            [nodes[node_id].x_mm, nodes[node_id].y_mm, nodes[node_id].z_mm]
+            for node_id in node_ids
+        ],
+        dtype=float,
+    )
+    normal = np.cross(points[1] - points[0], points[2] - points[0])
+    opposite_node_id = next(
+        node_id for node_id in adjacent[0].node_ids if node_id not in node_ids
+    )
+    opposite = nodes[opposite_node_id]
+    interior_direction = np.asarray(
+        [opposite.x_mm, opposite.y_mm, opposite.z_mm],
+        dtype=float,
+    ) - np.mean(points, axis=0)
+    return float(np.dot(normal, interior_direction))
+
+
 def _surface_quality(
     nodes: dict[int, VolumeNode],
     surface_triangles: dict[str, list[SurfaceTriangle]],
-    volume_records: Iterable[_VolumeRecord],
+    tetrahedra: list[Tetrahedron],
 ) -> tuple[int, int, int]:
-    centers = {record.domain: np.asarray(record.center, dtype=float) for record in volume_records}
+    tetrahedra_by_face = _tetrahedra_by_face(tetrahedra)
     edge_counts: dict[tuple[str, tuple[int, int]], int] = defaultdict(int)
     degenerate = 0
     orientation_failures = 0
@@ -168,8 +209,11 @@ def _surface_quality(
             ):
                 degenerate += 1
                 continue
-            centroid = np.mean(points, axis=0)
-            if float(np.dot(normal, centroid - centers[triangle.domain])) <= 0.0:
+            if _surface_orientation(
+                triangle.node_ids,
+                nodes=nodes,
+                tetrahedra_by_face=tetrahedra_by_face,
+            ) >= -1.0e-12:
                 orientation_failures += 1
             for first, second in (
                 (triangle.node_ids[0], triangle.node_ids[1]),
@@ -260,8 +304,6 @@ def generate_volume_mesh(solid: FingertipSolid, settings: VolumeMeshSettings) ->
         if len(volumes) != 1 or volumes[0][1] != volume_entity[1]:
             raise VolumeMeshingError(f"expected one compliant-pad volume, got {volumes!r}")
         volume_tag = int(volume_entity[1])
-        center = tuple(float(value) for value in gmsh.model.occ.getCenterOfMass(3, volume_tag))
-        volume_records = (_VolumeRecord(volume_tag, "pad", center),)
         gmsh.model.mesh.generate(3)
 
         node_tags, flat_coordinates, _ = gmsh.model.mesh.getNodes()
@@ -294,10 +336,9 @@ def generate_volume_mesh(solid: FingertipSolid, settings: VolumeMeshSettings) ->
                 )
                 signed_volume = _signed_tetra_volume(points)
                 if signed_volume < 0.0:
-                    raw_ids = (raw_ids[0], raw_ids[2], raw_ids[1], raw_ids[3])
-                    points = points[[0, 2, 1, 3]]
-                    signed_volume = -signed_volume
-                    inverted += 1
+                    raise VolumeMeshingError(
+                        "Gmsh returned an inverted tetrahedron"
+                    )
                 if signed_volume <= 0.0:
                     raise VolumeMeshingError("Gmsh returned a zero-volume tetrahedron")
                 mesh_volume += signed_volume
@@ -309,6 +350,7 @@ def generate_volume_mesh(solid: FingertipSolid, settings: VolumeMeshSettings) ->
                 volume_element_ids["pad"].append(int(element_tag))
         if not tetrahedra:
             raise VolumeMeshingError("Gmsh returned no tetrahedral elements")
+        tetrahedra_by_face = _tetrahedra_by_face(tetrahedra)
 
         surface_triangles: dict[str, list[SurfaceTriangle]] = {}
         surface_id = 1
@@ -323,13 +365,24 @@ def generate_volume_mesh(solid: FingertipSolid, settings: VolumeMeshSettings) ->
                     points = np.asarray(
                         [[nodes[node_id].x_mm, nodes[node_id].y_mm, nodes[node_id].z_mm] for node_id in ids]
                     )
-                    normal = np.cross(points[1] - points[0], points[2] - points[0])
-                    if float(np.dot(normal, np.mean(points, axis=0) - np.asarray(center))) < 0.0:
+                    orientation = _surface_orientation(
+                        ids,
+                        nodes=nodes,
+                        tetrahedra_by_face=tetrahedra_by_face,
+                    )
+                    if abs(orientation) <= 1.0e-12:
+                        raise VolumeMeshingError(
+                            "surface triangle orientation is geometrically ambiguous"
+                        )
+                    if orientation > 0.0:
                         ids = (ids[0], ids[2], ids[1])
                     tag = _surface_tag(
                         solid,
                         points,
-                        z_tolerance=max(1.0e-7, solid.parameters.geometry_tolerance * 100.0),
+                        z_tolerance=max(
+                            1.0e-7,
+                            solid.parameters.geometry_length_tolerance_mm * 100.0,
+                        ),
                     )
                     surface_triangles.setdefault(tag, []).append(SurfaceTriangle(surface_id, ids, tag, "pad"))
                     surface_id += 1
@@ -339,7 +392,7 @@ def generate_volume_mesh(solid: FingertipSolid, settings: VolumeMeshSettings) ->
         if missing:
             raise VolumeMeshingError(f"semantic surface families disappeared: {sorted(missing)!r}")
         degenerate, orientation_failures, closed_edge_failures = _surface_quality(
-            nodes, surface_triangles, volume_records
+            nodes, surface_triangles, tetrahedra
         )
         bonded_count, bonded_area, expected_bonded_area, bonded_area_error = _bonded_interface_quality(
             solid, nodes, surface_triangles

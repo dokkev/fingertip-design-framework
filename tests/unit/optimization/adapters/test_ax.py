@@ -8,8 +8,8 @@ from types import SimpleNamespace
 import pytest
 
 import optimization.adapters.ax as ax_adapter
-from mesh.fingertip.geometry import GmshDependencyError
-from model import FingertipParameters
+from mesh.volume.mesh import VolumeMeshDependencyError
+from finger import FingertipParameters
 from optimization.adapters.ax import (
     AxSettings,
     CampaignInfrastructureError,
@@ -18,7 +18,7 @@ from optimization.adapters.ax import (
 )
 from optimization.design_space import DesignSpace, DesignVariable, PRODUCTION_SEARCH_BOUNDS
 from optimization.evaluation_registry import EvaluationRegistry
-from optics.transport3d import Transport3DDependencyError
+from ray_tracing.optical_mechanics import Transport3DDependencyError
 from physics import PhysicsDependencyError
 
 
@@ -35,9 +35,10 @@ def _space() -> DesignSpace:
 @dataclass(frozen=True)
 class _Evaluation:
     status: str
-    objective_value: float
+    objective_value: float | None
     diagnostics: dict[str, object]
     failure_message: str | None = None
+    result_artifact_path: str | None = None
 
 
 class _Evaluator:
@@ -221,10 +222,57 @@ def test_candidate_failure_is_registered_in_real_evaluation_registry(monkeypatch
     assert all(trial.status != "ABANDONED" for trial in client.trials.values())
 
 
+def test_registry_uses_each_candidate_evaluation_artifact_path(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    client = _ClientDouble([_candidate(5.5)])
+
+    class _ArtifactEvaluator:
+        def evaluate(self, parameters):
+            artifact = tmp_path / f"candidate_{parameters.flat_pad_height:g}.json"
+            return _Evaluation(
+                status="success",
+                objective_value=parameters.flat_pad_height,
+                diagnostics={},
+                result_artifact_path=str(artifact),
+            )
+
+    study = SimpleNamespace(
+        design_space=_space(),
+        create_evaluator=_ArtifactEvaluator,
+    )
+    registry = EvaluationRegistry(tmp_path / "registry.json")
+    monkeypatch.setattr(ax_adapter, "create_ax_client", lambda *_: client)
+
+    run_ax_optimization(
+        study,
+        AxSettings(
+            initialization_trials=1,
+            search_trials=1,
+            seed=7,
+            objective_name="contact_state_separation",
+        ),
+        evaluation_registry=registry,
+        evaluation_contract_id="candidate-artifact-test-v1",
+        campaign_id="candidate-artifact-campaign",
+        result_artifact_path=str(tmp_path / "shared_trials.json"),
+    )
+
+    stored = registry.records_for_contract("candidate-artifact-test-v1")
+    assert {record.result_artifact_path for record in stored} == {
+        str(tmp_path / "candidate_5.json"),
+        str(tmp_path / "candidate_5.5.json"),
+    }
+
+
 @pytest.mark.parametrize(
     ("exception", "signature"),
     (
-        (GmshDependencyError("gmsh unavailable"), "gmsh-runtime-initialization"),
+        (
+            VolumeMeshDependencyError("gmsh unavailable"),
+            "gmsh-runtime-initialization",
+        ),
         (PhysicsDependencyError("Warp runtime unavailable"), "newton-warp-runtime-initialization"),
         (Transport3DDependencyError("OptiX unavailable"), "optix-runtime-initialization"),
     ),

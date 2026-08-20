@@ -10,8 +10,8 @@ from contact import (
     sphere_alignment_at_normalized_location,
 )
 from mesh.rigid.object import make_sphere_mesh
-from model.fingertip_model import FingertipModel
-from model.fingertip_parameters import FingertipParameters
+from finger.fingertip_geometry import FingertipModel
+from finger.fingertip_parameters import FingertipParameters
 
 
 @pytest.fixture(scope="module")

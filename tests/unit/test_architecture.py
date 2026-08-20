@@ -38,18 +38,18 @@ def _assert_no_prefix(package: str, forbidden: tuple[str, ...]) -> None:
 
 
 def test_production_packages_do_not_import_validation_or_tests() -> None:
-    for package in ("model", "mesh", "contact", "physics", "optics", "lumo", "optimization"):
+    for package in ("finger", "mesh", "contact", "physics", "ray_tracing", "lumo", "optimization"):
         _assert_no_prefix(package, ("validation", "tests"))
 
 
 def test_model_is_geometry_only() -> None:
     _assert_no_prefix(
-        "model",
+        "finger",
         (
             "mesh",
             "fem",
             "physics",
-            "optics",
+            "ray_tracing",
             "visualization",
             "gmsh",
             "matplotlib",
@@ -61,12 +61,12 @@ def test_model_is_geometry_only() -> None:
 def test_mesh_is_solver_and_plotting_independent() -> None:
     _assert_no_prefix(
         "mesh",
-        ("fem", "physics", "optics", "validation", "visualization", "matplotlib", "KratosMultiphysics"),
+        ("fem", "physics", "ray_tracing", "validation", "visualization", "matplotlib", "KratosMultiphysics"),
     )
 
 
 def test_physics_has_no_fem_or_optics_dependency() -> None:
-    _assert_no_prefix("physics", ("fem", "optics", "validation", "tests"))
+    _assert_no_prefix("physics", ("fem", "ray_tracing", "validation", "tests"))
 
 
 def test_contact_is_solver_independent() -> None:
@@ -74,11 +74,11 @@ def test_contact_is_solver_independent() -> None:
 
 
 def test_optics_has_no_mechanics_or_validation_dependency() -> None:
-    _assert_no_prefix("optics", ("physics", "validation", "tests"))
+    _assert_no_prefix("ray_tracing", ("physics", "validation", "tests"))
 
 
 def test_lower_layers_do_not_import_gui() -> None:
-    for package in ("model", "mesh", "contact", "physics", "optics", "lumo", "optimization"):
+    for package in ("finger", "mesh", "contact", "physics", "ray_tracing", "lumo", "optimization"):
         _assert_no_prefix(package, ("gui",))
 
 
@@ -87,8 +87,17 @@ def test_lumo_does_not_import_optimization() -> None:
 
 
 def test_removed_legacy_packages_are_absent() -> None:
-    for package in ("fem", "case", "visualization", "examples", "mechanics3d"):
-        assert not any((REPOSITORY_ROOT / package).glob("*.py"))
+    for package in (
+        "fem",
+        "case",
+        "visualization",
+        "examples",
+        "mechanics3d",
+        "model",
+        "optics",
+    ):
+        assert not (REPOSITORY_ROOT / package).exists()
+    assert not (REPOSITORY_ROOT / "mesh" / "fingertip").exists()
 
 
 def test_physics_has_one_flattened_newton_implementation() -> None:

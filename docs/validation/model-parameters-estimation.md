@@ -5,18 +5,27 @@ contract and optical inputs are held fixed. The compliant pad is fabricated
 using Smooth-On Solaris, Shore A15, but a constitutive material-identification
 experiment is not represented by the current production code.
 
-### Mechanics contract
+### Fingertip material parameters
 
 Production evaluation uses the values serialized by
-`lumo.mechanics_contract.DEFAULT_MECHANICS_CONTRACT`. In particular, the
-current Newton path receives `density_kg_m3`, `k_mu_pa`, `k_lambda_pa`, and
-`k_damp` directly. These values are frozen numerical inputs for reproducible
-search; this document does not reinterpret them as an experimentally calibrated
-Young's modulus or Poisson ratio.
+`FingertipParameters.viscoelastic`. In particular, the current Newton path
+receives `density_kg_m3`, `k_mu_pa`, `k_lambda_pa`, and `k_damp` directly from
+that fingertip-owned material group. These values are frozen numerical inputs
+for reproducible search; this document does not reinterpret them as an
+experimentally calibrated Young's modulus or Poisson ratio.
+
+`lumo.mechanics_contract.DEFAULT_MECHANICS_CONTRACT` remains responsible for
+solver iteration, contact penalty, timestep, and checkpoint-acceptance
+settings. It does not define the fingertip material.
+
+The bulk optical values are likewise stored in `FingertipParameters.optical`.
+The LED source/package remains a separate fixed `LED` input because its package
+fit and emission model are distinct from the silicone bulk material.
 
 Any future `E, nu` inputs must first define a reviewed constitutive mapping to
 the Newton backend and validation evidence. Until then, they are deliberately
-absent from `FingertipParameters` and from the optimization design space.
+absent as standalone fields from `FingertipParameters` and from the
+optimization design space.
 
 ---
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import asdict
 import json
 from types import SimpleNamespace
 
@@ -19,6 +20,11 @@ def test_user_config_contains_the_production_search_controls() -> None:
     }.issubset(payload["nominal_parameters"])
     assert payload["campaign_mode"] == "production"
     assert payload["trajectory_protocol"] == run_bo.USER_PROTOCOL.to_dict()
+    assert payload["search_bounds"] == [
+        bound.to_dict() for bound in run_bo.USER_SEARCH_BOUNDS
+    ]
+    assert payload["objective"]["config"] == asdict(run_bo.USER_OBJECTIVE)
+    assert "nominal baseline is evaluated separately" in payload["ax"]["trials_semantics"]
     assert payload["trajectory_protocol"]["contact_locations_u"] == [
         0.25,
         0.5,
@@ -103,6 +109,11 @@ def test_preflight_builds_configuration_under_requested_output_root(
         run_bo,
         "_run_optix_smoke",
         lambda: SimpleNamespace(to_dict=lambda: {"hit": True, "miss": True}),
+    )
+    monkeypatch.setattr(
+        run_bo,
+        "_run_newton_smoke",
+        lambda: {"finite_result": True},
     )
 
     payload = run_bo._preflight_payload(requested_output)

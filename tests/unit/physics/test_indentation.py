@@ -11,7 +11,6 @@ from physics import (
     NewtonSettings,
     NewtonResult,
     RigidIndenter3D,
-    solve_fingertip_indentation,
 )
 from physics.trajectory.fingertip import PreparedFingertipMesh
 from physics.contracts.types import TetMeshData

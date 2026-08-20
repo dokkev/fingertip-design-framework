@@ -14,11 +14,11 @@ Route a change to the smallest owning area:
 
 | Change concerns | Start with | Keep out of that package |
 | --- | --- | --- |
-| morphology fields, geometry invariants | `model/` | solver settings, OptiX, GUI |
+| morphology fields, geometry invariants | `finger/` | solver settings, OptiX, GUI |
 | Gmsh or neutral mesh records | `mesh/` | mechanics stepping, objective policy |
 | first-contact pose and approach geometry | `contact/` | Newton stepping, optical scoring |
 | Newton/Warp mechanics | `physics/` | Ax policy, validation reports |
-| transport geometry, OptiX, optical results | `optics/` | mechanics imports, campaign policy |
+| transport geometry, OptiX, optical results | `ray_tracing/` | mechanics imports, campaign policy |
 | concrete LUMO simulation flow | `lumo/` | generic backend abstractions, objective policy |
 | protocol, design space, objective, Ax boundary | `optimization/` | solver implementation |
 | studies, reports, regression/reference workflows | `validation/` | production dependencies |
@@ -40,12 +40,12 @@ orchestration for one prepared morphology; `optimization/evaluator.py` owns
 protocol/objective policy and persistence boundaries.
 
 ```text
-model.FingertipParameters
-    -> model / mesh geometry
+finger.FingertipParameters
+    -> finger / mesh geometry
     -> contact.find_first_contact
     -> physics.trajectory.indentation.solve_fingertip_indentation_trajectory
     -> lumo.LumoSimulation in-memory state handoff
-    -> optics.transport3d FULL_3D OptiX
+    -> ray_tracing.optical_mechanics FULL_3D OptiX
     -> optimization.objectives
     -> validation reports or optimization.adapters.ax
 ```
@@ -55,11 +55,12 @@ model.FingertipParameters
 
 | Path | Role | Canonical status |
 | --- | --- | --- |
-| `model/` | raw morphology parameters, solids, material/LED descriptors | production domain source |
-| `mesh/` | 2D/3D neutral mesh records, Gmsh volume meshing, rigid geometry | production discretization boundary |
+| `util/` | dependency-free scalar validation helpers | narrow shared utility boundary |
+| `finger/` | raw morphology parameters, solids, material/LED descriptors | production domain source |
+| `mesh/` | 3D neutral volume-mesh records, Gmsh meshing, rigid geometry | production discretization boundary |
 | `contact/` | geometry-derived first-contact and sphere alignment | production contact initialization |
 | `physics/` | Newton 1.4 / Warp mechanics and trajectory state | one production mechanics path |
-| `optics/` | optical contracts and FULL_3D transport implementation | production BO path |
+| `ray_tracing/` | optical contracts and FULL_3D transport implementation | production BO path |
 | `lumo/` | reusable concrete LUMO simulation state and execution orchestration | production orchestration boundary |
 | `optimization/` | fixed protocol, objective, registry, Ax boundary, evaluator, persistence | production evaluation and search boundary |
 | `validation/` | reports, smoke tests, regression/reference workflows, bounded campaign runners | domain/solver/transport ownership; production evaluation is in `optimization/` |
@@ -78,22 +79,22 @@ directories named `case/`, `examples/`, `fem/`, `visualization/`, or
 
 | If you need to understand... | Start here | Then inspect |
 | --- | --- | --- |
-| morphology and constraints | `model/fingertip_parameters.py::FingertipParameters` | `model/fingertip_model.py`, `model/fingertip.py`, `model/solid.py` |
+| morphology, material, and optical inputs | `finger/fingertip_parameters.py::FingertipParameters` | `finger/fingertip_geometry.py`, `finger/fingertip.py`, `finger/extrusion.py` |
 | neutral volume mesh | `mesh/volume/contracts.py` | `mesh/volume/mesh.py`, `mesh/volume/state.py` |
 | rigid object/carrier mesh | `mesh/rigid/object.py` | `mesh/rigid/carrier.py` |
 | neutral rigid pose | `mesh/rigid/object.py::RigidPose3D` | `contact/`, `physics/` |
 | first contact | `contact/first_contact.py` | `contact/sphere_alignment.py` |
 | mechanics public API | `physics/trajectory/indentation.py` | `physics/trajectory/fingertip.py`, `physics/contracts/` |
 | Newton implementation | `physics/newton/vbd.py` | `physics/newton/session.py`, `physics/newton/viewer.py` |
-| FULL_3D transport | `optics/transport3d/transport.py` | `geometry.py`, `fingertip.py`, `optix_backend.py` |
-| OptiX runtime/preflight | `optics/optix/runtime.py` | `scripts/tools/optix_smoke.py`, `scripts/tools/optix_doctor.py` |
+| FULL_3D transport | `ray_tracing/optical_mechanics/transport.py` | `geometry.py`, `fingertip.py`, `optix_backend.py` |
+| OptiX runtime/preflight | `ray_tracing/optix/runtime.py` | `scripts/tools/optix_smoke.py`, `scripts/tools/optix_doctor.py` |
 | evaluation protocol | `optimization/protocol.py` | `lumo/mechanics_contract.py` |
 | morphology search space | `optimization/design_space.py` | `optimization/evaluation_registry.py` |
 | objective | `optimization/objectives.py` | `optimization/evaluator.py` |
 | reusable LUMO simulation | `lumo/simulation.py` | `optimization/evaluator.py` |
 | Ax campaign boundary | `optimization/adapters/ax.py` | `validation/optimization/lumo6d_test_bo.py` |
 | production trajectory evaluator | `optimization/evaluator.py` | `lumo/simulation.py`, `validation/optimization/lumo3d_trajectory_validation.py` |
-| persisted mechanics state | `optimization/deformed_state_artifact.py` | evaluator artifact writers; validation replay is in `validation/optics/deformed_state_restore.py` |
+| persisted mechanics state | `optimization/deformed_state_artifact.py` | evaluator artifact writers; validation replay is in `validation/ray_tracing/deformed_state_restore.py` |
 | reference comparison | `validation/physics/correspondence.py` | `validation/reference/kratos3d/` |
 | interactive Newton view | `physics/newton/viewer.py` | example callers, if reintroduced explicitly |
 
@@ -102,29 +103,34 @@ directories named `case/`, `examples/`, `fem/`, `visualization/`, or
 
 | Package | Owns | Does not own |
 | --- | --- | --- |
-| `model` | raw `FingertipParameters`, morphology constraints, 2D solid boundaries, optical material/source descriptors | mesh construction, mechanics, optics execution, UI |
+| `util` | small typed helpers with no domain or runtime dependencies | morphology policy, solver settings, persistence, or cross-layer orchestration |
+| `finger` | kinematic, viscoelastic, and bulk optical fingertip parameters, morphology constraints, 2D solid boundaries, LED source descriptor | mesh construction, mechanics, ray-tracing execution, UI |
 | `mesh` | neutral mesh dataclasses, Gmsh-backed volume meshing, fingertip state conversion, sphere/carrier meshes | Newton stepping, OptiX calls, optimization policy |
 | `contact` | Shapely-based collision predicate, coarse bracket/bisection, canonical sphere alignment, clear/spawn/contact poses | deformation solve and optical transport |
 | `physics` | NumPy-facing Newton/Warp settings/results, prescribed indentation, continuous trajectory checkpoints, contact diagnostics | Ax generation, objective calculation, validation orchestration |
-| `optics` | optical boundary/result contracts, FULL_3D surface geometry, CUDA/OptiX runtime and launches | mechanics state evolution and BO decisions |
+| `ray_tracing` | optical boundary/result contracts, FULL_3D surface geometry, CUDA/OptiX runtime and launches | mechanics state evolution and BO decisions |
 | `lumo` | concrete `LumoSimulation` state/orchestration and named contact results | contact/Newton/OptiX implementation, persistence, and optimization policy |
 | `optimization` | six-dimensional design space, fixed-depth factorial protocol, trajectory objective, exact morphology registry, Ax adapter, evaluator, artifact persistence | mesh/solver/transport implementation and reusable simulation state |
 | `validation` | reports, smoke/regression/reference workflows, and bounded campaign runners | domain/solver/transport ownership; production packages must not import it |
 | `gui` | optional controls and diagnostics presentation | domain rules, solver settings, transport, campaign orchestration |
 
-The current package exports in `model/__init__.py`, `mesh/__init__.py`,
-`contact/__init__.py`, `physics/__init__.py`, `optics/__init__.py`, and
+The current package exports in `finger/__init__.py`, `mesh/__init__.py`,
+`contact/__init__.py`, `physics/__init__.py`, `ray_tracing/__init__.py`, and
 `optimization/__init__.py` are the primary lightweight API surfaces. Prefer
 those exports or the canonical module named above over new wrapper layers.
 
-`FingertipParameters` stores constructor-level morphology and representation
-inputs only. Coordinates and dimensions derived from those fields are computed
-explicitly by the owning geometry, thickness, or reporting consumer; they are
-not duplicated as public parameter properties. The physical morphology
-fingerprint intentionally excludes representation fields, as documented by
-`fingertip_parameters_fingerprint()`. Newton numerical inputs belong to
-`MechanicsContract`; the model does not expose disconnected Young's-modulus or
-Poisson-ratio fields.
+`KinematicParameters` stores constructor-level geometry and representation
+inputs. `ViscoelasticParameters` stores the fingertip's Newton constitutive and
+inertial inputs, and `OpticalParameters` stores its bulk optical inputs.
+`FingertipParameters` combines all three groups while preserving the direct
+geometry field access used by mesh and contact callers. The LED remains a
+separate source/package descriptor in `finger.led`; its values are fixed
+evaluation inputs alongside `FingertipParameters`. Coordinates and dimensions
+derived from parameter fields are computed explicitly by the owning geometry,
+thickness, or reporting consumer; they are not duplicated as public parameter
+properties. The physical morphology fingerprint intentionally excludes
+representation, material, and optical fields, as documented by
+`fingertip_parameters_fingerprint()`.
 
 
 ## Primary execution path
@@ -158,9 +164,18 @@ axes; normalized depth/radius values are derived diagnostics only.
 optical state and returns named `ContactSimulationResult` /
 `ContactOpticalState` values. The evaluator may persist mechanics checkpoints
 for campaign provenance after the in-memory handoff; persistence is not a
-required production optics input. Optical artifacts include the protocol,
+required production ray-tracing input. Optical artifacts include the protocol,
 transport configuration, contact-state identity, and deformed 3D surface
 provenance.
+
+There is no separately generated optical fingertip mesh. The OptiX adapter
+selects the lateral semantic triangles from the exact
+`FingertipVolumeState` checkpoint and copies those deformed coordinates into
+the runtime buffers. The rigid GAS uses the same neutral `RigidCarrierMesh`
+supplied to Newton; its named lateral face group excludes the periodic z-caps.
+The virtual envelope reuses the canonical reference outer/support triangles
+and adds only a two-triangle air-escape closure derived from `FingertipSolid`;
+it is not a second physical discretization.
 
 
 ## Important subsystem paths
@@ -184,29 +199,38 @@ millimetres in `NewtonResult` and checkpoint records. `physics.newton.vbd` is
 the sole Newton implementation. `physics.newton.viewer` is debug-only and must not
 change solver state or become a general visualization framework.
 
-`lumo.mechanics_contract.DEFAULT_MECHANICS_CONTRACT` owns the frozen
-search numerical settings and checkpoint-acceptance thresholds. This includes
-the actual density, `k_mu`, `k_lambda`, damping, timestep, contact coefficients,
-iteration count, and admissibility limits passed to or checked around Newton.
-These are backend numerical coefficients, not a calibrated `E, nu` material
-model. Do not duplicate or retune them in the evaluator, GUI, or validation
-scripts.
+`lumo.mechanics_contract.DEFAULT_MECHANICS_CONTRACT` owns the frozen solver
+execution settings and checkpoint-acceptance thresholds: timestep, contact
+coefficients, iteration count, and admissibility limits. The fingertip's
+`density`, `k_mu`, `k_lambda`, and damping are owned by
+`FingertipParameters.viscoelastic` and passed to Newton at the LUMO simulation
+boundary. These are backend coefficients, not a calibrated `E, nu` material
+model. Do not duplicate or retune either contract in the evaluator, GUI, or
+validation scripts.
 
 ### Optics
 
-`optics.transport3d` owns production FULL_3D geometry construction, field/path
-accumulation, carrier-interface handling, and trace results. The actual runtime
-boundary is `optics.optix.runtime.OptixRuntime.create()` and the production
-trace path is `trace_geometry()`. Artifact persistence and contract
-fingerprints belong to `optimization/optical_artifact.py`.
+`ray_tracing.optical_mechanics` owns production FULL_3D state-to-OptiX
+adaptation, field/path accumulation, carrier-interface handling, and trace
+results. It consumes neutral mesh contracts and does not remesh the fingertip.
+The actual runtime boundary is
+`ray_tracing.optix.runtime.OptixRuntime.create()` and the production trace path
+is `trace_geometry()`. Artifact persistence and contract fingerprints belong
+to `optimization/optical_artifact.py`.
 
-`optics.optix.runtime` owns only the optional CUDA/OptiX setup and execution
+`ray_tracing.optix.runtime` owns only the optional CUDA/OptiX setup and execution
 machinery. `scripts.tools.optix_smoke` performs the real setup, GAS build,
 launch, and hit/miss verification used as the BO preflight. The
 `scripts/tools/optix_doctor.py` command diagnoses an environment for human
-troubleshooting; it is not part of the production optics path. A shared
+troubleshooting; it is not part of the production ray-tracing path. A shared
 CUDA/OptiX dependency failure is campaign-fatal, not a morphology-specific
-optics failure.
+ray-tracing failure.
+
+`Transport3DResult.escaped_weight` is the complete escape-energy channel and
+includes virtual-envelope escape. `outgoing_surface_weight`, the surface
+field, and the recorded escape arrays cover only silicone-surface events that
+have a defined `(u, z)` coordinate. Artifacts preserve both values; do not
+silently treat the surface-observation subset as total escaped energy.
 
 The old planar transport facade and cross-section implementation have been
 removed. FULL_3D owns its deterministic sampling, native 3D accumulation, and
@@ -232,13 +256,14 @@ infrastructure failure.
 
 | Boundary | Owner | Consumer | Contract |
 | --- | --- | --- | --- |
-| morphology parameters | `model` | `mesh`, `optimization`, `validation`, `gui` | immutable six-variable design plus explicit constraints; public geometry units are mm |
-| neutral volume mesh | `mesh` | `physics`, `optics`, `validation` | NumPy-backed nodes/elements and surface metadata; no solver object |
+| morphology parameters | `finger` | `mesh`, `optimization`, `validation`, `gui` | immutable six-variable design plus explicit constraints; public geometry units are mm |
+| neutral volume mesh | `mesh` | `physics`, `ray_tracing`, `validation` | one canonical tetra topology plus semantic surface triangles; no solver or OptiX object |
 | first-contact result | `contact` | `physics`, `validation` | geometry-derived poses and post-contact travel; `T_spawn` is clear-side initialization only |
-| mechanics result/checkpoint | `physics` | `validation`, `optics` | NumPy arrays and immutable diagnostics; Newton state does not cross into optics |
-| in-memory deformed state | `lumo.ContactOpticalState` | `optics.transport3d` | exact `FingertipVolumeState` checkpoint; authoritative production handoff |
-| persisted mechanics artifact | `optimization/deformed_state_artifact` | evaluator writers | exact checkpoint mesh plus digest and source-node provenance; validation-only restoration belongs to `validation/optics/deformed_state_restore` |
-| optical result | `optics.transport3d` | `optimization`, `validation` | raw transport fields/weights, energy bookkeeping, and configuration fingerprints |
+| mechanics result/checkpoint | `physics` | `validation`, `ray_tracing` | NumPy arrays and immutable diagnostics; Newton state does not cross into ray tracing |
+| in-memory deformed state | `mesh.FingertipVolumeState` via `lumo` | `ray_tracing.optical_mechanics` | exact Newton-compatible node order, deformed coordinates, and semantic triangles; authoritative production handoff |
+| rigid carrier mesh | `mesh.RigidCarrierMesh` | `physics`, `ray_tracing` | one closed neutral mesh with explicit lateral/end face groups; OptiX excludes periodic z-caps |
+| persisted mechanics artifact | `optimization/deformed_state_artifact` | evaluator writers | exact checkpoint mesh plus digest and source-node provenance; validation-only restoration belongs to `validation/ray_tracing/deformed_state_restore` |
+| optical result | `ray_tracing.optical_mechanics` | `optimization`, `validation` | raw transport fields/weights, energy bookkeeping, and configuration fingerprints |
 | objective observation | `optimization.objectives` | `validation`, `optimization.adapters.ax` | trajectory observations preserve location, radius, depth, raw field, and diagnostics |
 | registry record | `optimization.evaluation_registry` | Ax adapter/campaign reports | exact contract + morphology identity; failed records carry no successful objective |
 
@@ -254,7 +279,7 @@ raw optical transport
 ```
 
 Do not put visualization smoothing, color normalization, or GUI state into
-mechanics/optics artifacts or optimization metrics.
+mechanics/ray-tracing artifacts or optimization metrics.
 
 
 ## Runtime dependencies
@@ -263,7 +288,7 @@ mechanics/optics artifacts or optimization metrics.
 | --- | --- | --- |
 | Gmsh | `mesh` | imported only when volume meshing is requested |
 | Newton / Warp | `physics.newton` and execution helpers | required only for mechanics execution; keep public NumPy contracts neutral |
-| CuPy / PyOptiX / CUDA Python / NVRTC | `optics.optix` and `optics.transport3d` | runtime/preflight/trace boundary; environment is externally managed |
+| CuPy / PyOptiX / CUDA Python / NVRTC | `ray_tracing.optix` and `ray_tracing.optical_mechanics` | runtime/preflight/trace boundary; environment is externally managed |
 | Ax 1.3.1 | `optimization.adapters.ax` | optimizer execution boundary; importing `optimization` must stay lightweight |
 | NiceGUI / Matplotlib | `gui` | optional presentation boundary |
 | Kratos | `validation/reference/kratos3d` | validation-only external reference; never a production dependency |
@@ -276,30 +301,31 @@ Installation and exact commands belong in `docs/COMMANDS.md`.
 The allowed high-level direction is:
 
 ```text
-model -> mesh -> contact -> physics
-model / mesh -> optics
-contact / physics / optics -> lumo
+finger -> mesh -> contact -> physics
+finger / mesh -> ray_tracing
+contact / physics / ray_tracing -> lumo
 lumo -> optimization / validation consumers
 ```
 
 This diagram is a consumption direction, not a requirement that every package
-import every predecessor. In particular, optics consumes neutral model/mesh
-and in-memory mechanics states at the `lumo` orchestration boundary; optics does
+import every predecessor. In particular, ray tracing consumes neutral finger/mesh
+and in-memory mechanics states at the `lumo` orchestration boundary; ray tracing does
 not import `physics`. Validation is the top-level scientific consumer and may
 compose all production packages.
 
 Important guards:
 
 - production packages do not import `validation` or `tests`;
-- `model` remains geometry/model-only and does not import `mesh`, `physics`,
-  `optics`, plotting, Gmsh, or Kratos;
-- `mesh` does not import mechanics, optics, validation, plotting, or Kratos;
-- `physics` does not import optics, validation, or tests;
-- `optics` does not import physics, validation, or tests;
+- `finger` remains geometry/model-only and does not import `mesh`, `physics`,
+  `ray_tracing`, plotting, Gmsh, or Kratos;
+- `mesh` does not import mechanics, ray tracing, validation, plotting, or Kratos;
+- `physics` does not import ray tracing, validation, or tests;
+- `ray_tracing` does not import physics, validation, or tests;
 - low-level packages do not import GUI code;
 - validation may compose production APIs and its own workflow helpers; production code never imports validation;
-- no new generic `utils`, backend registry, compatibility package, or
-  cross-layer wrapper is justified without a concrete current consumer;
+- shared helpers must remain small, explicitly typed, dependency-free, and
+  backed by current consumers; do not turn `util` into a generic cross-layer
+  service or put domain policy there;
 - optional heavy dependencies enter at execution boundaries rather than
   changing neutral data contracts.
 
@@ -315,8 +341,9 @@ violation as an architecture change, not as a test to weaken.
 | `mesh_failure` | candidate mesh cannot be generated/validated | record candidate failure |
 | `domain_incompatible` | requested radius/condition does not fit the current 11 mm representative cell | record expected domain outcome |
 | `mechanics_failure` | candidate-dependent Newton/trajectory failure | record candidate failure |
-| `optics_failure` | candidate-dependent geometry/physics/trace result failure | record candidate failure |
+| `optics_failure` | expected candidate optical objective pathology, such as a singular zero field | record candidate failure |
 | `VolumeMeshDependencyError`, `PhysicsDependencyError`, or `Transport3DDependencyError` | shared Gmsh/Newton-Warp/OptiX runtime infrastructure is unavailable | raise to `CampaignInfrastructureError`, abort campaign, and do not poison morphology registry |
+| optical geometry/physics/trace/result contract error or unexpected exception | implementation/runtime correctness is uncertain | abandon the active Ax trial, propagate the error, and do not register a candidate outcome |
 
 Do not turn a shared header/device/NVRTC/runtime failure into one failed
 morphology. The evaluator intentionally re-raises the infrastructure class so
@@ -332,7 +359,7 @@ the Ax boundary can stop before registering a candidate failure.
   model inputs, LED geometry and active emission inputs, mesh policies,
   mechanics settings, transport settings, device, protocol, and objective.
   Do not reuse records across incompatible contracts.
-- Mechanics artifacts are raw solver outputs plus provenance; optics consumes
+- Mechanics artifacts are raw solver outputs plus provenance; ray tracing consumes
   the exact checkpoint named by its identity and digest.
 - Optical fields and weights used by objective calculation remain raw. Any
   plotting normalization, smoothing, ray sampling, glow, or color transform is
@@ -351,9 +378,9 @@ documented in [`docs/COMMANDS.md`](COMMANDS.md):
 ```bash
 conda activate lit
 
-./scripts/tools/pytest_lit tests/unit/model tests/unit/mesh -q
+./scripts/tools/pytest_lit tests/unit/finger tests/unit/mesh -q
 ./scripts/tools/pytest_lit tests/unit/contact tests/unit/physics -q
-./scripts/tools/pytest_lit tests/unit/optics tests/unit/optimization -q
+./scripts/tools/pytest_lit tests/unit/ray_tracing tests/unit/optimization -q
 ./scripts/tools/pytest_lit tests/unit/optimization/test_evaluator.py -q
 ./scripts/tools/pytest_lit tests/smoke/physics -q -m "smoke and physics"
 ```

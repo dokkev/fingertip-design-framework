@@ -22,17 +22,18 @@ from physics import (
     prepare_fingertip_mesh,
 )
 from mesh import volume_mesh_settings_for_tier
+from mesh.rigid.carrier import make_distal_phalanx_mesh
 from mesh.volume.mesh import generate_volume_mesh
 from mesh.volume.mesh import VolumeMeshDependencyError, VolumeMeshingError
-from model import (
+from finger import (
     Fingertip,
     FingertipParameters,
     InvalidFingertip,
     InvalidFingertipParameters,
     validate_minimum_silicone_thickness,
 )
-from optics.contracts.objects import CarrierOptics
-from optics.transport3d import (
+from ray_tracing.contracts.objects import CarrierOptics
+from ray_tracing.optical_mechanics import (
     Transport3DDependencyError,
     Transport3DGeometryError,
     Transport3DPhysicsError,
@@ -41,12 +42,11 @@ from optics.transport3d import (
     Transport3DTraceError,
     trace_geometry,
 )
-from optics.transport3d.optix_backend import create_runtime
+from ray_tracing.optical_mechanics.optix_backend import create_runtime
 from optimization.design_space import (
     PRODUCTION_SEARCH_BOUNDS,
-    OPTIMIZABLE_PARAMETER_NAMES,
 )
-from validation.optics.deformed_state_restore import restore_deformed_optical_state
+from validation.ray_tracing.deformed_state_restore import restore_deformed_optical_state
 from optimization.optical_artifact import (
     energy_record,
     fingerprint_mapping,
@@ -325,6 +325,7 @@ class FixedStateLumo3DOracle:
                 volume_mesh_settings_for_tier("search"),
             )
             prepared = prepare_fingertip_mesh(volume_mesh)
+            carrier_mesh = make_distal_phalanx_mesh(volume_mesh.solid)
             material = make_material(tip)
             configuration = transport_configuration(
                 self.settings,
@@ -347,6 +348,7 @@ class FixedStateLumo3DOracle:
                     prepared,
                     case.mechanics_artifact_path,
                     case.mechanics_artifact_sha256,
+                    carrier_mesh=carrier_mesh,
                     carrier_optics=CarrierOptics("absorber"),
                     carrier_mapping_tolerance_mm=contact_state[
                         "carrier_mapping_tolerance_mm"

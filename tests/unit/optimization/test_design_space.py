@@ -7,7 +7,7 @@ import math
 
 import pytest
 
-from model import Fingertip, FingertipParameters
+from finger import Fingertip, FingertipParameters
 from optimization import (
     DesignSpace,
     DesignVariable,

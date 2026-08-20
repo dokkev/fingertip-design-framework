@@ -47,7 +47,7 @@ from physics import (
 from mesh import make_distal_phalanx_mesh, make_sphere_mesh
 from mesh.volume.mesh import generate_volume_mesh
 from mesh.volume.contracts import volume_mesh_settings_for_tier
-from model import Fingertip, FingertipParameters
+from finger import Fingertip, FingertipParameters
 
 
 OUTPUT_DIR = Path("output/validation/physics/void_height_carrier_contact")

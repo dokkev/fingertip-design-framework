@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from validation.optics import lumo3d_optix_stage
+from validation.ray_tracing import lumo3d_optix_stage
 
 
 def test_full3d_stage_rejects_nonpassing_preflight() -> None:

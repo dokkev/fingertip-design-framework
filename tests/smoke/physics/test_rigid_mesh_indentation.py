@@ -32,9 +32,9 @@ from mesh.rigid.carrier import make_distal_phalanx_mesh
 from mesh.rigid.object import make_box_mesh, make_cylinder_mesh, make_sphere_mesh
 from mesh.volume.mesh import generate_volume_mesh
 from mesh.volume.contracts import volume_mesh_settings_for_tier
-from model.fingertip_model import FingertipModel
-from model.fingertip_parameters import FingertipParameters
-from model.solid import build_fingertip_solid
+from finger.fingertip_geometry import FingertipModel
+from finger.fingertip_parameters import FingertipParameters
+from finger.extrusion import build_fingertip_solid
 
 
 def _six_volumes(vertices: np.ndarray, tetrahedra: np.ndarray) -> np.ndarray:

@@ -11,7 +11,7 @@ from contact.surface_frame import (
     surface_frame_from_normalized_location,
 )
 from mesh.rigid.object import RigidPose3D
-from model.fingertip_model import FingertipModel
+from finger.fingertip_geometry import FingertipModel
 
 
 _IDENTITY_QUATERNION = (0.0, 0.0, 0.0, 1.0)

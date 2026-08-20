@@ -7,7 +7,7 @@ from types import MappingProxyType
 
 import numpy as np
 
-from mesh.volume.contracts import FingertipVolumeMesh
+from mesh.volume.contracts import FingertipVolumeMesh, Tetrahedron
 
 
 _TET_VOLUME_TOLERANCE_MM3 = 1.0e-12
@@ -91,6 +91,17 @@ def _validate_topology(
                     f"{label} volume mesh contains an inverted or degenerate tetrahedron"
                 )
 
+    tetrahedra_by_face: dict[tuple[int, int, int], list[Tetrahedron]] = {}
+    for tetrahedron in tetrahedra:
+        first, second, third, fourth = tetrahedron.node_ids
+        for face in (
+            (first, second, third),
+            (first, second, fourth),
+            (first, third, fourth),
+            (second, third, fourth),
+        ):
+            tetrahedra_by_face.setdefault(tuple(sorted(face)), []).append(tetrahedron)
+
     if not volume_mesh.surface_triangles:
         raise ValueError("FingertipVolumeMesh must contain semantic surface topology")
     for tag, triangles in sorted(volume_mesh.surface_triangles.items()):
@@ -124,6 +135,25 @@ def _validate_topology(
             if float(np.dot(reference_cross, deformed_cross)) <= 0.0:
                 raise InvalidDeformedFingertipState(
                     f"semantic surface {tag!r} changed orientation"
+                )
+            adjacent = tetrahedra_by_face.get(tuple(sorted(triangle.node_ids)), [])
+            if len(adjacent) != 1:
+                raise ValueError(
+                    f"semantic surface {tag!r} is not a unique tetrahedral boundary"
+                )
+            tetra_points = reference[
+                np.asarray(
+                    [node_index[node_id] for node_id in adjacent[0].node_ids],
+                    dtype=np.int64,
+                )
+            ]
+            outward = np.mean(reference[local], axis=0) - np.mean(
+                tetra_points,
+                axis=0,
+            )
+            if float(np.dot(reference_cross, outward)) <= _TET_VOLUME_TOLERANCE_MM3:
+                raise ValueError(
+                    f"semantic surface {tag!r} is not outward-oriented"
                 )
 
 

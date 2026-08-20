@@ -10,8 +10,8 @@ import numpy as np
 from shapely.geometry import LineString, Point
 
 from mesh.rigid.object import RigidObjectMesh, RigidPose3D
-from model.fingertip_model import FingertipModel
-from model.solid import FingertipSolid
+from finger.fingertip_geometry import FingertipModel
+from finger.extrusion import FingertipSolid
 
 
 class CandidateContactError(RuntimeError):
@@ -83,6 +83,14 @@ class FirstContactSettings:
             object.__setattr__(self, name, value)
         if self.coarse_step_mm <= self.tolerance_mm:
             raise ValueError("coarse_step_mm must be greater than tolerance_mm")
+
+
+DEFAULT_FIRST_CONTACT_SETTINGS = FirstContactSettings(
+    coarse_step_mm=0.25,
+    tolerance_mm=1.0e-3,
+    spawn_clearance_mm=0.05,
+    max_travel_mm=20.0,
+)
 
 
 @dataclass(frozen=True)
@@ -299,6 +307,7 @@ def find_first_contact(
 
 __all__ = [
     "CandidateContactError",
+    "DEFAULT_FIRST_CONTACT_SETTINGS",
     "FirstContactResult",
     "FirstContactSettings",
     "FingertipContactSurface",

@@ -7,11 +7,12 @@ from math import isfinite
 from numbers import Real
 from typing import Literal, Mapping
 
-from model import (
+from finger import (
     Fingertip,
     FingertipParameters,
+    KinematicParameters,
     LED,
-    OpticalMaterial,
+    OpticalParameters,
     PRODUCTION_MINIMUM_SILICONE_THICKNESS_MM,
     ellipse_depth_at_cutout_mm,
     silicone_thickness_measures,
@@ -36,15 +37,15 @@ class Diagnostic:
 
 
 _PARAMETER_DEFAULTS = {
-    field.name: getattr(FingertipParameters(), field.name)
-    for field in fields(FingertipParameters)
+    field.name: getattr(KinematicParameters(), field.name)
+    for field in fields(KinematicParameters)
 }
 _LED_DEFAULTS = {
     field.name: getattr(LED(), field.name) for field in fields(LED)
 }
 _OPTICAL_DEFAULTS = {
-    field.name: getattr(OpticalMaterial(), field.name)
-    for field in fields(OpticalMaterial)
+    field.name: getattr(OpticalParameters(), field.name)
+    for field in fields(OpticalParameters)
 }
 _PRIMARY_DIMENSIONS = (
     "flat_pad_width",
@@ -175,7 +176,7 @@ def _geometry_corrections(values: Mapping[str, object]) -> list[Diagnostic]:
     flat_width = numeric["flat_pad_width"]
     stem_width = numeric["stem_width"]
     void_width = numeric["void_width"]
-    tolerance = numeric["geometry_tolerance"]
+    tolerance = numeric["geometry_length_tolerance_mm"]
     if (
         flat_width is not None
         and stem_width is not None
@@ -192,9 +193,10 @@ def _geometry_corrections(values: Mapping[str, object]) -> list[Diagnostic]:
                     "GEOMETRY",
                     "The cutout reaches the external half-width. Current values: "
                     f"cutout_half_width={cutout_half_width:g} mm, "
-                    f"flat_pad_width/2 - geometry_tolerance={available_half_width:g} mm.\n"
+                    "flat_pad_width/2 - geometry_length_tolerance_mm="
+                    f"{available_half_width:g} mm.\n"
                     "Constraint: cutout_half_width < "
-                    "flat_pad_width/2 - geometry_tolerance.\n"
+                    "flat_pad_width/2 - geometry_length_tolerance_mm.\n"
                     f"Required: flat_pad_width > {2.0 * (cutout_half_width + tolerance):g} mm "
                     f"or stem_width < {flat_width - 2.0 * void_width - 2.0 * tolerance:g} mm.",
                 )
@@ -253,9 +255,9 @@ def _geometry_corrections(values: Mapping[str, object]) -> list[Diagnostic]:
                             "Cutout bottom exits the semielliptical envelope.\n"
                             f"Current penetration={penetration:g} mm; "
                             f"available ellipse depth={available_depth:g} mm; "
-                            f"geometry_tolerance={tolerance:g} mm.\n"
+                            f"geometry_length_tolerance_mm={tolerance:g} mm.\n"
                             "Constraint: penetration < available ellipse depth "
-                            "- geometry_tolerance.\n"
+                            "- geometry_length_tolerance_mm.\n"
                             f"Possible fixes: stem_height < {max_stem_height:g} mm; "
                             + (
                                 f"semielliptical_pad_height > {required_ellipse_height:g} mm; "
@@ -349,27 +351,33 @@ def diagnose_geometry(
                 "repair was applied.",
             )
         )
-        if selected_led.width_mm > parameters.stem_width + parameters.geometry_tolerance:
+        if (
+            selected_led.width_mm
+            > parameters.stem_width + parameters.geometry_length_tolerance_mm
+        ):
             result.append(
                 _message(
                     "ERROR",
                     "LED FIT",
                     f"LED width={selected_led.width_mm:g} mm exceeds stem width="
                     f"{parameters.stem_width:g} mm. Required relation: "
-                    f"LED width <= stem_width + geometry_tolerance="
-                    f"{parameters.stem_width + parameters.geometry_tolerance:g} mm. "
+                    "LED width <= stem_width + geometry_length_tolerance_mm="
+                    f"{parameters.stem_width + parameters.geometry_length_tolerance_mm:g} mm. "
                     "Increase stem_width or reduce LED width.",
                 )
             )
-        if selected_led.height_mm > parameters.stem_height + parameters.geometry_tolerance:
+        if (
+            selected_led.height_mm
+            > parameters.stem_height + parameters.geometry_length_tolerance_mm
+        ):
             result.append(
                 _message(
                     "ERROR",
                     "LED FIT",
                     f"LED height={selected_led.height_mm:g} mm exceeds stem height="
                     f"{parameters.stem_height:g} mm. Required relation: "
-                    f"LED height <= stem_height + geometry_tolerance="
-                    f"{parameters.stem_height + parameters.geometry_tolerance:g} mm. "
+                    "LED height <= stem_height + geometry_length_tolerance_mm="
+                    f"{parameters.stem_height + parameters.geometry_length_tolerance_mm:g} mm. "
                     "Increase stem_height or reduce LED height.",
                 )
             )
@@ -442,7 +450,7 @@ def diagnose_optical(values: Mapping[str, object]) -> tuple[Diagnostic, ...]:
             )
         )
     try:
-        OpticalMaterial(**payload)
+        OpticalParameters(**payload)
     except Exception as exc:
         result.append(_message("ERROR", "OPTICAL", f"{type(exc).__name__}: {exc}"))
     return tuple(result)
@@ -558,16 +566,16 @@ def build_led(values: Mapping[str, object]) -> LED:
     return LED(**payload)
 
 
-def build_optical_material(values: Mapping[str, object]) -> OpticalMaterial:
-    """Construct the current optical material after callers have handled diagnostics."""
-    return OpticalMaterial(**_merged(_OPTICAL_DEFAULTS, values))
+def build_optical_parameters(values: Mapping[str, object]) -> OpticalParameters:
+    """Construct optical parameters after callers have handled diagnostics."""
+    return OpticalParameters(**_merged(_OPTICAL_DEFAULTS, values))
 
 
 __all__ = [
     "Diagnostic",
     "DiagnosticSeverity",
     "build_led",
-    "build_optical_material",
+    "build_optical_parameters",
     "diagnose_design_space",
     "diagnose_geometry",
     "diagnose_led",

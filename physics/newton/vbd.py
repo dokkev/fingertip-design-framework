@@ -778,7 +778,6 @@ def _solve_newton_vbd_indentation_path_with_schedule(
     checkpoints: list[IndentationCheckpoint] = []
     for scheduled_step in schedule:
         target_travel = scheduled_step.travel_mm
-        interval_step = scheduled_step.interval_step
         cumulative_step = scheduled_step.cumulative_step
         if first_contact is None:
             target_pose = indenter.pose_at_travel(target_travel)

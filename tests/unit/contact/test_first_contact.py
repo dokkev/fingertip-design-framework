@@ -14,9 +14,9 @@ from contact import (
     make_outer_compliant_surface,
 )
 from mesh.rigid.object import make_sphere_mesh
-from model.fingertip_model import FingertipModel
-from model.fingertip_parameters import FingertipParameters
-from model.solid import build_fingertip_solid
+from finger.fingertip_geometry import FingertipModel
+from finger.fingertip_parameters import FingertipParameters
+from finger.extrusion import build_fingertip_solid
 
 
 @pytest.fixture(scope="module")

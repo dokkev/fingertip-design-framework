@@ -10,7 +10,6 @@ import numpy as np
 from contact import (
     CandidateContactError,
     FirstContactResult,
-    FirstContactSettings,
     FingertipContactSurface,
     find_first_contact,
     intersects,
@@ -21,24 +20,22 @@ from contact import (
 from contact.sphere_alignment import SphereAlignment
 from lumo.mechanics_contract import DEFAULT_MECHANICS_CONTRACT, MechanicsContract
 from mesh import volume_mesh_settings_for_tier
-from mesh.fingertip.contracts import FingertipMesh, mesh_settings_for_level
-from mesh.fingertip.geometry import FingertipMeshingError, generate_fingertip_mesh
 from mesh.rigid.carrier import RigidCarrierMesh, make_distal_phalanx_mesh
-from mesh.rigid.object import RigidObjectMesh, make_sphere_mesh
+from mesh.rigid.object import make_sphere_mesh
 from mesh.volume.contracts import FingertipVolumeMesh
 from mesh.volume.mesh import generate_volume_mesh
 from mesh.volume.state import FingertipVolumeState, InvalidDeformedFingertipState
-from model import Fingertip
-from optics.contracts.objects import CarrierOptics
-from optics.transport3d import (
+from finger import Fingertip
+from ray_tracing.contracts.objects import CarrierOptics
+from ray_tracing.optical_mechanics import (
     Transport3DResult,
     Transport3DSettings,
     build_fingertip_volume_state_geometry,
     trace_geometry,
 )
-from optics.transport3d.geometry import ExtrudedTransportGeometry
-from optics.transport3d.optix_backend import create_runtime
-from optics.optix.runtime import OptixRuntime
+from ray_tracing.optical_mechanics.geometry import TransportGeometry
+from ray_tracing.optical_mechanics.optix_backend import create_runtime
+from ray_tracing.optix.runtime import OptixRuntime
 from physics import (
     CandidateMechanicsError,
     IndentationCheckpoint,
@@ -76,6 +73,30 @@ def lumo_optical_settings() -> Transport3DSettings:
         terminate_on_periodic_wrap_limit=True,
         terminate_on_no_event=True,
         retain_internal_path_field=True,
+    )
+
+
+def _prepared_mesh_matches_volume_mesh(
+    prepared: PreparedFingertipMesh,
+    volume_mesh: FingertipVolumeMesh,
+) -> bool:
+    """Return whether a prepared mechanics view is the canonical mesh adapter."""
+
+    expected = prepare_fingertip_mesh(volume_mesh)
+    return bool(
+        prepared.morphology_fingerprint == expected.morphology_fingerprint
+        and np.array_equal(prepared.source_node_ids, expected.source_node_ids)
+        and np.array_equal(prepared.tet_mesh.vertices, expected.tet_mesh.vertices)
+        and np.array_equal(prepared.tet_mesh.tetrahedra, expected.tet_mesh.tetrahedra)
+        and prepared.support_vertex_indices == expected.support_vertex_indices
+        and set(prepared.surface_triangles) == set(expected.surface_triangles)
+        and all(
+            np.array_equal(
+                prepared.surface_triangles[tag],
+                expected.surface_triangles[tag],
+            )
+            for tag in expected.surface_triangles
+        )
     )
 
 
@@ -151,7 +172,6 @@ class LumoSimulation:
         prepared: PreparedFingertipMesh,
         contact_surface: FingertipContactSurface,
         carrier_mesh: RigidCarrierMesh,
-        reference_mesh: FingertipMesh,
         initial_gap_mm: float,
         mechanics_contract: MechanicsContract = DEFAULT_MECHANICS_CONTRACT,
         device: str = "cuda:0",
@@ -168,8 +188,6 @@ class LumoSimulation:
             raise TypeError("contact_surface must be a FingertipContactSurface")
         if not isinstance(carrier_mesh, RigidCarrierMesh):
             raise TypeError("carrier_mesh must be a RigidCarrierMesh")
-        if not isinstance(reference_mesh, FingertipMesh):
-            raise TypeError("reference_mesh must be a FingertipMesh")
         if not isinstance(mechanics_contract, MechanicsContract):
             raise TypeError("mechanics_contract must be a MechanicsContract")
         if not isinstance(device, str) or not device.strip():
@@ -182,12 +200,39 @@ class LumoSimulation:
         selected_optical_settings = optical_settings or lumo_optical_settings()
         if not isinstance(selected_optical_settings, Transport3DSettings):
             raise TypeError("optical_settings must be a Transport3DSettings or None")
+        solid = tip.solid()
+        if volume_mesh.morphology_fingerprint != solid.morphology_fingerprint:
+            raise ValueError("volume_mesh morphology does not match tip")
+        if not _prepared_mesh_matches_volume_mesh(prepared, volume_mesh):
+            raise ValueError(
+                "prepared mechanics coordinates/topology do not match volume_mesh"
+            )
+        expected_contact_surface = make_outer_compliant_surface(solid)
+        if (
+            not contact_surface.outer_compliant_arc.equals(
+                expected_contact_surface.outer_compliant_arc
+            )
+            or not np.isclose(
+                contact_surface.z_min_mm,
+                expected_contact_surface.z_min_mm,
+                rtol=0.0,
+                atol=1.0e-12,
+            )
+            or not np.isclose(
+                contact_surface.z_max_mm,
+                expected_contact_surface.z_max_mm,
+                rtol=0.0,
+                atol=1.0e-12,
+            )
+        ):
+            raise ValueError("contact_surface does not match volume_mesh")
+        if carrier_mesh.morphology_fingerprint != volume_mesh.morphology_fingerprint:
+            raise ValueError("carrier_mesh morphology does not match volume_mesh")
         self.tip = tip
         self.volume_mesh = volume_mesh
         self.prepared = prepared
         self.contact_surface = contact_surface
         self.carrier_mesh = carrier_mesh
-        self.reference_mesh = reference_mesh
         self.initial_gap_mm = gap
         self.mechanics_contract = mechanics_contract
         self.device = device
@@ -205,7 +250,7 @@ class LumoSimulation:
         optical_settings: Transport3DSettings | None = None,
         optix_runtime: OptixRuntime | None = None,
     ) -> "LumoSimulation":
-        """Prepare reusable mesh/contact/reference state for one morphology."""
+        """Prepare reusable volume/contact/carrier state for one morphology."""
 
         if not isinstance(tip, Fingertip):
             raise TypeError("tip must be a Fingertip")
@@ -214,22 +259,12 @@ class LumoSimulation:
             volume_mesh_settings_for_tier("search"),
         )
         prepared = prepare_fingertip_mesh(volume_mesh)
-        reference_mesh = generate_fingertip_mesh(
-            tip.geometry,
-            mesh_settings_for_level("medium"),
-        )
-        if not reference_mesh.validation.passed:
-            raise FingertipMeshingError(
-                "optical reference mesh failed validation: "
-                + ", ".join(reference_mesh.validation.errors)
-            )
         return cls(
             tip=tip,
             volume_mesh=volume_mesh,
             prepared=prepared,
             contact_surface=make_outer_compliant_surface(volume_mesh.solid),
             carrier_mesh=make_distal_phalanx_mesh(volume_mesh.solid),
-            reference_mesh=reference_mesh,
             initial_gap_mm=initial_gap_mm,
             mechanics_contract=mechanics_contract,
             device=device,
@@ -395,7 +430,7 @@ class LumoSimulation:
         *,
         location_u: float,
         carrier_contact_source_node_ids: tuple[int, ...],
-    ) -> tuple[FingertipVolumeState, ExtrudedTransportGeometry]:
+    ) -> tuple[FingertipVolumeState, TransportGeometry]:
         try:
             mechanics = make_fingertip_volume_state(
                 self.volume_mesh,
@@ -412,7 +447,7 @@ class LumoSimulation:
         geometry = build_fingertip_volume_state_geometry(
             self.tip,
             mechanics,
-            reference_mesh=self.reference_mesh,
+            carrier_mesh=self.carrier_mesh,
             carrier_contact_source_node_ids=frozenset(
                 carrier_contact_source_node_ids
             ),
@@ -422,9 +457,6 @@ class LumoSimulation:
             metadata={
                 "contact_location_u": float(location_u),
                 "checkpoint_depth_mm": checkpoint.post_contact_travel_mm,
-                "carrier_contact_source_node_ids": list(
-                    carrier_contact_source_node_ids
-                ),
             },
         )
         return mechanics, geometry
@@ -458,12 +490,7 @@ class LumoSimulation:
             sphere,
             alignment.nominal_pose,
             alignment.approach_direction,
-            FirstContactSettings(
-                coarse_step_mm=0.25,
-                tolerance_mm=1.0e-3,
-                spawn_clearance_mm=0.05,
-                max_travel_mm=20.0,
-            ),
+            self.mechanics_contract.first_contact,
         )
         if intersects(self.contact_surface, sphere, first_contact.spawn_pose):
             raise CandidateContactError(
@@ -485,16 +512,17 @@ class LumoSimulation:
             alignment.radius_mm,
         )
         depths = tuple(float(value) for value in checkpoint_depths_mm)
+        viscoelastic = self.tip.parameters.viscoelastic
         mechanics_settings = NewtonSettings(
             device=self.device,
             gravity=0.0,
             dt=self.mechanics_contract.dt_s,
             steps=1,
             iterations=self.mechanics_contract.vbd_iterations,
-            density=self.mechanics_contract.density_kg_m3,
-            k_mu=self.mechanics_contract.k_mu_pa,
-            k_lambda=self.mechanics_contract.k_lambda_pa,
-            k_damp=self.mechanics_contract.k_damp,
+            density=viscoelastic.density_kg_m3,
+            k_mu=viscoelastic.k_mu_pa,
+            k_lambda=viscoelastic.k_lambda_pa,
+            k_damp=viscoelastic.k_damp,
             fixed_vertex_indices=self.prepared.support_vertex_indices,
         )
         indentation_settings = IndentationSettings(

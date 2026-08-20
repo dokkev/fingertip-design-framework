@@ -7,7 +7,7 @@ import math
 
 from shapely.geometry import Point
 
-from model.fingertip_model import FingertipModel
+from finger.fingertip_geometry import FingertipModel
 
 Vector2 = tuple[float, float]
 
@@ -55,13 +55,16 @@ def crown_frame_from_model(model: FingertipModel) -> CrownFrame:
     distance = float(arc.project(crown))
     sample_distance = max(
         1.0e-6 * arc.length,
-        100.0 * model.parameters.geometry_tolerance,
+        100.0 * model.parameters.geometry_length_tolerance_mm,
     )
     before = arc.interpolate(max(0.0, distance - sample_distance))
     after = arc.interpolate(min(arc.length, distance + sample_distance))
     tangent = _normalized((after.x - before.x, after.y - before.y))
     normal_candidates = ((-tangent[1], tangent[0]), (tangent[1], -tangent[0]))
-    probe_distance = max(1.0e-4, 1000.0 * model.parameters.geometry_tolerance)
+    probe_distance = max(
+        1.0e-4,
+        1000.0 * model.parameters.geometry_length_tolerance_mm,
+    )
     outside_candidates = [
         candidate
         for candidate in normal_candidates
@@ -110,13 +113,16 @@ def surface_frame_from_normalized_location(
     point = arc.interpolate(distance)
     sample_distance = max(
         1.0e-6 * arc.length,
-        100.0 * model.parameters.geometry_tolerance,
+        100.0 * model.parameters.geometry_length_tolerance_mm,
     )
     before = arc.interpolate(max(0.0, distance - sample_distance))
     after = arc.interpolate(min(arc.length, distance + sample_distance))
     tangent = _normalized((after.x - before.x, after.y - before.y))
     candidates = ((-tangent[1], tangent[0]), (tangent[1], -tangent[0]))
-    probe_distance = max(1.0e-4, 1000.0 * model.parameters.geometry_tolerance)
+    probe_distance = max(
+        1.0e-4,
+        1000.0 * model.parameters.geometry_length_tolerance_mm,
+    )
     outside = [
         candidate
         for candidate in candidates

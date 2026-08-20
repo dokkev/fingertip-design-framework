@@ -1,19 +1,23 @@
 """Run a bounded production LUMO Ax campaign.
 
 The file deliberately keeps the user-owned scientific configuration visible at
-the top.  ``--preflight`` performs environment checks only.  A campaign must
-be requested explicitly with ``--trials``; this prevents an accidental long
-GPU run while still exercising the real production evaluator when requested.
+the top.  ``--preflight`` performs environment and backend checks only.  A
+campaign must be requested explicitly with ``--trials``; this prevents an
+accidental long GPU run while still exercising the real production evaluator
+when requested. ``--trials`` counts Ax-generated proposals; the nominal
+baseline is evaluated separately.
 """
 
 from __future__ import annotations
 
-from dataclasses import asdict
+from dataclasses import asdict, replace
 import importlib
 import json
 from pathlib import Path
 import sys
 from typing import Any
+
+import numpy as np
 
 # Support the documented ``python scripts/optimization/run_bo.py`` invocation
 # as well as ``python -m scripts.optimization.run_bo``.
@@ -22,14 +26,15 @@ if __package__ in (None, ""):
 
 from lumo import DEFAULT_MECHANICS_CONTRACT
 from lumo.simulation import lumo_optical_settings
-from model import (
+from finger import (
     Fingertip,
     FingertipParameters,
     LED,
-    OpticalMaterial,
+    OpticalParameters,
+    ViscoelasticParameters,
     fingertip_parameters_fingerprint,
 )
-from optics.transport3d.settings import Transport3DSettings
+from ray_tracing.optical_mechanics.settings import Transport3DSettings
 from optimization.adapters.ax import (
     AxSettings,
     CampaignInfrastructureError,
@@ -37,11 +42,12 @@ from optimization.adapters.ax import (
     run_ax_optimization,
 )
 from optimization.evaluation_registry import EvaluationRegistry
+from optimization.design_space import ParameterSpec
 from optimization.evaluator import (
     TRAJECTORY_EVALUATION_SCHEMA,
     create_lumo3d_trajectory_study,
 )
-from optimization.objectives import OBJECTIVE_NAME
+from optimization.objectives import OBJECTIVE_NAME, TrajectoryObjectiveConfig
 from optimization.protocol import (
     DEFAULT_TRAJECTORY_PROTOCOL,
     TrajectoryEvaluationProtocol,
@@ -54,6 +60,17 @@ SEED = 20260820
 INITIALIZATION_TRIALS = 1
 DEFAULT_OUTPUT = Path("output/optimization/bo")
 
+USER_VISCOELASTIC = ViscoelasticParameters(
+    density_kg_m3=1.0e3,
+    k_mu_pa=1.0e5,
+    k_lambda_pa=1.0e5,
+    k_damp=10.0,
+)
+USER_OPTICAL = OpticalParameters(
+    refractive_index_air=1.0,
+    refractive_index_silicone=1.41,
+    absorption_per_mm=0.02,
+)
 USER_PARAMETERS = FingertipParameters(
     flat_pad_height=5.0,
     semielliptical_pad_height=9.0,
@@ -61,25 +78,59 @@ USER_PARAMETERS = FingertipParameters(
     stem_height=6.0,
     void_width=1.0,
     void_height=0.25,
+    viscoelastic=USER_VISCOELASTIC,
+    optical=USER_OPTICAL,
 )
 USER_LED = LED(
     relative_radiant_power=1.0,
     emission_half_angle_deg=80.0,
 )
-USER_OPTICAL_MATERIAL = OpticalMaterial(
-    refractive_index_air=1.0,
-    refractive_index_silicone=1.41,
-    absorption_per_mm=0.02,
+USER_PROTOCOL = replace(
+    DEFAULT_TRAJECTORY_PROTOCOL,
+    contact_locations_u=(0.25, 0.50, 0.75),
+    indenter_radii_mm=(4.0, 5.0),
+    checkpoint_depths_mm=(0.5, 1.0, 1.5),
+    initial_gap_mm=0.25,
 )
-USER_PROTOCOL = DEFAULT_TRAJECTORY_PROTOCOL
 SMOKE_PROTOCOL = TrajectoryEvaluationProtocol(
     contact_locations_u=(0.25, 0.75),
     indenter_radii_mm=(5.0,),
     checkpoint_depths_mm=(1.0,),
     initial_gap_mm=0.25,
 )
-USER_OPTICAL_SETTINGS: Transport3DSettings = lumo_optical_settings()
-USER_MECHANICS_CONTRACT = DEFAULT_MECHANICS_CONTRACT
+USER_OPTICAL_SETTINGS: Transport3DSettings = replace(
+    lumo_optical_settings(),
+    ray_count=256,
+)
+USER_MECHANICS_CONTRACT = replace(
+    DEFAULT_MECHANICS_CONTRACT,
+    vbd_iterations=10,
+    max_load_increment_mm=0.05,
+    first_contact=replace(
+        DEFAULT_MECHANICS_CONTRACT.first_contact,
+        coarse_step_mm=0.25,
+        tolerance_mm=1.0e-3,
+        spawn_clearance_mm=0.05,
+        max_travel_mm=20.0,
+    ),
+)
+USER_OBJECTIVE = TrajectoryObjectiveConfig(
+    radius_penalty_weight=1.0,
+)
+USER_SEARCH_BOUNDS = (
+    ParameterSpec("flat_pad_height", 0.5, 29.5),
+    ParameterSpec("semielliptical_pad_height", 0.5, 29.5),
+    ParameterSpec("stem_width", 1.0, 20.0),
+    ParameterSpec("stem_height", 1.0, 25.0),
+    ParameterSpec("void_width", 0.0, 10.0),
+    ParameterSpec("void_height", 0.0, 25.0),
+)
+
+
+def _search_bounds_payload(
+    search_bounds: tuple[ParameterSpec, ...],
+) -> list[dict[str, object]]:
+    return [bound.to_dict() for bound in search_bounds]
 
 
 def _json_write(path: Path, payload: Any) -> None:
@@ -97,16 +148,67 @@ def _run_optix_smoke() -> Any:
     return run()
 
 
+def _run_newton_smoke() -> dict[str, Any]:
+    """Advance a tiny neutral tetrahedral block through the real Newton backend."""
+    from physics import NewtonSettings, TetMeshData
+    from physics.newton.solve import solve
+
+    vertices = np.asarray(
+        (
+            (0.0, 0.0, 0.0),
+            (1.0, 0.0, 0.0),
+            (1.0, 1.0, 0.0),
+            (0.0, 1.0, 0.0),
+            (0.0, 0.0, 1.0),
+            (1.0, 0.0, 1.0),
+            (1.0, 1.0, 1.0),
+            (0.0, 1.0, 1.0),
+        ),
+        dtype=np.float32,
+    )
+    tetrahedra = np.asarray(
+        (
+            (0, 1, 3, 4),
+            (1, 2, 3, 6),
+            (1, 3, 4, 6),
+            (1, 4, 5, 6),
+            (3, 4, 6, 7),
+        ),
+        dtype=np.int32,
+    )
+    result = solve(
+        TetMeshData(vertices, tetrahedra),
+        settings=NewtonSettings(
+            device=DEVICE,
+            gravity=0.0,
+            steps=1,
+            iterations=1,
+            fixed_vertex_indices=(0, 1, 2, 3),
+        ),
+    )
+    if result.deformed_vertices.shape != vertices.shape:
+        raise RuntimeError("Newton smoke returned an unexpected vertex shape")
+    if not np.all(np.isfinite(result.deformed_vertices)):
+        raise RuntimeError("Newton smoke returned non-finite deformed vertices")
+    return {
+        "device": DEVICE,
+        "vertex_count": int(result.deformed_vertices.shape[0]),
+        "tetrahedron_count": int(result.tetrahedra.shape[0]),
+        "finite_result": True,
+    }
+
+
 def _user_config_payload(
     *,
     trials: int | None = None,
     protocol: TrajectoryEvaluationProtocol = USER_PROTOCOL,
     campaign_mode: str = "production",
+    objective_config: TrajectoryObjectiveConfig = USER_OBJECTIVE,
+    search_bounds: tuple[ParameterSpec, ...] = USER_SEARCH_BOUNDS,
 ) -> dict[str, Any]:
     tip = Fingertip(
         USER_PARAMETERS,
         led=USER_LED,
-        optical=USER_OPTICAL_MATERIAL,
     )
     payload = {
         "schema": "lumo-production-bo-user-config-v1",
@@ -114,14 +216,16 @@ def _user_config_payload(
         "seed": SEED,
         "campaign_mode": campaign_mode,
         "nominal_parameters": asdict(USER_PARAMETERS),
+        "search_bounds": _search_bounds_payload(search_bounds),
         "led": asdict(USER_LED),
-        "optical_material": asdict(USER_OPTICAL_MATERIAL),
+        "optical_parameters": asdict(USER_PARAMETERS.optical),
         "trajectory_protocol": protocol.to_dict(),
         "mechanics_contract": USER_MECHANICS_CONTRACT.to_dict(),
         "transport_3d_settings": asdict(USER_OPTICAL_SETTINGS),
         "objective": {
             "name": OBJECTIVE_NAME,
             "direction": "maximize",
+            "config": asdict(objective_config),
         },
         "ax": {
             "initialization_trials": INITIALIZATION_TRIALS,
@@ -130,6 +234,10 @@ def _user_config_payload(
                 (trials or INITIALIZATION_TRIALS) - INITIALIZATION_TRIALS,
             ),
             "max_proposals": trials,
+            "trials_semantics": (
+                "number of Ax-generated proposals; the nominal baseline is "
+                "evaluated separately"
+            ),
             "linear_constraints": list(PRODUCTION_LINEAR_PARAMETER_CONSTRAINTS),
         },
         "tip_validation": {
@@ -144,8 +252,10 @@ def _preflight_payload(
     output: str | Path | None = None,
     *,
     protocol: TrajectoryEvaluationProtocol = USER_PROTOCOL,
+    objective_config: TrajectoryObjectiveConfig = USER_OBJECTIVE,
+    search_bounds: tuple[ParameterSpec, ...] = USER_SEARCH_BOUNDS,
 ) -> dict[str, Any]:
-    """Check Python dependencies, domain construction, and one real OptiX launch."""
+    """Check dependencies, domain construction, and tiny real backend launches."""
     preflight_root = DEFAULT_OUTPUT if output is None else Path(output)
     checks: dict[str, Any] = {}
     for module_name in (
@@ -167,16 +277,17 @@ def _preflight_payload(
             checks[module_name] = {"status": "PASS"}
 
     try:
-        Fingertip(USER_PARAMETERS, led=USER_LED, optical=USER_OPTICAL_MATERIAL)
+        Fingertip(USER_PARAMETERS, led=USER_LED)
         study = create_lumo3d_trajectory_study(
             preflight_root / "preflight-artifacts",
             protocol=protocol,
+            objective_config=objective_config,
             mechanics_contract=USER_MECHANICS_CONTRACT,
             device=DEVICE,
             optical_settings=USER_OPTICAL_SETTINGS,
             led=USER_LED,
-            optical_material=USER_OPTICAL_MATERIAL,
             nominal_parameters=USER_PARAMETERS,
+            search_bounds=search_bounds,
         )
         checks["production_configuration"] = {
             "status": "PASS",
@@ -185,12 +296,23 @@ def _preflight_payload(
             ],
             "protocol_fingerprint": protocol.fingerprint,
             "mechanics_contract_fingerprint": USER_MECHANICS_CONTRACT.fingerprint,
+            "search_bounds": _search_bounds_payload(search_bounds),
         }
     except Exception as exc:
         checks["production_configuration"] = {
             "status": "FAIL",
             "error": f"{type(exc).__name__}: {exc}",
         }
+
+    try:
+        mechanics_smoke = _run_newton_smoke()
+    except Exception as exc:  # pragma: no cover - environment dependent
+        checks["newton_smoke"] = {
+            "status": "FAIL",
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+    else:
+        checks["newton_smoke"] = {"status": "PASS", "evidence": mechanics_smoke}
 
     try:
         smoke = _run_optix_smoke()
@@ -225,6 +347,11 @@ def _record_payload(record: Any) -> dict[str, Any]:
             else getattr(evaluation, "objective_value", None)
         ),
         "failure_message": record.failure_message,
+        "result_artifact_path": (
+            None
+            if evaluation is None
+            else getattr(evaluation, "result_artifact_path", None)
+        ),
         "wall_time_seconds": record.wall_time_seconds,
         "registry_key": record.registry_key,
     }
@@ -245,7 +372,12 @@ def run_campaign(
     root.mkdir(parents=True, exist_ok=True)
 
     protocol = SMOKE_PROTOCOL if smoke else USER_PROTOCOL
-    preflight = _preflight_payload(root, protocol=protocol)
+    preflight = _preflight_payload(
+        root,
+        protocol=protocol,
+        objective_config=USER_OBJECTIVE,
+        search_bounds=USER_SEARCH_BOUNDS,
+    )
     _json_write(root / "preflight.json", preflight)
     if preflight["status"] != "PASS":
         raise RuntimeError(
@@ -256,12 +388,13 @@ def run_campaign(
     study = create_lumo3d_trajectory_study(
         root / "artifacts",
         protocol=protocol,
+        objective_config=USER_OBJECTIVE,
         mechanics_contract=USER_MECHANICS_CONTRACT,
         device=DEVICE,
         optical_settings=USER_OPTICAL_SETTINGS,
         led=USER_LED,
-        optical_material=USER_OPTICAL_MATERIAL,
         nominal_parameters=USER_PARAMETERS,
+        search_bounds=USER_SEARCH_BOUNDS,
     )
     selected_registry_path = (
         root / "registry.json" if registry_path is None else Path(registry_path)
@@ -270,6 +403,8 @@ def run_campaign(
         trials=trials,
         protocol=protocol,
         campaign_mode="smoke" if smoke else "production",
+        objective_config=USER_OBJECTIVE,
+        search_bounds=USER_SEARCH_BOUNDS,
     )
     config.update(
         {
@@ -301,7 +436,6 @@ def run_campaign(
             evaluation_registry=registry,
             evaluation_contract_id=study.evaluation_contract_id,
             campaign_id=root.name,
-            result_artifact_path=str((root / "trials.json").resolve()),
             max_proposals=trials,
         )
     except CampaignInfrastructureError as exc:
@@ -337,7 +471,15 @@ def main(argv: list[str] | None = None) -> int:
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--preflight", action="store_true")
-    parser.add_argument("--trials", type=int, default=0)
+    parser.add_argument(
+        "--trials",
+        type=int,
+        default=0,
+        help=(
+            "number of Ax-generated proposals; the nominal baseline is "
+            "evaluated separately"
+        ),
+    )
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument(
         "--smoke",

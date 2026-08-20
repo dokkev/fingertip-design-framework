@@ -19,7 +19,7 @@ if TYPE_CHECKING:
     from contact.first_contact import FirstContactResult
 
 
-_DIRECTION_NORM_TOLERANCE = 1.0e-12
+DIRECTION_NORM_TOLERANCE = 1.0e-12
 
 
 class CandidateMechanicsError(RuntimeError):

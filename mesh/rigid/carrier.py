@@ -10,7 +10,7 @@ import numpy as np
 from shapely.geometry import MultiPolygon, Polygon
 from shapely.ops import triangulate
 
-from model.solid import FingertipSolid
+from finger.extrusion import FingertipSolid
 
 from .object import RigidObjectMesh
 
@@ -22,12 +22,20 @@ _XY_KEY_DIGITS = 12
 
 @dataclass(frozen=True)
 class RigidCarrierMesh:
-    """Rigid carrier surface plus its explicit collision diagnostic geometry."""
+    """Rigid carrier surface with semantic lateral/end face ownership.
+
+    Newton consumes the closed ``surface_mesh`` while periodic ray tracing
+    consumes only ``lateral_face_indices``.  The longitudinal end faces are
+    numerical cell caps, not physical optical boundaries.
+    """
 
     surface_mesh: RigidObjectMesh
     cross_section: Polygon | MultiPolygon
     z_min_mm: float
     z_max_mm: float
+    lateral_face_indices: tuple[int, ...]
+    longitudinal_end_face_indices: tuple[int, ...]
+    morphology_fingerprint: str
 
     def __post_init__(self) -> None:
         if not isinstance(self.surface_mesh, RigidObjectMesh):
@@ -40,8 +48,53 @@ class RigidCarrierMesh:
         z_max = float(self.z_max_mm)
         if not math.isfinite(z_min) or not math.isfinite(z_max) or z_min >= z_max:
             raise ValueError("carrier z bounds must be finite with z_min_mm < z_max_mm")
+        face_count = len(self.surface_mesh.faces)
+
+        def normalized_indices(
+            values: tuple[int, ...],
+            *,
+            name: str,
+        ) -> tuple[int, ...]:
+            if not isinstance(values, tuple):
+                raise TypeError(f"{name} must be a tuple of face indices")
+            if any(
+                not isinstance(value, int) or isinstance(value, bool)
+                for value in values
+            ):
+                raise TypeError(f"{name} must contain integer face indices")
+            if not values:
+                raise ValueError(f"{name} must be non-empty")
+            if len(set(values)) != len(values):
+                raise ValueError(f"{name} must not contain duplicate face indices")
+            if any(value < 0 or value >= face_count for value in values):
+                raise ValueError(f"{name} contains an out-of-range face index")
+            return tuple(int(value) for value in values)
+
+        lateral = normalized_indices(
+            self.lateral_face_indices,
+            name="lateral_face_indices",
+        )
+        longitudinal_ends = normalized_indices(
+            self.longitudinal_end_face_indices,
+            name="longitudinal_end_face_indices",
+        )
+        if set(lateral) & set(longitudinal_ends):
+            raise ValueError("carrier lateral and longitudinal end faces must be disjoint")
+        if set(lateral) | set(longitudinal_ends) != set(range(face_count)):
+            raise ValueError("carrier semantic face groups must cover the closed surface mesh")
+        if (
+            not isinstance(self.morphology_fingerprint, str)
+            or not self.morphology_fingerprint
+        ):
+            raise ValueError("morphology_fingerprint must be a non-empty string")
         object.__setattr__(self, "z_min_mm", z_min)
         object.__setattr__(self, "z_max_mm", z_max)
+        object.__setattr__(self, "lateral_face_indices", lateral)
+        object.__setattr__(
+            self,
+            "longitudinal_end_face_indices",
+            longitudinal_ends,
+        )
 
 
 def _iter_polygons(geometry: Polygon | MultiPolygon) -> tuple[Polygon, ...]:
@@ -107,6 +160,8 @@ def make_distal_phalanx_mesh(solid: FingertipSolid) -> RigidCarrierMesh:
 
     vertices: list[tuple[float, float, float]] = []
     faces: list[tuple[int, int, int]] = []
+    lateral_face_indices: list[int] = []
+    longitudinal_end_face_indices: list[int] = []
     vertex_indices: dict[tuple[tuple[float, float], float], int] = {}
 
     def vertex_index(x: float, y: float, z: float) -> int:
@@ -127,11 +182,15 @@ def make_distal_phalanx_mesh(solid: FingertipSolid) -> RigidCarrierMesh:
             top = [vertex_index(x, y, _CARRIER_Z_MAX_MM) for x, y in coordinates]
             for index, next_index in enumerate(range(1, len(coordinates) + 1)):
                 next_index %= len(coordinates)
+                first_face_index = len(faces)
                 faces.extend(
                     (
                         (bottom[index], bottom[next_index], top[next_index]),
                         (bottom[index], top[next_index], top[index]),
                     )
+                )
+                lateral_face_indices.extend(
+                    (first_face_index, first_face_index + 1)
                 )
 
         cap_triangles = tuple(triangulate(polygon))
@@ -155,7 +214,11 @@ def make_distal_phalanx_mesh(solid: FingertipSolid) -> RigidCarrierMesh:
                 vertex_index(x, y, _CARRIER_Z_MIN_MM) for x, y in coordinates
             )
             bottom_face = (bottom_face[0], bottom_face[2], bottom_face[1])
+            first_face_index = len(faces)
             faces.extend((bottom_face, top_face))
+            longitudinal_end_face_indices.extend(
+                (first_face_index, first_face_index + 1)
+            )
 
     surface_mesh = RigidObjectMesh(
         vertices_mm=np.asarray(vertices, dtype=np.float64),
@@ -171,6 +234,9 @@ def make_distal_phalanx_mesh(solid: FingertipSolid) -> RigidCarrierMesh:
         cross_section=solid.rigid_geometry,
         z_min_mm=_CARRIER_Z_MIN_MM,
         z_max_mm=_CARRIER_Z_MAX_MM,
+        lateral_face_indices=tuple(lateral_face_indices),
+        longitudinal_end_face_indices=tuple(longitudinal_end_face_indices),
+        morphology_fingerprint=solid.morphology_fingerprint,
     )
 
 

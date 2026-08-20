@@ -18,9 +18,9 @@ python -m pip install -e ".[mesh,physics,ax,test]"
 ## Focused tests
 
 ```bash
-./scripts/tools/pytest_lit tests/unit/model tests/unit/mesh -q
+./scripts/tools/pytest_lit tests/unit/finger tests/unit/mesh -q
 ./scripts/tools/pytest_lit tests/unit/contact tests/unit/physics -q
-./scripts/tools/pytest_lit tests/unit/optics tests/unit/optimization -q
+./scripts/tools/pytest_lit tests/unit/ray_tracing tests/unit/optimization -q
 ./scripts/tools/pytest_lit tests/unit/optimization/test_evaluator.py -q
 ```
 
@@ -86,6 +86,10 @@ block and requires explicit trial opt-in. Run the cheap gate first:
 conda run -n lit python scripts/optimization/run_bo.py --preflight
 ```
 
+The same block owns the six Ax box bounds, objective configuration, protocol,
+mechanics contract, and optical settings. The selected box bounds are written
+to the campaign `config.json`.
+
 For a minimal production-path smoke only:
 
 ```bash
@@ -101,7 +105,9 @@ use the production evaluator, Ax adapter, and exact-contract evaluation
 registry. Pass `--registry PATH` to reuse exact results across output
 directories; contract IDs prevent reuse across different fixed inputs. A
 shared CUDA/OptiX/Gmsh/Newton prerequisite failure aborts before candidate
-registration; a morphology failure is recorded as a candidate result.
+registration; a morphology failure is recorded as a candidate result. The
+`--trials` value counts Ax-generated proposals; the nominal baseline is
+evaluated separately.
 
 ## Newton viewer helpers
 

@@ -1,7 +1,7 @@
 # Scientific validation
 
-This package consumes the reusable `model`, `mesh`, `contact`, `physics`, and
-`optics` libraries. It owns current scientific orchestration, regression
+This package consumes the reusable `finger`, `mesh`, `contact`, `physics`, and
+`ray_tracing` libraries. It owns current scientific orchestration, regression
 provenance, and generated artifacts.
 
 `lumo/` contains the concrete reusable simulation orchestration. `optimization/`

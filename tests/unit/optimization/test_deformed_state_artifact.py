@@ -11,9 +11,10 @@ pytest.importorskip("gmsh")
 
 from physics import prepare_fingertip_mesh
 from mesh import volume_mesh_settings_for_tier
+from mesh.rigid.carrier import make_distal_phalanx_mesh
 from mesh.volume.mesh import generate_volume_mesh
-from model import Fingertip
-from validation.optics.deformed_state_restore import restore_deformed_optical_state
+from finger import Fingertip
+from validation.ray_tracing.deformed_state_restore import restore_deformed_optical_state
 
 
 def _write_artifact(path, prepared, deformed) -> str:
@@ -53,6 +54,7 @@ def test_persisted_state_restores_exact_deformed_optical_geometry(tmp_path) -> N
         prepared,
         artifact,
         digest,
+        carrier_mesh=make_distal_phalanx_mesh(volume_mesh.solid),
         metadata={"contact_location_u": 0.5},
     )
 
@@ -65,6 +67,17 @@ def test_persisted_state_restores_exact_deformed_optical_geometry(tmp_path) -> N
         0.05, abs=1.0e-6
     )
 
+    with pytest.raises(ValueError, match="cannot override restored-state provenance"):
+        restore_deformed_optical_state(
+            tip,
+            volume_mesh,
+            prepared,
+            artifact,
+            digest,
+            carrier_mesh=make_distal_phalanx_mesh(volume_mesh.solid),
+            metadata={"mechanics_source": "spoofed"},
+        )
+
 
 def test_persisted_state_hash_is_verified(tmp_path) -> None:
     tip = Fingertip()
@@ -74,7 +87,7 @@ def test_persisted_state_hash_is_verified(tmp_path) -> None:
     )
     prepared = prepare_fingertip_mesh(volume_mesh)
     artifact = tmp_path / "state.npz"
-    digest = _write_artifact(artifact, prepared, prepared.tet_mesh.vertices)
+    _write_artifact(artifact, prepared, prepared.tet_mesh.vertices)
 
     with pytest.raises(ValueError, match="hash mismatch"):
         restore_deformed_optical_state(
@@ -83,4 +96,5 @@ def test_persisted_state_hash_is_verified(tmp_path) -> None:
             prepared,
             artifact,
             "0" * 64,
+            carrier_mesh=make_distal_phalanx_mesh(volume_mesh.solid),
         )

@@ -31,7 +31,7 @@ from mesh.rigid.carrier import make_distal_phalanx_mesh
 from mesh.rigid.object import make_sphere_mesh
 from mesh.volume.mesh import generate_volume_mesh
 from mesh.volume.contracts import volume_mesh_settings_for_tier
-from model import Fingertip, FingertipParameters
+from finger import Fingertip, FingertipParameters
 
 
 def _six_volumes(vertices: np.ndarray, tetrahedra: np.ndarray) -> np.ndarray:

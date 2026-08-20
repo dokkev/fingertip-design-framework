@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import json
 from types import SimpleNamespace
 
@@ -9,15 +10,22 @@ import pytest
 from contact import CandidateContactError
 from mesh.volume.mesh import VolumeMeshDependencyError
 from lumo import MechanicsContract
-from model import FingertipParameters, LED, OpticalMaterial
+from finger import (
+    FingertipParameters,
+    LED,
+    OpticalParameters,
+    ViscoelasticParameters,
+)
 from physics import CandidateMechanicsError
 from optimization.objectives import TrajectoryObservation, compute_trajectory_objective
+from optimization.design_space import ParameterSpec
 from optimization.protocol import DEFAULT_TRAJECTORY_PROTOCOL, TrajectoryEvaluationProtocol
 from optimization.evaluator import (
     Lumo3DTrajectoryEvaluator,
     _objective_failure,
     create_lumo3d_trajectory_study,
 )
+from ray_tracing.optical_mechanics import Transport3DResultError
 import optimization.evaluator as evaluator_module
 
 
@@ -40,6 +48,24 @@ def test_custom_protocol_is_consumed_by_study_without_evaluator_changes(tmp_path
     assert evaluator.mechanics_contract.max_load_increment_mm == 0.05
 
 
+def test_study_accepts_explicit_search_bounds(tmp_path) -> None:
+    bounds = (
+        ParameterSpec("flat_pad_height", 4.0, 6.0),
+        ParameterSpec("semielliptical_pad_height", 8.0, 10.0),
+        ParameterSpec("stem_width", 7.0, 8.0),
+        ParameterSpec("stem_height", 5.0, 7.0),
+        ParameterSpec("void_width", 0.5, 2.0),
+        ParameterSpec("void_height", 0.0, 1.0),
+    )
+
+    study = create_lumo3d_trajectory_study(tmp_path, search_bounds=bounds)
+
+    assert tuple(
+        (variable.name.value, variable.lower, variable.upper)
+        for variable in study.design_space.active_variables
+    ) == tuple((bound.name.value, bound.lower, bound.upper) for bound in bounds)
+
+
 def test_evaluation_contract_id_changes_with_fixed_scientific_inputs(tmp_path) -> None:
     base = create_lumo3d_trajectory_study(tmp_path / "base")
     changed_protocol = create_lumo3d_trajectory_study(
@@ -60,7 +86,9 @@ def test_evaluation_contract_id_changes_with_fixed_scientific_inputs(tmp_path) -
     )
     changed_material = create_lumo3d_trajectory_study(
         tmp_path / "material",
-        optical_material=OpticalMaterial(absorption_per_mm=0.03),
+        nominal_parameters=FingertipParameters(
+            optical=OpticalParameters(absorption_per_mm=0.03),
+        ),
     )
     changed_fixed_geometry = create_lumo3d_trajectory_study(
         tmp_path / "fixed-geometry",
@@ -71,7 +99,30 @@ def test_evaluation_contract_id_changes_with_fixed_scientific_inputs(tmp_path) -
     )
     changed_mechanics = create_lumo3d_trajectory_study(
         tmp_path / "mechanics",
-        mechanics_contract=MechanicsContract(k_mu_pa=2.0e5),
+        mechanics_contract=MechanicsContract(vbd_iterations=11),
+    )
+    changed_first_contact = create_lumo3d_trajectory_study(
+        tmp_path / "first-contact",
+        mechanics_contract=replace(
+            base.mechanics_contract,
+            first_contact=replace(
+                base.mechanics_contract.first_contact,
+                coarse_step_mm=0.2,
+            ),
+        ),
+    )
+    changed_path_sampling = create_lumo3d_trajectory_study(
+        tmp_path / "path-sampling",
+        optical_settings=replace(
+            base.optical_settings,
+            internal_max_samples_per_segment=8,
+        ),
+    )
+    changed_viscoelastic = create_lumo3d_trajectory_study(
+        tmp_path / "viscoelastic",
+        nominal_parameters=FingertipParameters(
+            viscoelastic=ViscoelasticParameters(k_mu_pa=2.0e5),
+        ),
     )
 
     assert len(base.evaluation_contract_id.split(":", 1)[1]) == 64
@@ -81,6 +132,9 @@ def test_evaluation_contract_id_changes_with_fixed_scientific_inputs(tmp_path) -
     assert base.evaluation_contract_id != changed_material.evaluation_contract_id
     assert base.evaluation_contract_id != changed_fixed_geometry.evaluation_contract_id
     assert base.evaluation_contract_id != changed_mechanics.evaluation_contract_id
+    assert base.evaluation_contract_id != changed_first_contact.evaluation_contract_id
+    assert base.evaluation_contract_id != changed_path_sampling.evaluation_contract_id
+    assert base.evaluation_contract_id != changed_viscoelastic.evaluation_contract_id
 
 
 def test_radius_six_is_rejected_as_domain_incompatible_before_mesh_or_newton(tmp_path) -> None:
@@ -223,6 +277,31 @@ def test_candidate_mechanics_error_is_translated_to_candidate_failure(
     assert "candidate state is inverted" in (result.failure_message or "")
 
 
+def test_optical_contract_error_is_not_reclassified_as_candidate_failure(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    protocol = TrajectoryEvaluationProtocol((0.5,), (5.0,), (1.5,))
+    evaluator = Lumo3DTrajectoryEvaluator(tmp_path, protocol=protocol)
+
+    class _Simulation:
+        volume_mesh = SimpleNamespace(morphology_fingerprint="mesh")
+
+        @staticmethod
+        def run_sphere_contact(*_args, **_kwargs):
+            raise Transport3DResultError("inconsistent optical result")
+
+    class _SimulationFactory:
+        @staticmethod
+        def from_fingertip(*_args, **_kwargs):
+            return _Simulation()
+
+    monkeypatch.setattr(evaluator_module, "LumoSimulation", _SimulationFactory)
+
+    with pytest.raises(Transport3DResultError, match="inconsistent optical result"):
+        evaluator.evaluate(FingertipParameters())
+
+
 def test_unexpected_objective_error_propagates(
     tmp_path,
     monkeypatch,
@@ -252,6 +331,7 @@ def test_unexpected_objective_error_propagates(
         total_transport = 1.0
         launched_weight = 1.0
         escaped_weight = 1.0
+        outgoing_surface_weight = 1.0
         absorbed_weight = 0.0
         terminated_weight = 0.0
         processed_segment_count = 1

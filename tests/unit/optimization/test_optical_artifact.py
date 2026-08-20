@@ -6,8 +6,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from model import Fingertip, LED, OpticalMaterial
-from optics.transport3d import Transport3DResult
+from finger import Fingertip, FingertipParameters, LED, OpticalParameters
+from ray_tracing.optical_mechanics import Transport3DResult
 from optimization.optical_artifact import (
     load_case_artifact,
     optical_physics_parameters,
@@ -27,7 +27,7 @@ def _result() -> Transport3DResult:
         outgoing_surface_weight=0.4,
         surface_u_edges=np.asarray([0.0, 1.0]),
         surface_z_edges=np.asarray([-1.0, 1.0]),
-        outgoing_surface_field=np.ones((1, 1), dtype=float),
+        outgoing_surface_field=np.full((1, 1), 0.4, dtype=float),
         escape_positions_mm=np.asarray([[0.0, 0.0, 0.0]]),
         escape_directions=np.asarray([[0.0, 1.0, 0.0]]),
         escape_surface_normals=np.asarray([[0.0, -1.0, 0.0]]),
@@ -72,6 +72,7 @@ def test_full3d_artifact_records_and_validates_xyz_axis_order(tmp_path: Path) ->
     loaded = load_case_artifact(path, expected_contract=contract)
     np.testing.assert_array_equal(loaded.field, result.field)
     np.testing.assert_array_equal(loaded.field_axes[2], result.field_axes[2])
+    assert loaded.outgoing_surface_weight == pytest.approx(0.4)
 
     metadata["field_axis_order"] = "x,y"
     path.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n")
@@ -88,8 +89,8 @@ def test_direct_result_keeps_carrier_energy_channels_distinct() -> None:
 
 def test_optical_fingerprint_inputs_match_full3d_transport_inputs() -> None:
     tip = Fingertip(
+        parameters=FingertipParameters(optical=OpticalParameters()),
         led=LED(relative_radiant_power=2.0, emission_half_angle_deg=60.0),
-        optical=OpticalMaterial(),
     )
 
     parameters = optical_physics_parameters(tip)

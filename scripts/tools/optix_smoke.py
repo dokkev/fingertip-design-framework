@@ -15,7 +15,7 @@ if __package__ in (None, ""):
 
 import numpy as np
 
-from optics.optix.runtime import OptixRuntime, OptixRuntimeError
+from ray_tracing.optix.runtime import OptixRuntime, OptixRuntimeError
 
 
 _DEVICE_SOURCE = r"""

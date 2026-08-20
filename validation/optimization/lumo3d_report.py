@@ -275,7 +275,6 @@ def _plot_mechanics(
             artifact = _resolve_artifact_path(mechanics["mechanics_artifact_path"], evaluation_path.parent)
             maximum, rms = _mechanics_displacement(artifact)
             rows.append((label, float(mechanics["normalized_location"]), maximum, rms))
-    x = np.arange(3)
     fig, axes = plt.subplots(1, 2, figsize=(8.4, 3.8), constrained_layout=True)
     for label, color in (("nominal", "#4C78A8"), ("best", "#E15759")):
         subset = [row for row in rows if row[0] == label]

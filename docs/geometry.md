@@ -170,13 +170,20 @@ open only at the cutout mouth for loaded optical-domain closure.
 
 ## Mechanics inputs
 
-`FingertipParameters` owns geometry only. Production mechanics uses the actual
-Newton numerical coefficients in `lumo.mechanics_contract.MechanicsContract`,
-including density, `k_mu`, `k_lambda`, damping, timestep, contact coefficients,
-and checkpoint-acceptance thresholds.
+`FingertipParameters` combines `KinematicParameters` for geometry with
+`ViscoelasticParameters` for the fingertip's constitutive and inertial inputs,
+and `OpticalParameters` for its bulk optical inputs.
+Production mechanics uses those material values through
+`FingertipParameters.viscoelastic`. The separate
+`lumo.mechanics_contract.MechanicsContract` owns solver execution settings,
+contact coefficients, and checkpoint-acceptance thresholds.
+
+The LED package and emission model remain the separate `LED` descriptor in
+`finger.led`; bulk optical values are owned by `FingertipParameters.optical`.
 
 The repository does not currently define or calibrate a Young's-modulus and
 Poisson-ratio material model, and therefore does not expose disconnected
-`E, nu` fields on the fingertip morphology. Adding such physical inputs requires
-an explicit constitutive mapping and scientific validation rather than a
-cleanup-only conversion.
+`E, nu` fields on the fingertip morphology. The current Newton coefficients are
+not interpreted as calibrated Young's modulus and Poisson ratio. Adding such
+physical inputs requires an explicit constitutive mapping and scientific
+validation rather than a cleanup-only conversion.

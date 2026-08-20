@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 import math
+from types import MappingProxyType
 from typing import Any, Literal
 
-import numpy as np
-
-from model.fingertip_parameters import FingertipParameters
-from model.solid import FingertipSolid
+from finger.fingertip_parameters import FingertipParameters
+from finger.extrusion import FingertipSolid
 
 
 VolumeMeshTier = Literal["search", "reference"]
@@ -99,8 +99,26 @@ class VolumeMeshValidation:
     """Named M2 acceptance checks."""
 
     passed: bool
-    checks: dict[str, bool]
+    checks: Mapping[str, bool]
     errors: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.passed, bool):
+            raise TypeError("passed must be bool")
+        checks: dict[str, bool] = {}
+        for name, value in self.checks.items():
+            if not isinstance(name, str) or not name:
+                raise TypeError("mesh validation check names must be non-empty strings")
+            if not isinstance(value, bool):
+                raise TypeError("mesh validation check values must be bool")
+            checks[name] = value
+        errors = tuple(str(error) for error in self.errors)
+        if self.passed != all(checks.values()):
+            raise ValueError("passed must match the named mesh validation checks")
+        if set(errors) != {name for name, passed in checks.items() if not passed}:
+            raise ValueError("errors must name exactly the failed mesh validation checks")
+        object.__setattr__(self, "checks", MappingProxyType(checks))
+        object.__setattr__(self, "errors", errors)
 
 
 @dataclass(frozen=True)
@@ -108,14 +126,29 @@ class FingertipVolumeMesh:
     """Neutral 3D volume mesh and semantic surface topology."""
 
     solid: FingertipSolid
-    nodes: dict[int, VolumeNode]
+    nodes: Mapping[int, VolumeNode]
     tetrahedra: tuple[Tetrahedron, ...]
-    surface_triangles: dict[str, tuple[SurfaceTriangle, ...]]
-    volume_element_ids: dict[str, tuple[int, ...]]
+    surface_triangles: Mapping[str, tuple[SurfaceTriangle, ...]]
+    volume_element_ids: Mapping[str, tuple[int, ...]]
     settings: VolumeMeshSettings
     quality: VolumeMeshQuality
     validation: VolumeMeshValidation
     gmsh_version: str
+
+    def __post_init__(self) -> None:
+        nodes = {int(node_id): node for node_id, node in self.nodes.items()}
+        surfaces = {
+            str(tag): tuple(triangles)
+            for tag, triangles in self.surface_triangles.items()
+        }
+        volume_ids = {
+            str(tag): tuple(int(element_id) for element_id in element_ids)
+            for tag, element_ids in self.volume_element_ids.items()
+        }
+        object.__setattr__(self, "nodes", MappingProxyType(nodes))
+        object.__setattr__(self, "tetrahedra", tuple(self.tetrahedra))
+        object.__setattr__(self, "surface_triangles", MappingProxyType(surfaces))
+        object.__setattr__(self, "volume_element_ids", MappingProxyType(volume_ids))
 
     @property
     def parameters(self) -> FingertipParameters:
@@ -157,9 +190,13 @@ class FingertipVolumeMesh:
                 tag: [asdict(value) for value in triangles]
                 for tag, triangles in sorted(self.surface_triangles.items())
             },
-            "volume_element_ids": self.volume_element_ids,
+            "volume_element_ids": dict(self.volume_element_ids),
             "quality": asdict(self.quality),
-            "validation": asdict(self.validation),
+            "validation": {
+                "passed": self.validation.passed,
+                "checks": dict(self.validation.checks),
+                "errors": self.validation.errors,
+            },
         }
 
 

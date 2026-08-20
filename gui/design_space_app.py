@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from itertools import product
 from math import isfinite
 from numbers import Real
@@ -10,7 +10,7 @@ from typing import Mapping
 
 from nicegui import ui
 
-from model import Fingertip, FingertipParameters, LED, OpticalMaterial
+from finger import Fingertip, FingertipParameters, LED, OpticalParameters
 from optimization.design_space import (
     OPTIMIZABLE_PARAMETER_NAMES,
     DesignSpace,
@@ -19,7 +19,7 @@ from optimization.design_space import (
 from gui.diagnostics import (
     Diagnostic,
     build_led,
-    build_optical_material,
+    build_optical_parameters,
     diagnose_design_space,
     diagnose_physical_state,
     diagnose_state,
@@ -121,7 +121,7 @@ def _initial_state() -> dict[str, object]:
     return {
         "geometry": geometry,
         "led": asdict(LED()),
-        "optical": asdict(OpticalMaterial()),
+        "optical": asdict(OpticalParameters()),
         "variables": variables,
     }
 
@@ -143,11 +143,14 @@ def _tip_for_preview(
     parameters = _parameters(geometry)
     led = build_led(led_values)
     optical = (
-        build_optical_material({})
+        build_optical_parameters({})
         if not optical_valid
-        else build_optical_material(optical_values)
+        else build_optical_parameters(optical_values)
     )
-    return Fingertip(parameters, led=led, optical=optical)
+    return Fingertip(
+        replace(parameters, optical=optical),
+        led=led,
+    )
 
 
 def _corner_values(state: Mapping[str, object]) -> tuple[dict[str, float], ...] | None:
@@ -647,7 +650,7 @@ def _render_parameter_drawing(
             0.5,
             0.5,
             "Geometry preview disabled\n(core GUI remains available)\n"
-            "Use model/mesh diagnostics for geometry inspection.",
+            "Use finger/mesh diagnostics for geometry inspection.",
             ha="center",
             va="center",
             transform=axis.transAxes,

@@ -209,9 +209,9 @@ def _prepare_case() -> _PreparedCase:
     from physics import prepare_fingertip_mesh
     from mesh.volume.mesh import generate_volume_mesh
     from mesh.volume.contracts import volume_mesh_settings_for_tier
-    from model.fingertip_model import FingertipModel
-    from model.fingertip_parameters import FingertipParameters
-    from model.solid import build_fingertip_solid
+    from finger.fingertip_geometry import FingertipModel
+    from finger.fingertip_parameters import FingertipParameters
+    from finger.extrusion import build_fingertip_solid
 
     model = FingertipModel(
         FingertipParameters(

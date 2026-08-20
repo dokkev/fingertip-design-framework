@@ -10,14 +10,11 @@ from typing import Any, Mapping
 
 import numpy as np
 
-from model import FingertipParameters
+from finger import FingertipParameters
 from optimization.objectives import normalized_field_distance
 from optimization.protocol import DEFAULT_TRAJECTORY_PROTOCOL, TrajectoryEvaluationProtocol
 from validation.physics.multi_location_sphere_contact import run_multi_location_sphere_contact
-from optimization.evaluator import (
-    Lumo3DTrajectoryEvaluator,
-    create_lumo3d_trajectory_study,
-)
+from optimization.evaluator import Lumo3DTrajectoryEvaluator
 from validation.reference.lumo3d_fixed_state_oracle import FixedStateLumo3DOracle
 
 

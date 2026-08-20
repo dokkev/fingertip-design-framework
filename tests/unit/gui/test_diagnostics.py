@@ -4,11 +4,10 @@ from __future__ import annotations
 
 from dataclasses import asdict
 
-from model import FingertipParameters, LED
+from finger import FingertipParameters, LED
 from gui.diagnostics import (
     diagnose_design_space,
     diagnose_geometry,
-    diagnose_led,
     diagnose_optical,
 )
 

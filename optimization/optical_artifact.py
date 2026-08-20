@@ -10,12 +10,12 @@ from typing import Any, Mapping
 
 import numpy as np
 
-from model.fingertip import Fingertip
-from optics.transport3d.result import Transport3DResult
-from optics.transport3d.settings import Transport3DSettings
+from finger.fingertip import Fingertip
+from ray_tracing.optical_mechanics.result import Transport3DResult
+from ray_tracing.optical_mechanics.settings import Transport3DSettings
 
 
-UNIFIED_ARTIFACT_SCHEMA = "unified-optix-transport-case-v5"
+UNIFIED_ARTIFACT_SCHEMA = "unified-optix-transport-case-v6"
 
 
 def _canonical_json(value: Any) -> str:
@@ -78,6 +78,7 @@ class OpticalFieldArtifact:
     total_transport: float
     launched_weight: float
     escaped_weight: float
+    outgoing_surface_weight: float
     absorbed_weight: float
     terminated_weight: float
     energy_balance_error: float
@@ -112,6 +113,7 @@ def energy_record(result: Transport3DResult) -> dict[str, Any]:
         "launched_weight": launched,
         "escaped_weight": escaped,
         "escaped_transport_fraction": escaped / max(launched, 1.0e-30),
+        "outgoing_surface_weight": float(result.outgoing_surface_weight),
         "absorbed_weight": float(result.absorbed_weight),
         "terminated_weight": float(result.terminated_weight),
         "processed_segment_count": int(result.processed_segment_count),
@@ -266,6 +268,7 @@ def _result_record(result: Transport3DResult, contract: Mapping[str, Any]) -> di
         "total_transport": result.escaped_weight,
         "launched_weight": result.launched_weight,
         "escaped_weight": result.escaped_weight,
+        "outgoing_surface_weight": result.outgoing_surface_weight,
         "absorbed_weight": result.absorbed_weight,
         "terminated_weight": result.terminated_weight,
         "escape_event_count": int(result.escape_event_count),
@@ -442,6 +445,7 @@ def load_case_artifact(
         total_transport=float(record["total_transport"]),
         launched_weight=float(record["launched_weight"]),
         escaped_weight=float(record["escaped_weight"]),
+        outgoing_surface_weight=float(record["outgoing_surface_weight"]),
         absorbed_weight=float(record["absorbed_weight"]),
         terminated_weight=float(record["terminated_weight"]),
         energy_balance_error=float(record["energy_balance_error"]),

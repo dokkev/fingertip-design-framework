@@ -1,16 +1,5 @@
 """Public solver-independent mesh data contracts."""
 
-from mesh.fingertip.surface import InvalidPadMesh, PadMesh
-from mesh.fingertip.contracts import (
-    FingertipMesh,
-    InvalidMeshSettings,
-    MeshSettings,
-    mesh_settings_for_level,
-)
-from mesh.fingertip.geometry import (
-    FingertipMeshingError,
-    GmshDependencyError,
-)
 from mesh.volume.mesh import (
     VolumeMeshDependencyError,
     VolumeMeshingError,
@@ -48,14 +37,6 @@ from mesh.io.obj import (
 )
 
 __all__ = [
-    "FingertipMesh",
-    "FingertipMeshingError",
-    "GmshDependencyError",
-    "InvalidMeshSettings",
-    "InvalidPadMesh",
-    "MeshSettings",
-    "PadMesh",
-    "mesh_settings_for_level",
     "FingertipVolumeMesh",
     "SurfaceTriangle",
     "Tetrahedron",
