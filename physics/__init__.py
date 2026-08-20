@@ -10,11 +10,8 @@ the production-facing package export.
 from .trajectory.fingertip import (
     PreparedFingertipMesh,
     InvalidFingertipMesh,
-    PrescribedVertexDisplacement,
-    outer_compliant_timing_patch,
     make_fingertip_volume_state,
     prepare_fingertip_mesh,
-    solve_prescribed_indentation,
 )
 from .newton.solve import NewtonSettings, PhysicsDependencyError
 from .contracts.types import NewtonResult, TetMeshData
@@ -39,14 +36,11 @@ __all__ = [
     "IndentationTrajectoryResult",
     "PreparedFingertipMesh",
     "InvalidFingertipMesh",
-    "PrescribedVertexDisplacement",
     "RigidIndenter3D",
     "checkpoint_step_schedule",
     "TetMeshData",
-    "outer_compliant_timing_patch",
     "make_fingertip_volume_state",
     "prepare_fingertip_mesh",
-    "solve_prescribed_indentation",
     "solve_fingertip_indentation",
     "solve_fingertip_indentation_trajectory",
 ]

@@ -3,6 +3,7 @@ from __future__ import annotations
 import numpy as np
 
 import lumo.simulation as simulation_module
+from lumo import MechanicsContract
 from lumo.simulation import LumoSimulation
 
 
@@ -35,3 +36,14 @@ def test_checkpoint_values_reject_non_monotonic_or_non_finite_depths() -> None:
         LumoSimulation._checkpoint_values((0.5, 0.5), 5.0)
     with np.testing.assert_raises(ValueError):
         LumoSimulation._checkpoint_values((0.5, float("nan")), 5.0)
+
+
+def test_mechanics_contract_rejects_non_finite_or_non_integer_settings() -> None:
+    with np.testing.assert_raises(ValueError):
+        MechanicsContract(dt_s=float("nan"))
+    with np.testing.assert_raises(ValueError):
+        MechanicsContract(soft_contact_ke=float("inf"))
+    with np.testing.assert_raises(TypeError):
+        MechanicsContract(vbd_iterations=10.0)  # type: ignore[arg-type]
+    with np.testing.assert_raises(TypeError):
+        MechanicsContract(sphere_subdivisions=True)  # type: ignore[arg-type]

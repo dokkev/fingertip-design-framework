@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+import math
 import time
 from types import MappingProxyType
 from typing import Callable, Literal, Mapping
@@ -214,7 +215,15 @@ def _evaluation_objective_value(
         value = getattr(evaluation, "objective_value", None)
         if value is None:
             value = getattr(evaluation, "score", None)
-    return None if value is None else float(value)
+    if value is None:
+        return None
+    resolved = float(value)
+    if not math.isfinite(resolved):
+        raise ValueError(
+            f"evaluation objective {objective_name!r} must be finite, "
+            f"received {resolved!r}"
+        )
+    return resolved
 
 
 def _mark_failed(client: Client, trial_index: int, message: str) -> None:

@@ -54,7 +54,7 @@ externally managed runtime dependencies.
 conda run -n lit ./scripts/tools/pytest_lit tests/unit/model tests/unit/mesh -q
 conda run -n lit ./scripts/tools/pytest_lit tests/unit/physics -q
 conda run -n lit python scripts/tools/optix_doctor.py --json
-conda run -n lit python -m validation.optics.optix_smoke
+conda run -n lit python -m scripts.tools.optix_smoke
 ```
 
 The doctor diagnoses the environment. The validation smoke command performs a

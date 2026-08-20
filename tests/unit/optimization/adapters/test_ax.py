@@ -117,6 +117,15 @@ def test_create_ax_client_translates_all_six_active_morphology_variables() -> No
     }
 
 
+@pytest.mark.parametrize("value", (float("nan"), float("inf"), float("-inf")))
+def test_ax_rejects_non_finite_objective_values(value: float) -> None:
+    with pytest.raises(ValueError, match="must be finite"):
+        ax_adapter._evaluation_objective_value(
+            SimpleNamespace(objective_value=value),
+            "trajectory_objective",
+        )
+
+
 def test_run_ax_optimization_evaluates_morphology_without_mechanics_or_optics(
     monkeypatch,
 ) -> None:

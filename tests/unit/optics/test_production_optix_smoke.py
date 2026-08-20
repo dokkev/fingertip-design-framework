@@ -6,7 +6,7 @@ import sys
 
 import numpy as np
 
-from validation.optics import optix_smoke as smoke
+from scripts.tools import optix_smoke as smoke
 
 
 class _FakeArray:

@@ -22,7 +22,7 @@ from optics.transport3d import (
     trace_geometry,
 )
 from optics.transport3d.optix_backend import create_runtime
-from validation.optics.optix_smoke import run as run_optix_smoke
+from scripts.tools.optix_smoke import run as run_optix_smoke
 from optimization.deformed_state_artifact import restore_deformed_optical_state
 from optimization.optical_artifact import (
     optical_physics_parameters,

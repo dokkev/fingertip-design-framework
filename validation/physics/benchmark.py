@@ -11,10 +11,9 @@ from typing import Any
 
 import numpy as np
 
-from physics import (
-    NewtonSettings,
+from physics import NewtonSettings, prepare_fingertip_mesh
+from physics.trajectory.fingertip import (
     outer_compliant_timing_patch,
-    prepare_fingertip_mesh,
     solve_prescribed_indentation,
 )
 from mesh.volume.mesh import generate_volume_mesh

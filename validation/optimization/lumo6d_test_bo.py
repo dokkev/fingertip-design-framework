@@ -24,7 +24,7 @@ from mesh.volume.mesh import VolumeMeshDependencyError
 from model import FingertipParameters, silicone_thickness_measures
 from optics.transport3d import Transport3DDependencyError
 from optimization.optical_artifact import fingerprint_mapping
-from validation.optics.optix_smoke import run as run_optix_smoke
+from scripts.tools.optix_smoke import run as run_optix_smoke
 from optimization.adapters.ax import (
     AxSettings,
     CONTACT_STATE_SEPARATION_OBJECTIVE_NAME,

@@ -6,7 +6,7 @@ from pathlib import Path
 
 from scripts.tools.optix_doctor import main as doctor_main
 from optics.optix._paths import _diagnose_include_paths, _discover_include_paths
-from validation.optics import optix_smoke
+from scripts.tools import optix_smoke
 
 
 def _headers(directory: Path, names: tuple[str, ...]) -> None:

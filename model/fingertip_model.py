@@ -90,19 +90,23 @@ class FingertipParameters:
 
     def validate(self) -> None:
         """Raise ``InvalidFingertipParameters`` for inconsistent dimensions."""
-        _require_finite("flat_pad_width", self.flat_pad_width)
-        _require_finite("flat_pad_height", self.flat_pad_height)
-        _require_finite("semielliptical_pad_height", self.semielliptical_pad_height)
-        _require_finite("link_thickness", self.link_thickness)
-        _require_finite("bond_extension_width", self.bond_extension_width)
-        _require_finite("bond_extension_height", self.bond_extension_height)
-        _require_finite("stem_width", self.stem_width)
-        _require_finite("stem_height", self.stem_height)
-        _require_finite("void_width", self.void_width)
-        _require_finite("void_height", self.void_height)
-        _require_finite("geometry_tolerance", self.geometry_tolerance)
-        _require_finite("young_modulus_mpa", self.young_modulus_mpa)
-        _require_finite("poisson_ratio", self.poisson_ratio)
+        finite_fields = (
+            "flat_pad_width",
+            "flat_pad_height",
+            "semielliptical_pad_height",
+            "link_thickness",
+            "bond_extension_width",
+            "bond_extension_height",
+            "stem_width",
+            "stem_height",
+            "void_width",
+            "void_height",
+            "geometry_tolerance",
+            "young_modulus_mpa",
+            "poisson_ratio",
+        )
+        for name in finite_fields:
+            _require_finite(name, getattr(self, name))
 
         for name in (
             "flat_pad_width",

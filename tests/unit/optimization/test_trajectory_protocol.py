@@ -56,6 +56,25 @@ def test_protocol_validation_does_not_require_default_counts() -> None:
         TrajectoryEvaluationProtocol((0.5,), (4.0,), (0.5, 0.5))
 
 
+@pytest.mark.parametrize(
+    ("location", "radius", "depth", "message"),
+    (
+        (-0.1, 4.0, 1.0, "location_u"),
+        (1.1, 4.0, 1.0, "location_u"),
+        (0.5, 0.0, 1.0, "radius_mm"),
+        (0.5, 4.0, 0.0, "checkpoint_depth_mm"),
+    ),
+)
+def test_trajectory_observation_rejects_nonphysical_labels(
+    location,
+    radius,
+    depth,
+    message,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        TrajectoryObservation(location, radius, depth, np.ones(2))
+
+
 def test_objective_compares_all_cross_location_states_and_radius_nuisance() -> None:
     observations = []
     for location in (0.25, 0.50):

@@ -43,12 +43,12 @@ from optimization.evaluator import (
 )
 from optimization.objectives import OBJECTIVE_NAME
 from optimization.protocol import TrajectoryEvaluationProtocol
-from validation.optics.optix_smoke import OptixSmokeError, run as run_optix_smoke
 
 
 # ------------------------------ USER CONFIG ------------------------------
 DEVICE = "cuda:0"
 SEED = 20260820
+INITIALIZATION_TRIALS = 1
 DEFAULT_OUTPUT = Path("output/optimization/bo")
 
 USER_PARAMETERS = FingertipParameters(
@@ -86,6 +86,13 @@ def _json_write(path: Path, payload: Any) -> None:
     )
 
 
+def _run_optix_smoke() -> Any:
+    """Run the tooling-owned environment smoke at the preflight boundary."""
+    from scripts.tools.optix_smoke import run
+
+    return run()
+
+
 def _user_config_payload(*, trials: int | None = None) -> dict[str, Any]:
     tip = Fingertip(
         USER_PARAMETERS,
@@ -107,8 +114,11 @@ def _user_config_payload(*, trials: int | None = None) -> dict[str, Any]:
             "direction": "maximize",
         },
         "ax": {
-            "initialization_trials": 1,
-            "search_trials": max(0, (trials or 1) - 1),
+            "initialization_trials": INITIALIZATION_TRIALS,
+            "search_trials": max(
+                0,
+                (trials or INITIALIZATION_TRIALS) - INITIALIZATION_TRIALS,
+            ),
             "max_proposals": trials,
             "linear_constraints": list(PRODUCTION_LINEAR_PARAMETER_CONSTRAINTS),
         },
@@ -120,8 +130,9 @@ def _user_config_payload(*, trials: int | None = None) -> dict[str, Any]:
     return payload
 
 
-def _preflight_payload() -> dict[str, Any]:
+def _preflight_payload(output: str | Path | None = None) -> dict[str, Any]:
     """Check Python dependencies, domain construction, and one real OptiX launch."""
+    preflight_root = DEFAULT_OUTPUT if output is None else Path(output)
     checks: dict[str, Any] = {}
     for module_name in (
         "gmsh",
@@ -144,7 +155,7 @@ def _preflight_payload() -> dict[str, Any]:
     try:
         Fingertip(USER_PARAMETERS, led=USER_LED, optical=USER_OPTICAL_MATERIAL)
         study = create_lumo3d_trajectory_study(
-            DEFAULT_OUTPUT / "preflight-artifacts",
+            preflight_root / "preflight-artifacts",
             protocol=USER_PROTOCOL,
             mechanics_contract=USER_MECHANICS_CONTRACT,
             device=DEVICE,
@@ -168,17 +179,11 @@ def _preflight_payload() -> dict[str, Any]:
         }
 
     try:
-        smoke = run_optix_smoke()
-    except OptixSmokeError as exc:  # pragma: no cover - environment dependent
-        checks["optix_smoke"] = {
-            "status": "FAIL",
-            "stage": exc.stage,
-            "error": str(exc),
-        }
+        smoke = _run_optix_smoke()
     except Exception as exc:  # pragma: no cover - environment dependent
         checks["optix_smoke"] = {
             "status": "FAIL",
-            "stage": "optix_runtime_initialization",
+            "stage": getattr(exc, "stage", "optix_runtime_initialization"),
             "error": f"{type(exc).__name__}: {exc}",
         }
     else:
@@ -219,7 +224,7 @@ def run_campaign(output: str | Path, *, trials: int) -> dict[str, Any]:
         raise FileExistsError(f"refusing to overwrite non-empty output: {root}")
     root.mkdir(parents=True, exist_ok=True)
 
-    preflight = _preflight_payload()
+    preflight = _preflight_payload(root)
     _json_write(root / "preflight.json", preflight)
     if preflight["status"] != "PASS":
         raise RuntimeError(
@@ -254,8 +259,8 @@ def run_campaign(output: str | Path, *, trials: int) -> dict[str, Any]:
         _json_write(root / "trials.json", records)
 
     settings = AxSettings(
-        initialization_trials=1,
-        search_trials=max(0, trials - 1),
+        initialization_trials=INITIALIZATION_TRIALS,
+        search_trials=max(0, trials - INITIALIZATION_TRIALS),
         seed=SEED,
         objective_name=OBJECTIVE_NAME,
     )
@@ -308,7 +313,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.preflight:
-        preflight = _preflight_payload()
+        preflight = _preflight_payload(args.output)
         print(json.dumps(preflight, indent=2, sort_keys=True, allow_nan=False))
         if args.trials == 0:
             return 0 if preflight["status"] == "PASS" else 2

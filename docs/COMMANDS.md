@@ -41,7 +41,7 @@ conda run -n lit python scripts/tools/optix_doctor.py --json
 Immediately before a long production campaign, run the real runtime smoke:
 
 ```bash
-conda run -n lit python -m validation.optics.optix_smoke
+conda run -n lit python -m scripts.tools.optix_smoke
 ```
 
 The distinction is important:

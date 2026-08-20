@@ -45,6 +45,12 @@ class TrajectoryObservation:
             if not math.isfinite(value):
                 raise ValueError(f"{name} must be finite")
             object.__setattr__(self, name, value)
+        if not 0.0 <= self.location_u <= 1.0:
+            raise ValueError("location_u must lie in [0, 1]")
+        if self.radius_mm <= 0.0:
+            raise ValueError("radius_mm must be positive")
+        if self.checkpoint_depth_mm <= 0.0:
+            raise ValueError("checkpoint_depth_mm must be positive")
 
 
 def _as_observation(value: TrajectoryObservation | Mapping[str, Any]) -> TrajectoryObservation:

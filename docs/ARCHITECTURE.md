@@ -86,7 +86,7 @@ directories named `case/`, `examples/`, `fem/`, `visualization/`, or
 | mechanics public API | `physics/trajectory/indentation.py` | `physics/trajectory/fingertip.py`, `physics/contracts/` |
 | Newton implementation | `physics/newton/vbd.py` | `physics/newton/session.py`, `physics/newton/viewer.py` |
 | FULL_3D transport | `optics/transport3d/transport.py` | `geometry.py`, `fingertip.py`, `optix_backend.py` |
-| OptiX runtime/preflight | `optics/optix/runtime.py` | `validation/optics/optix_smoke.py`, `scripts/tools/optix_doctor.py` |
+| OptiX runtime/preflight | `optics/optix/runtime.py` | `scripts/tools/optix_smoke.py`, `scripts/tools/optix_doctor.py` |
 | evaluation protocol | `optimization/protocol.py` | `lumo/mechanics_contract.py` |
 | morphology search space | `optimization/design_space.py` | `optimization/evaluation_registry.py` |
 | objective | `optimization/objectives.py` | `optimization/evaluator.py` |
@@ -117,10 +117,12 @@ The current package exports in `model/__init__.py`, `mesh/__init__.py`,
 `optimization/__init__.py` are the primary lightweight API surfaces. Prefer
 those exports or the canonical module named above over new wrapper layers.
 
-`FingertipParameters` stores constructor-level physical fields only. Coordinates
-and dimensions derived from those fields are computed explicitly by the owning
-geometry, thickness, or reporting consumer; they are not duplicated as public
-parameter properties.
+`FingertipParameters` stores constructor-level morphology, geometry, and
+mechanics-material inputs. Coordinates and dimensions derived from those fields
+are computed explicitly by the owning geometry, thickness, or reporting
+consumer; they are not duplicated as public parameter properties. The physical
+morphology fingerprint intentionally excludes representation and material
+fields, as documented by `fingertip_parameters_fingerprint()`.
 
 
 ## Primary execution path
@@ -193,7 +195,7 @@ trace path is `trace_geometry()`. Artifact persistence and contract
 fingerprints belong to `optimization/optical_artifact.py`.
 
 `optics.optix.runtime` owns only the optional CUDA/OptiX setup and execution
-machinery. `validation.optics.optix_smoke` performs the real setup, GAS build,
+machinery. `scripts.tools.optix_smoke` performs the real setup, GAS build,
 launch, and hit/miss verification used as the BO preflight. The
 `scripts/tools/optix_doctor.py` command diagnoses an environment for human
 troubleshooting; it is not part of the production optics path. A shared
@@ -352,7 +354,7 @@ Before an unattended OptiX/BO run, use both gates from `COMMANDS.md`:
 
 ```bash
 conda run -n lit python scripts/tools/optix_doctor.py --json
-conda run -n lit python -m validation.optics.optix_smoke
+conda run -n lit python -m scripts.tools.optix_smoke
 ```
 
 The fixed-depth trajectory validation and bounded 6D test BO are validation

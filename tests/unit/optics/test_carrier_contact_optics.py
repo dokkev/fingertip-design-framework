@@ -107,6 +107,23 @@ def test_carrier_mapping_tolerance_cannot_be_read_from_metadata() -> None:
         )
 
 
+def test_surface_provenance_cannot_be_read_from_metadata() -> None:
+    tip, _volume_mesh, state = _reference_state()
+    with pytest.raises(ValueError, match="owned by the geometry builder"):
+        build_fingertip_volume_state_geometry(
+            tip,
+            state,
+            reference_mesh=generate_fingertip_mesh(
+                tip.geometry,
+                mesh_settings_for_level("medium"),
+            ),
+            full3d_surface_provenance="actual_reference_3d_volume_state",
+            metadata={
+                "full3d_surface_provenance": "actual_deformed_3d_fea_surface"
+            },
+        )
+
+
 def test_carrier_contact_requires_explicit_mapping_tolerance() -> None:
     tip, volume_mesh, state = _reference_state()
     contacted_node = int(volume_mesh.surface_triangles["void_bottom"][0].node_ids[0])
