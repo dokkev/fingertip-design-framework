@@ -99,7 +99,7 @@ directories named `case/`, `examples/`, `fem/`, `visualization/`, or
 | --- | --- | --- |
 | `model` | `FingertipParameters`, morphology constraints, 2D solid boundaries, optical material/source descriptors | mesh construction, mechanics, optics execution, UI |
 | `mesh` | neutral mesh dataclasses, Gmsh-backed volume meshing, fingertip state conversion, sphere/carrier meshes | Newton stepping, OptiX calls, optimization policy |
-| `contact` | Shapely-based collision predicate, coarse bracket/bisection, canonical sphere alignment, clear/spawn/contact poses | deformation solve and optical transport |
+| `contact` | Shapely-based collision predicate, coarse bracket/bisection, canonical sphere alignment, clear/spawn/contact poses | deformation solve and optical transport; the current pose record is defined in `physics.indentation` |
 | `physics` | NumPy-facing Newton/Warp settings/results, prescribed indentation, continuous trajectory checkpoints, contact diagnostics | Ax generation, objective calculation, validation orchestration |
 | `optics` | optical state/result contracts, 2D/reference transport, FULL_3D surface geometry, CUDA/OptiX runtime and launches | mechanics state evolution and BO decisions |
 | `optimization` | six-dimensional design space, fixed-depth factorial protocol, mechanics contract, trajectory objective, exact morphology registry, Ax adapter | mesh/solver implementation and scientific report generation |
@@ -181,10 +181,10 @@ must reuse that underlying function; it must not shell out to the CLI. A shared
 CUDA/OptiX dependency failure is campaign-fatal, not a morphology-specific
 optics failure.
 
-`optics.cross_section` and `optics.mitsuba` remain separate optical/reference
-implementations inside the optics owner. They are not the production FULL_3D
-BO transport path and must not be introduced as hidden dependencies of the
-trajectory evaluator.
+`optics.transport.py`, `optics.cross_section`, and `optics.mitsuba` remain
+separate 2D or optical/reference implementations inside the optics owner. They
+are not the production FULL_3D BO transport path and must not be introduced as
+hidden dependencies of the trajectory evaluator.
 
 ### Optimization
 
@@ -339,6 +339,31 @@ conda run -n lit python -m validation.optics.production_optix_smoke
 
 The fixed-depth trajectory validation and bounded 6D test BO are validation
 workflows, not ordinary unit tests or permission to start a production BO.
+
+`validation/optimization/lumo3d_evaluator.py` is retained as a fixed-state
+regression oracle for the trajectory evaluator. `validation/physics/
+multi_location_sphere_contact.py` is a validation-level orchestration fixture
+that reuses the neutral contact and Newton APIs. Neither is the production Ax
+evaluation entry point.
+
+
+## Current deviations from the target map
+
+These are verified current-code deviations, not recommended new architecture:
+
+- `contact/first_contact.py` and `contact/sphere_alignment.py` import
+  `RigidPose3D` from `physics.indentation`. The intended conceptual boundary is
+  solver-neutral contact registration, but the shared pose record currently
+  lives in `physics`; do not move it or add a replacement type without a
+  separate architecture task.
+- `validation/common/io.py::write_indentation_case_outputs()` imports the
+  removed `validation.fingertip.indentation.figures` module. This stale helper
+  is outside the current trajectory path and must not be used as a new entry
+  point; removing it requires a separate validation cleanup.
+- The repository retains secondary 2D/reference optical implementations and
+  the fixed-state evaluator noted above. New production work must follow the
+  `transport3d` trajectory path unless a validation task explicitly names a
+  reference implementation.
 
 
 ## Intentionally absent architecture
