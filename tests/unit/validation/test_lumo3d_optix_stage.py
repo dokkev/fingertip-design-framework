@@ -21,10 +21,9 @@ def test_full3d_stage_runs_shared_smoke_when_preflight_is_omitted(monkeypatch) -
         calls.append("smoke")
         return _Smoke()
 
-    monkeypatch.setattr(lumo3d_optix_stage, "run_production_optix_smoke", fake_smoke)
+    monkeypatch.setattr(lumo3d_optix_stage, "run_optix_smoke", fake_smoke)
     evidence = lumo3d_optix_stage._validated_preflight(None)
 
     assert calls == ["smoke"]
     assert evidence["status"] == "PASS"
     assert evidence["evidence"]["ray_count"] == 2
-

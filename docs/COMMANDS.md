@@ -35,19 +35,19 @@ The Newton smoke tests require the CUDA-capable `lit` environment:
 First run the environment diagnosis:
 
 ```bash
-conda run -n lit python -m optics.optix.doctor --json
+conda run -n lit python scripts/tools/optix_doctor.py --json
 ```
 
 Immediately before a long production campaign, run the real runtime smoke:
 
 ```bash
-conda run -n lit python -m validation.optics.production_optix_smoke
+conda run -n lit python -m validation.optics.optix_smoke
 ```
 
 The distinction is important:
 
-- `doctor` diagnoses dependencies, headers, versions, and device settings;
-- `production_optix_smoke` uses the production OptiX runtime to compile, build
+- `optix_doctor.py` diagnoses dependencies, headers, versions, and device settings;
+- `optix_smoke` uses the production OptiX runtime to compile, build
   a GAS/SBT, launch real rays, copy results back, and validate hit/miss output;
 - the production BO preflight calls that same underlying smoke function and
   aborts before Ax creates a candidate when infrastructure is unavailable.

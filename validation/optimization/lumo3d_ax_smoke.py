@@ -22,8 +22,8 @@ from model import Fingertip, FingertipParameters
 from optimization.evaluator import (
     TRAJECTORY_EVALUATION_CONTRACT_ID,
     create_lumo3d_trajectory_study,
-    LUMO3D_OBSERVATION_LEVEL,
 )
+from lumo.simulation import LUMO3D_OBSERVATION_LEVEL
 
 
 @dataclass(frozen=True)

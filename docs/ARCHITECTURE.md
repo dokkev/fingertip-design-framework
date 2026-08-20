@@ -19,6 +19,7 @@ Route a change to the smallest owning area:
 | first-contact pose and approach geometry | `contact/` | Newton stepping, optical scoring |
 | Newton/Warp mechanics | `physics/` | Ax policy, validation reports |
 | transport geometry, OptiX, optical results | `optics/` | mechanics imports, campaign policy |
+| concrete LUMO simulation flow | `lumo/` | generic backend abstractions, objective policy |
 | protocol, design space, objective, Ax boundary | `optimization/` | solver implementation |
 | studies, reports, regression/reference workflows | `validation/` | production dependencies |
 | interactive controls or diagnostics | `gui/` | core geometry and solver ownership |
@@ -34,9 +35,9 @@ LUMO builds a parameterized fingertip, meshes its compliant volume, derives
 first contact for each rigid indenter condition, runs a continuous Newton/Warp
 indentation trajectory, transports the resulting deformed 3D state through the
 FULL_3D OptiX backend, and computes a trajectory objective for morphology
-search. The current candidate-evaluation workflow is owned by
-`optimization/evaluator.py`; it composes production contracts but does not own
-their domain, mechanics, or optical physics.
+search. `lumo/simulation.py` owns the reusable concrete Newton + OptiX
+orchestration for one prepared morphology; `optimization/evaluator.py` owns
+protocol/objective policy and persistence boundaries.
 
 ```text
 model.FingertipParameters
@@ -59,7 +60,8 @@ model.FingertipParameters
 | `contact/` | geometry-derived first-contact and sphere alignment | production contact initialization |
 | `physics/` | Newton 1.4 / Warp mechanics and trajectory state | one production mechanics path |
 | `optics/` | optical contracts and FULL_3D transport implementation | production BO path |
-| `optimization/` | fixed protocol, design space, objective, registry, Ax boundary | production search contracts |
+| `lumo/` | reusable concrete LUMO simulation state and execution orchestration | mechanics/optics implementation and optimization policy |
+| `optimization/` | fixed protocol, objective, registry, Ax boundary, evaluator | solver implementation and scientific report generation |
 | `validation/` | reports, smoke tests, regression/reference workflows, bounded campaign runners | domain/solver/transport ownership; production evaluation is in `optimization/` |
 | `validation/reference/kratos3d/` | preserved 3D Kratos reference implementation | validation-only |
 | `gui/` | NiceGUI design-space shell and diagnostics | optional consumer, not core architecture |
@@ -84,12 +86,13 @@ directories named `case/`, `examples/`, `fem/`, `visualization/`, or
 | mechanics public API | `physics/trajectory/indentation.py` | `physics/trajectory/fingertip.py`, `physics/contracts/` |
 | Newton implementation | `physics/newton/vbd.py` | `physics/newton/session.py`, `physics/newton/viewer.py` |
 | FULL_3D transport | `optics/transport3d/transport.py` | `geometry.py`, `fingertip.py`, `optix_backend.py` |
-| OptiX runtime/preflight | `optics/optix/runtime.py` | `optics/optix/smoke.py`, `optics/optix/doctor.py` |
+| OptiX runtime/preflight | `optics/optix/runtime.py` | `validation/optics/optix_smoke.py`, `scripts/tools/optix_doctor.py` |
 | evaluation protocol | `optimization/protocol.py` | `optimization/mechanics_contract.py` |
 | morphology search space | `optimization/design_space.py` | `optimization/evaluation_registry.py` |
 | objective | `optimization/objectives.py` | `optimization/evaluator.py` |
+| reusable LUMO simulation | `lumo/simulation.py` | `optimization/evaluator.py` |
 | Ax campaign boundary | `optimization/adapters/ax.py` | `validation/optimization/lumo6d_test_bo.py` |
-| production trajectory evaluator | `optimization/evaluator.py` | `validation/optimization/lumo3d_trajectory_validation.py` |
+| production trajectory evaluator | `optimization/evaluator.py` | `lumo/simulation.py`, `validation/optimization/lumo3d_trajectory_validation.py` |
 | persisted mechanics state | `optimization/deformed_state_artifact.py` | evaluator artifact writers |
 | reference comparison | `validation/physics/correspondence.py` | `validation/reference/kratos3d/` |
 | interactive Newton view | `physics/newton/viewer.py` | example callers, if reintroduced explicitly |
@@ -104,7 +107,8 @@ directories named `case/`, `examples/`, `fem/`, `visualization/`, or
 | `contact` | Shapely-based collision predicate, coarse bracket/bisection, canonical sphere alignment, clear/spawn/contact poses | deformation solve and optical transport |
 | `physics` | NumPy-facing Newton/Warp settings/results, prescribed indentation, continuous trajectory checkpoints, contact diagnostics | Ax generation, objective calculation, validation orchestration |
 | `optics` | optical boundary/result contracts, FULL_3D surface geometry, CUDA/OptiX runtime and launches | mechanics state evolution and BO decisions |
-| `optimization` | six-dimensional design space, fixed-depth factorial protocol, mechanics contract, trajectory objective, exact morphology registry, Ax adapter | mesh/solver implementation and scientific report generation |
+| `lumo` | concrete `LumoSimulation` state/orchestration and named contact results | contact/Newton/OptiX implementation and optimization policy |
+| `optimization` | six-dimensional design space, fixed-depth factorial protocol, mechanics contract, trajectory objective, exact morphology registry, Ax adapter | mesh/solver/transport implementation and simulation state |
 | `validation` | reports, smoke/regression/reference workflows, and bounded campaign runners | domain/solver/transport ownership; production packages must not import it |
 | `gui` | optional controls and diagnostics presentation | domain rules, solver settings, transport, campaign orchestration |
 
@@ -122,34 +126,35 @@ parameter properties.
 ## Primary execution path
 
 The current candidate-evaluation workflow is
-`optimization.evaluator.Lumo3DTrajectoryEvaluator`. It owns candidate and
-provenance handoff, but not morphology, mechanics, or optical physics.
+`optimization.evaluator.Lumo3DTrajectoryEvaluator`. It owns candidate,
+protocol, objective, and provenance handoff. `lumo.simulation.LumoSimulation`
+owns one prepared morphology's reusable mesh/contact/runtime state and the
+per-condition scientific call order; it does not implement contact, Newton, or
+optical physics.
 Validation scripts consume this evaluator for regression and campaign reports;
 they are not part of the production runtime path.
 
 ```text
 FingertipParameters
-  -> Fingertip + volume mesh
-  -> PreparedFingertipMesh
-  -> one contact surface / sphere alignment per (u, radius)
-  -> find_first_contact: clear bracket -> refined T_first -> clear T_spawn
-  -> one continuous Newton trajectory to maximum fixed depth
-  -> checkpoint mechanics artifacts
-  -> restore exact deformed checkpoint state
-  -> one FULL_3D OptiX trace per checkpoint
+  -> LumoSimulation.from_fingertip
+  -> reusable volume mesh / prepared mechanics / carrier / OptiX runtime
+  -> run_sphere_contact(u, radius, depths)
+  -> first contact -> continuous Newton trajectory
+  -> checkpoint state -> FULL_3D OptiX trace
   -> TrajectoryObservation records
   -> compute_trajectory_objective
 ```
 
-The evaluator creates six mechanics trajectories per morphology from the
-default protocol and records three absolute post-contact depth checkpoints per
+`LumoSimulation` runs six mechanics trajectories per morphology from the
+default protocol and returns three absolute post-contact depth checkpoints per
 trajectory, for 18 optical states. Radius and depth are independent protocol
 axes; normalized depth/radius values are derived diagnostics only.
 
-The evaluator persists each mechanics checkpoint before using it for optics.
-The optical artifact includes the mechanics artifact digest, protocol,
-transport configuration, contact-state identity, and deformed 3D surface
-provenance.
+`LumoSimulation` persists each mechanics checkpoint before using it for optics
+and returns named `ContactSimulationResult` / `ContactOpticalState` values.
+The evaluator converts those values at the artifact boundary. The optical
+artifact includes the mechanics artifact digest, protocol, transport
+configuration, contact-state identity, and deformed 3D surface provenance.
 
 
 ## Important subsystem paths
@@ -185,9 +190,11 @@ boundary is `optics.optix.runtime.OptixRuntime.create()` and the production
 trace path is `trace_geometry()`. Artifact persistence and contract
 fingerprints belong to `optimization/optical_artifact.py`.
 
-`optics.optix.doctor` diagnoses an environment. The production smoke uses the
-same runtime implementation and performs a real setup/launch. The BO preflight
-must reuse that underlying function; it must not shell out to the CLI. A shared
+`optics.optix.runtime` owns only the optional CUDA/OptiX setup and execution
+machinery. `validation.optics.optix_smoke` performs the real setup, GAS build,
+launch, and hit/miss verification used as the BO preflight. The
+`scripts/tools/optix_doctor.py` command diagnoses an environment for human
+troubleshooting; it is not part of the production optics path. A shared
 CUDA/OptiX dependency failure is campaign-fatal, not a morphology-specific
 optics failure.
 
@@ -343,8 +350,8 @@ conda activate lit
 Before an unattended OptiX/BO run, use both gates from `COMMANDS.md`:
 
 ```bash
-conda run -n lit python -m optics.optix.doctor --json
-conda run -n lit python -m validation.optics.production_optix_smoke
+conda run -n lit python scripts/tools/optix_doctor.py --json
+conda run -n lit python -m validation.optics.optix_smoke
 ```
 
 The fixed-depth trajectory validation and bounded 6D test BO are validation

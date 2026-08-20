@@ -24,7 +24,7 @@ from mesh.volume.mesh import VolumeMeshDependencyError
 from model import FingertipParameters, silicone_thickness_measures
 from optics.transport3d import Transport3DDependencyError
 from optimization.optical_artifact import fingerprint_mapping
-from optics.optix.smoke import run_production_optix_smoke
+from validation.optics.optix_smoke import run as run_optix_smoke
 from optimization.adapters.ax import (
     AxSettings,
     CONTACT_STATE_SEPARATION_OBJECTIVE_NAME,
@@ -43,15 +43,15 @@ from optimization.design_space import (
 from physics import PhysicsDependencyError
 from optimization.evaluation_registry import EvaluationRegistry, REGISTRY_SCHEMA_VERSION
 from optimization.evaluator import (
-    LUMO3D_OBSERVATION_LEVEL,
-    LUMO3D_OPTICAL_X_BOUNDS_MM,
-    LUMO3D_OPTICAL_Y_BOUNDS_MM,
-)
-from optimization.evaluator import (
     Lumo3DTrajectoryStudy,
     TRAJECTORY_EVALUATION_CONTRACT_ID,
     TRAJECTORY_EVALUATION_SCHEMA,
     create_lumo3d_trajectory_study,
+)
+from lumo.simulation import (
+    LUMO3D_OBSERVATION_LEVEL,
+    LUMO3D_OPTICAL_X_BOUNDS_MM,
+    LUMO3D_OPTICAL_Y_BOUNDS_MM,
 )
 
 
@@ -662,7 +662,7 @@ def run_lumo6d_test_bo(output_dir: str | Path = OUTPUT_DIRECTORY) -> dict[str, A
     _write_json(output / "checkpoint.json", state)
 
     try:
-        preflight = run_production_optix_smoke()
+        preflight = run_optix_smoke()
         state["optix_preflight"] = {"status": "PASS", "evidence": preflight.to_dict()}
         _write_json(output / "preflight.json", state["optix_preflight"])
         _write_json(output / "checkpoint.json", state)

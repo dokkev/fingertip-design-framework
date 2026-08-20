@@ -22,7 +22,7 @@ from optics.transport3d import (
     trace_geometry,
 )
 from optics.transport3d.optix_backend import create_runtime
-from optics.optix.smoke import run_production_optix_smoke
+from validation.optics.optix_smoke import run as run_optix_smoke
 from optimization.deformed_state_artifact import restore_deformed_optical_state
 from optimization.optical_artifact import (
     optical_physics_parameters,
@@ -116,7 +116,7 @@ def _validated_preflight(preflight: dict[str, Any] | None) -> dict[str, Any]:
     or transport work is started.
     """
     if preflight is None:
-        result = run_production_optix_smoke()
+        result = run_optix_smoke()
         return {"status": "PASS", "evidence": result.to_dict()}
     if preflight.get("status") != "PASS":
         raise RuntimeError(

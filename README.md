@@ -53,11 +53,11 @@ externally managed runtime dependencies.
 ```bash
 conda run -n lit ./scripts/tools/pytest_lit tests/unit/model tests/unit/mesh -q
 conda run -n lit ./scripts/tools/pytest_lit tests/unit/physics -q
-conda run -n lit python -m optics.optix.doctor --json
-conda run -n lit python -m validation.optics.production_optix_smoke
+conda run -n lit python scripts/tools/optix_doctor.py --json
+conda run -n lit python -m validation.optics.optix_smoke
 ```
 
-The doctor diagnoses the environment. The production smoke command performs a
+The doctor diagnoses the environment. The validation smoke command performs a
 real OptiX initialization and launch. Both should pass before an unattended
 campaign.
 

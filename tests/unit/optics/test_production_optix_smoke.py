@@ -6,12 +6,7 @@ import sys
 
 import numpy as np
 
-from optics.optix import smoke
-from optics.optix.smoke import (
-    ProductionOptixSmokeError,
-    ProductionOptixSmokeResult,
-)
-from validation.optics import production_optix_smoke as smoke_cli
+from validation.optics import optix_smoke as smoke
 
 
 class _FakeArray:
@@ -110,8 +105,8 @@ def _fake_import_modules(monkeypatch, fake_cp: _FakeCuPy) -> None:
     monkeypatch.setitem(sys.modules, "cuda.bindings.nvrtc", nvrtc)
 
 
-def _result() -> ProductionOptixSmokeResult:
-    return ProductionOptixSmokeResult(
+def _result() -> smoke.OptixSmokeResult:
+    return smoke.OptixSmokeResult(
         metadata={
             "cuda_device": "synthetic GPU",
             "optix_version": "9.1.0",
@@ -137,20 +132,12 @@ def test_smoke_success_performs_two_launches_without_fea_or_ax(
     _FakeRuntime.launches = 0
     _fake_import_modules(monkeypatch, fake_cp)
     monkeypatch.setattr(
-        smoke,
-        "discover_paths",
-        lambda: SimpleNamespace(
-            optix_include="/synthetic/optix",
-            cuda_include="/synthetic/cuda",
-        ),
-    )
-    monkeypatch.setattr(
         smoke.OptixRuntime,
         "create",
         lambda **_: _FakeRuntime(fake_cp),
     )
 
-    result = smoke.run_production_optix_smoke()
+    result = smoke.run()
 
     assert _FakeRuntime.launches == 2
     assert result.hit == (1, 0, 1.0)
@@ -164,23 +151,23 @@ def test_smoke_success_performs_two_launches_without_fea_or_ax(
 def test_cli_uses_shared_smoke_and_reports_failure_stage(monkeypatch, capsys) -> None:
     calls: list[str] = []
 
-    def fail() -> ProductionOptixSmokeResult:
+    def fail() -> smoke.OptixSmokeResult:
         calls.append("smoke")
-        raise ProductionOptixSmokeError("nvrtc_compile", "synthetic NVRTC failure")
+        raise smoke.OptixSmokeError("nvrtc_compile", "synthetic NVRTC failure")
 
-    monkeypatch.setattr(smoke_cli, "run_production_optix_smoke", fail)
+    monkeypatch.setattr(smoke, "run", fail)
 
-    assert smoke_cli.main() == 1
+    assert smoke.main() == 1
     assert calls == ["smoke"]
     assert "FAIL: nvrtc_compile" in capsys.readouterr().err
 
 
 def test_cli_success_summary_contains_runtime_and_result_counts(monkeypatch, capsys) -> None:
-    monkeypatch.setattr(smoke_cli, "run_production_optix_smoke", _result)
+    monkeypatch.setattr(smoke, "run", _result)
 
-    assert smoke_cli.main() == 0
+    assert smoke.main() == 0
     output = capsys.readouterr().out
-    assert "PASS: production_optix_smoke" in output
+    assert "PASS: optix_smoke" in output
     assert "setup=0.100s" in output
     assert "trace=0.010s" in output
     assert "rays=2" in output

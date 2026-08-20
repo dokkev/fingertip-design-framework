@@ -4,8 +4,9 @@ This package consumes the reusable `model`, `mesh`, `contact`, `physics`, and
 `optics` libraries. It owns current scientific orchestration, regression
 provenance, and generated artifacts.
 
-`optimization/` contains the current trajectory evaluator and bounded search
-workflows. `physics/` contains Newton validation and correspondence checks.
+`lumo/` contains the concrete reusable simulation orchestration. `optimization/`
+contains the current trajectory evaluator and bounded search workflows.
+`physics/` contains Newton validation and correspondence checks.
 `reference/kratos3d/` is a read-only loader for persisted nonlinear reference
 states; it is not a production solver backend. Shared I/O and process
 orchestration live in `common/`.

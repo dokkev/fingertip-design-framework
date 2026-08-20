@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -49,10 +51,13 @@ def test_shared_mesh_dependency_is_not_recorded_as_candidate_failure(
     tmp_path,
     monkeypatch,
 ) -> None:
-    def fail_volume_mesh(solid, settings):
+    def fail_volume_mesh(*_args, **_kwargs):
         raise VolumeMeshDependencyError("gmsh unavailable")
 
-    monkeypatch.setattr(evaluator_module, "generate_volume_mesh", fail_volume_mesh)
+    class _SimulationFactory:
+        from_fingertip = staticmethod(fail_volume_mesh)
+
+    monkeypatch.setattr(evaluator_module, "LumoSimulation", _SimulationFactory)
     evaluator = Lumo3DTrajectoryEvaluator(tmp_path)
 
     with pytest.raises(VolumeMeshDependencyError, match="gmsh unavailable"):
@@ -63,10 +68,13 @@ def test_unexpected_evaluator_runtime_error_is_not_reclassified(
     tmp_path,
     monkeypatch,
 ) -> None:
-    def fail_volume_mesh(solid, settings):
+    def fail_volume_mesh(*_args, **_kwargs):
         raise RuntimeError("unexpected evaluator bug")
 
-    monkeypatch.setattr(evaluator_module, "generate_volume_mesh", fail_volume_mesh)
+    class _SimulationFactory:
+        from_fingertip = staticmethod(fail_volume_mesh)
+
+    monkeypatch.setattr(evaluator_module, "LumoSimulation", _SimulationFactory)
     evaluator = Lumo3DTrajectoryEvaluator(tmp_path)
 
     with pytest.raises(RuntimeError, match="unexpected evaluator bug"):
@@ -109,23 +117,19 @@ def test_candidate_contact_error_is_translated_to_candidate_failure(
     protocol = TrajectoryEvaluationProtocol((0.5,), (5.0,), (1.5,))
     evaluator = Lumo3DTrajectoryEvaluator(tmp_path, protocol=protocol)
 
-    monkeypatch.setattr(
-        evaluator_module,
-        "generate_volume_mesh",
-        lambda *_args: type(
-            "VolumeMesh",
-            (),
-            {"solid": object(), "morphology_fingerprint": "mesh"},
-        )(),
-    )
-    monkeypatch.setattr(evaluator_module, "prepare_fingertip_mesh", lambda _mesh: object())
-    monkeypatch.setattr(evaluator_module, "make_outer_compliant_surface", lambda _solid: object())
-    monkeypatch.setattr(evaluator_module, "make_distal_phalanx_mesh", lambda _solid: object())
+    class _Simulation:
+        volume_mesh = SimpleNamespace(morphology_fingerprint="mesh")
 
-    def fail_contact(*_args, **_kwargs):
-        raise CandidateContactError("candidate contact is impossible")
+        @staticmethod
+        def run_sphere_contact(*_args, **_kwargs):
+            raise CandidateContactError("candidate contact is impossible")
 
-    monkeypatch.setattr(evaluator, "_trajectory_mechanics", fail_contact)
+    class _SimulationFactory:
+        @staticmethod
+        def from_fingertip(*_args, **_kwargs):
+            return _Simulation()
+
+    monkeypatch.setattr(evaluator_module, "LumoSimulation", _SimulationFactory)
 
     result = evaluator.evaluate(FingertipParameters())
     assert result.status == "mechanics_failure"
@@ -140,52 +144,6 @@ def test_unexpected_objective_error_propagates(
     protocol = TrajectoryEvaluationProtocol((0.25, 0.50), (5.0,), (1.5,))
     evaluator = Lumo3DTrajectoryEvaluator(tmp_path, protocol=protocol)
 
-    monkeypatch.setattr(
-        evaluator_module,
-        "generate_volume_mesh",
-        lambda *_args: type(
-            "VolumeMesh",
-            (),
-            {"solid": object(), "morphology_fingerprint": "mesh"},
-        )(),
-    )
-    monkeypatch.setattr(
-        evaluator_module,
-        "prepare_fingertip_mesh",
-        lambda _mesh: type("Prepared", (), {"source_node_ids": ()})(),
-    )
-    monkeypatch.setattr(evaluator_module, "make_outer_compliant_surface", lambda _solid: object())
-    monkeypatch.setattr(evaluator_module, "make_distal_phalanx_mesh", lambda _solid: object())
-
-    def mechanics(*_args, **kwargs):
-        return ({
-            "trajectory_id": f"u_{kwargs['location_u']:.3f}",
-            "normalized_location": kwargs["location_u"],
-            "radius_mm": kwargs["radius_mm"],
-            "checkpoint_index": 0,
-            "checkpoint_depth_mm": 1.5,
-            "checkpoint_fraction": 1.0,
-            "normalized_indentation_ratio": 0.3,
-            "post_contact_travel_mm": 1.5,
-            "unintended_boundary_clearance_mm": 1.0,
-            "cumulative_step_index": 1,
-            "first_contact_travel_mm": 0.1,
-            "first_contact_fingerprint": "contact",
-            "mechanics_artifact_path": str(tmp_path / "state.npz"),
-            "mechanics_artifact_sha256": "artifact",
-            "final_pose_error_mm": 0.0,
-            "mechanics_diagnostics": {},
-        },)
-
-    monkeypatch.setattr(evaluator, "_trajectory_mechanics", mechanics)
-    monkeypatch.setattr(
-        evaluator_module,
-        "restore_deformed_optical_state",
-        lambda *_args, **_kwargs: type(
-            "Restored", (), {"geometry": object(), "artifact_path": tmp_path / "state.npz"}
-        )(),
-    )
-    monkeypatch.setattr(evaluator_module, "create_runtime", lambda: object())
     monkeypatch.setattr(evaluator_module, "save_case_artifact", lambda *_args, **_kwargs: None)
 
     class _Result:
@@ -206,11 +164,56 @@ def test_unexpected_objective_error_propagates(
         carrier_contact_triangle_count = 0
         energy_balance_error = 0.0
 
-    monkeypatch.setattr(
-        evaluator_module,
-        "trace_geometry",
-        lambda *_args, **_kwargs: _Result(),
-    )
+    def contact_result(location_u: float) -> SimpleNamespace:
+        checkpoint = SimpleNamespace(
+            checkpoint_index=0,
+            checkpoint_fraction=1.0,
+            normalized_indentation_ratio=0.3,
+            post_contact_travel_mm=1.5,
+            cumulative_step_index=1,
+            diagnostics={},
+        )
+        state = SimpleNamespace(
+            normalized_location=location_u,
+            indenter_radius_mm=5.0,
+            trajectory_id=f"u_{location_u:.3f}",
+            checkpoint=checkpoint,
+            optics=_Result(),
+            mechanics_artifact_path=Path(tmp_path / "state.npz"),
+            mechanics_artifact_sha256="artifact",
+            final_pose_error_mm=0.0,
+            contact_state={
+                "unintended_boundary_clearance_mm": 1.0,
+                "contact_state_fingerprint": "contact",
+                "carrier_contact_active": False,
+                "carrier_contact_occurred": False,
+            },
+        )
+        return SimpleNamespace(
+            alignment=SimpleNamespace(
+                target_point_mm=(0.0, 0.0, 0.0),
+                outward_normal=(0.0, 1.0, 0.0),
+                approach_direction=(0.0, -1.0, 0.0),
+            ),
+            first_contact=SimpleNamespace(
+                travel_to_contact_mm=0.1,
+                contact_pose=SimpleNamespace(translation_mm=(0.0, 0.0, 0.0)),
+            ),
+            checkpoints=(state,),
+        )
+
+    class _Simulation:
+        volume_mesh = SimpleNamespace(morphology_fingerprint="mesh")
+
+        @staticmethod
+        def from_fingertip(*_args, **_kwargs):
+            return _Simulation()
+
+        @staticmethod
+        def run_sphere_contact(*, location_u, **_kwargs):
+            return contact_result(location_u)
+
+    monkeypatch.setattr(evaluator_module, "LumoSimulation", _Simulation)
 
     def fail_objective(*_args, **_kwargs):
         raise RuntimeError("unexpected objective implementation error")

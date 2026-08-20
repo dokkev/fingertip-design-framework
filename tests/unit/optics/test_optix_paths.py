@@ -4,8 +4,8 @@ import json
 import inspect
 from pathlib import Path
 
-from optics.optix.doctor import main as doctor_main
-from optics.optix.paths import diagnose_paths, discover_paths
+from scripts.tools.optix_doctor import main as doctor_main
+from optics.optix._paths import _diagnose_include_paths, _discover_include_paths
 from validation.optics import optix_smoke
 
 
@@ -22,15 +22,15 @@ def test_direct_include_overrides_are_resolved_first(tmp_path, monkeypatch) -> N
     _headers(cuda, ("cuda.h", "cuda_runtime.h"))
     monkeypatch.delenv("OPTIX_INCLUDE_DIR", raising=False)
     monkeypatch.delenv("CUDA_INCLUDE_DIR", raising=False)
-    paths = discover_paths(
+    paths = _discover_include_paths(
         {},
         optix_include_dir=optix,
         cuda_include_dir=cuda,
     )
-    assert paths.optix_include == optix.resolve()
-    assert paths.cuda_include == cuda.resolve()
-    assert paths.optix_resolution_source == "explicit argument"
-    assert paths.cuda_resolution_source == "explicit argument"
+    assert paths.optix == optix.resolve()
+    assert paths.cuda == cuda.resolve()
+    assert paths.optix_source == "explicit argument"
+    assert paths.cuda_source == "explicit argument"
 
 
 def test_environment_direct_include_overrides_are_supported(tmp_path) -> None:
@@ -38,16 +38,16 @@ def test_environment_direct_include_overrides_are_supported(tmp_path) -> None:
     cuda = tmp_path / "cuda-include"
     _headers(optix, ("optix.h", "optix_device.h"))
     _headers(cuda, ("cuda.h", "cuda_runtime.h"))
-    paths = discover_paths(
+    paths = _discover_include_paths(
         {
             "OPTIX_INCLUDE_DIR": str(optix),
             "CUDA_INCLUDE_DIR": str(cuda),
         }
     )
-    assert paths.optix_include == optix.resolve()
-    assert paths.cuda_include == cuda.resolve()
-    assert paths.optix_resolution_source == "OPTIX_INCLUDE_DIR"
-    assert paths.cuda_resolution_source == "CUDA_INCLUDE_DIR"
+    assert paths.optix == optix.resolve()
+    assert paths.cuda == cuda.resolve()
+    assert paths.optix_source == "OPTIX_INCLUDE_DIR"
+    assert paths.cuda_source == "CUDA_INCLUDE_DIR"
 
 
 def test_optix_install_root_and_optix_root_include_are_supported(tmp_path) -> None:
@@ -56,30 +56,30 @@ def test_optix_install_root_and_optix_root_include_are_supported(tmp_path) -> No
     _headers(optix_install_include, ("optix.h", "optix_device.h"))
     cuda = tmp_path / "cuda"
     _headers(cuda, ("cuda.h", "cuda_runtime.h"))
-    paths = discover_paths(
+    paths = _discover_include_paths(
         {
             "OptiX_INSTALL_DIR": str(install_root),
             "CUDA_INCLUDE_DIR": str(cuda),
         }
     )
-    assert paths.optix_include == optix_install_include.resolve()
+    assert paths.optix == optix_install_include.resolve()
 
     root = tmp_path / "root"
     root_include = root / "include"
     _headers(root_include, ("optix.h", "optix_device.h"))
-    root_paths = discover_paths(
+    root_paths = _discover_include_paths(
         {
             "OPTIX_ROOT": str(root),
             "CUDA_INCLUDE_DIR": str(cuda),
         }
     )
-    assert root_paths.optix_include == root_include.resolve()
+    assert root_paths.optix == root_include.resolve()
 
 
 def test_missing_header_diagnostic_lists_candidate_source_and_headers(tmp_path) -> None:
     optix = tmp_path / "incomplete"
     optix.mkdir()
-    diagnostics = diagnose_paths(
+    diagnostics = _diagnose_include_paths(
         {
             "OPTIX_INCLUDE_DIR": str(optix),
             "CUDA_INCLUDE_DIR": str(tmp_path / "missing-cuda"),
@@ -93,7 +93,7 @@ def test_missing_header_diagnostic_lists_candidate_source_and_headers(tmp_path) 
         "optix_device.h",
     ]
     try:
-        discover_paths(
+        _discover_include_paths(
             {
                 "OPTIX_INCLUDE_DIR": str(optix),
                 "CUDA_INCLUDE_DIR": str(tmp_path / "missing-cuda"),
@@ -125,4 +125,4 @@ def test_doctor_json_is_dependency_light(monkeypatch, capsys) -> None:
 def test_validation_smoke_uses_shared_runtime_boundary() -> None:
     source = inspect.getsource(optix_smoke)
     assert "OptixRuntime" in source
-    assert "nvrtc" not in source
+    assert "__raygen__raygen_program" in source

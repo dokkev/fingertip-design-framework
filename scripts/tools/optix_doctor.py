@@ -10,10 +10,10 @@ from pathlib import Path
 import sys
 from typing import Any
 
-from optics.optix.paths import diagnose_paths
+from optics.optix._paths import _diagnose_include_paths
 
 
-def _module_status(name: str, *, version_attribute: str | None = None) -> dict[str, Any]:
+def _module_status(name: str) -> dict[str, Any]:
     try:
         spec = importlib.util.find_spec(name)
     except Exception as exc:
@@ -71,10 +71,10 @@ def collect_diagnostics() -> dict[str, Any]:
     """Collect import, header, and optional GPU runtime status."""
     return {
         "python_executable": sys.executable,
-        "pyoptix": _module_status("optix", version_attribute="version"),
-        "cupy": _module_status("cupy", version_attribute="__version__"),
+        "pyoptix": _module_status("optix"),
+        "cupy": _module_status("cupy"),
         "cuda_python_nvrtc": _module_status("cuda.bindings.nvrtc"),
-        "headers": diagnose_paths(),
+        "headers": _diagnose_include_paths(),
         "gpu_runtime": _gpu_runtime_status(),
     }
 
