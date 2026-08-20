@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from enum import StrEnum
 from itertools import product
 from math import isfinite
 from numbers import Real
-from typing import Literal, Mapping
+from typing import Mapping
 
 from model import (
     FingertipParameters,
@@ -16,34 +17,30 @@ from model import (
 )
 
 
-OptimizableParameterName = Literal[
-    "flat_pad_height",
-    "semielliptical_pad_height",
-    "stem_width",
-    "stem_height",
-    "void_width",
-    "void_height",
-]
+class OptimizableParameterName(StrEnum):
+    """Canonical names shared by morphology, Ax, and registry boundaries."""
 
-OPTIMIZABLE_PARAMETER_NAMES: tuple[OptimizableParameterName, ...] = (
-    "flat_pad_height",
-    "semielliptical_pad_height",
-    "stem_width",
-    "stem_height",
-    "void_width",
-    "void_height",
+    FLAT_PAD_HEIGHT = "flat_pad_height"
+    SEMIELLIPTICAL_PAD_HEIGHT = "semielliptical_pad_height"
+    STEM_WIDTH = "stem_width"
+    STEM_HEIGHT = "stem_height"
+    VOID_WIDTH = "void_width"
+    VOID_HEIGHT = "void_height"
+
+OPTIMIZABLE_PARAMETER_NAMES: tuple[OptimizableParameterName, ...] = tuple(
+    OptimizableParameterName
 )
-_OPTIMIZABLE_PARAMETER_SET = frozenset(OPTIMIZABLE_PARAMETER_NAMES)
+_OPTIMIZABLE_PARAMETER_SET = frozenset(OptimizableParameterName)
 _FIXED_FLAT_PAD_WIDTH_MM = 30.0
 PRODUCTION_MAX_TOTAL_PAD_DEPTH_MM = MAX_TOTAL_PAD_DEPTH_MM
 PRODUCTION_NOMINAL_VOID_HEIGHT_MM = 0.25
-PRODUCTION_SEARCH_BOUNDS: tuple[tuple[str, float, float], ...] = (
-    ("flat_pad_height", 0.5, 29.5),
-    ("semielliptical_pad_height", 0.5, 29.5),
-    ("stem_width", 1.0, 20.0),
-    ("stem_height", 1.0, 25.0),
-    ("void_width", 0.0, 10.0),
-    ("void_height", 0.0, 25.0),
+PRODUCTION_SEARCH_BOUNDS: tuple[tuple[OptimizableParameterName, float, float], ...] = (
+    (OptimizableParameterName.FLAT_PAD_HEIGHT, 0.5, 29.5),
+    (OptimizableParameterName.SEMIELLIPTICAL_PAD_HEIGHT, 0.5, 29.5),
+    (OptimizableParameterName.STEM_WIDTH, 1.0, 20.0),
+    (OptimizableParameterName.STEM_HEIGHT, 1.0, 25.0),
+    (OptimizableParameterName.VOID_WIDTH, 0.0, 10.0),
+    (OptimizableParameterName.VOID_HEIGHT, 0.0, 25.0),
 )
 PRODUCTION_LINEAR_PARAMETER_CONSTRAINTS: tuple[str, ...] = (
     "flat_pad_height + semielliptical_pad_height <= 30.0",
@@ -70,8 +67,11 @@ class DesignVariable:
     upper: float
 
     def __post_init__(self) -> None:
-        if not isinstance(self.name, str) or self.name not in _OPTIMIZABLE_PARAMETER_SET:
-            raise ValueError(f"unsupported design variable: {self.name!r}")
+        try:
+            name = OptimizableParameterName(self.name)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"unsupported design variable: {self.name!r}") from exc
+        object.__setattr__(self, "name", name)
         if not isinstance(self.optimize, bool):
             raise TypeError("optimize must be a bool")
         lower = _finite_real("lower", self.lower)
