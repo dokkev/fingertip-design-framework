@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 from dataclasses import replace
 
-from optimization.ax_adapter import (
+from optimization.adapters.ax import (
     AxSettings,
     CONTACT_STATE_SEPARATION_OBJECTIVE_NAME,
     run_ax_optimization,

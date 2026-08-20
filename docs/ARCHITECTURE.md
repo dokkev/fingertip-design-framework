@@ -42,11 +42,11 @@ their domain, mechanics, or optical physics.
 model.FingertipParameters
     -> model / mesh geometry
     -> contact.find_first_contact
-    -> physics.solve_fingertip_indentation_trajectory
+    -> physics.trajectory.indentation.solve_fingertip_indentation_trajectory
     -> mechanics checkpoint artifacts
     -> optics.transport3d FULL_3D OptiX
     -> optimization.objectives
-    -> validation reports or optimization.ax_adapter
+    -> validation reports or optimization.adapters.ax
 ```
 
 
@@ -58,7 +58,7 @@ model.FingertipParameters
 | `mesh/` | 2D/3D neutral mesh records, Gmsh volume meshing, rigid geometry | production discretization boundary |
 | `contact/` | geometry-derived first-contact and sphere alignment | production contact initialization |
 | `physics/` | Newton 1.4 / Warp mechanics and trajectory state | one production mechanics path |
-| `optics/` | optical contracts and transport implementations | `transport3d/` is the production BO path |
+| `optics/` | optical contracts and FULL_3D transport implementation | production BO path |
 | `optimization/` | fixed protocol, design space, objective, registry, Ax boundary | production search contracts |
 | `validation/` | reports, smoke tests, regression/reference workflows, bounded campaign runners | domain/solver/transport ownership; production evaluation is in `optimization/` |
 | `validation/reference/kratos3d/` | preserved 3D Kratos reference implementation | validation-only |
@@ -77,22 +77,22 @@ directories named `case/`, `examples/`, `fem/`, `visualization/`, or
 | If you need to understand... | Start here | Then inspect |
 | --- | --- | --- |
 | morphology and constraints | `model/fingertip_model.py::FingertipParameters` | `model/fingertip.py`, `model/solid.py` |
-| neutral volume mesh | `mesh/volume_types.py` | `mesh/volume3d.py`, `mesh/volume_state.py` |
-| rigid object/carrier mesh | `mesh/rigid_object.py` | `mesh/rigid_carrier.py` |
-| neutral rigid pose | `mesh/rigid_object.py::RigidPose3D` | `contact/`, `physics/` |
+| neutral volume mesh | `mesh/volume/contracts.py` | `mesh/volume/mesh.py`, `mesh/volume/state.py` |
+| rigid object/carrier mesh | `mesh/rigid/object.py` | `mesh/rigid/carrier.py`, `mesh/rigid/indenter.py` |
+| neutral rigid pose | `mesh/rigid/object.py::RigidPose3D` | `contact/`, `physics/` |
 | first contact | `contact/first_contact.py` | `contact/sphere_alignment.py` |
-| mechanics public API | `physics/indentation.py` | `physics/fingertip.py`, `physics/solve.py` |
-| Newton implementation | `physics/newton_vbd.py` | `physics/session.py`, `physics/_viewer.py` |
+| mechanics public API | `physics/trajectory/indentation.py` | `physics/trajectory/fingertip.py`, `physics/contracts/` |
+| Newton implementation | `physics/newton/vbd.py` | `physics/newton/session.py`, `physics/newton/viewer.py` |
 | FULL_3D transport | `optics/transport3d/transport.py` | `geometry.py`, `fingertip.py`, `optix_backend.py` |
 | OptiX runtime/preflight | `optics/optix/runtime.py` | `optics/optix/smoke.py`, `optics/optix/doctor.py` |
 | evaluation protocol | `optimization/protocol.py` | `optimization/mechanics_contract.py` |
 | morphology search space | `optimization/design_space.py` | `optimization/evaluation_registry.py` |
 | objective | `optimization/objectives.py` | `optimization/evaluator.py` |
-| Ax campaign boundary | `optimization/ax_adapter.py` | `validation/optimization/lumo6d_test_bo.py` |
+| Ax campaign boundary | `optimization/adapters/ax.py` | `validation/optimization/lumo6d_test_bo.py` |
 | production trajectory evaluator | `optimization/evaluator.py` | `validation/optimization/lumo3d_trajectory_validation.py` |
 | persisted mechanics state | `optimization/deformed_state_artifact.py` | evaluator artifact writers |
 | reference comparison | `validation/physics/correspondence.py` | `validation/reference/kratos3d/` |
-| interactive Newton view | `physics/_viewer.py` | example callers, if reintroduced explicitly |
+| interactive Newton view | `physics/newton/viewer.py` | example callers, if reintroduced explicitly |
 
 
 ## Package ownership
@@ -103,7 +103,7 @@ directories named `case/`, `examples/`, `fem/`, `visualization/`, or
 | `mesh` | neutral mesh dataclasses, Gmsh-backed volume meshing, fingertip state conversion, sphere/carrier meshes | Newton stepping, OptiX calls, optimization policy |
 | `contact` | Shapely-based collision predicate, coarse bracket/bisection, canonical sphere alignment, clear/spawn/contact poses | deformation solve and optical transport |
 | `physics` | NumPy-facing Newton/Warp settings/results, prescribed indentation, continuous trajectory checkpoints, contact diagnostics | Ax generation, objective calculation, validation orchestration |
-| `optics` | optical state/result contracts, 2D/reference transport, FULL_3D surface geometry, CUDA/OptiX runtime and launches | mechanics state evolution and BO decisions |
+| `optics` | optical boundary/result contracts, FULL_3D surface geometry, CUDA/OptiX runtime and launches | mechanics state evolution and BO decisions |
 | `optimization` | six-dimensional design space, fixed-depth factorial protocol, mechanics contract, trajectory objective, exact morphology registry, Ax adapter | mesh/solver implementation and scientific report generation |
 | `validation` | reports, smoke/regression/reference workflows, and bounded campaign runners | domain/solver/transport ownership; production packages must not import it |
 | `gui` | optional controls and diagnostics presentation | domain rules, solver settings, transport, campaign orchestration |
@@ -166,11 +166,11 @@ hard-coded to world coordinates.
 
 ### Mechanics
 
-`physics.indentation.solve_fingertip_indentation_trajectory()` is the shared
+`physics.trajectory.indentation.solve_fingertip_indentation_trajectory()` is the shared
 incremental trajectory loop. The public units are millimetres; the Newton
 backend converts positions to metres at the solver boundary and returns
-millimetres in `NewtonResult` and checkpoint records. `physics.newton_vbd` is
-the sole Newton implementation. `physics._viewer` is debug-only and must not
+millimetres in `NewtonResult` and checkpoint records. `physics.newton.vbd` is
+the sole Newton implementation. `physics.newton.viewer` is debug-only and must not
 change solver state or become a general visualization framework.
 
 `optimization.mechanics_contract.DEFAULT_MECHANICS_CONTRACT` owns the frozen
@@ -182,7 +182,7 @@ evaluator, GUI, or validation scripts.
 `optics.transport3d` owns production FULL_3D geometry construction, field/path
 accumulation, carrier-interface handling, and trace results. The actual runtime
 boundary is `optics.optix.runtime.OptixRuntime.create()` and the production
-trace path is `OptiXTransport.trace()` / `trace_3d()`.
+trace path is `OptiXTransport.trace()` / `trace_geometry()`.
 
 `optics.optix.doctor` diagnoses an environment. The production smoke uses the
 same runtime implementation and performs a real setup/launch. The BO preflight
@@ -190,10 +190,10 @@ must reuse that underlying function; it must not shell out to the CLI. A shared
 CUDA/OptiX dependency failure is campaign-fatal, not a morphology-specific
 optics failure.
 
-`optics.transport.py` and `optics.cross_section` remain separate 2D/reference
-implementations inside the optics owner because `transport3d` reuses their
-sampling primitives. They are not the production FULL_3D BO transport path and
-must not be introduced as hidden dependencies of the trajectory evaluator.
+The old planar transport facade and cross-section implementation have been
+removed. FULL_3D owns its deterministic sampling, native 3D accumulation, and
+OptiX boundary directly; no reduced optical path is a hidden dependency of the
+trajectory evaluator.
 
 ### Optimization
 
@@ -205,7 +205,7 @@ owns the objective formula.
 
 `optimization.evaluation_registry.EvaluationRegistry` stores exact morphology
 provenance and reusable results. It is a cache of scientific outcomes, not a
-replacement for Ax model state. `optimization.ax_adapter` is the only Ax
+replacement for Ax model state. `optimization.adapters.ax` is the only Ax
 boundary; it distinguishes duplicate lookup, candidate failure, and campaign
 infrastructure failure.
 
@@ -220,7 +220,7 @@ infrastructure failure.
 | mechanics result/checkpoint | `physics` | `validation`, `optics` | NumPy arrays and immutable diagnostics; Newton state does not cross into optics |
 | deformed state artifact | `optimization/deformed_state_artifact` | `optics.transport3d` | exact checkpoint mesh plus digest and source-node provenance |
 | optical result | `optics.transport3d` | `optimization`, `validation` | raw transport fields/weights, energy bookkeeping, and configuration fingerprints |
-| objective observation | `optimization.objectives` | `validation`, `optimization.ax_adapter` | trajectory observations preserve location, radius, depth, raw field, and diagnostics |
+| objective observation | `optimization.objectives` | `validation`, `optimization.adapters.ax` | trajectory observations preserve location, radius, depth, raw field, and diagnostics |
 | registry record | `optimization.evaluation_registry` | Ax adapter/campaign reports | exact contract + morphology identity; failed records carry no successful objective |
 
 Representation conversions stay at boundaries:
@@ -243,9 +243,9 @@ mechanics/optics artifacts or optimization metrics.
 | Dependency | Owner | Boundary |
 | --- | --- | --- |
 | Gmsh | `mesh` | imported only when volume meshing is requested |
-| Newton / Warp | `physics.newton_vbd` and execution helpers | required only for mechanics execution; keep public NumPy contracts neutral |
+| Newton / Warp | `physics.newton` and execution helpers | required only for mechanics execution; keep public NumPy contracts neutral |
 | CuPy / PyOptiX / CUDA Python / NVRTC | `optics.optix` and `optics.transport3d` | runtime/preflight/trace boundary; environment is externally managed |
-| Ax 1.3.1 | `optimization.ax_adapter` | optimizer execution boundary; importing `optimization` must stay lightweight |
+| Ax 1.3.1 | `optimization.adapters.ax` | optimizer execution boundary; importing `optimization` must stay lightweight |
 | NiceGUI / Matplotlib | `gui` | optional presentation boundary |
 | Kratos | `validation/reference/kratos3d` | validation-only external reference; never a production dependency |
 
@@ -332,11 +332,11 @@ documented in [`docs/COMMANDS.md`](COMMANDS.md):
 ```bash
 conda activate lit
 
-./scripts/pytest_lit tests/unit/model tests/unit/mesh -q
-./scripts/pytest_lit tests/unit/contact tests/unit/physics -q
-./scripts/pytest_lit tests/unit/optics tests/unit/optimization -q
-./scripts/pytest_lit tests/unit/optimization/test_evaluator.py -q
-./scripts/pytest_lit tests/smoke/physics -q -m "smoke and physics"
+./scripts/tools/pytest_lit tests/unit/model tests/unit/mesh -q
+./scripts/tools/pytest_lit tests/unit/contact tests/unit/physics -q
+./scripts/tools/pytest_lit tests/unit/optics tests/unit/optimization -q
+./scripts/tools/pytest_lit tests/unit/optimization/test_evaluator.py -q
+./scripts/tools/pytest_lit tests/smoke/physics -q -m "smoke and physics"
 ```
 
 Before an unattended OptiX/BO run, use both gates from `COMMANDS.md`:
@@ -360,10 +360,9 @@ evaluation entry point.
 
 These are verified current-code deviations, not recommended new architecture:
 
-- The repository retains secondary 2D/reference optical implementations and
-  the fixed-state evaluator noted above. New candidate evaluations must follow
-  the `optimization.evaluator` FULL_3D trajectory workflow unless a validation
-  task explicitly names a reference implementation.
+- The repository retains the fixed-state evaluator noted above. New candidate
+  evaluations must follow the `optimization.evaluator` FULL_3D trajectory
+  workflow unless a validation task explicitly names a reference implementation.
 
 
 ## Intentionally absent architecture

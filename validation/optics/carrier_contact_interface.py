@@ -18,12 +18,12 @@ from typing import Any, Iterable
 import numpy as np
 
 from physics import prepare_fingertip_mesh
-from mesh.fingertip import generate_fingertip_mesh
+from mesh.fingertip.geometry import generate_fingertip_mesh
 from mesh import FingertipVolumeState, volume_mesh_settings_for_tier
-from mesh.types import mesh_settings_for_level
-from mesh.volume3d import generate_volume_mesh
+from mesh.fingertip.contracts import mesh_settings_for_level
+from mesh.volume.mesh import generate_volume_mesh
 from model import Fingertip, FingertipParameters
-from optics.contact_object import CarrierOptics
+from optics.contracts.objects import CarrierOptics
 from optics.transport3d import (
     OptiXTransport,
     Transport3DSettings,
@@ -55,7 +55,6 @@ DEFAULT_TRAVELS_MM = (0.05, 1.5, 3.0)
 
 def _settings(*, ray_count: int = 256) -> Transport3DSettings:
     return Transport3DSettings(
-        mode="full3d",
         ray_count=ray_count,
         max_interactions=6,
         maximum_segment_count=4096,
@@ -70,7 +69,6 @@ def _settings(*, ray_count: int = 256) -> Transport3DSettings:
         terminate_on_periodic_wrap_limit=True,
         terminate_on_no_event=True,
         retain_internal_path_field=True,
-        retain_projected_segments=False,
     )
 
 

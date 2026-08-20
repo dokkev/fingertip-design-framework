@@ -1,9 +1,4 @@
-"""Unified neutral contract around the shared OptiX transport core.
-
-The CUDA/OptiX wavefront implementation is shared by both dimensional modes.
-This module only assigns native field meaning, case provenance, and the common
-separability calculation; it does not implement a second optical solver.
-"""
+"""Unified neutral contract around the FULL_3D OptiX transport core."""
 
 from __future__ import annotations
 
@@ -22,11 +17,8 @@ from optics.transport3d.settings import Transport3DSettings
 from optics.transport3d.transport import trace_geometry
 
 
-UnifiedOpticalMode = Literal["PLANAR_2D", "FULL_3D"]
+UnifiedOpticalMode = Literal["FULL_3D"]
 UNIFIED_ARTIFACT_SCHEMA = "unified-optix-transport-case-v4"
-LEGACY_UNIFIED_ARTIFACT_SCHEMA_V3 = "unified-optix-transport-case-v3"
-LEGACY_UNIFIED_ARTIFACT_SCHEMA_V2 = "unified-optix-transport-case-v2"
-LEGACY_UNIFIED_ARTIFACT_SCHEMA = "unified-optix-transport-case-v1"
 
 
 def _canonical_json(value: Any) -> str:
@@ -40,8 +32,8 @@ def fingerprint_mapping(value: Mapping[str, Any]) -> str:
 
 def _owned_field(value: Any, *, name: str) -> np.ndarray:
     field = np.array(value, dtype=float, copy=True)
-    if field.ndim not in (2, 3) or not field.size:
-        raise ValueError(f"{name} must be a nonempty 2D or 3D field")
+    if field.ndim != 3 or not field.size:
+        raise ValueError(f"{name} must be a nonempty 3D field")
     if not np.all(np.isfinite(field)) or np.any(field < 0.0):
         raise ValueError(f"{name} must be finite and nonnegative")
     field.setflags(write=False)
@@ -61,7 +53,7 @@ def _owned_axes(value: Any, *, dimension: int) -> tuple[np.ndarray, ...]:
 
 @dataclass(frozen=True)
 class UnifiedTransportResult:
-    """Common neutral result while preserving P2 or P3 natively."""
+    """Common neutral result preserving the native P3 field."""
 
     morphology_id: str
     morphology_fingerprint: str
@@ -92,19 +84,16 @@ class UnifiedTransportResult:
     carrier_reflected_weight: float = 0.0
 
     def __post_init__(self) -> None:
-        if self.optical_mode not in ("PLANAR_2D", "FULL_3D"):
-            raise ValueError("optical_mode must be PLANAR_2D or FULL_3D")
-        expected_dimension = 2 if self.optical_mode == "PLANAR_2D" else 3
-        if self.mechanics_dimension not in ("2D", "3D"):
-            raise ValueError("mechanics_dimension must be '2D' or '3D'")
+        if self.optical_mode != "FULL_3D":
+            raise ValueError("optical_mode must be FULL_3D")
+        if self.mechanics_dimension != "3D":
+            raise ValueError("FULL_3D transport requires 3D mechanics")
         if not isinstance(self.ray_count, int) or self.ray_count < 1:
             raise ValueError("ray_count must be a positive integer")
         field = _owned_field(self.field, name="native transport field")
-        if field.ndim != expected_dimension:
-            raise ValueError(
-                f"{self.optical_mode} requires a native {expected_dimension}D field"
-            )
-        axes = _owned_axes(self.field_axes, dimension=expected_dimension)
+        if field.ndim != 3:
+            raise ValueError("FULL_3D requires a native 3D field")
+        axes = _owned_axes(self.field_axes, dimension=3)
         if field.shape != tuple(len(axis) - 1 for axis in axes):
             raise ValueError("native field shape does not match its axes")
         scalars = np.asarray(
@@ -183,47 +172,28 @@ class UnifiedTransportResult:
         contact_state: Mapping[str, Any],
         transport_configuration_fingerprint: str,
     ) -> "UnifiedTransportResult":
-        if result.source_mode == "planar":
-            mode: UnifiedOpticalMode = "PLANAR_2D"
-            if (
-                result.projected_x_edges_mm is None
-                or result.projected_y_edges_mm is None
-                or result.projected_weighted_path_density is None
-            ):
-                raise ValueError("PLANAR_2D result is missing its native P2 field")
-            # The transport accumulator stores projected density as
-            # density[y, x].  The neutral public field convention is
-            # field[x, y], matching the (x_edges, y_edges) axes below.
-            field = np.transpose(result.projected_weighted_path_density, (1, 0))
-            axes = (result.projected_x_edges_mm, result.projected_y_edges_mm)
-        elif result.source_mode == "full3d":
-            mode = "FULL_3D"
-            if (
-                result.internal_path_x_edges_mm is None
-                or result.internal_path_y_edges_mm is None
-                or result.internal_path_z_edges_mm is None
-                or result.internal_weighted_path_density_3d is None
-            ):
-                raise ValueError("FULL_3D result is missing its native P3 field")
-            # The accumulator owns storage in (z, y, x) order for efficient
-            # sample indexing; the neutral artifact contract owns axes in the
-            # public (x, y, z) order.  Preserve all three native dimensions
-            # while making that ordering explicit at the boundary.
-            field = np.transpose(result.internal_weighted_path_density_3d, (2, 1, 0))
-            axes = (
-                result.internal_path_x_edges_mm,
-                result.internal_path_y_edges_mm,
-                result.internal_path_z_edges_mm,
-            )
-        else:
-            raise ValueError(f"unsupported transport source mode: {result.source_mode!r}")
+        if (
+            result.internal_path_x_edges_mm is None
+            or result.internal_path_y_edges_mm is None
+            or result.internal_path_z_edges_mm is None
+            or result.internal_weighted_path_density_3d is None
+        ):
+            raise ValueError("FULL_3D result is missing its native P3 field")
+        # The accumulator owns storage in (z, y, x) order for efficient sample
+        # indexing; the artifact contract owns axes in public (x, y, z) order.
+        field = np.transpose(result.internal_weighted_path_density_3d, (2, 1, 0))
+        axes = (
+            result.internal_path_x_edges_mm,
+            result.internal_path_y_edges_mm,
+            result.internal_path_z_edges_mm,
+        )
         return cls(
             morphology_id=morphology_id,
             morphology_fingerprint=morphology_fingerprint,
             mechanics_source=mechanics_source,
             mechanics_dimension=mechanics_dimension,
             contact_state=contact_state,
-            optical_mode=mode,
+            optical_mode="FULL_3D",
             ray_count=result.launched_ray_count,
             transport_configuration_fingerprint=transport_configuration_fingerprint,
             field=field,
@@ -252,7 +222,7 @@ class UnifiedTransportResult:
 
 
 class OptiXTransport:
-    """One entry point for PLANAR_2D and FULL_3D shared transport."""
+    """One entry point for production FULL_3D transport."""
 
     def trace(
         self,
@@ -268,36 +238,26 @@ class OptiXTransport:
         transport_configuration: Mapping[str, Any],
         runtime: Any | None = None,
     ) -> UnifiedTransportResult:
-        if settings.mode == "planar" and geometry.geometry_mode != "planar_extruded":
-            raise ValueError("PLANAR_2D requires planar_extruded geometry")
-        if settings.mode == "full3d" and geometry.geometry_mode != "full3d_surface":
-            raise ValueError(
-                "FULL_3D requires an actual deformed 3D surface artifact; "
-                "2D extrusion is not accepted by the unified evaluator"
-            )
         geometry_metadata = dict(geometry.metadata)
-        if geometry.geometry_mode == "full3d_surface":
-            if geometry_metadata.get("full3d_surface_provenance") not in {
-                "actual_reference_3d_volume_state",
-                "actual_deformed_3d_fea_surface",
-                "actual_deformed_3d_vbd_surface",
-                "actual_deformed_3d_volume_state",
-            }:
-                raise ValueError(
-                    "FULL_3D geometry lacks direct 3D surface provenance"
-                )
-            if geometry_metadata.get("morphology_fingerprint") not in (
-                None,
-                morphology_fingerprint,
-            ):
-                raise ValueError("FULL_3D geometry morphology fingerprint mismatch")
-            expected_contact_fingerprint = contact_state.get(
-                "contact_state_fingerprint"
-            )
-            if expected_contact_fingerprint is not None and geometry_metadata.get(
-                "contact_state_fingerprint"
-            ) != expected_contact_fingerprint:
-                raise ValueError("FULL_3D geometry contact-state fingerprint mismatch")
+        if geometry_metadata.get("full3d_surface_provenance") not in {
+            "actual_reference_3d_volume_state",
+            "actual_deformed_3d_fea_surface",
+            "actual_deformed_3d_vbd_surface",
+            "actual_deformed_3d_volume_state",
+        }:
+            raise ValueError("FULL_3D geometry lacks direct 3D surface provenance")
+        if geometry_metadata.get("morphology_fingerprint") not in (
+            None,
+            morphology_fingerprint,
+        ):
+            raise ValueError("FULL_3D geometry morphology fingerprint mismatch")
+        expected_contact_fingerprint = contact_state.get(
+            "contact_state_fingerprint"
+        )
+        if expected_contact_fingerprint is not None and geometry_metadata.get(
+            "contact_state_fingerprint"
+        ) != expected_contact_fingerprint:
+            raise ValueError("FULL_3D geometry contact-state fingerprint mismatch")
         result = trace_geometry(tip, geometry, settings=settings, runtime=runtime)
         configuration = dict(transport_configuration)
         configuration["carrier_interface"] = dict(
@@ -385,7 +345,7 @@ def transport_configuration(
         "material": dict(material),
         "source_sampling": "optics.transport3d.sampling.sample_directions",
         "physics": "optics.transport3d.physics.interface_split+attenuation",
-        "accumulation": "native P2 for PLANAR_2D; native P3(x,y,z) for FULL_3D",
+        "accumulation": "native P3(x,y,z)",
     }
     if source is not None:
         configuration["source"] = dict(source)
@@ -394,12 +354,9 @@ def transport_configuration(
 
 def save_case_artifact(path: Path, result: UnifiedTransportResult, contract: Mapping[str, Any]) -> None:
     """Persist one independently verifiable transport case artifact."""
-    field_axis_order = {
-        "PLANAR_2D": "x,y",
-        "FULL_3D": "x,y,z",
-    }.get(result.optical_mode)
-    if field_axis_order is None:
+    if result.optical_mode != "FULL_3D":
         raise ValueError(f"unsupported unified optical mode: {result.optical_mode!r}")
+    field_axis_order = "x,y,z"
     path.parent.mkdir(parents=True, exist_ok=True)
     field_path = path.with_suffix(".npz")
     field_tmp = field_path.with_name(field_path.name + ".tmp")
@@ -458,28 +415,13 @@ def load_case_artifact(path: Path, *, expected_contract: Mapping[str, Any]) -> U
     """Load an artifact only when the complete fingerprint contract matches."""
     metadata = json.loads(path.read_text(encoding="utf-8"))
     schema = metadata.get("schema")
-    if schema not in (
-        UNIFIED_ARTIFACT_SCHEMA,
-        LEGACY_UNIFIED_ARTIFACT_SCHEMA_V3,
-        LEGACY_UNIFIED_ARTIFACT_SCHEMA_V2,
-        LEGACY_UNIFIED_ARTIFACT_SCHEMA,
-    ):
+    if schema != UNIFIED_ARTIFACT_SCHEMA:
         raise ValueError("unsupported unified transport artifact schema")
     record = metadata.get("result")
     if not isinstance(record, Mapping):
         raise ValueError("unified transport result metadata is missing")
-    if schema == UNIFIED_ARTIFACT_SCHEMA:
-        expected_axis_order = {
-            "PLANAR_2D": "x,y",
-            "FULL_3D": "x,y,z",
-        }.get(record.get("optical_mode"))
-        if (
-            expected_axis_order is None
-            or metadata.get("field_axis_order") != expected_axis_order
-        ):
-            raise ValueError(
-                "unified transport field axis order is missing or unsupported"
-            )
+    if record.get("optical_mode") != "FULL_3D" or metadata.get("field_axis_order") != "x,y,z":
+        raise ValueError("unified transport artifact must contain a FULL_3D field")
     contract = metadata.get("contract")
     if contract != dict(expected_contract):
         raise ValueError("unified transport artifact contract mismatch")
@@ -500,11 +442,6 @@ def load_case_artifact(path: Path, *, expected_contract: Mapping[str, Any]) -> U
             np.asarray(archive[f"axis_{index}"], dtype=float)
             for index in range(field.ndim)
         )
-    if schema == LEGACY_UNIFIED_ARTIFACT_SCHEMA and record.get("optical_mode") == "PLANAR_2D":
-        # v1 persisted the raw accumulator convention density[y, x] while
-        # labeling its axes as (x, y).  Convert only legacy planar artifacts;
-        # v1 FULL_3D fields already used the public x,y,z ordering.
-        field = np.transpose(field, (1, 0))
     contract_result_checks = {
         "morphology_id": contract.get("morphology_id"),
         "mechanics_dimension": contract.get("mechanics_dimension"),
@@ -536,7 +473,7 @@ def load_case_artifact(path: Path, *, expected_contract: Mapping[str, Any]) -> U
         mechanics_source=str(record["mechanics_source"]),
         mechanics_dimension=str(record["mechanics_dimension"]),
         contact_state=record["contact_state"],
-        optical_mode=str(record["optical_mode"]),
+        optical_mode="FULL_3D",
         ray_count=int(record["ray_count"]),
         transport_configuration_fingerprint=str(
             record["transport_configuration_fingerprint"]
@@ -568,9 +505,6 @@ def load_case_artifact(path: Path, *, expected_contract: Mapping[str, Any]) -> U
 
 
 __all__ = [
-    "LEGACY_UNIFIED_ARTIFACT_SCHEMA",
-    "LEGACY_UNIFIED_ARTIFACT_SCHEMA_V2",
-    "LEGACY_UNIFIED_ARTIFACT_SCHEMA_V3",
     "OptiXTransport",
     "UNIFIED_ARTIFACT_SCHEMA",
     "UnifiedOpticalMode",

@@ -7,7 +7,7 @@ import math
 from shapely.geometry import LineString, MultiLineString, MultiPoint, Point
 from shapely.geometry.base import BaseGeometry
 
-from mesh.types import (
+from mesh.fingertip.contracts import (
     BoundaryEdge,
     FingertipMesh,
     MeshNode,

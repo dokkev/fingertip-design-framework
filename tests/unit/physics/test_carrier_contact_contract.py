@@ -7,9 +7,9 @@ import pytest
 pytest.importorskip("gmsh")
 
 from physics import prepare_fingertip_mesh
-from mesh.rigid_carrier import make_distal_phalanx_mesh
-from mesh.volume3d import generate_volume_mesh
-from mesh.volume_types import volume_mesh_settings_for_tier
+from mesh.rigid.carrier import make_distal_phalanx_mesh
+from mesh.volume.mesh import generate_volume_mesh
+from mesh.volume.contracts import volume_mesh_settings_for_tier
 from model import Fingertip, FingertipParameters
 
 

@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 from contact import CandidateContactError
-from mesh.volume3d import VolumeMeshDependencyError
+from mesh.volume.mesh import VolumeMeshDependencyError
 from model import FingertipParameters
 from optimization.objectives import TrajectoryObservation, compute_trajectory_objective
 from optimization.protocol import DEFAULT_TRAJECTORY_PROTOCOL, TrajectoryEvaluationProtocol

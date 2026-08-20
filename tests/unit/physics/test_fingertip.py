@@ -9,8 +9,8 @@ import pytest
 
 pytest.importorskip("gmsh")
 
-from mesh.volume3d import generate_volume_mesh
-from mesh.volume_types import VolumeMeshValidation, volume_mesh_settings_for_tier
+from mesh.volume.mesh import generate_volume_mesh
+from mesh.volume.contracts import VolumeMeshValidation, volume_mesh_settings_for_tier
 from model.fingertip_model import FingertipModel
 from model.fingertip_model import FingertipParameters
 from model.solid import build_fingertip_solid

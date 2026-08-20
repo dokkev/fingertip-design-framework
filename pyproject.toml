@@ -43,6 +43,7 @@ include = [
   "optics*",
   "optimization*",
   "gui*",
+  "util*",
 ]
 
 [tool.setuptools.package-data]

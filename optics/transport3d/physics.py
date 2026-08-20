@@ -6,10 +6,6 @@ from math import isfinite
 from typing import Any
 
 import numpy as np
-from optics.physics import (
-    OpticalPhysicsError,
-    interface_directions_and_reflectance as _canonical_interface,
-)
 
 
 class Transport3DPhysicsError(RuntimeError):
@@ -94,25 +90,6 @@ def object_interface_split(
     return _interface_split_indices(xp, incident, normal, n1, n2)
 
 
-def interface_directions_and_reflectance(
-    incident_direction: np.ndarray,
-    interface_normal: np.ndarray,
-    refractive_index_1: float,
-    refractive_index_2: float,
-) -> tuple[np.ndarray, np.ndarray | None, float]:
-    """Scalar NumPy form matching the reduced 2D Fresnel convention."""
-    try:
-        reflected, transmitted, reflectance, _ = _canonical_interface(
-            incident_direction,
-            interface_normal,
-            refractive_index_1,
-            refractive_index_2,
-        )
-    except OpticalPhysicsError as exc:
-        raise Transport3DPhysicsError(str(exc)) from exc
-    return reflected, transmitted, reflectance
-
-
 def attenuated_weight(
     weight: float,
     length_mm: float,
@@ -172,7 +149,6 @@ def wrapped_periodic_z(
 __all__ = [
     "Transport3DPhysicsError",
     "attenuated_weight",
-    "interface_directions_and_reflectance",
     "interface_split",
     "object_interface_split",
     "periodic_plane_distance",

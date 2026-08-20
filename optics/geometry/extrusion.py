@@ -1,4 +1,4 @@
-"""Stable 2D-to-3D extrusion topology for optical rendering."""
+"""Stable extrusion topology for fixed FULL_3D carrier and envelope surfaces."""
 
 from __future__ import annotations
 

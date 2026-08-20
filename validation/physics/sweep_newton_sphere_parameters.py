@@ -207,8 +207,8 @@ def _six_volumes(vertices: np.ndarray, tetrahedra: np.ndarray) -> np.ndarray:
 def _prepare_case() -> _PreparedCase:
     from contact import make_outer_compliant_surface
     from physics import prepare_fingertip_mesh
-    from mesh.volume3d import generate_volume_mesh
-    from mesh.volume_types import volume_mesh_settings_for_tier
+    from mesh.volume.mesh import generate_volume_mesh
+    from mesh.volume.contracts import volume_mesh_settings_for_tier
     from model.fingertip_model import FingertipModel
     from model.fingertip_model import FingertipParameters
     from model.solid import build_fingertip_solid

@@ -10,38 +10,27 @@ from model import LED
 from optics.geometry.extrusion import _ExtrudedMesh
 from optics.transport3d.physics import (
     attenuated_weight,
-    interface_directions_and_reflectance,
     periodic_plane_distance,
     wrapped_periodic_z,
 )
 from optics.transport3d.transport import _accumulate_segment_path_3d
 from optics.transport3d.result import Transport3DResult
-from optics.transport3d.sampling import sample_directions, sample_planar_directions
 from optics.transport3d.settings import Transport3DSettings
-from optics.cross_section.settings import TraceSettings
-from optics.cross_section.transport import _sample_primary_directions
 
 
-def test_planar_sampling_is_identical_and_full_sampling_is_deterministic() -> None:
+def test_full_sampling_is_deterministic_and_three_dimensional() -> None:
+    from optics.transport3d.sampling import sample_directions
+
     led = LED()
-    first = sample_planar_directions(led, (0.0, -1.0), 161)
-    second = sample_planar_directions(led, (0.0, -1.0), 161)
-    assert np.array_equal(first, second)
-    reduced = np.asarray(
-        [[direction[0], direction[1], 0.0] for direction in _sample_primary_directions(led, (0.0, -1.0), TraceSettings(ray_count=161))],
-        dtype=float,
-    )
-    assert np.array_equal(first, reduced)
-    assert np.all(first[:, 2] == 0.0)
-    full_first = sample_directions(led, (0.0, -1.0), mode="full3d", ray_count=257)
-    full_second = sample_directions(led, (0.0, -1.0), mode="full3d", ray_count=257)
+    full_first = sample_directions(led, (0.0, -1.0), ray_count=257)
+    full_second = sample_directions(led, (0.0, -1.0), ray_count=257)
     assert np.array_equal(full_first, full_second)
     assert np.allclose(np.linalg.norm(full_first, axis=1), 1.0)
     assert np.any(np.abs(full_first[:, 2]) > 0.0)
 
 
 def test_extrusion_has_exact_periodic_depth_and_side_selector() -> None:
-    from mesh.pad import PadMesh
+    from mesh.fingertip.surface import PadMesh
 
     mesh = PadMesh.from_arrays(
         node_ids=np.arange(4),
@@ -56,41 +45,6 @@ def test_extrusion_has_exact_periodic_depth_and_side_selector() -> None:
     assert np.isclose(np.min(vertices[:, 2]), -5.5)
     assert np.isclose(np.max(vertices[:, 2]), 5.5)
     assert extrusion.side_faces_for_edges(mesh.boundary_edges).shape == (8, 3)
-
-
-def test_fresnel_snell_tir_and_energy_split() -> None:
-    reflected, transmitted, reflectance = interface_directions_and_reflectance(
-        np.asarray([0.0, -1.0, 0.0]),
-        np.asarray([0.0, -1.0, 0.0]),
-        1.0,
-        1.41,
-    )
-    expected = ((1.0 - 1.41) / (1.0 + 1.41)) ** 2
-    assert np.isclose(reflectance, expected)
-    assert transmitted is not None
-    assert np.isclose(reflectance + (1.0 - reflectance), 1.0)
-    assert np.isclose(np.linalg.norm(reflected), 1.0)
-    assert np.isclose(np.linalg.norm(transmitted), 1.0)
-
-    angle = np.deg2rad(35.0)
-    _, oblique, _ = interface_directions_and_reflectance(
-        np.asarray([np.sin(angle), -np.cos(angle), 0.0]),
-        np.asarray([0.0, -1.0, 0.0]),
-        1.0,
-        1.41,
-    )
-    assert oblique is not None
-    assert np.isclose(oblique[0], np.sin(angle) / 1.41, atol=1.0e-12)
-
-    reflected, transmitted, reflectance = interface_directions_and_reflectance(
-        np.asarray([0.8, 0.6, 0.0]),
-        np.asarray([0.0, 1.0, 0.0]),
-        1.41,
-        1.0,
-    )
-    assert transmitted is None
-    assert reflectance == 1.0
-    assert np.allclose(reflected, np.asarray([0.8, -0.6, 0.0]))
 
 
 def test_periodic_travel_and_wrap_preserve_direction() -> None:
@@ -122,10 +76,9 @@ def test_attenuation_and_result_validation() -> None:
     )
     assert np.isclose(end + removed, 1.0)
     assert attenuated_weight(1.0, 10.0, medium="air", absorption_per_mm=0.02) == (1.0, 0.0)
-    settings = Transport3DSettings(mode="planar", ray_count=3)
+    settings = Transport3DSettings(ray_count=3)
     result = Transport3DResult(
         source_position_mm=(0.0, -6.0, 0.0),
-        source_mode="planar",
         extrusion_depth_mm=11.0,
         launched_ray_count=3,
         launched_weight=1.0,
@@ -151,8 +104,6 @@ def test_attenuation_and_result_validation() -> None:
         energy_balance_tolerance=settings.energy_balance_tolerance,
     )
     assert not result.outgoing_surface_field.flags.writeable
-    with pytest.raises(ValueError):
-        Transport3DSettings(mode="invalid")  # type: ignore[arg-type]
 
 
 def test_simple_internal_path_accumulation_and_z_integration() -> None:
@@ -267,7 +218,6 @@ def test_rigid_blocker_mask_prevents_internal_path_accumulation() -> None:
 def test_nested_result_metadata_is_immutable() -> None:
     result = Transport3DResult(
         source_position_mm=(0.0, -6.0, 0.0),
-        source_mode="planar",
         extrusion_depth_mm=11.0,
         launched_ray_count=3,
         launched_weight=1.0,
@@ -301,5 +251,6 @@ def test_nested_result_metadata_is_immutable() -> None:
 def test_normal_optics_import_does_not_load_optional_optix() -> None:
     import optics
 
-    assert hasattr(optics, "trace")
+    assert not hasattr(optics, "trace")
+    assert hasattr(optics, "CarrierOptics")
     assert "optix" not in sys.modules

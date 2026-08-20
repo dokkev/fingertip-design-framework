@@ -11,7 +11,7 @@ pytest.importorskip("gmsh")
 
 from physics import prepare_fingertip_mesh
 from mesh import volume_mesh_settings_for_tier
-from mesh.volume3d import generate_volume_mesh
+from mesh.volume.mesh import generate_volume_mesh
 from model import Fingertip
 from optimization.deformed_state_artifact import restore_deformed_optical_state
 
@@ -54,7 +54,7 @@ def test_persisted_state_restores_exact_deformed_optical_geometry(tmp_path) -> N
         metadata={"contact_location_u": 0.5},
     )
 
-    assert restored.geometry.geometry_mode == "full3d_surface"
+    assert restored.geometry.metadata["geometry_mode"] == "full3d_surface"
     assert restored.geometry.metadata["contact_location_u"] == 0.5
     assert restored.geometry.metadata["mechanics_artifact_sha256"] == digest
     assert restored.state_id

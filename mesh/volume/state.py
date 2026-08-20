@@ -7,7 +7,7 @@ from types import MappingProxyType
 
 import numpy as np
 
-from mesh.volume_types import FingertipVolumeMesh
+from mesh.volume.contracts import FingertipVolumeMesh
 
 
 _TET_VOLUME_TOLERANCE_MM3 = 1.0e-12
@@ -130,10 +130,10 @@ class FingertipVolumeState:
     def __post_init__(self) -> None:
         if not isinstance(self.volume_mesh, FingertipVolumeMesh):
             raise TypeError("volume_mesh must be FingertipVolumeMesh")
-        if not self.volume_mesh.validation.passed:
+        if not self.volume_mesh.fingertip.validation.passed:
             raise ValueError(
                 "refusing an invalid FingertipVolumeMesh: "
-                + ", ".join(self.volume_mesh.validation.errors)
+                + ", ".join(self.volume_mesh.fingertip.validation.errors)
             )
         node_ids = tuple(sorted(self.volume_mesh.nodes))
         reference = _coordinates_for_node_ids(self.volume_mesh, node_ids)

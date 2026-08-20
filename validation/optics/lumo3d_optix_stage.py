@@ -11,10 +11,10 @@ from typing import Any
 import numpy as np
 
 from physics import prepare_fingertip_mesh
-from mesh.fingertip import generate_fingertip_mesh
+from mesh.fingertip.geometry import generate_fingertip_mesh
 from mesh import FingertipVolumeState, volume_mesh_settings_for_tier
-from mesh.types import mesh_settings_for_level
-from mesh.volume3d import generate_volume_mesh
+from mesh.fingertip.contracts import mesh_settings_for_level
+from mesh.volume.mesh import generate_volume_mesh
 from model import Fingertip
 from optics.transport3d import (
     OptiXTransport,
@@ -36,7 +36,6 @@ def _settings(
     y_bounds_mm: tuple[float, float],
 ) -> Transport3DSettings:
     return Transport3DSettings(
-        mode="full3d",
         ray_count=256,
         max_interactions=6,
         maximum_segment_count=4096,
@@ -51,7 +50,6 @@ def _settings(
         terminate_on_periodic_wrap_limit=True,
         terminate_on_no_event=True,
         retain_internal_path_field=True,
-        retain_projected_segments=False,
     )
 
 
@@ -169,7 +167,7 @@ def run_lumo3d_optix_stage(
             "mechanics_contract": stage2_payload["search_contract"],
         },
     )
-    if reference_geometry.geometry_mode != "full3d_surface":
+    if reference_geometry.metadata.get("geometry_mode") != "full3d_surface":
         raise RuntimeError("reference geometry is not FULL_3D")
     configuration = transport_configuration(
         settings,
@@ -232,7 +230,7 @@ def run_lumo3d_optix_stage(
                 "mechanics_contract": stage2_payload["search_contract"],
             },
         )
-        if restored.geometry.geometry_mode != "full3d_surface":
+        if restored.geometry.metadata.get("geometry_mode") != "full3d_surface":
             raise RuntimeError(f"u={location:g} geometry is not FULL_3D")
         contract = {
             "schema": "lumo3d-optix-stage-v1",

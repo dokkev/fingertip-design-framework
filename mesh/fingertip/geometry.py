@@ -15,7 +15,7 @@ from shapely.geometry import (
 )
 from shapely.geometry.base import BaseGeometry
 
-from mesh.types import (
+from mesh.fingertip.contracts import (
     BoundaryEdge,
     FingertipMesh,
     MeshedContactPair,
@@ -25,7 +25,7 @@ from mesh.types import (
     MeshValidationReport,
     T3Element,
 )
-from mesh.validation import mesh_quality_statistics, validate_fingertip_mesh
+from mesh.fingertip.validation import mesh_quality_statistics, validate_fingertip_mesh
 from model.fingertip_model import FingertipModel, PolygonalGeometry
 
 

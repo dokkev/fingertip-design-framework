@@ -17,8 +17,8 @@ from physics import (
     prepare_fingertip_mesh,
 )
 from mesh import volume_mesh_settings_for_tier
-from mesh.volume3d import generate_volume_mesh
-from mesh.volume3d import VolumeMeshDependencyError, VolumeMeshingError
+from mesh.volume.mesh import generate_volume_mesh
+from mesh.volume.mesh import VolumeMeshDependencyError, VolumeMeshingError
 from model import (
     Fingertip,
     FingertipParameters,
@@ -26,7 +26,7 @@ from model import (
     InvalidFingertipParameters,
     validate_minimum_silicone_thickness,
 )
-from optics.contact_object import CarrierOptics
+from optics.contracts.objects import CarrierOptics
 from optics.transport3d import (
     OptiXTransport,
     Transport3DDependencyError,
@@ -71,7 +71,6 @@ LUMO3D_OPTICAL_Y_BOUNDS_MM = (-31.0, 4.5)
 def make_optical_settings() -> Transport3DSettings:
     """Return the fixed-state oracle's independent optical contract."""
     return Transport3DSettings(
-        mode="full3d",
         ray_count=256,
         max_interactions=6,
         maximum_segment_count=4096,
@@ -86,7 +85,6 @@ def make_optical_settings() -> Transport3DSettings:
         terminate_on_periodic_wrap_limit=True,
         terminate_on_no_event=True,
         retain_internal_path_field=True,
-        retain_projected_segments=False,
     )
 
 

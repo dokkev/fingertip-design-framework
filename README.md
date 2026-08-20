@@ -51,8 +51,8 @@ externally managed runtime dependencies.
 ## First checks
 
 ```bash
-conda run -n lit ./scripts/pytest_lit tests/unit/model tests/unit/mesh -q
-conda run -n lit ./scripts/pytest_lit tests/unit/physics -q
+conda run -n lit ./scripts/tools/pytest_lit tests/unit/model tests/unit/mesh -q
+conda run -n lit ./scripts/tools/pytest_lit tests/unit/physics -q
 conda run -n lit python -m optics.optix.doctor --json
 conda run -n lit python -m validation.optics.production_optix_smoke
 ```

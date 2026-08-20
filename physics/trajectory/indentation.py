@@ -8,11 +8,11 @@ from typing import TYPE_CHECKING, Mapping, Sequence
 
 import numpy as np
 
-from mesh.rigid_object import RigidObjectMesh, RigidPose3D
+from mesh.rigid.object import RigidObjectMesh, RigidPose3D
 
 from .fingertip import PreparedFingertipMesh
-from .solve import NewtonSettings, _load_newton_backend
-from .types import NewtonResult
+from ..contracts.types import NewtonResult
+from ..newton.solve import NewtonSettings, _load_newton_backend
 
 if TYPE_CHECKING:
     from contact.first_contact import FirstContactResult

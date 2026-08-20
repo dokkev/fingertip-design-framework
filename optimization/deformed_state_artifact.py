@@ -9,15 +9,15 @@ from typing import Any, Iterable, Mapping
 
 import numpy as np
 
-from physics.fingertip import PreparedFingertipMesh
-from mesh.fingertip import generate_fingertip_mesh
-from mesh.types import mesh_settings_for_level
-from mesh.volume_types import FingertipVolumeMesh
-from mesh.volume_state import FingertipVolumeState
+from physics.trajectory.fingertip import PreparedFingertipMesh
+from mesh.fingertip.geometry import generate_fingertip_mesh
+from mesh.fingertip.contracts import mesh_settings_for_level
+from mesh.volume.contracts import FingertipVolumeMesh
+from mesh.volume.state import FingertipVolumeState
 from model.fingertip import Fingertip
 from optics.transport3d import build_fingertip_volume_state_geometry
 from optics.transport3d import fingerprint_mapping
-from optics.contact_object import CarrierOptics
+from optics.contracts.objects import CarrierOptics
 from optimization.protocol import TrajectoryEvaluationProtocol
 
 

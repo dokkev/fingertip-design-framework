@@ -12,9 +12,9 @@ pytest.importorskip("newton")
 import warp as wp
 
 from physics import NewtonSettings, prepare_fingertip_mesh
-from physics.solve import solve
-from mesh.volume3d import generate_volume_mesh
-from mesh.volume_types import volume_mesh_settings_for_tier
+from physics.newton.solve import solve
+from mesh.volume.mesh import generate_volume_mesh
+from mesh.volume.contracts import volume_mesh_settings_for_tier
 from model.fingertip_model import FingertipModel
 from model.fingertip_model import FingertipParameters
 from model.solid import build_fingertip_solid
@@ -31,7 +31,7 @@ def test_nominal_fingertip_volume_mesh_advances_on_cuda() -> None:
     volume_mesh = generate_volume_mesh(solid, volume_mesh_settings_for_tier("search"))
     prepared = prepare_fingertip_mesh(volume_mesh)
 
-    assert volume_mesh.validation.passed, volume_mesh.validation.errors
+    assert volume_mesh.fingertip.validation.passed, volume_mesh.fingertip.validation.errors
     assert volume_mesh.nodes
     assert volume_mesh.tetrahedra
     assert prepared.tet_mesh.vertices.shape[0] == len(volume_mesh.nodes)

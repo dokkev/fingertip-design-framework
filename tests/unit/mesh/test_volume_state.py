@@ -8,7 +8,7 @@ import pytest
 pytest.importorskip("gmsh")
 
 from mesh import FingertipVolumeState, generate_volume_mesh, volume_mesh_settings_for_tier
-from mesh.volume_types import SurfaceTriangle
+from mesh.volume.contracts import SurfaceTriangle
 from model import Fingertip
 
 

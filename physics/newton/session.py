@@ -6,9 +6,9 @@ import time
 
 import numpy as np
 
-from .load import ParticleLoad
+from ..contracts.load import ParticleLoad
 from .solve import NewtonSettings, _load_newton_backend
-from .types import NewtonResult, TetMeshData
+from ..contracts.types import NewtonResult, TetMeshData
 
 
 class NewtonSession:

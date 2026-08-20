@@ -12,11 +12,11 @@ import newton
 from shapely import wkt as shapely_wkt
 from shapely.geometry import Point
 
-from physics.solve import NewtonSettings, PhysicsDependencyError
-from physics.load import ParticleLoad
-from physics.types import NewtonResult, TetMeshData
-from physics.fingertip import PreparedFingertipMesh
-from physics.indentation import (
+from physics.newton.solve import NewtonSettings, PhysicsDependencyError
+from physics.contracts.load import ParticleLoad
+from physics.contracts.types import NewtonResult, TetMeshData
+from physics.trajectory.fingertip import PreparedFingertipMesh
+from physics.trajectory.indentation import (
     IndentationCheckpoint,
     IndentationResult,
     IndentationSettings,
@@ -24,7 +24,7 @@ from physics.indentation import (
     RigidIndenter3D,
     checkpoint_step_schedule,
 )
-from mesh.rigid_object import RigidObjectMesh, RigidPose3D
+from mesh.rigid.object import RigidObjectMesh, RigidPose3D
 
 if TYPE_CHECKING:
     from contact.first_contact import FirstContactResult

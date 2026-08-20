@@ -7,7 +7,7 @@ modules for validation and smoke workflows, but are intentionally not part of
 the production-facing package export.
 """
 
-from .fingertip import (
+from .trajectory.fingertip import (
     PreparedFingertipMesh,
     InvalidFingertipMesh,
     PrescribedVertexDisplacement,
@@ -16,9 +16,9 @@ from .fingertip import (
     prepare_fingertip_mesh,
     solve_prescribed_indentation,
 )
-from .solve import NewtonSettings, PhysicsDependencyError
-from .types import NewtonResult, TetMeshData
-from .indentation import (
+from .newton.solve import NewtonSettings, PhysicsDependencyError
+from .contracts.types import NewtonResult, TetMeshData
+from .trajectory.indentation import (
     IndentationCheckpoint,
     IndentationResult,
     IndentationSettings,

@@ -18,16 +18,16 @@ python -m pip install -e ".[mesh,physics,ax,test]"
 ## Focused tests
 
 ```bash
-./scripts/pytest_lit tests/unit/model tests/unit/mesh -q
-./scripts/pytest_lit tests/unit/contact tests/unit/physics -q
-./scripts/pytest_lit tests/unit/optics tests/unit/optimization -q
-./scripts/pytest_lit tests/unit/optimization/test_evaluator.py -q
+./scripts/tools/pytest_lit tests/unit/model tests/unit/mesh -q
+./scripts/tools/pytest_lit tests/unit/contact tests/unit/physics -q
+./scripts/tools/pytest_lit tests/unit/optics tests/unit/optimization -q
+./scripts/tools/pytest_lit tests/unit/optimization/test_evaluator.py -q
 ```
 
 The Newton smoke tests require the CUDA-capable `lit` environment:
 
 ```bash
-./scripts/pytest_lit tests/smoke/physics -q -m "smoke and physics"
+./scripts/tools/pytest_lit tests/smoke/physics -q -m "smoke and physics"
 ```
 
 ## OptiX gate before production BO
@@ -79,9 +79,24 @@ and do not run it as part of ordinary focused test execution.
 
 ## Newton viewer helpers
 
-Interactive Newton viewer support is kept in `physics._viewer` for debugging.
+Interactive Newton viewer support is kept in `physics.newton.viewer` for debugging.
 It is intentionally not a general plotting framework. Production evaluation
 does not open a viewer or alter solver state for display.
+
+## Rigid OBJ asset preparation
+
+Prepare a deterministic parametric sphere asset with:
+
+```bash
+python scripts/assets/prepare_object_mesh.py \
+  --radius-mm 2.0 \
+  --subdivisions 2
+```
+
+The default output is under `assets/objects/`. Runtime code can load one
+asset with `mesh.load_obj()` or load all top-level OBJ files in a directory
+with `mesh.load_obj_directory()`. The loader requires an explicit
+`scale_mm_per_unit` and validates the neutral closed rigid-mesh contract.
 
 ## Generated artifacts
 

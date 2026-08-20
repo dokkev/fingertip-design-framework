@@ -1,4 +1,4 @@
-"""Deterministic primary-ray sets for the 2D-to-3D comparison."""
+"""Deterministic primary-ray sets for FULL_3D transport."""
 
 from __future__ import annotations
 
@@ -7,10 +7,6 @@ from math import radians
 import numpy as np
 
 from model.led import LED
-from optics.cross_section.settings import TraceSettings
-from optics.cross_section.transport import sample_primary_directions
-
-
 def _radical_inverse_base_two(indices: np.ndarray) -> np.ndarray:
     """Vectorized base-two radical inverse for uint32 index values."""
     values = np.asarray(indices, dtype=np.uint32)
@@ -24,35 +20,15 @@ def sample_directions(
     led: LED,
     emission_axis_2d: tuple[float, float],
     *,
-    mode: str,
     ray_count: int,
 ) -> np.ndarray:
-    """Return one deterministic direction set for one comparison family.
+    """Return a deterministic Hammersley-like 3D direction set.
 
-    Planar mode delegates to the existing reduced sampler, so its directions
-    are numerically identical.  Full 3D uses a deterministic Hammersley-like
-    sequence.  With ``s = sin(theta_max)*sqrt(u)``, the radial area measure in
-    the truncated cone is sampled uniformly; azimuth is the base-two radical
-    inverse.  This is an idealized deterministic extension, not a measured LED
-    radiation pattern.
+    With ``s = sin(theta_max)*sqrt(u)``, the radial area measure in the
+    truncated cone is sampled uniformly; azimuth is the base-two radical
+    inverse.  This is an idealized deterministic extension, not a measured
+    LED radiation pattern.
     """
-    if mode == "planar":
-        directions = sample_primary_directions(
-            led,
-            emission_axis_2d,
-            TraceSettings(ray_count=ray_count),
-        )
-        # Keep the reduced sampler's float64 values exact at this API
-        # boundary; the OptiX backend performs the explicit float32 upload
-        # required by traversal after this equality contract is checked.
-        result = np.asarray(
-            [[float(direction[0]), float(direction[1]), 0.0] for direction in directions],
-            dtype=float,
-        )
-        return result
-    if mode != "full3d":
-        raise ValueError(f"unsupported 3D sampling mode: {mode!r}")
-
     axis_xy = np.asarray(emission_axis_2d, dtype=float)
     axis_xy /= np.linalg.norm(axis_xy)
     axis = np.asarray([axis_xy[0], axis_xy[1], 0.0], dtype=float)
@@ -75,19 +51,4 @@ def sample_directions(
     directions /= np.linalg.norm(directions, axis=1)[:, None]
     return directions.astype(np.float32)
 
-
-def sample_planar_directions(
-    led: LED,
-    emission_axis_2d: tuple[float, float],
-    ray_count: int,
-) -> np.ndarray:
-    """Return the exact reduced-tracer planar direction set."""
-    return sample_directions(
-        led,
-        emission_axis_2d,
-        mode="planar",
-        ray_count=ray_count,
-    )
-
-
-__all__ = ["sample_directions", "sample_planar_directions"]
+__all__ = ["sample_directions"]

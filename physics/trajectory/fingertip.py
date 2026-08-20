@@ -8,14 +8,14 @@ from typing import Mapping, Sequence
 
 import numpy as np
 
-from mesh.volume_types import FingertipVolumeMesh
-from mesh.volume_state import (
+from mesh.volume.contracts import FingertipVolumeMesh
+from mesh.volume.state import (
     FingertipVolumeState,
     make_fingertip_volume_state as make_volume_state,
 )
 
-from .types import NewtonResult, TetMeshData
-from .solve import _load_newton_backend
+from ..contracts.types import NewtonResult, TetMeshData
+from ..newton.solve import _load_newton_backend
 
 
 class InvalidFingertipMesh(ValueError):
@@ -143,10 +143,10 @@ def prepare_fingertip_mesh(
 
     if not isinstance(volume_mesh, FingertipVolumeMesh):
         raise TypeError("volume_mesh must be FingertipVolumeMesh")
-    if not volume_mesh.validation.passed:
+    if not volume_mesh.fingertip.validation.passed:
         raise InvalidFingertipMesh(
             "refusing invalid FingertipVolumeMesh: "
-            + ", ".join(volume_mesh.validation.errors)
+            + ", ".join(volume_mesh.fingertip.validation.errors)
         )
     if not volume_mesh.nodes or not volume_mesh.tetrahedra:
         raise ValueError("FingertipVolumeMesh must contain nodes and tetrahedra")

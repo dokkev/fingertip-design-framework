@@ -1,6 +1,6 @@
 """Current morphology-search contracts.
 
-The optional Ax dependency is imported only by ``optimization.ax_adapter`` at
+The optional Ax dependency is imported only by ``optimization.adapters.ax`` at
 the execution boundary; importing this package stays lightweight.
 """
 from optimization.design_space import (

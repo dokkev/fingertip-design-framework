@@ -6,11 +6,11 @@ import pytest
 pytest.importorskip("gmsh")
 
 from mesh import FingertipVolumeState, volume_mesh_settings_for_tier
-from mesh.fingertip import generate_fingertip_mesh
-from mesh.types import mesh_settings_for_level
-from mesh.volume3d import generate_volume_mesh
+from mesh.fingertip.geometry import generate_fingertip_mesh
+from mesh.fingertip.contracts import mesh_settings_for_level
+from mesh.volume.mesh import generate_volume_mesh
 from model import Fingertip
-from optics.contact_object import CarrierOptics, IndenterOptics
+from optics.contracts.objects import CarrierOptics, IndenterOptics
 from optics.transport3d import build_fingertip_volume_state_geometry
 from optics.transport3d.geometry import CARRIER_CONTACT_INTERFACE
 

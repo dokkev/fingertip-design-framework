@@ -11,7 +11,6 @@ from optics.transport3d.geometry import (
     CARRIER_CONTACT_INTERFACE,
     build_full3d_transport_geometry,
     build_fixed_transport_surfaces,
-    build_transport_geometry,
 )
 from optics.transport3d.fingertip import build_fingertip_volume_state_geometry
 from optics.transport3d.settings import Transport3DSettings
@@ -21,13 +20,10 @@ from optics.transport3d.transport import (
     Transport3DPhysicsError,
     Transport3DTraceError,
     trace_geometry,
-    trace_3d,
 )
 from optics.transport3d.unified import (
     OptiXTransport,
-    LEGACY_UNIFIED_ARTIFACT_SCHEMA,
-    LEGACY_UNIFIED_ARTIFACT_SCHEMA_V2,
-    LEGACY_UNIFIED_ARTIFACT_SCHEMA_V3,
+    UNIFIED_ARTIFACT_SCHEMA,
     UnifiedTransportResult,
     fingerprint_mapping,
     load_case_artifact,
@@ -48,21 +44,17 @@ __all__ = [
     "NATIVE_3D_FEA_STATE_SCHEMA",
     "Full3DSurfaceArtifact",
     "OptiXTransport",
-    "LEGACY_UNIFIED_ARTIFACT_SCHEMA",
-    "LEGACY_UNIFIED_ARTIFACT_SCHEMA_V2",
-    "LEGACY_UNIFIED_ARTIFACT_SCHEMA_V3",
+    "UNIFIED_ARTIFACT_SCHEMA",
     "UnifiedTransportResult",
     "build_full3d_transport_geometry",
     "CARRIER_CONTACT_INTERFACE",
     "build_fixed_transport_surfaces",
     "build_fingertip_volume_state_geometry",
-    "build_transport_geometry",
     "fingerprint_mapping",
     "load_case_artifact",
     "load_full3d_surface_artifact",
     "native_field_separability",
     "save_case_artifact",
     "trace_geometry",
-    "trace_3d",
     "transport_configuration",
 ]

@@ -163,7 +163,7 @@ class FingertipMesh:
     @cached_property
     def pad(self):
         """Return the compliant-pad topology as the public neutral mesh."""
-        from mesh.pad import PadMesh
+        from mesh.fingertip.surface import PadMesh
 
         return PadMesh.from_fingertip_mesh(self)
 

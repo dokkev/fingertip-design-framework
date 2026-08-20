@@ -10,7 +10,7 @@ from typing import Any, Iterable
 import numpy as np
 from shapely.geometry import LineString, Polygon
 
-from mesh.volume_types import (
+from mesh.volume.contracts import (
     FingertipVolumeMesh,
     SurfaceTriangle,
     Tetrahedron,

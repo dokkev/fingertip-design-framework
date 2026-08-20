@@ -29,11 +29,11 @@ from physics import (
     make_fingertip_volume_state as make_vbd_volume_state,
     prepare_fingertip_mesh,
 )
-from physics.session import NewtonSession
-from mesh.fingertip import generate_fingertip_mesh
-from mesh.types import mesh_settings_for_level
-from mesh.volume3d import generate_volume_mesh
-from mesh.volume_types import volume_mesh_settings_for_tier
+from physics.newton.session import NewtonSession
+from mesh.fingertip.geometry import generate_fingertip_mesh
+from mesh.fingertip.contracts import mesh_settings_for_level
+from mesh.volume.mesh import generate_volume_mesh
+from mesh.volume.contracts import volume_mesh_settings_for_tier
 from model.fingertip import Fingertip
 from model.fingertip_model import FingertipModel
 from model.fingertip_model import FingertipParameters
@@ -53,7 +53,7 @@ from optics.transport3d.optix_backend import create_runtime
 from optics.transport3d.settings import Transport3DSettings
 from validation.common.io import atomic_write_json, strict_read_json
 from validation.common.provenance import sha256_file
-from mesh.volume_state import make_fingertip_volume_state as make_volume_state
+from mesh.volume.state import make_fingertip_volume_state as make_volume_state
 
 from .correspondence import (
     VBD_CORRESPONDENCE_DT,
@@ -286,7 +286,6 @@ def _bounds(geometries: Sequence[Any]) -> tuple[tuple[float, float], tuple[float
 
 def _optix_settings(bounds: tuple[tuple[float, float], tuple[float, float]]) -> Transport3DSettings:
     return Transport3DSettings(
-        mode="full3d",
         ray_count=RAY_COUNT,
         max_interactions=10,
         minimum_ray_weight=1.0e-4,
@@ -298,11 +297,8 @@ def _optix_settings(bounds: tuple[tuple[float, float], tuple[float, float]]) -> 
         internal_grid_width=GRID_WIDTH,
         internal_grid_height=GRID_HEIGHT,
         internal_z_bins=GRID_Z_BINS,
-        projected_grid_width=GRID_WIDTH,
-        projected_grid_height=GRID_HEIGHT,
         x_bounds_mm=bounds[0],
         y_bounds_mm=bounds[1],
-        retain_projected_segments=False,
         retain_internal_path_field=True,
     )
 

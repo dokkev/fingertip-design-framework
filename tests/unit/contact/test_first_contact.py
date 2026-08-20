@@ -13,7 +13,7 @@ from contact import (
     intersects,
     make_outer_compliant_surface,
 )
-from mesh.rigid_object import make_sphere_mesh
+from mesh.rigid.object import make_sphere_mesh
 from model.fingertip_model import FingertipModel
 from model.fingertip_model import FingertipParameters
 from model.solid import build_fingertip_solid

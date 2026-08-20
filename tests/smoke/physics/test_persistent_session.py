@@ -11,8 +11,8 @@ pytest.importorskip("newton")
 import warp as wp
 
 from physics import NewtonSettings, TetMeshData
-from physics.load import ParticleLoad
-from physics.session import NewtonSession
+from physics.contracts.load import ParticleLoad
+from physics.newton.session import NewtonSession
 
 
 def _cube_mesh() -> TetMeshData:

@@ -8,9 +8,9 @@ import pytest
 pytest.importorskip("gmsh")
 
 from mesh import FingertipVolumeState, volume_mesh_settings_for_tier
-from mesh.fingertip import generate_fingertip_mesh
-from mesh.types import mesh_settings_for_level
-from mesh.volume3d import generate_volume_mesh
+from mesh.fingertip.geometry import generate_fingertip_mesh
+from mesh.fingertip.contracts import mesh_settings_for_level
+from mesh.volume.mesh import generate_volume_mesh
 from model import Fingertip
 from optics.transport3d import build_fingertip_volume_state_geometry
 
@@ -108,7 +108,7 @@ def test_volume_state_direct_adapter_builds_full3d_geometry_without_fea_artifact
         ),
     )
 
-    assert geometry.geometry_mode == "full3d_surface"
+    assert geometry.metadata["geometry_mode"] == "full3d_surface"
     assert geometry.depth_mm == pytest.approx(11.0)
     assert geometry.z_min_mm == pytest.approx(-5.5)
     assert geometry.z_max_mm == pytest.approx(5.5)

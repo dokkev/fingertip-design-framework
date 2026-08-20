@@ -7,9 +7,9 @@ from typing import Any, Mapping
 import numpy as np
 from shapely.geometry import LineString, Point
 
-from mesh.fingertip import generate_fingertip_mesh
-from mesh.types import FingertipMesh, mesh_settings_for_level
-from mesh.volume_state import FingertipVolumeState
+from mesh.fingertip.geometry import generate_fingertip_mesh
+from mesh.fingertip.contracts import FingertipMesh, mesh_settings_for_level
+from mesh.volume.state import FingertipVolumeState
 from model.fingertip import Fingertip
 
 from .geometry import (
@@ -22,7 +22,7 @@ from .geometry import (
     build_full3d_transport_geometry,
     _surface_normals,
 )
-from optics.contact_object import CarrierOptics
+from optics.contracts.objects import CarrierOptics
 
 
 _SURFACE_ORIENTATION_TOLERANCE_MM = 1.0e-9

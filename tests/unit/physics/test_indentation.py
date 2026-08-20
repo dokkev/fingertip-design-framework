@@ -13,10 +13,10 @@ from physics import (
     RigidIndenter3D,
     solve_fingertip_indentation,
 )
-from physics.fingertip import PreparedFingertipMesh
-from physics.types import TetMeshData
-from physics.indentation import _validate_support_constraints
-from mesh.rigid_object import RigidPose3D, make_cube_mesh
+from physics.trajectory.fingertip import PreparedFingertipMesh
+from physics.contracts.types import TetMeshData
+from physics.trajectory.indentation import _validate_support_constraints
+from mesh.rigid.object import RigidPose3D, make_cube_mesh
 
 
 def test_pose_and_direction_are_normalized_without_solver_imports() -> None:

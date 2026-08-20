@@ -9,7 +9,7 @@ from typing import Any
 import numpy as np
 from shapely.geometry import LineString, Point
 
-from mesh.rigid_object import RigidObjectMesh, RigidPose3D
+from mesh.rigid.object import RigidObjectMesh, RigidPose3D
 from model.fingertip_model import FingertipModel
 from model.solid import FingertipSolid
 

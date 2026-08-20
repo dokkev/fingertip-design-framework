@@ -11,7 +11,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .types import NewtonResult, TetMeshData
+from ..contracts.types import NewtonResult, TetMeshData
 
 
 class PhysicsDependencyError(RuntimeError):
@@ -22,13 +22,13 @@ def _load_newton_backend():
     """Load the optional Newton/Warp backend at the execution boundary."""
 
     try:
-        from . import newton_vbd
+        from . import vbd
     except (ImportError, OSError) as exc:
         raise PhysicsDependencyError(
             "Newton/Warp backend could not be imported: "
             f"{type(exc).__name__}: {exc}"
         ) from exc
-    return newton_vbd
+    return vbd
 
 
 @dataclass(frozen=True)

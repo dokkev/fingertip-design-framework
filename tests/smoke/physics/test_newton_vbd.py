@@ -11,7 +11,7 @@ pytest.importorskip("newton")
 import warp as wp
 
 from physics import NewtonSettings, TetMeshData
-from physics.solve import solve
+from physics.newton.solve import solve
 
 
 @pytest.mark.smoke

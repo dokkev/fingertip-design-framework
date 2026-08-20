@@ -11,7 +11,7 @@ from shapely.ops import triangulate
 
 from model.solid import FingertipSolid
 
-from .rigid_object import RigidObjectMesh
+from .object import RigidObjectMesh
 
 
 _CARRIER_Z_MIN_MM = -5.5

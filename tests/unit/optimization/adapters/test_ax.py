@@ -7,10 +7,10 @@ from types import SimpleNamespace
 
 import pytest
 
-import optimization.ax_adapter as ax_adapter
-from mesh.fingertip import GmshDependencyError
+import optimization.adapters.ax as ax_adapter
+from mesh.fingertip.geometry import GmshDependencyError
 from model import FingertipParameters
-from optimization.ax_adapter import (
+from optimization.adapters.ax import (
     AxSettings,
     CampaignInfrastructureError,
     create_ax_client,

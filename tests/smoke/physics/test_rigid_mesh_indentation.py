@@ -26,12 +26,12 @@ from physics import (
     prepare_fingertip_mesh,
     solve_fingertip_indentation,
 )
-from mesh.rigid_object import RigidPose3D
-from physics.newton_vbd import solve_newton_vbd_indentation
-from mesh.rigid_carrier import make_distal_phalanx_mesh
-from mesh.rigid_object import make_box_mesh, make_cylinder_mesh, make_sphere_mesh
-from mesh.volume3d import generate_volume_mesh
-from mesh.volume_types import volume_mesh_settings_for_tier
+from mesh.rigid.object import RigidPose3D
+from physics.newton.vbd import solve_newton_vbd_indentation
+from mesh.rigid.carrier import make_distal_phalanx_mesh
+from mesh.rigid.object import make_box_mesh, make_cylinder_mesh, make_sphere_mesh
+from mesh.volume.mesh import generate_volume_mesh
+from mesh.volume.contracts import volume_mesh_settings_for_tier
 from model.fingertip_model import FingertipModel
 from model.fingertip_model import FingertipParameters
 from model.solid import build_fingertip_solid
@@ -375,8 +375,8 @@ def test_triangle_mesh_model_path_accepts_primitive_family(object_mesh) -> None:
         [[0, 1, 3, 4], [1, 2, 3, 6], [1, 3, 4, 6], [1, 4, 5, 6], [3, 4, 6, 7]],
         dtype=np.int32,
     )
-    from physics.fingertip import PreparedFingertipMesh
-    from physics.types import TetMeshData
+    from physics.trajectory.fingertip import PreparedFingertipMesh
+    from physics.contracts.types import TetMeshData
 
     prepared = PreparedFingertipMesh(
         TetMeshData(vertices, tetrahedra),

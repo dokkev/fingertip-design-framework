@@ -48,7 +48,7 @@ class FingertipSolid:
 
     This object contains geometry and provenance only.  It deliberately does
     not contain FEA mesh nodes or solver state; volume meshing is a separate
-    operation in :mod:`mesh.volume3d`.
+    operation in :mod:`mesh.volume.mesh`.
     """
 
     parameters: FingertipParameters

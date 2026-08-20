@@ -1,4 +1,4 @@
-"""Neutral immutable results for deterministic 3D optical transport."""
+"""Neutral immutable results for deterministic FULL_3D optical transport."""
 
 from __future__ import annotations
 
@@ -22,7 +22,6 @@ def _owned_array(value: Any, *, dtype: Any, name: str) -> np.ndarray:
 
 
 def _freeze_metadata(value: Any) -> Any:
-    """Recursively freeze the small metadata trees carried by a result."""
     if isinstance(value, Mapping):
         return MappingProxyType(
             {key: _freeze_metadata(item) for key, item in value.items()}
@@ -38,10 +37,9 @@ def _freeze_metadata(value: Any) -> Any:
 
 @dataclass(frozen=True)
 class Transport3DResult:
-    """Camera-free outgoing field and complete energy bookkeeping."""
+    """Camera-free outgoing field and complete FULL_3D energy bookkeeping."""
 
     source_position_mm: tuple[float, float, float]
-    source_mode: str
     extrusion_depth_mm: float
     launched_ray_count: int
     launched_weight: float
@@ -73,38 +71,28 @@ class Transport3DResult:
     carrier_transmitted_weight: float = 0.0
     carrier_interface_incident_weight: float = 0.0
     carrier_reflected_weight: float = 0.0
-    projected_x_edges_mm: np.ndarray | None = None
-    projected_y_edges_mm: np.ndarray | None = None
-    projected_weighted_path_density: np.ndarray | None = None
-    projected_optical_mask: np.ndarray | None = None
     internal_path_x_edges_mm: np.ndarray | None = None
     internal_path_y_edges_mm: np.ndarray | None = None
     internal_path_z_edges_mm: np.ndarray | None = None
     internal_weighted_path_density_3d: np.ndarray | None = None
     internal_z_integrated_path_density: np.ndarray | None = None
-    retained_segment_lengths_mm: np.ndarray | None = None
-    retained_segment_primary_ray_indices: np.ndarray | None = None
-    retained_segment_interaction_counts: np.ndarray | None = None
-    retained_segment_starts_mm: np.ndarray | None = None
-    retained_segment_ends_mm: np.ndarray | None = None
-    retained_segment_media: np.ndarray | None = None
-    retained_segment_start_weights: np.ndarray | None = None
-    retained_segment_end_weights: np.ndarray | None = None
     geometry_metadata: Mapping[str, Any] = field(default_factory=dict)
     timings_seconds: Mapping[str, float] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         source = tuple(float(value) for value in self.source_position_mm)
         if len(source) != 3 or not np.all(np.isfinite(source)):
-            raise Transport3DResultError("source_position_mm must contain three finite values")
-        if self.source_mode not in ("planar", "full3d"):
-            raise Transport3DResultError("source_mode must be 'planar' or 'full3d'")
+            raise Transport3DResultError(
+                "source_position_mm must contain three finite values"
+            )
         if (
             not isinstance(self.launched_ray_count, int)
             or isinstance(self.launched_ray_count, bool)
             or self.launched_ray_count < 1
         ):
-            raise Transport3DResultError("launched_ray_count must be a positive integer")
+            raise Transport3DResultError(
+                "launched_ray_count must be a positive integer"
+            )
         scalar_names = (
             "extrusion_depth_mm",
             "launched_weight",
@@ -126,9 +114,17 @@ class Transport3DResult:
         scalars = {name: float(getattr(self, name)) for name in scalar_names}
         if any(not np.isfinite(value) for value in scalars.values()):
             raise Transport3DResultError("result scalars must be finite")
-        if scalars["extrusion_depth_mm"] <= 0.0 or scalars["energy_balance_tolerance"] <= 0.0:
-            raise Transport3DResultError("depth and energy tolerance must be positive")
-        if any(value < 0.0 for name, value in scalars.items() if name not in ("energy_balance_error",)):
+        if scalars["extrusion_depth_mm"] <= 0.0 or scalars[
+            "energy_balance_tolerance"
+        ] <= 0.0:
+            raise Transport3DResultError(
+                "depth and energy tolerance must be positive"
+            )
+        if any(
+            value < 0.0
+            for name, value in scalars.items()
+            if name != "energy_balance_error"
+        ):
             raise Transport3DResultError("result weights must be nonnegative")
         if scalars["energy_balance_error"] < 0.0:
             raise Transport3DResultError("energy_balance_error must be nonnegative")
@@ -156,17 +152,33 @@ class Transport3DResult:
 
         u_edges = _owned_array(self.surface_u_edges, dtype=float, name="surface_u_edges")
         z_edges = _owned_array(self.surface_z_edges, dtype=float, name="surface_z_edges")
-        field = _owned_array(self.outgoing_surface_field, dtype=float, name="outgoing_surface_field")
-        if len(u_edges) < 2 or len(z_edges) < 2 or field.shape != (len(z_edges) - 1, len(u_edges) - 1):
+        field = _owned_array(
+            self.outgoing_surface_field,
+            dtype=float,
+            name="outgoing_surface_field",
+        )
+        if (
+            len(u_edges) < 2
+            or len(z_edges) < 2
+            or field.shape != (len(z_edges) - 1, len(u_edges) - 1)
+        ):
             raise Transport3DResultError("surface field shape does not match its edges")
         if np.any(np.diff(u_edges) <= 0.0) or np.any(np.diff(z_edges) <= 0.0):
             raise Transport3DResultError("surface field edges must be increasing")
         if np.any(field < 0.0):
             raise Transport3DResultError("surface field must be nonnegative")
 
-        positions = _owned_array(self.escape_positions_mm, dtype=float, name="escape_positions_mm")
-        directions = _owned_array(self.escape_directions, dtype=float, name="escape_directions")
-        normals = _owned_array(self.escape_surface_normals, dtype=float, name="escape_surface_normals")
+        positions = _owned_array(
+            self.escape_positions_mm, dtype=float, name="escape_positions_mm"
+        )
+        directions = _owned_array(
+            self.escape_directions, dtype=float, name="escape_directions"
+        )
+        normals = _owned_array(
+            self.escape_surface_normals,
+            dtype=float,
+            name="escape_surface_normals",
+        )
         surface_u = _owned_array(self.escape_surface_u, dtype=float, name="escape_surface_u")
         surface_z = _owned_array(self.escape_surface_z, dtype=float, name="escape_surface_z")
         surface_tags = tuple(str(tag) for tag in self.escape_surface_tags)
@@ -177,7 +189,11 @@ class Transport3DResult:
         )
         weights = _owned_array(self.escape_weights, dtype=float, name="escape_weights")
         primary = np.array(self.escape_primary_ray_indices, dtype=np.int64, copy=True)
-        paths = _owned_array(self.escape_path_lengths_mm, dtype=float, name="escape_path_lengths_mm")
+        paths = _owned_array(
+            self.escape_path_lengths_mm,
+            dtype=float,
+            name="escape_path_lengths_mm",
+        )
         interactions = np.array(self.escape_interaction_counts, dtype=np.int64, copy=True)
         if (
             positions.ndim != 2
@@ -219,33 +235,14 @@ class Transport3DResult:
         if len(normals) and np.any(~np.isfinite(normals_norm) | (normals_norm <= 0.0)):
             raise Transport3DResultError("escape surface normals must be nonzero")
         directions_norm = np.linalg.norm(directions, axis=1)
-        if len(directions) and np.any(~np.isfinite(directions_norm) | (directions_norm <= 0.0)):
+        if len(directions) and np.any(
+            ~np.isfinite(directions_norm) | (directions_norm <= 0.0)
+        ):
             raise Transport3DResultError("escape directions must be nonzero")
         primary.setflags(write=False)
         interactions.setflags(write=False)
+        primitive_indices.setflags(write=False)
 
-        projected = []
-        if self.projected_x_edges_mm is not None or self.projected_y_edges_mm is not None or self.projected_weighted_path_density is not None:
-            if self.projected_x_edges_mm is None or self.projected_y_edges_mm is None or self.projected_weighted_path_density is None:
-                raise Transport3DResultError("projected diagnostic arrays must be supplied together")
-            projected_x = _owned_array(self.projected_x_edges_mm, dtype=float, name="projected_x_edges_mm")
-            projected_y = _owned_array(self.projected_y_edges_mm, dtype=float, name="projected_y_edges_mm")
-            projected_density = _owned_array(self.projected_weighted_path_density, dtype=float, name="projected_weighted_path_density")
-            projected_mask = (
-                np.ones_like(projected_density, dtype=bool)
-                if self.projected_optical_mask is None
-                else np.array(self.projected_optical_mask, dtype=bool, copy=True)
-            )
-            if (
-                projected_density.shape != (len(projected_y) - 1, len(projected_x) - 1)
-                or projected_mask.shape != projected_density.shape
-                or np.any(projected_density < 0.0)
-            ):
-                raise Transport3DResultError("projected diagnostic shape is invalid")
-            projected_mask.setflags(write=False)
-            projected = [projected_x, projected_y, projected_density, projected_mask]
-
-        internal = []
         internal_values = (
             self.internal_path_x_edges_mm,
             self.internal_path_y_edges_mm,
@@ -253,6 +250,7 @@ class Transport3DResult:
             self.internal_weighted_path_density_3d,
             self.internal_z_integrated_path_density,
         )
+        internal: list[np.ndarray] = []
         if any(value is not None for value in internal_values):
             if any(value is None for value in internal_values):
                 raise Transport3DResultError(
@@ -314,112 +312,17 @@ class Transport3DResult:
                 integrated_density,
             ]
 
-        retained_segments = []
-        retained_values = (
-            self.retained_segment_lengths_mm,
-            self.retained_segment_primary_ray_indices,
-            self.retained_segment_interaction_counts,
-            self.retained_segment_starts_mm,
-            self.retained_segment_ends_mm,
-            self.retained_segment_media,
-            self.retained_segment_start_weights,
-            self.retained_segment_end_weights,
-        )
-        if any(value is not None for value in retained_values):
-            if any(value is None for value in retained_values):
-                raise Transport3DResultError(
-                    "retained segment metadata must be supplied together"
-                )
-            retained_lengths = _owned_array(
-                self.retained_segment_lengths_mm,
-                dtype=float,
-                name="retained_segment_lengths_mm",
-            )
-            retained_primary = np.array(
-                self.retained_segment_primary_ray_indices,
-                dtype=np.int64,
-                copy=True,
-            )
-            retained_interactions = np.array(
-                self.retained_segment_interaction_counts,
-                dtype=np.int64,
-                copy=True,
-            )
-            retained_starts = _owned_array(
-                self.retained_segment_starts_mm,
-                dtype=float,
-                name="retained_segment_starts_mm",
-            )
-            retained_ends = _owned_array(
-                self.retained_segment_ends_mm,
-                dtype=float,
-                name="retained_segment_ends_mm",
-            )
-            retained_media = np.array(
-                self.retained_segment_media,
-                dtype=np.uint8,
-                copy=True,
-            )
-            retained_start_weights = _owned_array(
-                self.retained_segment_start_weights,
-                dtype=float,
-                name="retained_segment_start_weights",
-            )
-            retained_end_weights = _owned_array(
-                self.retained_segment_end_weights,
-                dtype=float,
-                name="retained_segment_end_weights",
-            )
-            if (
-                retained_lengths.ndim != 1
-                or retained_primary.ndim != 1
-                or retained_interactions.ndim != 1
-                or retained_starts.ndim != 2
-                or retained_starts.shape[1:] != (3,)
-                or retained_ends.shape != retained_starts.shape
-                or retained_media.ndim != 1
-                or retained_start_weights.ndim != 1
-                or retained_end_weights.ndim != 1
-                or len(retained_primary) != len(retained_lengths)
-                or len(retained_interactions) != len(retained_lengths)
-                or len(retained_starts) != len(retained_lengths)
-                or len(retained_ends) != len(retained_lengths)
-                or len(retained_media) != len(retained_lengths)
-                or len(retained_start_weights) != len(retained_lengths)
-                or len(retained_end_weights) != len(retained_lengths)
-                or np.any(retained_lengths < 0.0)
-                or np.any(retained_primary < 0)
-                or np.any(retained_interactions < 0)
-                or np.any(retained_media > 1)
-                or np.any(retained_start_weights < 0.0)
-                or np.any(retained_end_weights < 0.0)
-            ):
-                raise Transport3DResultError("retained segment metadata is invalid")
-            retained_primary.setflags(write=False)
-            retained_interactions.setflags(write=False)
-            retained_media.setflags(write=False)
-            retained_segments = [
-                retained_lengths,
-                retained_primary,
-                retained_interactions,
-                retained_starts,
-                retained_ends,
-                retained_media,
-                retained_start_weights,
-                retained_end_weights,
-            ]
-
-        for name, array in (
-            ("u_edges", u_edges),
-            ("z_edges", z_edges),
-            ("field", field),
-            ("positions", positions),
-            ("directions", directions),
-            ("normals", normals),
-            ("surface_u", surface_u),
-            ("surface_z", surface_z),
-            ("weights", weights),
-            ("paths", paths),
+        for array in (
+            u_edges,
+            z_edges,
+            field,
+            positions,
+            directions,
+            normals,
+            surface_u,
+            surface_z,
+            weights,
+            paths,
         ):
             array.setflags(write=False)
         object.__setattr__(self, "source_position_mm", source)
@@ -432,45 +335,30 @@ class Transport3DResult:
         object.__setattr__(self, "escape_surface_u", surface_u)
         object.__setattr__(self, "escape_surface_z", surface_z)
         object.__setattr__(self, "escape_surface_tags", surface_tags)
-        primitive_indices.setflags(write=False)
         object.__setattr__(self, "escape_surface_primitive_indices", primitive_indices)
         object.__setattr__(self, "escape_weights", weights)
         object.__setattr__(self, "escape_primary_ray_indices", primary)
         object.__setattr__(self, "escape_path_lengths_mm", paths)
         object.__setattr__(self, "escape_interaction_counts", interactions)
-        if projected:
-            object.__setattr__(self, "projected_x_edges_mm", projected[0])
-            object.__setattr__(self, "projected_y_edges_mm", projected[1])
-            object.__setattr__(self, "projected_weighted_path_density", projected[2])
-            object.__setattr__(self, "projected_optical_mask", projected[3])
         if internal:
             object.__setattr__(self, "internal_path_x_edges_mm", internal[0])
             object.__setattr__(self, "internal_path_y_edges_mm", internal[1])
             object.__setattr__(self, "internal_path_z_edges_mm", internal[2])
             object.__setattr__(self, "internal_weighted_path_density_3d", internal[3])
             object.__setattr__(self, "internal_z_integrated_path_density", internal[4])
-        if retained_segments:
-            object.__setattr__(self, "retained_segment_lengths_mm", retained_segments[0])
-            object.__setattr__(self, "retained_segment_primary_ray_indices", retained_segments[1])
-            object.__setattr__(self, "retained_segment_interaction_counts", retained_segments[2])
-            object.__setattr__(self, "retained_segment_starts_mm", retained_segments[3])
-            object.__setattr__(self, "retained_segment_ends_mm", retained_segments[4])
-            object.__setattr__(self, "retained_segment_media", retained_segments[5])
-            object.__setattr__(self, "retained_segment_start_weights", retained_segments[6])
-            object.__setattr__(self, "retained_segment_end_weights", retained_segments[7])
         object.__setattr__(self, "geometry_metadata", _freeze_metadata(self.geometry_metadata))
-        object.__setattr__(self, "timings_seconds", MappingProxyType({key: float(value) for key, value in self.timings_seconds.items()}))
+        object.__setattr__(
+            self,
+            "timings_seconds",
+            MappingProxyType(
+                {key: float(value) for key, value in self.timings_seconds.items()}
+            ),
+        )
 
     def lateral_outgoing_profiles(
         self,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """Return common-edge outgoing profiles for the two lateral surfaces.
-
-        Profiles integrate escaped ray weights over the extrusion coordinate
-        and histogram only the semantic ``pad_outer_left`` and
-        ``pad_outer_right`` surfaces.  This is a neutral post-processing view;
-        the raw escape events and transport physics are unchanged.
-        """
+        """Return outgoing profiles for the two lateral pad surfaces."""
         left = np.asarray(self.escape_surface_tags, dtype=object) == "pad_outer_left"
         right = np.asarray(self.escape_surface_tags, dtype=object) == "pad_outer_right"
         left_profile = np.histogram(

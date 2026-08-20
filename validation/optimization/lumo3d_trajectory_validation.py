@@ -461,8 +461,8 @@ def run_validation(output: str | Path, *, device: str = "cuda:0") -> dict[str, A
         "objective_pathology": objective_pathology,
         "code_cleanup": {
             "files_simplified": [
-                "physics/indentation.py",
-                "physics/newton_vbd.py",
+                "physics/trajectory/indentation.py",
+                "physics/newton/vbd.py",
                 "optimization/__init__.py",
             ],
             "modules_added": [

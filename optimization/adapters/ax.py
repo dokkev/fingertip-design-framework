@@ -10,8 +10,8 @@ from typing import Callable, Literal, Mapping
 from ax.api.client import Client
 from ax.api.configs import RangeParameterConfig
 
-from mesh.fingertip import GmshDependencyError
-from mesh.volume3d import VolumeMeshDependencyError
+from mesh.fingertip.geometry import GmshDependencyError
+from mesh.volume.mesh import VolumeMeshDependencyError
 from model import InvalidFingertipParameters
 from physics import PhysicsDependencyError
 from optics.transport3d import Transport3DDependencyError

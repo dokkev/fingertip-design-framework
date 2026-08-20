@@ -5,17 +5,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 import math
 from types import MappingProxyType
-from typing import Any, Literal, Mapping
+from typing import Any, Mapping
 
 import numpy as np
-from shapely.geometry import Point
 
-from mesh.pad import PadMesh
-from mesh.indenter import IndenterPose2D
-from mesh.types import FingertipMesh
+from mesh.fingertip.contracts import FingertipMesh
+from mesh.fingertip.surface import PadMesh
 from model.fingertip import Fingertip
-from optics.contact_object import IndenterOptics, ObjectBoundaryOptics
-from optics.cross_section.domain import build_mesh_domain
+from optics.contracts.objects import ObjectBoundaryOptics
 from optics.geometry.extrusion import (
     InvalidExtrudedOpticalMesh,
     _ExtrudedMesh,
@@ -150,13 +147,7 @@ class TriangleSurface:
 
 @dataclass(frozen=True)
 class ExtrudedTransportGeometry:
-    """All neutral surfaces and material-coordinate metadata for one state.
-
-    ``planar_extruded`` is the OptiX representation of a deformed 2D
-    cross-section.  ``full3d_surface`` is reserved for a direct deformed 3D
-    FEA or VBD surface artifact; it must never be produced by the 2D
-    extrusion helper.
-    """
+    """All neutral surfaces and metadata for one direct FULL_3D state."""
 
     silicone: TriangleSurface
     rigid: TriangleSurface
@@ -166,9 +157,7 @@ class ExtrudedTransportGeometry:
     z_max_mm: float
     source_position_mm: tuple[float, float, float]
     source_medium: int
-    optical_domain: Any
     metadata: Mapping[str, Any]
-    geometry_mode: Literal["planar_extruded", "full3d_surface"] = "planar_extruded"
     indenter_optics: ObjectBoundaryOptics | None = None
     carrier_optics: ObjectBoundaryOptics | None = None
 
@@ -182,10 +171,6 @@ class ExtrudedTransportGeometry:
             raise Transport3DGeometryError("the single source must be at z=0")
         if self.source_medium not in (0, 1):
             raise Transport3DGeometryError("source_medium must be air=0 or silicone=1")
-        if self.geometry_mode not in ("planar_extruded", "full3d_surface"):
-            raise Transport3DGeometryError(
-                "geometry_mode must be 'planar_extruded' or 'full3d_surface'"
-            )
         object.__setattr__(self, "source_position_mm", source)
         object.__setattr__(self, "metadata", MappingProxyType(dict(self.metadata)))
 
@@ -199,10 +184,6 @@ def _surface_normals(vertices: np.ndarray, faces: np.ndarray) -> np.ndarray:
     if np.any(lengths <= 1.0e-12):
         raise Transport3DGeometryError("triangle normal is degenerate")
     return normals / lengths[:, None]
-
-
-def _canonical_edge(first: int, second: int) -> tuple[int, int]:
-    return min(first, second), max(first, second)
 
 
 def _ordered_chain(edges: np.ndarray, coordinates: np.ndarray) -> tuple[int, ...]:
@@ -232,57 +213,6 @@ def _ordered_chain(edges: np.ndarray, coordinates: np.ndarray) -> tuple[int, ...
     if len(chain) != len(adjacency):
         raise Transport3DGeometryError("external semantic boundary chain is disconnected")
     return tuple(chain)
-
-
-def _boundary_metadata(
-    mesh: Any,
-    reference_mesh: PadMesh,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, tuple[str, ...], tuple[int, ...]]:
-    external_edges = np.vstack(
-        [mesh.boundary_edges_for(tag) for tag in EXTERNAL_SURFACE_TAGS]
-    )
-    chain = _ordered_chain(external_edges, reference_mesh.reference_coordinates_mm)
-    chain_u: dict[int, float] = {chain[0]: 0.0}
-    cumulative = 0.0
-    for first, second in zip(chain, chain[1:]):
-        cumulative += float(
-            np.linalg.norm(
-                reference_mesh.reference_coordinates_mm[second]
-                - reference_mesh.reference_coordinates_mm[first]
-            )
-        )
-        chain_u[second] = cumulative
-    if cumulative <= 0.0:
-        raise Transport3DGeometryError("external semantic boundary has zero reference length")
-    chain_u = {node: value / cumulative for node, value in chain_u.items()}
-    edge_to_tag: dict[tuple[int, int], str] = {}
-    for tag in mesh.semantic_boundary_tags:
-        for first, second in mesh.boundary_edges_for(tag):
-            edge_to_tag[_canonical_edge(int(first), int(second))] = tag
-
-    edge_indices: list[int] = []
-    external: list[bool] = []
-    u_start: list[float] = []
-    u_end: list[float] = []
-    semantic_tags: list[str] = []
-    for index, (first, second) in enumerate(mesh.boundary_edges):
-        i, j = int(first), int(second)
-        tag = edge_to_tag.get(_canonical_edge(i, j))
-        is_external = tag in EXTERNAL_SURFACE_TAGS
-        for _ in range(2):
-            edge_indices.append(index)
-            external.append(is_external)
-            u_start.append(chain_u.get(i, 0.0))
-            u_end.append(chain_u.get(j, 0.0))
-            semantic_tags.append(tag or "")
-    return (
-        np.asarray(edge_indices, dtype=np.int64),
-        np.asarray(external, dtype=bool),
-        np.asarray(u_start, dtype=float),
-        np.asarray(u_end, dtype=float),
-        tuple(semantic_tags),
-        chain,
-    )
 
 
 def _rigid_pad_mesh(mesh: FingertipMesh) -> PadMesh:
@@ -358,8 +288,8 @@ def build_fixed_transport_surfaces(
     """Build the fixed rigid-carrier and virtual-envelope surfaces.
 
     The fixed surfaces are independent of the mechanics backend.  Compliant
-    silicone triangles are supplied separately by the planar mesh path or the
-    direct ``FingertipVolumeState`` adapter.
+    silicone triangles are supplied separately by the direct
+    ``FingertipVolumeState`` adapter.
     """
     if not isinstance(reference_mesh, FingertipMesh):
         raise TypeError("reference_mesh must be FingertipMesh")
@@ -410,152 +340,6 @@ def build_fixed_transport_surfaces(
     return rigid, envelope
 
 
-def build_transport_geometry(
-    tip: Fingertip,
-    pad_mesh: Any,
-    reference_mesh: FingertipMesh,
-    *,
-    depth_mm: float = 11.0,
-    source_epsilon_mm: float = 1.0e-5,
-    indenter_pose: IndenterPose2D | None = None,
-    indenter_optics: IndenterOptics | None = None,
-) -> ExtrudedTransportGeometry:
-    """Build one loaded/reference scene from neutral mesh data only."""
-    if not isinstance(tip, Fingertip):
-        raise TypeError("tip must be a Fingertip")
-    if not isinstance(reference_mesh, FingertipMesh):
-        raise TypeError("reference_mesh must be a FingertipMesh")
-    if not hasattr(pad_mesh, "coordinates") or not hasattr(pad_mesh, "triangles"):
-        raise TypeError("pad_mesh must expose neutral coordinates and triangles")
-    if (indenter_pose is None) != (indenter_optics is None):
-        raise Transport3DGeometryError(
-            "indenter_pose and indenter_optics must be supplied together"
-        )
-    reference_pad = reference_mesh.pad
-    if len(pad_mesh.node_ids) != len(reference_pad.node_ids) or not np.array_equal(
-        np.asarray(pad_mesh.node_ids), np.asarray(reference_pad.node_ids)
-    ):
-        raise Transport3DGeometryError("loaded pad topology does not match reference topology")
-    if not np.array_equal(np.asarray(pad_mesh.triangles), reference_pad.triangles):
-        raise Transport3DGeometryError("loaded pad triangles do not match reference topology")
-    try:
-        extrusion = _ExtrudedMesh.from_pad_mesh(reference_pad, depth_mm=depth_mm)
-    except InvalidExtrudedOpticalMesh as exc:
-        raise Transport3DGeometryError(str(exc)) from exc
-    domain = build_mesh_domain(
-        tip,
-        pad_mesh,
-        indenter_pose=indenter_pose,
-        indenter_optics=indenter_optics,
-    )
-
-    side_face_start = 2 * len(reference_pad.triangles)
-    side_faces = extrusion.faces_3d[side_face_start:]
-    edge_indices, external, u_start, u_end, semantic_tags, chain = _boundary_metadata(
-        pad_mesh,
-        reference_pad,
-    )
-    contact_edge_mask = np.zeros(len(pad_mesh.boundary_edges), dtype=bool)
-    if indenter_optics is not None:
-        if indenter_pose is None or indenter_pose.contact_patch is None:
-            raise Transport3DGeometryError(
-                "BLOCKED_CONTACT_INTERFACE_MAPPING: requested indenter optics "
-                "requires a nonempty mechanical contact patch"
-            )
-        active_node_ids = set(indenter_pose.active_contact_node_ids)
-        if not active_node_ids:
-            raise Transport3DGeometryError(
-                "BLOCKED_CONTACT_INTERFACE_MAPPING: mechanical contact patch "
-                "has no active contact node provenance"
-            )
-        deformed_coordinates = np.asarray(pad_mesh.coordinates, dtype=float)
-        contact_edge_keys = {
-            _canonical_edge(int(edge[0]), int(edge[1]))
-            for edge in pad_mesh.boundary_edges_for("pad_outer_arc")
-        }
-        for index, edge in enumerate(pad_mesh.boundary_edges):
-            if not external[2 * index]:
-                continue
-            first, second = (int(edge[0]), int(edge[1]))
-            if _canonical_edge(first, second) not in contact_edge_keys:
-                continue
-            node_ids = (
-                int(pad_mesh.node_ids[first]),
-                int(pad_mesh.node_ids[second]),
-            )
-            contact_edge_mask[index] = all(
-                node_id in active_node_ids for node_id in node_ids
-            )
-        mapped_edges = [
-            deformed_coordinates[np.asarray(edge, dtype=np.int64)]
-            for edge, selected in zip(
-                pad_mesh.boundary_edges,
-                contact_edge_mask,
-            )
-            if selected
-        ]
-        if not mapped_edges:
-            raise Transport3DGeometryError(
-                "BLOCKED_CONTACT_INTERFACE_MAPPING: active contact nodes do not "
-                "map to a pad outer boundary edge"
-            )
-    interface_tags = tuple(
-        (
-            OBJECT_CONTACT_INTERFACE
-            if contact_edge_mask[index // 2]
-            else AIR_INTERFACE if external[index] else INTERNAL_INTERFACE
-        )
-        for index in range(len(side_faces))
-    )
-    silicone = _surface_from_extrusion(
-        extrusion,
-        np.asarray(pad_mesh.coordinates, dtype=float),
-        side_faces,
-        boundary_edge_indices=edge_indices,
-        external_surface=external,
-        u_start=u_start,
-        u_end=u_end,
-        semantic_tags=semantic_tags,
-        interface_tags=interface_tags,
-    )
-
-    rigid, envelope = build_fixed_transport_surfaces(
-        reference_mesh,
-        depth_mm=depth_mm,
-        envelope_coordinates=np.asarray(pad_mesh.coordinates, dtype=float),
-    )
-
-    source_xy = np.asarray(domain.source_position_mm, dtype=float)
-    source_probe = source_xy + source_epsilon_mm * np.asarray(domain.source_emission_axis_2d)
-    source_medium = 1 if domain.silicone_region.covers(Point(*source_probe)) else 0
-    metadata = {
-        "silicone_triangle_count": int(len(silicone.faces)),
-        "rigid_triangle_count": int(len(rigid.faces)),
-        "envelope_triangle_count": int(len(envelope.faces)),
-        "silicone_2d_triangle_count": int(len(reference_pad.triangles)),
-        "silicone_boundary_edge_count": int(len(reference_pad.boundary_edges)),
-        "external_surface_tags": list(EXTERNAL_SURFACE_TAGS),
-        "external_reference_chain_node_count": len(chain),
-        "periodic_z_planes": [-5.5, 5.5],
-        "periodic_planes_are_escape_surfaces": False,
-        "rigid_geometry_source": "FingertipMesh.carrier_elements",
-    }
-    return ExtrudedTransportGeometry(
-        silicone=silicone,
-        rigid=rigid,
-        envelope=envelope,
-        depth_mm=depth_mm,
-        z_min_mm=-depth_mm / 2.0,
-        z_max_mm=depth_mm / 2.0,
-        source_position_mm=(float(source_xy[0]), float(source_xy[1]), 0.0),
-        source_medium=source_medium,
-        optical_domain=domain,
-        metadata=metadata,
-        geometry_mode="planar_extruded",
-        indenter_optics=indenter_optics,
-    )
-
-
 def build_full3d_transport_geometry(
     tip: Fingertip,
     *,
@@ -574,9 +358,8 @@ def build_full3d_transport_geometry(
     accept a ``PadMesh``.  The distinction is the provenance guard against
     accidentally labelling an extrusion of 2D deformation as FULL_3D.  The
     provenance guard accepts only direct FEA or direct VBD surface states.
-    ``optical_domain`` is absent because full 3D field accumulation is
-    performed from retained native path segments; callers requesting the
-    legacy projected diagnostic must provide a separate validated domain.
+    Full 3D field accumulation is performed from retained native path
+    segments; no collapsed 2D optical domain is accepted here.
     """
     if not isinstance(tip, Fingertip):
         raise TypeError("tip must be a Fingertip")
@@ -651,9 +434,7 @@ def build_full3d_transport_geometry(
         z_max_mm=depth_mm / 2.0,
         source_position_mm=source,
         source_medium=source_medium,
-        optical_domain=None,
         metadata=enriched_metadata,
-        geometry_mode="full3d_surface",
         carrier_optics=carrier_optics,
     )
 
@@ -669,5 +450,4 @@ __all__ = [
     "Transport3DGeometryError",
     "build_full3d_transport_geometry",
     "build_fixed_transport_surfaces",
-    "build_transport_geometry",
 ]

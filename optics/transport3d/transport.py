@@ -1,10 +1,4 @@
-"""Deterministic camera-independent 3D optical transport.
-
-FULL_3D owns its scene, CUDA traversal, and native 3D accumulation here.  It
-reuses the cross-section package only for the canonical 2D domain preparation
-and weighted projected-path reporting boundary; the explicit public functions
-make that coupling intentional rather than depending on private helpers.
-"""
+"""Deterministic camera-independent FULL_3D optical transport."""
 
 from __future__ import annotations
 
@@ -12,18 +6,12 @@ import time
 from typing import Any
 
 import numpy as np
-from shapely import contains_xy
-
 from model.fingertip import Fingertip
-from optics.cross_section.result import RawRaySegment
-from optics.cross_section.settings import TraceSettings
-from optics.cross_section.transport import build_path_density_grid, prepare_geometry
 from optics.transport3d.geometry import (
     CARRIER_CONTACT_INTERFACE,
     OBJECT_CONTACT_INTERFACE,
     ExtrudedTransportGeometry,
     Transport3DGeometryError,
-    build_transport_geometry,
 )
 from optics.transport3d.optix_backend import (
     OptixScene,
@@ -44,81 +32,27 @@ from optics.transport3d.sampling import sample_directions
 from optics.transport3d.settings import Transport3DSettings
 
 
-PLANAR_DIRECTION_TOLERANCE = 1.0e-6
-
-
-def _enforce_planar_directions(
-    cp: Any,
-    directions: Any,
-    *,
-    valid: Any | None = None,
-    context: str,
-) -> Any:
-    """Validate and reproject planar directions without permitting 3D drift."""
-    if valid is None:
-        valid = cp.ones(directions.shape[0], dtype=cp.bool_)
-    if bool(cp.any(valid)):
-        selected = directions[valid]
-        max_abs_dz = float(cp.asnumpy(cp.max(cp.abs(selected[:, 2]))))
-        if not np.isfinite(max_abs_dz) or max_abs_dz > PLANAR_DIRECTION_TOLERANCE:
-            raise Transport3DPhysicsError(
-                f"{context} introduced non-planar propagation: max |dz|={max_abs_dz:g}"
-            )
-        selected = selected.copy()
-        selected[:, 2] = 0.0
-        norms = cp.linalg.norm(selected[:, :2], axis=1)
-        if bool(cp.any(~cp.isfinite(norms) | (norms <= 1.0e-12))):
-            raise Transport3DPhysicsError(
-                f"{context} produced a degenerate planar direction"
-            )
-        selected[:, :2] /= norms[:, None]
-        result = directions.copy()
-        result[valid] = selected
-        return result
-    return directions
-
-
 def _xy_edges(
     geometry: ExtrudedTransportGeometry,
     *,
     width: int,
     height: int,
 ) -> tuple[np.ndarray, np.ndarray]:
-    if geometry.optical_domain is None:
-        vertices = np.vstack(
-            (
-                geometry.silicone.vertices,
-                geometry.rigid.vertices,
-                geometry.envelope.vertices,
-            )
+    vertices = np.vstack(
+        (
+            geometry.silicone.vertices,
+            geometry.rigid.vertices,
+            geometry.envelope.vertices,
         )
-        min_x = float(np.min(vertices[:, 0]))
-        min_y = float(np.min(vertices[:, 1]))
-        max_x = float(np.max(vertices[:, 0]))
-        max_y = float(np.max(vertices[:, 1]))
-    else:
-        domain = geometry.optical_domain
-        min_x, min_y, max_x, max_y = domain.outer_envelope.bounds
+    )
+    min_x = float(np.min(vertices[:, 0]))
+    min_y = float(np.min(vertices[:, 1]))
+    max_x = float(np.max(vertices[:, 0]))
+    max_y = float(np.max(vertices[:, 1]))
     margin = 0.04 * max(max_x - min_x, max_y - min_y)
     x_edges = np.linspace(min_x - margin, max_x + margin, width + 1)
     y_edges = np.linspace(min_y - margin, max_y + margin, height + 1)
     return x_edges, y_edges
-
-
-def _field_edges(
-    geometry: ExtrudedTransportGeometry,
-    settings: Transport3DSettings,
-) -> tuple[np.ndarray, np.ndarray]:
-    if settings.x_bounds_mm is not None and settings.y_bounds_mm is not None:
-        return (
-            np.linspace(*settings.x_bounds_mm, settings.projected_grid_width + 1),
-            np.linspace(*settings.y_bounds_mm, settings.projected_grid_height + 1),
-        )
-    return _xy_edges(
-        geometry,
-        width=settings.projected_grid_width,
-        height=settings.projected_grid_height,
-    )
 
 
 def _internal_field_edges(
@@ -173,53 +107,6 @@ def _surface_coordinates(
     along = cp.sum((points[:, :2] - first[:, :2]) * edge, axis=1) / cp.maximum(denominator, 1.0e-30)
     u = surface.u_start[primitive] + along * (surface.u_end[primitive] - surface.u_start[primitive])
     return points, cp.clip(u, 0.0, 1.0), points[:, 2]
-
-
-def _projected_density(
-    geometry: ExtrudedTransportGeometry,
-    settings: Transport3DSettings,
-    chunks: list[tuple[Any, Any, Any, Any, Any]],
-    cp: Any,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    x_edges, y_edges = _field_edges(geometry, settings)
-    raw_segments: list[RawRaySegment] = []
-    for starts, ends, media, start_weights, end_weights in chunks:
-        starts_np = cp.asnumpy(starts)
-        ends_np = cp.asnumpy(ends)
-        media_np = cp.asnumpy(media)
-        start_np = cp.asnumpy(start_weights)
-        end_np = cp.asnumpy(end_weights)
-        for index in range(len(starts_np)):
-            raw_segments.append(
-                RawRaySegment(
-                    start_mm=(float(starts_np[index, 0]), float(starts_np[index, 1])),
-                    end_mm=(float(ends_np[index, 0]), float(ends_np[index, 1])),
-                    medium="silicone" if int(media_np[index]) else "air",
-                    start_weight=float(start_np[index]),
-                    end_weight=float(end_np[index]),
-                    primary_ray_index=0,
-                    interaction_index=0,
-                )
-            )
-    prepared = prepare_geometry(geometry.optical_domain)
-    trace_settings = TraceSettings(
-        ray_count=settings.ray_count,
-        max_interactions=settings.max_interactions,
-        minimum_ray_weight=settings.minimum_ray_weight,
-        maximum_segment_count=settings.maximum_segment_count,
-        grid_width=settings.projected_grid_width,
-        grid_height=settings.projected_grid_height,
-        source_epsilon_mm=settings.source_epsilon_mm,
-        intersection_epsilon_mm=settings.intersection_epsilon_mm,
-    )
-    return build_path_density_grid(
-        geometry.optical_domain,
-        prepared,
-        trace_settings,
-        tuple(raw_segments),
-        x_bounds_mm=settings.x_bounds_mm,
-        y_bounds_mm=settings.y_bounds_mm,
-    )
 
 
 def _accumulate_segment_path_3d(
@@ -281,24 +168,12 @@ def _new_internal_path_context(
     settings: Transport3DSettings,
  ) -> dict[str, Any]:
     x_edges, y_edges, z_edges = _internal_field_edges(geometry, settings)
-    if geometry.optical_domain is None:
-        # A true 3D surface artifact has no authoritative 2D projection to
-        # use as an accessibility classifier.  The native P3 accumulator
-        # therefore books every sampled transport segment; no collapsed 2D
-        # geometry is invented for the FULL_3D path.
-        optical_mask = np.ones(
-            (settings.internal_grid_height, settings.internal_grid_width),
-            dtype=bool,
-        )
-    else:
-        prepared = prepare_geometry(geometry.optical_domain)
-        x_centers = 0.5 * (x_edges[:-1] + x_edges[1:])
-        y_centers = 0.5 * (y_edges[:-1] + y_edges[1:])
-        center_x, center_y = np.meshgrid(x_centers, y_centers)
-        optical_mask = np.asarray(
-            contains_xy(prepared.accessible_region, center_x, center_y),
-            dtype=bool,
-        )
+    # A direct 3D surface artifact has no authoritative 2D projection.  The
+    # native accumulator therefore books every sampled transport segment.
+    optical_mask = np.ones(
+        (settings.internal_grid_height, settings.internal_grid_width),
+        dtype=bool,
+    )
     density = np.zeros(
         (settings.internal_z_bins, settings.internal_grid_height, settings.internal_grid_width),
         dtype=float,
@@ -434,14 +309,6 @@ def _trace_with_runtime(
     runtime: OptixRuntime,
 ) -> Transport3DResult:
     cp = runtime.cp
-    if settings.mode == "planar" and geometry.geometry_mode != "planar_extruded":
-        raise Transport3DGeometryError(
-            "PLANAR_2D requires the explicit 2D-to-z-wall geometry representation"
-        )
-    if settings.retain_projected_segments and geometry.optical_domain is None:
-        raise Transport3DGeometryError(
-            "projected path accumulation requires a validated 2D optical domain"
-        )
     if geometry.indenter_optics is not None and geometry.silicone.interface_tags is None:
         raise Transport3DGeometryError(
             "indenter optics require semantic silicone interface tags"
@@ -515,16 +382,9 @@ def _trace_with_runtime(
     directions_np = sample_directions(
         tip.led,
         tip.emission_axis,
-        mode=settings.mode,
         ray_count=settings.ray_count,
     )
     directions = cp.asarray(directions_np, dtype=cp.float32)
-    if settings.mode == "planar":
-        directions = _enforce_planar_directions(
-            cp,
-            directions,
-            context="deterministic planar source sampling",
-        )
     origins = source[None, :] + settings.source_epsilon_mm * axis[None, :]
     origins = cp.repeat(origins, settings.ray_count, axis=0)
     launched_weight = float(tip.led.relative_radiant_power)
@@ -558,9 +418,6 @@ def _trace_with_runtime(
         if settings.retain_internal_path_field
         else None
     )
-    retain_segments = settings.retain_projected_segments
-    segment_chunks: list[tuple[Any, Any, Any, Any, Any]] = []
-    segment_metadata_chunks: list[tuple[Any, Any, Any]] = []
     escape_chunks: list[tuple[Any, ...]] = []
     surface_field = cp.zeros((settings.surface_z_bins, settings.surface_u_bins), dtype=cp.float64)
     surface_u_edges = cp.linspace(0.0, 1.0, settings.surface_u_bins + 1, dtype=cp.float64)
@@ -610,13 +467,6 @@ def _trace_with_runtime(
         envelope_distance = cp.where(envelope_found != 0, envelope_distance, infinity)
 
         dz = directions[:, 2]
-        if settings.mode == "planar":
-            directions = _enforce_planar_directions(
-                cp,
-                directions,
-                context="planar propagation before intersection",
-            )
-            dz = directions[:, 2]
         periodic_distance = periodic_plane_distance(
             cp,
             origins[:, 2],
@@ -691,16 +541,6 @@ def _trace_with_runtime(
         if bool(cp.any(removed < -1.0e-12)):
             raise Transport3DPhysicsError("segment attenuation increased branch weight")
         absorbed_weight += float(cp.asnumpy(cp.sum(removed)))
-        if retain_segments:
-            segment_chunks.append((origins.copy(), hit_positions.copy(), medium.copy(), weights.copy(), end_weights.copy()))
-        if settings.retain_projected_segments:
-            segment_metadata_chunks.append(
-                (
-                    cp.linalg.norm(hit_positions - origins, axis=1).copy(),
-                    primary.copy(),
-                    interactions.copy(),
-                )
-            )
         if internal_context is not None:
             _accumulate_internal_chunk(
                 internal_context,
@@ -711,10 +551,6 @@ def _trace_with_runtime(
 
         periodic = event == 3
         if bool(cp.any(periodic)):
-            if settings.mode == "planar":
-                raise Transport3DPhysicsError(
-                    "PLANAR_2D reached a longitudinal periodic boundary"
-                )
             periodic_weight = end_weights[periodic]
             periodic_wrapped = wraps[periodic] + 1
             pathological = periodic_wrapped > settings.maximum_periodic_wraps
@@ -864,18 +700,6 @@ def _trace_with_runtime(
                                 float(geometry.indenter_optics.refractive_index),
                             )
                         )
-                        if settings.mode == "planar":
-                            object_reflected = _enforce_planar_directions(
-                                cp,
-                                object_reflected,
-                                context="planar object reflected branch",
-                            )
-                            object_transmitted = _enforce_planar_directions(
-                                cp,
-                                object_transmitted,
-                                valid=~object_tir,
-                                context="planar object transmitted branch",
-                            )
                         reflected[object_indices] = object_reflected
                         transmitted[object_indices] = object_transmitted
                         reflectance[object_indices] = object_reflectance
@@ -922,18 +746,6 @@ def _trace_with_runtime(
                                 float(geometry.carrier_optics.refractive_index),
                             )
                         )
-                        if settings.mode == "planar":
-                            carrier_reflected = _enforce_planar_directions(
-                                cp,
-                                carrier_reflected,
-                                context="planar carrier reflected branch",
-                            )
-                            carrier_transmitted = _enforce_planar_directions(
-                                cp,
-                                carrier_transmitted,
-                                valid=~carrier_tir,
-                                context="planar carrier transmitted branch",
-                            )
                         reflected[carrier_indices] = carrier_reflected
                         transmitted[carrier_indices] = carrier_transmitted
                         reflectance[carrier_indices] = carrier_reflectance
@@ -948,19 +760,6 @@ def _trace_with_runtime(
                         )
                 reflected_weight = interface_end_weights * reflectance
                 transmitted_weight = interface_end_weights * (1.0 - reflectance)
-                if settings.mode == "planar":
-                    reflected = _enforce_planar_directions(
-                        cp,
-                        reflected,
-                        valid=reflected_weight > 0.0,
-                        context="planar reflected branch",
-                    )
-                    transmitted = _enforce_planar_directions(
-                        cp,
-                        transmitted,
-                        valid=(transmitted_weight > 0.0) & ~tir & ~tagged_contact,
-                        context="planar transmitted branch",
-                    )
                 next_interaction = interface_interactions + 1
                 first_generation = next_interaction <= 1
                 reflected_keep = (
@@ -1047,12 +846,6 @@ def _trace_with_runtime(
         if new_states:
             origins = _concatenate(cp, [state[0] for state in new_states], dtype=cp.float32, width=3)
             directions = _concatenate(cp, [state[1] for state in new_states], dtype=cp.float32, width=3)
-            if settings.mode == "planar":
-                directions = _enforce_planar_directions(
-                    cp,
-                    directions,
-                    context="planar branch state update",
-                )
             weights = _concatenate(cp, [state[2] for state in new_states], dtype=cp.float64)
             medium = _concatenate(cp, [state[3] for state in new_states], dtype=cp.uint8)
             primary = _concatenate(cp, [state[4] for state in new_states], dtype=cp.int64)
@@ -1081,37 +874,9 @@ def _trace_with_runtime(
         geometry.silicone.semantic_tags[int(primitive)]
         for primitive in cp.asnumpy(escaped_primitives)
     )
-    planar_direction_z_max = 0.0
-    if settings.mode == "planar" and int(escaped_directions.size):
-        planar_direction_z_max = float(
-            cp.asnumpy(cp.max(cp.abs(escaped_directions[:, 2])))
-        )
-        if planar_direction_z_max > PLANAR_DIRECTION_TOLERANCE:
-            raise Transport3DPhysicsError(
-                "PLANAR_2D escape history contains a nonzero longitudinal direction"
-            )
-    projected = (None, None, None, None)
-    if settings.retain_projected_segments:
-        projected = _projected_density(geometry, settings, segment_chunks, cp)
     internal = (None, None, None, None, None, None)
     if internal_context is not None:
         internal = _finalize_internal_path_context(internal_context, settings)
-    retained_segments = (None, None, None)
-    retained_geometry = (None, None, None, None, None, None)
-    if settings.retain_projected_segments:
-        retained_segments = (
-            _concatenate(cp, [chunk[0] for chunk in segment_metadata_chunks], dtype=cp.float64),
-            _concatenate(cp, [chunk[1] for chunk in segment_metadata_chunks], dtype=cp.int64),
-            _concatenate(cp, [chunk[2] for chunk in segment_metadata_chunks], dtype=cp.int64),
-        )
-        retained_geometry = (
-            _concatenate(cp, [chunk[0] for chunk in segment_chunks], dtype=cp.float32, width=3),
-            _concatenate(cp, [chunk[1] for chunk in segment_chunks], dtype=cp.float32, width=3),
-            _concatenate(cp, [chunk[2] for chunk in segment_chunks], dtype=cp.uint8),
-            _concatenate(cp, [chunk[3] for chunk in segment_chunks], dtype=cp.float64),
-            _concatenate(cp, [chunk[4] for chunk in segment_chunks], dtype=cp.float64),
-            _concatenate(cp, [chunk[1] for chunk in segment_metadata_chunks], dtype=cp.int64),
-        )
     geometry_metadata = dict(geometry.metadata)
     geometry_metadata["branch_cutoff"] = {
         "minimum_ray_weight_fraction": settings.minimum_ray_weight,
@@ -1135,16 +900,6 @@ def _trace_with_runtime(
     geometry_metadata["interface_normal_orientation_fallback_count"] = (
         interface_normal_orientation_fallback_count
     )
-    geometry_metadata["planar_direction_invariant"] = {
-        "required": settings.mode == "planar",
-        "max_abs_direction_z": planar_direction_z_max,
-        "tolerance": PLANAR_DIRECTION_TOLERANCE,
-        "passed": settings.mode != "planar"
-        or planar_direction_z_max <= PLANAR_DIRECTION_TOLERANCE,
-    }
-    geometry_metadata["retained_segment_count"] = len(segment_chunks) and int(
-        sum(len(chunk[0]) for chunk in segment_chunks)
-    ) or 0
     geometry_metadata["transport_material"] = {
         "refractive_index_air": float(tip.optical.refractive_index_air),
         "refractive_index_silicone": float(tip.optical.refractive_index_silicone),
@@ -1156,7 +911,6 @@ def _trace_with_runtime(
         internal_metadata.update(
             {
                 "source_position_mm": list(geometry.source_position_mm),
-                "source_mode": settings.mode,
                 "ray_count": settings.ray_count,
                 "branch_cutoff": dict(geometry_metadata["branch_cutoff"]),
                 "material": dict(geometry_metadata["transport_material"]),
@@ -1211,7 +965,6 @@ def _trace_with_runtime(
         )
     return Transport3DResult(
         source_position_mm=geometry.source_position_mm,
-        source_mode=settings.mode,
         extrusion_depth_mm=geometry.depth_mm,
         launched_ray_count=settings.ray_count,
         launched_weight=launched_weight,
@@ -1243,23 +996,11 @@ def _trace_with_runtime(
         carrier_transmitted_weight=carrier_transmitted_weight,
         carrier_interface_incident_weight=carrier_interface_incident_weight,
         carrier_reflected_weight=carrier_reflected_weight,
-        projected_x_edges_mm=None if projected[0] is None else projected[0],
-        projected_y_edges_mm=None if projected[1] is None else projected[1],
-        projected_weighted_path_density=None if projected[2] is None else projected[2],
-        projected_optical_mask=None if projected[3] is None else projected[3],
         internal_path_x_edges_mm=None if internal[0] is None else internal[0],
         internal_path_y_edges_mm=None if internal[1] is None else internal[1],
         internal_path_z_edges_mm=None if internal[2] is None else internal[2],
         internal_weighted_path_density_3d=None if internal[3] is None else internal[3],
         internal_z_integrated_path_density=None if internal[4] is None else internal[4],
-        retained_segment_lengths_mm=None if retained_segments[0] is None else cp.asnumpy(retained_segments[0]),
-        retained_segment_primary_ray_indices=None if retained_segments[1] is None else cp.asnumpy(retained_segments[1]),
-        retained_segment_interaction_counts=None if retained_segments[2] is None else cp.asnumpy(retained_segments[2]),
-        retained_segment_starts_mm=None if retained_geometry[0] is None else cp.asnumpy(retained_geometry[0]),
-        retained_segment_ends_mm=None if retained_geometry[1] is None else cp.asnumpy(retained_geometry[1]),
-        retained_segment_media=None if retained_geometry[2] is None else cp.asnumpy(retained_geometry[2]),
-        retained_segment_start_weights=None if retained_geometry[3] is None else cp.asnumpy(retained_geometry[3]),
-        retained_segment_end_weights=None if retained_geometry[4] is None else cp.asnumpy(retained_geometry[4]),
         geometry_metadata=geometry_metadata,
         timings_seconds={
             "gas_build": scene.gas_build_seconds,
@@ -1267,47 +1008,6 @@ def _trace_with_runtime(
             "postprocessing": time.perf_counter() - postprocessing_started,
         },
     )
-
-
-def trace_3d(
-    tip: Fingertip,
-    mesh: Any,
-    *,
-    reference_mesh: Any | None = None,
-    settings: Transport3DSettings | None = None,
-    runtime: Any | None = None,
-    indenter_pose: Any | None = None,
-    indenter_optics: Any | None = None,
-) -> Transport3DResult:
-    """Trace one neutral fingertip state through an OptiX periodic cell.
-
-    ``mesh`` may be the reference ``FingertipMesh`` or a neutral deformed
-    ``PadMesh``.  A deformed pad must be paired with the original full mesh so
-    the fixed rigid carrier is taken from its existing neutral topology.
-    """
-    if not isinstance(tip, Fingertip):
-        raise TypeError("tip must be a Fingertip")
-    trace_settings = settings or Transport3DSettings()
-    if hasattr(mesh, "pad_elements") and hasattr(mesh, "carrier_elements"):
-        full_mesh = mesh
-        pad_mesh = mesh.pad
-    else:
-        pad_mesh = mesh
-        full_mesh = reference_mesh
-    if full_mesh is None:
-        raise Transport3DGeometryError(
-            "a deformed neutral pad requires reference_mesh for fixed carrier geometry"
-        )
-    geometry = build_transport_geometry(
-        tip,
-        pad_mesh,
-        full_mesh,
-        depth_mm=trace_settings.extrusion_depth_mm,
-        source_epsilon_mm=trace_settings.source_epsilon_mm,
-        indenter_pose=indenter_pose,
-        indenter_optics=indenter_optics,
-    )
-    return trace_geometry(tip, geometry, settings=trace_settings, runtime=runtime)
 
 
 def trace_geometry(
@@ -1337,5 +1037,4 @@ __all__ = [
     "Transport3DSettings",
     "Transport3DTraceError",
     "trace_geometry",
-    "trace_3d",
 ]
