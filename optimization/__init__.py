@@ -22,14 +22,26 @@ from optimization.evaluation_registry import (
     EvaluationRegistry,
     EvaluationRegistryRecord,
 )
-from optimization.scenarios import (
-    ContactScenario,
-    ScenarioGrid,
-    TrajectoryScenario,
+from optimization.mechanics_contract import (
+    DEFAULT_MECHANICS_CONTRACT,
+    MechanicsContract,
+)
+from optimization.objectives import (
+    OBJECTIVE_NAME,
+    TrajectoryObjectiveConfig,
+    TrajectoryObservation,
+    compute_trajectory_objective,
+)
+from optimization.protocol import (
+    DEFAULT_TRAJECTORY_PROTOCOL,
+    TrajectoryEvaluationProtocol,
 )
 
 
 _LAZY_EXPORTS = {
+    "ContactScenario": ("optimization.scenarios", "ContactScenario"),
+    "ScenarioGrid": ("optimization.scenarios", "ScenarioGrid"),
+    "TrajectoryScenario": ("optimization.scenarios", "TrajectoryScenario"),
     "DesignEvaluation": ("optimization.evaluator", "DesignEvaluation"),
     "DesignEvaluator": ("optimization.evaluator", "DesignEvaluator"),
     "StateEvaluation": ("optimization.evaluator", "StateEvaluation"),
@@ -62,12 +74,16 @@ def __getattr__(name: str):
 
 __all__ = [
     "ContactScenario",
+    "DEFAULT_MECHANICS_CONTRACT",
+    "DEFAULT_TRAJECTORY_PROTOCOL",
     "DesignSpace",
     "DesignEvaluation",
     "DesignEvaluator",
     "DesignVariable",
     "EvaluationRegistry",
     "EvaluationRegistryRecord",
+    "MechanicsContract",
+    "OBJECTIVE_NAME",
     "OPTIMIZABLE_PARAMETER_NAMES",
     "OptimizationStudy",
     "OptimizableParameterName",
@@ -80,7 +96,11 @@ __all__ = [
     "PRODUCTION_MAX_TOTAL_PAD_DEPTH_MM",
     "StateEvaluation",
     "TrajectoryEvaluation",
+    "TrajectoryEvaluationProtocol",
+    "TrajectoryObjectiveConfig",
+    "TrajectoryObservation",
     "ScenarioGrid",
     "TrajectoryScenario",
+    "compute_trajectory_objective",
     "create_production_study",
 ]

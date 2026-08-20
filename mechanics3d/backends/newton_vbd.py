@@ -17,10 +17,13 @@ from mechanics3d.load import ParticleLoad
 from mechanics3d.types import Mechanics3DResult, TetMeshData
 from mechanics3d.fingertip import FingertipMechanicsMesh
 from mechanics3d.indentation import (
+    IndentationCheckpoint,
     IndentationResult,
     IndentationSettings,
+    IndentationTrajectoryResult,
     RigidIndenter3D,
     RigidPose3D,
+    checkpoint_step_schedule,
 )
 from mesh.rigid_object import RigidObjectMesh
 
@@ -605,7 +608,7 @@ def _build_indentation_context(
     )
 
 
-def solve_newton_vbd_indentation(
+def _solve_newton_vbd_indentation_path(
     prepared_fingertip: FingertipMechanicsMesh,
     indenter: RigidIndenter3D,
     mechanics_settings: Mechanics3DSettings,
@@ -615,7 +618,7 @@ def solve_newton_vbd_indentation(
     visual_carrier_mesh: RigidObjectMesh | None = None,
     rigid_carrier_mesh: RigidObjectMesh | None = None,
     first_contact: FirstContactResult | None = None,
-) -> IndentationResult:
+) -> IndentationTrajectoryResult:
     """Run translation-only kinematic rigid-mesh contact with standalone VBD.
 
     ``viewer`` is an optional Newton viewer owned by a Newton-specific example
@@ -627,6 +630,51 @@ def solve_newton_vbd_indentation(
     collision. ``rigid_carrier_mesh`` is a separate explicit collision-enabled
     static world mesh. The two arguments are intentionally not interchangeable.
     """
+
+    checkpoint_travels = (float(indentation_settings.travel_mm),)
+    checkpoint_fractions = (1.0,)
+    if indentation_settings.travel_mm == 0.0:
+        schedule = tuple(
+            (0.0, step, step)
+            for step in range(1, indentation_settings.load_steps + 1)
+        )
+    else:
+        schedule = checkpoint_step_schedule(
+            checkpoint_travels,
+            max_load_increment_mm=float(indentation_settings.travel_mm)
+            / float(indentation_settings.load_steps),
+        )
+    return _solve_newton_vbd_indentation_path_with_schedule(
+        prepared_fingertip,
+        indenter,
+        mechanics_settings,
+        indentation_settings,
+        schedule,
+        checkpoint_travels=checkpoint_travels,
+        checkpoint_fractions=checkpoint_fractions,
+        viewer=viewer,
+        visual_carrier_mesh=visual_carrier_mesh,
+        rigid_carrier_mesh=rigid_carrier_mesh,
+        first_contact=first_contact,
+    )
+
+
+def _solve_newton_vbd_indentation_path_with_schedule(
+    prepared_fingertip: FingertipMechanicsMesh,
+    indenter: RigidIndenter3D,
+    mechanics_settings: Mechanics3DSettings,
+    indentation_settings: IndentationSettings,
+    schedule: tuple[tuple[float, int, int], ...],
+    *,
+    checkpoint_travels: tuple[float, ...],
+    checkpoint_fractions: tuple[float, ...],
+    normalized_indentation_ratios: tuple[float, ...] | None = None,
+    viewer: object | None = None,
+    visual_carrier_mesh: RigidObjectMesh | None = None,
+    rigid_carrier_mesh: RigidObjectMesh | None = None,
+    first_contact: FirstContactResult | None = None,
+) -> IndentationTrajectoryResult:
+    """Execute the one shared incremental VBD loop for all path APIs."""
 
     if first_contact is not None:
         from contact.first_contact import FirstContactResult
@@ -643,13 +691,32 @@ def solve_newton_vbd_indentation(
                 "first_contact.approach_direction must match the indenter "
                 "approach_direction"
             )
+    if len(checkpoint_travels) != len(checkpoint_fractions):
+        raise ValueError("checkpoint travel/fraction lengths must match")
+    ratios = (
+        checkpoint_fractions
+        if normalized_indentation_ratios is None
+        else normalized_indentation_ratios
+    )
+    if len(ratios) != len(checkpoint_travels):
+        raise ValueError("checkpoint travel/ratio lengths must match")
+    # The schedule may contain intermediate steps.  Build the exact mapping
+    # from each requested cumulative endpoint instead of relying on a global
+    # load-step fraction.
+    checkpoint_indices = {}
+    for target in checkpoint_travels:
+        matching = [cumulative for travel, _, cumulative in schedule if np.isclose(travel, target, rtol=0.0, atol=1.0e-12)]
+        if not matching:
+            raise ValueError(f"checkpoint travel {target:g} is absent from the schedule")
+        checkpoint_indices[matching[-1]] = checkpoint_travels.index(target)
+    checkpoint_by_index = {index: cumulative for cumulative, index in checkpoint_indices.items()}
+    checkpoint_by_step = {cumulative: index for index, cumulative in checkpoint_by_index.items()}
 
     initial_pose = (
         first_contact.spawn_pose
         if first_contact is not None
         else indenter.initial_pose
     )
-
     context = _build_indentation_context(
         prepared_fingertip,
         indenter,
@@ -661,9 +728,6 @@ def solve_newton_vbd_indentation(
     )
     if viewer is not None:
         viewer.set_model(context.model)
-    # T_spawn is the actual initialized body state.  It is intentionally not
-    # used as the physical velocity reference for the first positive load:
-    # spawn clearance is a numerical safeguard, not prescribed indentation.
     previous_pose_for_velocity = (
         first_contact.contact_pose
         if first_contact is not None
@@ -694,15 +758,15 @@ def solve_newton_vbd_indentation(
             rigid_carrier_mesh,
         )
     timestep_s = float(mechanics_settings.dt)
-    for step in range(indentation_settings.load_steps):
-        fraction = float(step + 1) / indentation_settings.load_steps
+    checkpoints: list[IndentationCheckpoint] = []
+    for target_travel, interval_step, cumulative_step in schedule:
         if first_contact is None:
-            target_pose = indenter.pose_at_travel(fraction * indentation_settings.travel_mm)
+            target_pose = indenter.pose_at_travel(target_travel)
         else:
             # Free-space motion to contact has already been normalized by the
             # geometry-only search. The VBD schedule is post-contact only.
             target_pose = first_contact.pose_at_post_contact_travel(
-                fraction * indentation_settings.travel_mm
+                target_travel
             )
         delta_mm = np.asarray(target_pose.translation_mm) - np.asarray(
             previous_pose_for_velocity.translation_mm
@@ -767,7 +831,7 @@ def solve_newton_vbd_indentation(
             void_bottom_carrier_contact_count,
         )
         if void_bottom_carrier_contact_count and first_carrier_contact_step is None:
-            first_carrier_contact_step = step + 1
+            first_carrier_contact_step = cumulative_step
         max_sphere_carrier_rigid_contact_count = max(
             max_sphere_carrier_rigid_contact_count,
             sphere_carrier_rigid_count,
@@ -807,7 +871,7 @@ def solve_newton_vbd_indentation(
                 )
                 final_carrier_clearance_mm = current_clearance_mm
         if viewer is not None:
-            viewer.begin_frame((step + 1) * timestep_s)
+            viewer.begin_frame(cumulative_step * timestep_s)
             viewer.log_state(accepted_state)
             viewer.log_contacts(context.contacts, accepted_state)
             viewer.end_frame()
@@ -838,84 +902,180 @@ def solve_newton_vbd_indentation(
         context.state_in, context.state_out = context.state_out, context.state_in
         previous_pose_for_velocity = target_pose
 
-    wp.synchronize_device(context.device)
-    deformed_vertices = (
-        np.asarray(context.state_in.particle_q.numpy(), dtype=np.float32).copy() * 1.0e3
-    )
-    rest_vertices = context.rest_vertices_m * 1.0e3
-    final_body_translation_mm = (
-        np.asarray(
-            context.state_in.body_q.numpy()[context.indenter_body][:3],
-            dtype=np.float32,
-        )
-        * 1.0e3
-    )
-    mechanics_result = Mechanics3DResult(
-        rest_vertices=rest_vertices,
-        deformed_vertices=deformed_vertices,
-        tetrahedra=prepared_fingertip.tet_mesh.tetrahedra,
-        steps=indentation_settings.load_steps,
-    )
-    final_pose = (
-        first_contact.pose_at_post_contact_travel(indentation_settings.travel_mm)
-        if first_contact is not None
-        else indenter.pose_at_travel(indentation_settings.travel_mm)
-    )
-    diagnostics: dict[str, float | int | str | bool] = {
-        "device": mechanics_settings.device,
-        "full_surface_contact": True,
-        "contact_buffer_status": "not_applicable_for_kinematic_indenter",
-        "first_contact_normalized": first_contact is not None,
-        "post_contact_travel_mm": indentation_settings.travel_mm,
-        "load_steps": indentation_settings.load_steps,
-        "rigid_sdf_target_voxel_mm": indentation_settings.rigid_sdf_target_voxel_mm,
-        "max_soft_contact_count": max_soft_contact_count,
-        "max_sphere_soft_contact_count": max_sphere_soft_contact_count,
-        "max_carrier_soft_contact_count": max_carrier_soft_contact_count,
-        "max_void_bottom_carrier_contact_count": max_void_bottom_carrier_contact_count,
-        # This is the semantic contact count used by the optical handoff.
-        # ``max_carrier_soft_contact_count`` also includes carrier records
-        # outside the compliant void-bottom interface (for example support
-        # contacts), so it is intentionally not the optical provenance count.
-        "carrier_interface_contact_count": max_void_bottom_carrier_contact_count,
-        "first_carrier_contact_step": first_carrier_contact_step,
-        "carrier_contact_active": first_carrier_contact_step is not None,
-        "max_sphere_carrier_rigid_contact_count": max_sphere_carrier_rigid_contact_count,
-        "carrier_contact_vertex_indices": tuple(sorted(carrier_contact_vertex_indices)),
-        "carrier_contact_vertex_count": len(carrier_contact_vertex_indices),
-        "carrier_collision_enabled": rigid_carrier_mesh is not None,
-        "initial_carrier_clearance_mm": initial_carrier_clearance_mm,
-        "min_carrier_clearance_mm": min_carrier_clearance_mm,
-        "final_carrier_clearance_mm": final_carrier_clearance_mm,
-        "max_carrier_penetration_mm": (
-            max(0.0, -min_carrier_clearance_mm)
-            if np.isfinite(min_carrier_clearance_mm)
-            else float("nan")
-        ),
-        "max_rigid_contact_count": max_rigid_contact_count,
-        "max_soft_contact_overflow": max_soft_contact_overflow,
-        "max_rigid_contact_overflow": max_rigid_contact_overflow,
-        "rigid_body_particle_contact_buffer_size": _RIGID_BODY_PARTICLE_CONTACT_BUFFER_SIZE,
-        "rigid_contact_buffer_size": _RIGID_CONTACT_BUFFER_SIZE,
-        "final_body_x_mm": float(final_body_translation_mm[0]),
-        "final_body_y_mm": float(final_body_translation_mm[1]),
-        "final_body_z_mm": float(final_body_translation_mm[2]),
-        "max_displacement_mm": float(np.max(np.linalg.norm(mechanics_result.displacement, axis=1))),
-    }
-    if first_contact is not None:
-        diagnostics.update(
-            {
-                "first_contact_travel_mm": first_contact.travel_to_contact_mm,
-                "first_contact_bracket_width_mm": first_contact.bracket_width_mm,
-                "spawn_clearance_mm": first_contact.spawn_clearance_mm,
-                "reference_pose_collision_free": True,
-                "spawn_pose_collision_free": True,
+        checkpoint_index = checkpoint_by_step.get(cumulative_step)
+        if checkpoint_index is not None:
+            wp.synchronize_device(context.device)
+            snapshot_vertices = (
+                np.asarray(context.state_in.particle_q.numpy(), dtype=np.float32).copy()
+                * 1.0e3
+            )
+            rest_vertices = context.rest_vertices_m * 1.0e3
+            snapshot_result = Mechanics3DResult(
+                rest_vertices=rest_vertices,
+                deformed_vertices=snapshot_vertices,
+                tetrahedra=prepared_fingertip.tet_mesh.tetrahedra,
+                steps=cumulative_step,
+            )
+            support_indices = tuple(prepared_fingertip.support_vertex_indices)
+            support_displacement = snapshot_result.displacement[list(support_indices)] if support_indices else np.empty((0, 3))
+            points = snapshot_vertices[prepared_fingertip.tet_mesh.tetrahedra]
+            six_volumes = np.einsum(
+                "ij,ij->i",
+                np.cross(points[:, 1] - points[:, 0], points[:, 2] - points[:, 0]),
+                points[:, 3] - points[:, 0],
+            )
+            snapshot_diagnostics: dict[str, object] = {
+                "device": mechanics_settings.device,
+                "full_surface_contact": True,
+                "contact_buffer_status": "not_applicable_for_kinematic_indenter",
+                "first_contact_normalized": first_contact is not None,
+                "post_contact_travel_mm": target_travel,
+                "load_steps": cumulative_step,
+                "max_load_increment_mm": max(
+                    travel - previous
+                    for previous, travel in zip(
+                        (0.0,) + tuple(item[0] for item in schedule[: cumulative_step - 1]),
+                        tuple(item[0] for item in schedule[:cumulative_step]),
+                    )
+                ),
+                "rigid_sdf_target_voxel_mm": indentation_settings.rigid_sdf_target_voxel_mm,
+                "max_soft_contact_count": max_soft_contact_count,
+                "max_sphere_soft_contact_count": max_sphere_soft_contact_count,
+                "max_carrier_soft_contact_count": max_carrier_soft_contact_count,
+                "max_void_bottom_carrier_contact_count": max_void_bottom_carrier_contact_count,
+                "carrier_interface_contact_count": max_void_bottom_carrier_contact_count,
+                "first_carrier_contact_step": first_carrier_contact_step,
+                "carrier_contact_active": first_carrier_contact_step is not None,
+                "max_sphere_carrier_rigid_contact_count": max_sphere_carrier_rigid_contact_count,
+                "carrier_contact_vertex_indices": tuple(sorted(carrier_contact_vertex_indices)),
+                "carrier_contact_vertex_count": len(carrier_contact_vertex_indices),
+                "active_carrier_contact_vertex_indices": tuple(sorted(contact_vertices)),
+                "carrier_collision_enabled": rigid_carrier_mesh is not None,
+                "initial_carrier_clearance_mm": initial_carrier_clearance_mm,
+                "min_carrier_clearance_mm": min_carrier_clearance_mm,
+                "final_carrier_clearance_mm": final_carrier_clearance_mm,
+                "max_carrier_penetration_mm": (
+                    max(0.0, -min_carrier_clearance_mm)
+                    if np.isfinite(min_carrier_clearance_mm)
+                    else float("nan")
+                ),
+                "max_rigid_contact_count": max_rigid_contact_count,
+                "max_soft_contact_overflow": max_soft_contact_overflow,
+                "max_rigid_contact_overflow": max_rigid_contact_overflow,
+                "rigid_body_particle_contact_buffer_size": _RIGID_BODY_PARTICLE_CONTACT_BUFFER_SIZE,
+                "rigid_contact_buffer_size": _RIGID_CONTACT_BUFFER_SIZE,
+                "max_displacement_mm": float(np.max(np.linalg.norm(snapshot_result.displacement, axis=1))),
+                "rms_displacement_mm": float(np.sqrt(np.mean(np.square(snapshot_result.displacement)))),
+                "max_support_displacement_mm": float(np.max(np.linalg.norm(support_displacement, axis=1))) if len(support_displacement) else 0.0,
+                "inverted_tetrahedra": int(np.count_nonzero(six_volumes <= 0.0)),
+                "min_six_volume": float(np.min(six_volumes)),
+                "final_body_x_mm": float(np.asarray(context.state_in.body_q.numpy()[context.indenter_body][:3], dtype=np.float32)[0] * 1.0e3),
+                "final_body_y_mm": float(np.asarray(context.state_in.body_q.numpy()[context.indenter_body][:3], dtype=np.float32)[1] * 1.0e3),
+                "final_body_z_mm": float(np.asarray(context.state_in.body_q.numpy()[context.indenter_body][:3], dtype=np.float32)[2] * 1.0e3),
             }
-        )
+            if first_contact is not None:
+                snapshot_diagnostics.update(
+                    {
+                        "first_contact_travel_mm": first_contact.travel_to_contact_mm,
+                        "first_contact_bracket_width_mm": first_contact.bracket_width_mm,
+                        "spawn_clearance_mm": first_contact.spawn_clearance_mm,
+                        "reference_pose_collision_free": True,
+                        "spawn_pose_collision_free": True,
+                    }
+                )
+            checkpoints.append(
+                IndentationCheckpoint(
+                    checkpoint_index=checkpoint_index,
+                    checkpoint_fraction=checkpoint_fractions[checkpoint_index],
+                    normalized_indentation_ratio=ratios[checkpoint_index],
+                    post_contact_travel_mm=target_travel,
+                    cumulative_step_index=cumulative_step,
+                    indenter_pose=target_pose,
+                    mechanics_result=snapshot_result,
+                    diagnostics=snapshot_diagnostics,
+                )
+            )
+
+    wp.synchronize_device(context.device)
+    if not checkpoints:
+        raise RuntimeError("indentation path produced no requested checkpoints")
+    return IndentationTrajectoryResult(
+        checkpoints=tuple(checkpoints),
+        total_steps=len(schedule),
+        diagnostics=checkpoints[-1].diagnostics,
+    )
+
+
+def solve_newton_vbd_indentation(
+    prepared_fingertip: FingertipMechanicsMesh,
+    indenter: RigidIndenter3D,
+    mechanics_settings: Mechanics3DSettings,
+    indentation_settings: IndentationSettings,
+    *,
+    viewer: object | None = None,
+    visual_carrier_mesh: RigidObjectMesh | None = None,
+    rigid_carrier_mesh: RigidObjectMesh | None = None,
+    first_contact: FirstContactResult | None = None,
+) -> IndentationResult:
+    """Compatibility wrapper returning the final checkpoint only."""
+
+    trajectory = _solve_newton_vbd_indentation_path(
+        prepared_fingertip,
+        indenter,
+        mechanics_settings,
+        indentation_settings,
+        viewer=viewer,
+        visual_carrier_mesh=visual_carrier_mesh,
+        rigid_carrier_mesh=rigid_carrier_mesh,
+        first_contact=first_contact,
+    )
+    final = trajectory.final
     return IndentationResult(
-        mechanics_result=mechanics_result,
-        final_indenter_pose=final_pose,
-        diagnostics=diagnostics,
+        mechanics_result=final.mechanics_result,
+        final_indenter_pose=final.indenter_pose,
+        diagnostics=final.diagnostics,
+    )
+
+
+def solve_newton_vbd_indentation_trajectory(
+    prepared_fingertip: FingertipMechanicsMesh,
+    indenter: RigidIndenter3D,
+    mechanics_settings: Mechanics3DSettings,
+    indentation_settings: IndentationSettings,
+    checkpoint_travels_mm: Sequence[float],
+    *,
+    checkpoint_fractions: Sequence[float],
+    normalized_indentation_ratios: Sequence[float] | None = None,
+    max_load_increment_mm: float = 0.05,
+    viewer: object | None = None,
+    visual_carrier_mesh: RigidObjectMesh | None = None,
+    rigid_carrier_mesh: RigidObjectMesh | None = None,
+    first_contact: FirstContactResult | None = None,
+) -> IndentationTrajectoryResult:
+    """Run one continuous VBD path and capture exact checkpoint states."""
+
+    travels = tuple(float(value) for value in checkpoint_travels_mm)
+    fractions = tuple(float(value) for value in checkpoint_fractions)
+    ratios = None if normalized_indentation_ratios is None else tuple(
+        float(value) for value in normalized_indentation_ratios
+    )
+    schedule = checkpoint_step_schedule(
+        travels,
+        max_load_increment_mm=max_load_increment_mm,
+    )
+    return _solve_newton_vbd_indentation_path_with_schedule(
+        prepared_fingertip,
+        indenter,
+        mechanics_settings,
+        indentation_settings,
+        schedule,
+        checkpoint_travels=travels,
+        checkpoint_fractions=fractions,
+        normalized_indentation_ratios=ratios,
+        viewer=viewer,
+        visual_carrier_mesh=visual_carrier_mesh,
+        rigid_carrier_mesh=rigid_carrier_mesh,
+        first_contact=first_contact,
     )
 
 

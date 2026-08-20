@@ -20,6 +20,8 @@ SUPPORTED_EVALUATION_STATUSES = frozenset(
         "success",
         "invalid_design",
         "mesh_failure",
+        "domain_incompatible",
+        "mechanics_failure",
         "fea_failure",
         "optics_failure",
     }

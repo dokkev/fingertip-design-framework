@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
+from importlib import import_module
 import json
 from pathlib import Path
 import time
@@ -598,4 +599,26 @@ __all__ = [
     "Lumo3DEvaluator",
     "Lumo3DStudy",
     "create_lumo3d_study",
+]
+
+def __getattr__(name: str):
+    """Lazily expose the configurable evaluator beside the legacy path."""
+
+    if name in {
+        "Lumo3DTrajectoryEvaluation",
+        "Lumo3DTrajectoryEvaluator",
+        "Lumo3DTrajectoryStudy",
+        "create_lumo3d_trajectory_study",
+    }:
+        module = import_module("validation.optimization.lumo3d_trajectory_evaluator")
+        value = getattr(module, name)
+        globals()[name] = value
+        return value
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+__all__ += [
+    "Lumo3DTrajectoryEvaluation",
+    "Lumo3DTrajectoryEvaluator",
+    "Lumo3DTrajectoryStudy",
+    "create_lumo3d_trajectory_study",
 ]

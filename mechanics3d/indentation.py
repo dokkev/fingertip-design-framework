@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Mapping
+from typing import TYPE_CHECKING, Mapping, Sequence
 
 import numpy as np
 
@@ -158,6 +158,105 @@ class IndentationResult:
         object.__setattr__(self, "diagnostics", MappingProxyType(dict(self.diagnostics)))
 
 
+@dataclass(frozen=True)
+class IndentationCheckpoint:
+    """Immutable snapshot of one accepted point on an indentation path."""
+
+    checkpoint_index: int
+    checkpoint_fraction: float
+    normalized_indentation_ratio: float
+    post_contact_travel_mm: float
+    cumulative_step_index: int
+    indenter_pose: RigidPose3D
+    mechanics_result: Mechanics3DResult
+    diagnostics: Mapping[str, object] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.indenter_pose, RigidPose3D):
+            raise TypeError("indenter_pose must be RigidPose3D")
+        if not isinstance(self.mechanics_result, Mechanics3DResult):
+            raise TypeError("mechanics_result must be Mechanics3DResult")
+        for name in (
+            "checkpoint_fraction",
+            "normalized_indentation_ratio",
+            "post_contact_travel_mm",
+        ):
+            value = float(getattr(self, name))
+            if not np.isfinite(value) or value < 0.0:
+                raise ValueError(f"{name} must be finite and non-negative")
+            object.__setattr__(self, name, value)
+        if int(self.checkpoint_index) < 0 or int(self.cumulative_step_index) < 1:
+            raise ValueError("checkpoint and cumulative step indices are invalid")
+        object.__setattr__(self, "checkpoint_index", int(self.checkpoint_index))
+        object.__setattr__(self, "cumulative_step_index", int(self.cumulative_step_index))
+        object.__setattr__(self, "diagnostics", MappingProxyType(dict(self.diagnostics)))
+
+
+@dataclass(frozen=True)
+class IndentationTrajectoryResult:
+    """All copied checkpoints from one continuous Newton indentation path."""
+
+    checkpoints: tuple[IndentationCheckpoint, ...]
+    total_steps: int
+    diagnostics: Mapping[str, object] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        checkpoints = tuple(self.checkpoints)
+        if not checkpoints:
+            raise ValueError("an indentation trajectory needs at least one checkpoint")
+        if any(not isinstance(item, IndentationCheckpoint) for item in checkpoints):
+            raise TypeError("checkpoints must contain IndentationCheckpoint values")
+        if any(left.cumulative_step_index >= right.cumulative_step_index
+               for left, right in zip(checkpoints, checkpoints[1:])):
+            raise ValueError("checkpoint step indices must be strictly increasing")
+        if int(self.total_steps) != checkpoints[-1].cumulative_step_index:
+            raise ValueError("total_steps must equal the final checkpoint step")
+        object.__setattr__(self, "checkpoints", checkpoints)
+        object.__setattr__(self, "total_steps", int(self.total_steps))
+        object.__setattr__(self, "diagnostics", MappingProxyType(dict(self.diagnostics)))
+
+    @property
+    def final(self) -> IndentationCheckpoint:
+        return self.checkpoints[-1]
+
+
+def checkpoint_step_schedule(
+    checkpoint_travels_mm: Sequence[float],
+    *,
+    max_load_increment_mm: float,
+) -> tuple[tuple[float, int, int], ...]:
+    """Return exact cumulative steps for a monotonic checkpoint path.
+
+    Each tuple is ``(travel_mm, interval_step, cumulative_step)``.  The
+    interval is split with ``ceil(distance / max_increment)`` and therefore
+    always lands exactly on the requested checkpoint.
+    """
+
+    travels = tuple(float(value) for value in checkpoint_travels_mm)
+    increment_limit = float(max_load_increment_mm)
+    if not travels or any(not np.isfinite(value) or value <= 0.0 for value in travels):
+        raise ValueError("checkpoint travels must be finite and positive")
+    if any(left >= right for left, right in zip(travels, travels[1:])):
+        raise ValueError("checkpoint travels must be strictly increasing")
+    if not np.isfinite(increment_limit) or increment_limit <= 0.0:
+        raise ValueError("max_load_increment_mm must be finite and positive")
+    schedule: list[tuple[float, int, int]] = []
+    previous = 0.0
+    cumulative = 0
+    for target in travels:
+        interval = target - previous
+        interval_steps = max(1, int(np.ceil(interval / increment_limit)))
+        actual_increment = interval / interval_steps
+        if actual_increment > increment_limit + 1.0e-12:
+            raise ValueError("checkpoint scheduler exceeded max_load_increment_mm")
+        for interval_step in range(1, interval_steps + 1):
+            cumulative += 1
+            current = target if interval_step == interval_steps else previous + actual_increment * interval_step
+            schedule.append((float(current), interval_step, cumulative))
+        previous = target
+    return tuple(schedule)
+
+
 def solve_fingertip_indentation(
     prepared_fingertip: FingertipMechanicsMesh,
     indenter: RigidIndenter3D,
@@ -227,10 +326,65 @@ def solve_fingertip_indentation(
     )
 
 
+def solve_fingertip_indentation_trajectory(
+    prepared_fingertip: FingertipMechanicsMesh,
+    indenter: RigidIndenter3D,
+    mechanics_settings: Mechanics3DSettings | None,
+    indentation_settings: IndentationSettings,
+    checkpoint_travels_mm: Sequence[float],
+    *,
+    checkpoint_fractions: Sequence[float] | None = None,
+    normalized_indentation_ratios: Sequence[float] | None = None,
+    max_load_increment_mm: float = 0.05,
+    first_contact: FirstContactResult | None = None,
+    visual_carrier_mesh: RigidObjectMesh | None = None,
+    rigid_carrier_mesh: RigidObjectMesh | None = None,
+) -> IndentationTrajectoryResult:
+    """Solve one continuous path and capture exact requested checkpoints."""
+
+    if mechanics_settings is None:
+        mechanics_settings = Mechanics3DSettings()
+    if not isinstance(mechanics_settings, Mechanics3DSettings):
+        raise TypeError("mechanics_settings must be Mechanics3DSettings")
+    if not isinstance(indentation_settings, IndentationSettings):
+        raise TypeError("indentation_settings must be IndentationSettings")
+    travels = tuple(float(value) for value in checkpoint_travels_mm)
+    fractions = (
+        tuple(float(value) for value in checkpoint_fractions)
+        if checkpoint_fractions is not None
+        else tuple(value / travels[-1] for value in travels)
+    )
+    if len(fractions) != len(travels):
+        raise ValueError("checkpoint_fractions must match checkpoint_travels_mm")
+    from .backends.newton_vbd import solve_newton_vbd_indentation_trajectory
+
+    return solve_newton_vbd_indentation_trajectory(
+        prepared_fingertip,
+        indenter,
+        mechanics_settings,
+        indentation_settings,
+        travels,
+        checkpoint_fractions=fractions,
+        normalized_indentation_ratios=(
+            None
+            if normalized_indentation_ratios is None
+            else tuple(float(value) for value in normalized_indentation_ratios)
+        ),
+        max_load_increment_mm=max_load_increment_mm,
+        visual_carrier_mesh=visual_carrier_mesh,
+        rigid_carrier_mesh=rigid_carrier_mesh,
+        first_contact=first_contact,
+    )
+
+
 __all__ = [
     "IndentationResult",
+    "IndentationCheckpoint",
+    "IndentationTrajectoryResult",
     "IndentationSettings",
     "RigidIndenter3D",
     "RigidPose3D",
+    "checkpoint_step_schedule",
     "solve_fingertip_indentation",
+    "solve_fingertip_indentation_trajectory",
 ]
