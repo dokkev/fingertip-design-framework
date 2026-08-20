@@ -61,6 +61,7 @@ def test_vbd_volume_state_reaches_full3d_optix_without_fea_artifact() -> None:
             tip.geometry,
             mesh_settings_for_level("medium"),
         ),
+        full3d_surface_provenance="actual_deformed_3d_volume_state",
     )
     runtime = create_runtime()
     result = trace_geometry(

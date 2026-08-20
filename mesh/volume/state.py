@@ -130,10 +130,10 @@ class FingertipVolumeState:
     def __post_init__(self) -> None:
         if not isinstance(self.volume_mesh, FingertipVolumeMesh):
             raise TypeError("volume_mesh must be FingertipVolumeMesh")
-        if not self.volume_mesh.fingertip.validation.passed:
+        if not self.volume_mesh.validation.passed:
             raise ValueError(
                 "refusing an invalid FingertipVolumeMesh: "
-                + ", ".join(self.volume_mesh.fingertip.validation.errors)
+                + ", ".join(self.volume_mesh.validation.errors)
             )
         node_ids = tuple(sorted(self.volume_mesh.nodes))
         reference = _coordinates_for_node_ids(self.volume_mesh, node_ids)

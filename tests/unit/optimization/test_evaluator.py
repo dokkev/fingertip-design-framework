@@ -190,14 +190,21 @@ def test_unexpected_objective_error_propagates(
 
     class _Result:
         field = np.ones((2, 2), dtype=float)
-
-        def energy_record(self):
-            return {
-                "total_transport": 1.0,
-                "carrier_absorbed_weight": 0.0,
-                "launched_weight": 1.0,
-                "escaped_weight": 1.0,
-            }
+        total_transport = 1.0
+        launched_weight = 1.0
+        escaped_weight = 1.0
+        absorbed_weight = 0.0
+        terminated_weight = 0.0
+        object_interface_incident_weight = 0.0
+        object_absorbed_weight = 0.0
+        object_transmitted_weight = 0.0
+        object_reflected_weight = 0.0
+        carrier_absorbed_weight = 0.0
+        carrier_transmitted_weight = 0.0
+        carrier_interface_incident_weight = 0.0
+        carrier_reflected_weight = 0.0
+        carrier_contact_triangle_count = 0
+        energy_balance_error = 0.0
 
     monkeypatch.setattr(
         evaluator_module,

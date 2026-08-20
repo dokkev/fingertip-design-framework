@@ -92,7 +92,6 @@ class _InternalField:
     y_edges: np.ndarray
     z_edges: np.ndarray
     density: np.ndarray
-    metadata: dict[str, Any]
 
 
 def _xy_edges(
@@ -171,60 +170,6 @@ def _surface_coordinates(
     along = cp.sum((points[:, :2] - first[:, :2]) * edge, axis=1) / cp.maximum(denominator, 1.0e-30)
     u = u_start[primitive] + along * (u_end[primitive] - u_start[primitive])
     return points, cp.clip(u, 0.0, 1.0), points[:, 2]
-
-
-def _accumulate_segment_path_3d(
-    density: np.ndarray,
-    x_edges: np.ndarray,
-    y_edges: np.ndarray,
-    z_edges: np.ndarray,
-    optical_mask: np.ndarray,
-    start: np.ndarray,
-    end: np.ndarray,
-    start_weight: float,
-    end_weight: float,
-    *,
-    maximum_spacing: float,
-) -> None:
-    """Accumulate one weighted straight path into a regular 3D grid.
-
-    The stored value is weighted path length per voxel.  Midpoint sampling
-    uses the same deterministic representative-weight convention as the
-    reduced tracer; summing the z bins therefore performs the required
-    discrete z integral without an extra width factor.
-    """
-    displacement = np.asarray(end, dtype=float) - np.asarray(start, dtype=float)
-    length = float(np.linalg.norm(displacement))
-    if length <= 0.0:
-        return
-    sample_count = max(1, int(np.ceil(length / maximum_spacing)))
-    fractions = (np.arange(sample_count, dtype=float) + 0.5) / sample_count
-    samples = np.asarray(start, dtype=float)[None, :] + fractions[:, None] * displacement[None, :]
-    x_indices = np.searchsorted(x_edges, samples[:, 0], side="right") - 1
-    y_indices = np.searchsorted(y_edges, samples[:, 1], side="right") - 1
-    z_indices = np.searchsorted(z_edges, samples[:, 2], side="right") - 1
-    valid = (
-        (x_indices >= 0)
-        & (x_indices < len(x_edges) - 1)
-        & (y_indices >= 0)
-        & (y_indices < len(y_edges) - 1)
-        & (z_indices >= 0)
-        & (z_indices < len(z_edges) - 1)
-    )
-    if not np.any(valid):
-        return
-    x_indices = x_indices[valid]
-    y_indices = y_indices[valid]
-    z_indices = z_indices[valid]
-    inside = optical_mask[y_indices, x_indices]
-    if not np.any(inside):
-        return
-    representative_weight = 0.5 * (float(start_weight) + float(end_weight))
-    np.add.at(
-        density,
-        (z_indices[inside], y_indices[inside], x_indices[inside]),
-        representative_weight * length / sample_count,
-    )
 
 
 def _new_internal_path_context(
@@ -321,38 +266,12 @@ def _finalize_internal_path_context(
     density = context.density
     if not np.all(np.isfinite(density)) or np.any(density < 0.0):
         raise Transport3DTraceError("3D internal path field is non-finite or negative")
-    metadata = {
-        "domain": {
-            "x_min_mm": float(x_edges[0]),
-            "x_max_mm": float(x_edges[-1]),
-            "y_min_mm": float(y_edges[0]),
-            "y_max_mm": float(y_edges[-1]),
-            "z_min_mm": float(z_edges[0]),
-            "z_max_mm": float(z_edges[-1]),
-        },
-        "resolution": {
-            "x_bins": settings.internal_grid_width,
-            "y_bins": settings.internal_grid_height,
-            "z_bins": settings.internal_z_bins,
-        },
-        "normalization": "raw weighted path length per voxel; no TV normalization",
-        "z_integration": "sum of raw z-bin path masses; no extra width factor",
-        "segment_medium_scope": "air and silicone segments in the native FULL_3D field",
-        "line_sampling": {
-            "method": "deterministic segment midpoint sampling",
-            "maximum_spacing_fraction_of_smallest_bin": 0.5,
-            "maximum_samples_per_segment": context.maximum_samples_per_segment,
-        },
-        "total_accumulated_weighted_path_length_mm": float(np.sum(density)),
-        "processed_segment_count": context.processed_segments,
-    }
     density_xyz = np.transpose(density, (2, 1, 0))
     return _InternalField(
         x_edges=x_edges,
         y_edges=y_edges,
         z_edges=z_edges,
         density=density_xyz,
-        metadata=metadata,
     )
 
 
@@ -929,77 +848,12 @@ def _trace_with_runtime(
     if internal_context is not None:
         internal = _finalize_internal_path_context(internal_context, settings)
     geometry_metadata = dict(geometry.metadata)
-    geometry_metadata["branch_cutoff"] = {
-        "minimum_ray_weight_fraction": settings.minimum_ray_weight,
-        "absolute_weight_threshold": threshold,
-        "maximum_interactions": settings.max_interactions,
-        "primary_and_first_generation_exempt": True,
-        "convention": "cutoff applies to branches with interaction_count > 1",
-    }
-    geometry_metadata["processed_segment_count"] = segment_count
-    geometry_metadata["periodic_wrap_termination"] = {
-        "enabled": settings.terminate_on_periodic_wrap_limit,
-        "count": periodic_wrap_termination_count,
-        "weight": periodic_wrap_termination_weight,
-        "maximum_periodic_wraps": settings.maximum_periodic_wraps,
-    }
-    geometry_metadata["no_event_termination"] = {
-        "enabled": settings.terminate_on_no_event,
-        "count": no_event_termination_count,
-        "weight": no_event_termination_weight,
-    }
-    geometry_metadata["interface_normal_orientation_fallback_count"] = (
-        interface_normal_orientation_fallback_count
-    )
-    geometry_metadata["transport_material"] = {
-        "refractive_index_air": float(tip.optical.refractive_index_air),
-        "refractive_index_silicone": float(tip.optical.refractive_index_silicone),
-        "absorption_per_mm": float(tip.optical.absorption_per_mm),
-        "scattering_per_mm": float(tip.optical.scattering_per_mm),
-    }
-    if internal is not None:
-        internal_metadata = dict(internal.metadata)
-        internal_metadata.update(
-            {
-                "source_position_mm": list(geometry.source_position_mm),
-                "ray_count": settings.ray_count,
-                "branch_cutoff": dict(geometry_metadata["branch_cutoff"]),
-                "material": dict(geometry_metadata["transport_material"]),
-            }
+    carrier_contact_triangle_count = int(
+        sum(
+            tag == CARRIER_CONTACT_INTERFACE
+            for tag in (geometry.silicone.interface_tags or ())
         )
-        geometry_metadata["internal_path_field"] = internal_metadata
-    geometry_metadata["object_interface"] = {
-        "enabled": geometry.indenter_optics is not None,
-        "boundary_model": (
-            None
-            if geometry.indenter_optics is None
-            else geometry.indenter_optics.boundary_model
-        ),
-        "indenter_internal_propagation": False,
-        "object_absorbed_weight": object_absorbed_weight,
-        "object_transmitted_weight": object_transmitted_weight,
-        "object_interface_incident_weight": object_interface_incident_weight,
-        "object_reflected_weight": object_reflected_weight,
-    }
-    geometry_metadata["carrier_interface"] = {
-        "enabled": geometry.carrier_optics is not None,
-        "boundary_model": (
-            None
-            if geometry.carrier_optics is None
-            else geometry.carrier_optics.boundary_model
-        ),
-        "carrier_absorbed_weight": carrier_absorbed_weight,
-        "carrier_transmitted_weight": carrier_transmitted_weight,
-        "carrier_interface_incident_weight": carrier_interface_incident_weight,
-        "carrier_reflected_weight": carrier_reflected_weight,
-        "contact_triangle_count": int(
-            sum(
-                tag == CARRIER_CONTACT_INTERFACE
-                for tag in (geometry.silicone.interface_tags or ())
-            )
-        ),
-    }
-    escaped_weight += 0.0
+    )
     energy_balance_error = abs(
         launched_weight
         - escaped_weight
@@ -1039,6 +893,15 @@ def _trace_with_runtime(
         escape_interaction_counts=cp.asnumpy(escaped_interactions),
         energy_balance_error=float(energy_balance_error),
         energy_balance_tolerance=settings.energy_balance_tolerance,
+        processed_segment_count=segment_count,
+        periodic_wrap_termination_count=periodic_wrap_termination_count,
+        periodic_wrap_termination_weight=periodic_wrap_termination_weight,
+        no_event_termination_count=no_event_termination_count,
+        no_event_termination_weight=no_event_termination_weight,
+        interface_normal_fallback_count=interface_normal_orientation_fallback_count,
+        carrier_contact_triangle_count=carrier_contact_triangle_count,
+        escape_event_count=len(escaped_weights),
+        escaped_primary_count=len(np.unique(cp.asnumpy(escaped_primary))),
         object_absorbed_weight=object_absorbed_weight,
         object_transmitted_weight=object_transmitted_weight,
         object_interface_incident_weight=object_interface_incident_weight,

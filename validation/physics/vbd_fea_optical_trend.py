@@ -51,6 +51,7 @@ from optimization.optical_artifact import (
     fingerprint_mapping,
     load_case_artifact,
     native_field_separability,
+    optical_physics_parameters,
     save_case_artifact,
     transport_configuration,
 )
@@ -306,12 +307,7 @@ def _optix_settings(bounds: tuple[tuple[float, float], tuple[float, float]]) -> 
 
 
 def _material(tip: Any) -> dict[str, Any]:
-    return {
-        "refractive_index_air": tip.optical.refractive_index_air,
-        "refractive_index_silicone": tip.optical.refractive_index_silicone,
-        "absorption_per_mm": tip.optical.absorption_per_mm,
-        "scattering_per_mm": tip.optical.scattering_per_mm,
-    }
+    return optical_physics_parameters(tip)
 
 
 def artifact_contract_is_exact(metadata: Mapping[str, Any], expected: Mapping[str, Any]) -> bool:
@@ -716,17 +712,18 @@ def run_comparison(
                     state["tip"],
                     side_state["fea_state"],
                     reference_mesh=state["reference_mesh"],
+                    full3d_surface_provenance="actual_deformed_3d_volume_state",
                     metadata={
                         "morphology_id": state["morphology_id"],
                         "contact_state_fingerprint": side_state["artifact"].contact_state_fingerprint,
                         "mechanics_source": str(side_state["artifact"].artifact_path),
-                        "full3d_surface_provenance": "actual_deformed_3d_volume_state",
                     },
                 )
                 geometry = build_fingertip_volume_state_geometry(
                     state["tip"],
                     vbd_state,
                     reference_mesh=state["reference_mesh"],
+                    full3d_surface_provenance="actual_deformed_3d_vbd_surface",
                     metadata={
                         "morphology_id": state["morphology_id"],
                         "contact_state_fingerprint": vbd_fp,
@@ -734,7 +731,6 @@ def run_comparison(
                         "vbd_side": side,
                         "vbd_surface_source": "direct NewtonResult deformed coordinates",
                         "vbd_state_fingerprint": vbd_fp,
-                        "full3d_surface_provenance": "actual_deformed_3d_volume_state",
                     },
                 )
                 side_state.update({

@@ -85,8 +85,9 @@ from optimization.deformed_state_artifact import (
     write_mechanics_artifact,
 )
 from optimization.optical_artifact import (
+    energy_record,
     fingerprint_mapping,
-    optical_material_parameters,
+    optical_physics_parameters,
     save_case_artifact,
     transport_configuration,
 )
@@ -422,7 +423,7 @@ class Lumo3DTrajectoryEvaluator:
             stage = "optics"
             configuration = transport_configuration(
                 self.settings,
-                material=optical_material_parameters(tip.optical),
+                material=optical_physics_parameters(tip),
                 source={"model": "existing Fingertip optical source", "evaluator": TRAJECTORY_EVALUATION_SCHEMA},
             )
             objective_contract = {
@@ -464,6 +465,9 @@ class Lumo3DTrajectoryEvaluator:
                     record["mechanics_artifact_sha256"],
                     carrier_optics=CarrierOptics("absorber"),
                     carrier_contact_source_node_ids=contact_state["carrier_contact_source_node_ids"],
+                    carrier_mapping_tolerance_mm=contact_state[
+                        "carrier_mapping_tolerance_mm"
+                    ],
                     metadata={
                         "contact_state_fingerprint": contact_state["contact_state_fingerprint"],
                         "contact_location_u": record["normalized_location"],
@@ -474,7 +478,6 @@ class Lumo3DTrajectoryEvaluator:
                         "unintended_boundary_clearance_mm": record["unintended_boundary_clearance_mm"],
                         "observation_level": LUMO3D_OBSERVATION_LEVEL,
                         "carrier_optical_boundary_model": "absorber",
-                        "carrier_mapping_tolerance_mm": contact_state["carrier_mapping_tolerance_mm"],
                     },
                 )
                 result = trace_geometry(
@@ -510,7 +513,7 @@ class Lumo3DTrajectoryEvaluator:
                     "transport_configuration_fingerprint": configuration_fingerprint,
                 }
                 save_case_artifact(artifact, result, contract)
-                energy = result.energy_record()
+                energy = energy_record(result)
                 optical_record = dict(record)
                 optical_record.update(energy)
                 optical_record.update(

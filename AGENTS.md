@@ -107,3 +107,8 @@ Report what was changed, what was actually verified, what was measured or
 observed, and what remains failed, blocked, or unverified.
 
 Do not hide negative scientific results or known evidence gaps.
+
+## Core Library Reference
+- [otk-pyoptix](https://github.com/NVIDIA/otk-pyoptix)
+- [optix-dev](https://github.com/NVIDIA/optix-dev) 
+- [Newton](https://github.com/newton-physics/newton)

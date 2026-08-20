@@ -31,7 +31,7 @@ def test_nominal_fingertip_volume_mesh_advances_on_cuda() -> None:
     volume_mesh = generate_volume_mesh(solid, volume_mesh_settings_for_tier("search"))
     prepared = prepare_fingertip_mesh(volume_mesh)
 
-    assert volume_mesh.fingertip.validation.passed, volume_mesh.fingertip.validation.errors
+    assert volume_mesh.validation.passed, volume_mesh.validation.errors
     assert volume_mesh.nodes
     assert volume_mesh.tetrahedra
     assert prepared.tet_mesh.vertices.shape[0] == len(volume_mesh.nodes)

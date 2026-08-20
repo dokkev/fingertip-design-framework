@@ -63,6 +63,15 @@ class Transport3DResult:
     escape_interaction_counts: np.ndarray
     energy_balance_error: float
     energy_balance_tolerance: float
+    processed_segment_count: int = 0
+    periodic_wrap_termination_count: int = 0
+    periodic_wrap_termination_weight: float = 0.0
+    no_event_termination_count: int = 0
+    no_event_termination_weight: float = 0.0
+    interface_normal_fallback_count: int = 0
+    carrier_contact_triangle_count: int = 0
+    escape_event_count: int | None = None
+    escaped_primary_count: int | None = None
     object_absorbed_weight: float = 0.0
     object_transmitted_weight: float = 0.0
     object_interface_incident_weight: float = 0.0
@@ -109,6 +118,8 @@ class Transport3DResult:
             "carrier_transmitted_weight",
             "carrier_interface_incident_weight",
             "carrier_reflected_weight",
+            "periodic_wrap_termination_weight",
+            "no_event_termination_weight",
         )
         scalars = {name: float(getattr(self, name)) for name in scalar_names}
         if any(not np.isfinite(value) for value in scalars.values()):
@@ -129,6 +140,20 @@ class Transport3DResult:
             raise Transport3DResultError("energy_balance_error must be nonnegative")
         if scalars["energy_balance_error"] > scalars["energy_balance_tolerance"]:
             raise Transport3DResultError("energy balance exceeds its declared tolerance")
+        count_names = (
+            "processed_segment_count",
+            "periodic_wrap_termination_count",
+            "no_event_termination_count",
+            "interface_normal_fallback_count",
+            "carrier_contact_triangle_count",
+        )
+        for name in count_names:
+            value = getattr(self, name)
+            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                raise Transport3DResultError(f"{name} must be a non-negative integer")
+        for name in ("periodic_wrap_termination_weight", "no_event_termination_weight"):
+            if scalars[name] < 0.0:
+                raise Transport3DResultError(f"{name} must be non-negative")
         terminal_weight = sum(
             scalars[name]
             for name in (
@@ -230,6 +255,28 @@ class Transport3DResult:
             or np.any(interactions < 0)
         ):
             raise Transport3DResultError("escape metadata contains invalid values")
+        observed_escape_events = len(weights)
+        observed_escaped_primaries = len(np.unique(primary))
+        if self.escape_event_count is None:
+            object.__setattr__(self, "escape_event_count", observed_escape_events)
+        elif (
+            not isinstance(self.escape_event_count, int)
+            or isinstance(self.escape_event_count, bool)
+            or self.escape_event_count != observed_escape_events
+        ):
+            raise Transport3DResultError(
+                "escape_event_count must match the number of escape events"
+            )
+        if self.escaped_primary_count is None:
+            object.__setattr__(self, "escaped_primary_count", observed_escaped_primaries)
+        elif (
+            not isinstance(self.escaped_primary_count, int)
+            or isinstance(self.escaped_primary_count, bool)
+            or self.escaped_primary_count != observed_escaped_primaries
+        ):
+            raise Transport3DResultError(
+                "escaped_primary_count must match unique escaping primary rays"
+            )
         normals_norm = np.linalg.norm(normals, axis=1)
         if len(normals) and np.any(~np.isfinite(normals_norm) | (normals_norm <= 0.0)):
             raise Transport3DResultError("escape surface normals must be nonzero")
@@ -357,40 +404,6 @@ class Transport3DResult:
     def z_integrated_field(self) -> np.ndarray:
         """Return the derived field obtained by summing native z bins."""
         return np.sum(self.field, axis=2)
-
-    def energy_record(self) -> dict[str, Any]:
-        """Return scalar transport diagnostics for evaluator persistence."""
-        launched = float(self.launched_weight)
-        carrier_absorbed = float(self.carrier_absorbed_weight)
-        escaped = float(self.escaped_weight)
-        return {
-            "launched_weight": launched,
-            "escaped_weight": escaped,
-            "escaped_transport_fraction": escaped / max(launched, 1.0e-30),
-            "absorbed_weight": float(self.absorbed_weight),
-            "terminated_weight": float(self.terminated_weight),
-            "total_transport": escaped,
-            "object_interface_optics": "disabled_in_deformation_only_scene",
-            "object_interface_incident_weight": float(self.object_interface_incident_weight),
-            "object_absorbed_weight": float(self.object_absorbed_weight),
-            "object_transmitted_weight": float(self.object_transmitted_weight),
-            "object_reflected_weight": float(self.object_reflected_weight),
-            "carrier_absorbed_weight": carrier_absorbed,
-            "carrier_absorption_fraction": carrier_absorbed / max(launched, 1.0e-30),
-            "carrier_transmitted_weight": float(self.carrier_transmitted_weight),
-            "carrier_interface_incident_weight": float(self.carrier_interface_incident_weight),
-            "carrier_reflected_weight": float(self.carrier_reflected_weight),
-            "carrier_optical_contact_triangle_count": int(
-                self.geometry_metadata.get("carrier_interface", {}).get(
-                    "contact_triangle_count", 0
-                )
-            ),
-            "energy_balance_error": float(self.energy_balance_error),
-            "field_shape": list(self.field.shape),
-            "field_finite_nonnegative": bool(
-                np.all(np.isfinite(self.field)) and np.all(self.field >= 0.0)
-            ),
-        }
 
     def lateral_outgoing_profiles(
         self,

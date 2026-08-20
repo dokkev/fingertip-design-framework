@@ -33,10 +33,14 @@ def test_open_gap_keeps_all_void_triangles_as_air_or_internal() -> None:
             tip.geometry,
             mesh_settings_for_level("medium"),
         ),
+        full3d_surface_provenance="actual_reference_3d_volume_state",
         carrier_optics=CarrierOptics("absorber"),
     )
 
-    assert geometry.metadata["carrier_optical_contact_triangle_count"] == 0
+    assert np.count_nonzero(
+        np.asarray(geometry.silicone.interface_tags, dtype=object)
+        == CARRIER_CONTACT_INTERFACE
+    ) == 0
     assert CARRIER_CONTACT_INTERFACE not in (geometry.silicone.interface_tags or ())
     assert geometry.carrier_optics == IndenterOptics("absorber")
     assert geometry.metadata["carrier_contact_active"] is False
@@ -53,8 +57,10 @@ def test_exact_contact_vertices_map_only_semantic_void_triangles() -> None:
             tip.geometry,
             mesh_settings_for_level("medium"),
         ),
+        full3d_surface_provenance="actual_reference_3d_volume_state",
         carrier_contact_source_node_ids={contacted_node},
         carrier_optics=CarrierOptics("absorber"),
+        carrier_mapping_tolerance_mm=0.0625,
     )
 
     tags = np.asarray(geometry.silicone.interface_tags, dtype=object)
@@ -77,5 +83,42 @@ def test_contact_triangles_require_explicit_carrier_optics() -> None:
                 tip.geometry,
                 mesh_settings_for_level("medium"),
             ),
+            full3d_surface_provenance="actual_reference_3d_volume_state",
             carrier_contact_source_node_ids={contacted_node},
+            carrier_mapping_tolerance_mm=0.0625,
+        )
+
+
+def test_carrier_mapping_tolerance_cannot_be_read_from_metadata() -> None:
+    tip, volume_mesh, state = _reference_state()
+    contacted_node = int(volume_mesh.surface_triangles["void_bottom"][0].node_ids[0])
+    with pytest.raises(ValueError, match="explicit argument"):
+        build_fingertip_volume_state_geometry(
+            tip,
+            state,
+            reference_mesh=generate_fingertip_mesh(
+                tip.geometry,
+                mesh_settings_for_level("medium"),
+            ),
+            full3d_surface_provenance="actual_reference_3d_volume_state",
+            carrier_contact_source_node_ids={contacted_node},
+            carrier_optics=CarrierOptics("absorber"),
+            metadata={"carrier_mapping_tolerance_mm": 0.0625},
+        )
+
+
+def test_carrier_contact_requires_explicit_mapping_tolerance() -> None:
+    tip, volume_mesh, state = _reference_state()
+    contacted_node = int(volume_mesh.surface_triangles["void_bottom"][0].node_ids[0])
+    with pytest.raises(ValueError, match="explicit mapping tolerance"):
+        build_fingertip_volume_state_geometry(
+            tip,
+            state,
+            reference_mesh=generate_fingertip_mesh(
+                tip.geometry,
+                mesh_settings_for_level("medium"),
+            ),
+            full3d_surface_provenance="actual_reference_3d_volume_state",
+            carrier_contact_source_node_ids={contacted_node},
+            carrier_optics=CarrierOptics("absorber"),
         )

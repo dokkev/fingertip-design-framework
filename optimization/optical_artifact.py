@@ -10,11 +10,12 @@ from typing import Any, Mapping
 
 import numpy as np
 
+from model.fingertip import Fingertip
 from optics.transport3d.result import Transport3DResult
 from optics.transport3d.settings import Transport3DSettings
 
 
-UNIFIED_ARTIFACT_SCHEMA = "unified-optix-transport-case-v4"
+UNIFIED_ARTIFACT_SCHEMA = "unified-optix-transport-case-v5"
 
 
 def _canonical_json(value: Any) -> str:
@@ -38,13 +39,16 @@ def _plain(value: Any) -> Any:
     return value
 
 
-def optical_material_parameters(material: Any) -> dict[str, float]:
-    """Select the optical material values that participate in a contract."""
+def optical_physics_parameters(tip: Fingertip) -> dict[str, float]:
+    """Return exactly the optical values used by FULL_3D transport."""
+    if not isinstance(tip, Fingertip):
+        raise TypeError("tip must be a Fingertip")
     return {
-        "refractive_index_air": float(material.refractive_index_air),
-        "refractive_index_silicone": float(material.refractive_index_silicone),
-        "absorption_per_mm": float(material.absorption_per_mm),
-        "scattering_per_mm": float(material.scattering_per_mm),
+        "refractive_index_air": float(tip.optical.refractive_index_air),
+        "refractive_index_silicone": float(tip.optical.refractive_index_silicone),
+        "absorption_per_mm": float(tip.optical.absorption_per_mm),
+        "relative_radiant_power": float(tip.led.relative_radiant_power),
+        "emission_half_angle_deg": float(tip.led.emission_half_angle_deg),
     }
 
 
@@ -80,8 +84,8 @@ class OpticalFieldArtifact:
     terminated_weight: float
     energy_balance_error: float
     ray_count: int
-    valid_ray_count: int
-    terminated_ray_count: int
+    escape_event_count: int
+    escaped_primary_count: int
     path_diagnostics: Mapping[str, Any]
     morphology_id: str = ""
     morphology_fingerprint: str = ""
@@ -97,40 +101,98 @@ class OpticalFieldArtifact:
     carrier_transmitted_weight: float = 0.0
     carrier_interface_incident_weight: float = 0.0
     carrier_reflected_weight: float = 0.0
+    carrier_contact_triangle_count: int = 0
     optical_mode: str = "FULL_3D"
 
-    def energy_record(self) -> dict[str, Any]:
-        launched = float(self.launched_weight)
-        carrier_absorbed = float(self.carrier_absorbed_weight)
-        escaped = float(self.escaped_weight)
-        return {
-            "launched_weight": launched,
-            "escaped_weight": escaped,
-            "escaped_transport_fraction": escaped / max(launched, 1.0e-30),
-            "absorbed_weight": float(self.absorbed_weight),
-            "terminated_weight": float(self.terminated_weight),
-            "total_transport": float(self.total_transport),
-            "object_interface_optics": "disabled_in_deformation_only_scene",
-            "object_interface_incident_weight": float(self.object_interface_incident_weight),
-            "object_absorbed_weight": float(self.object_absorbed_weight),
-            "object_transmitted_weight": float(self.object_transmitted_weight),
-            "object_reflected_weight": float(self.object_reflected_weight),
-            "carrier_absorbed_weight": carrier_absorbed,
-            "carrier_absorption_fraction": carrier_absorbed / max(launched, 1.0e-30),
-            "carrier_transmitted_weight": float(self.carrier_transmitted_weight),
-            "carrier_interface_incident_weight": float(self.carrier_interface_incident_weight),
-            "carrier_reflected_weight": float(self.carrier_reflected_weight),
-            "carrier_optical_contact_triangle_count": int(
-                self.path_diagnostics.get("carrier_interface", {}).get(
-                    "contact_triangle_count", 0
-                )
+
+def energy_record(result: Transport3DResult | OpticalFieldArtifact) -> dict[str, Any]:
+    """Serialize scalar transport diagnostics at the optimization boundary."""
+    launched = float(result.launched_weight)
+    carrier_absorbed = float(result.carrier_absorbed_weight)
+    escaped = float(result.escaped_weight)
+    return {
+        "launched_weight": launched,
+        "escaped_weight": escaped,
+        "escaped_transport_fraction": escaped / max(launched, 1.0e-30),
+        "absorbed_weight": float(result.absorbed_weight),
+        "terminated_weight": float(result.terminated_weight),
+        "total_transport": float(result.total_transport),
+        "object_interface_optics": "disabled_in_deformation_only_scene",
+        "object_interface_incident_weight": float(result.object_interface_incident_weight),
+        "object_absorbed_weight": float(result.object_absorbed_weight),
+        "object_transmitted_weight": float(result.object_transmitted_weight),
+        "object_reflected_weight": float(result.object_reflected_weight),
+        "carrier_absorbed_weight": carrier_absorbed,
+        "carrier_absorption_fraction": carrier_absorbed / max(launched, 1.0e-30),
+        "carrier_transmitted_weight": float(result.carrier_transmitted_weight),
+        "carrier_interface_incident_weight": float(result.carrier_interface_incident_weight),
+        "carrier_reflected_weight": float(result.carrier_reflected_weight),
+        "carrier_optical_contact_triangle_count": int(
+            result.carrier_contact_triangle_count
+        ),
+        "energy_balance_error": float(result.energy_balance_error),
+        "field_shape": list(result.field.shape),
+        "field_finite_nonnegative": bool(
+            np.all(np.isfinite(result.field)) and np.all(result.field >= 0.0)
+        ),
+    }
+
+
+def _path_diagnostics(
+    result: Transport3DResult, contract: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Build report-oriented diagnostics without storing them in optics core."""
+    transport = contract.get("transport_configuration", {})
+    settings = transport.get("settings", {}) if isinstance(transport, Mapping) else {}
+    return {
+        "branch_cutoff": {
+            "minimum_ray_weight_fraction": settings.get("minimum_ray_weight"),
+            "maximum_interactions": settings.get("max_interactions"),
+            "primary_and_first_generation_exempt": True,
+            "convention": "cutoff applies to branches with interaction_count > 1",
+        },
+        "processed_segment_count": int(result.processed_segment_count),
+        "periodic_wrap_termination": {
+            "enabled": bool(settings.get("terminate_on_periodic_wrap_limit", False)),
+            "count": int(result.periodic_wrap_termination_count),
+            "weight": float(result.periodic_wrap_termination_weight),
+            "maximum_periodic_wraps": settings.get("maximum_periodic_wraps"),
+        },
+        "no_event_termination": {
+            "enabled": bool(settings.get("terminate_on_no_event", False)),
+            "count": int(result.no_event_termination_count),
+            "weight": float(result.no_event_termination_weight),
+        },
+        "interface_normal_orientation_fallback_count": int(
+            result.interface_normal_fallback_count
+        ),
+        "object_interface": {
+            "object_absorbed_weight": float(result.object_absorbed_weight),
+            "object_transmitted_weight": float(result.object_transmitted_weight),
+            "object_interface_incident_weight": float(
+                result.object_interface_incident_weight
             ),
-            "energy_balance_error": float(self.energy_balance_error),
-            "field_shape": list(self.field.shape),
-            "field_finite_nonnegative": bool(
-                np.all(np.isfinite(self.field)) and np.all(self.field >= 0.0)
+            "object_reflected_weight": float(result.object_reflected_weight),
+        },
+        "carrier_interface": {
+            "carrier_absorbed_weight": float(result.carrier_absorbed_weight),
+            "carrier_transmitted_weight": float(result.carrier_transmitted_weight),
+            "carrier_interface_incident_weight": float(
+                result.carrier_interface_incident_weight
             ),
-        }
+            "carrier_reflected_weight": float(result.carrier_reflected_weight),
+            "contact_triangle_count": int(result.carrier_contact_triangle_count),
+        },
+        "internal_path_field": {
+            "field_axis_order": "x,y,z",
+            "field_shape": list(result.field.shape),
+            "normalization": "raw weighted path length per voxel; no TV normalization",
+            "z_integration": "sum of raw z-bin path masses; no extra width factor",
+            "segment_medium_scope": "air and silicone segments in the native FULL_3D field",
+            "line_sampling": "deterministic segment midpoint sampling",
+            "total_accumulated_weighted_path_length_mm": float(np.sum(result.field)),
+        },
+    }
 
 
 def _result_record(result: Transport3DResult, contract: Mapping[str, Any]) -> dict[str, Any]:
@@ -153,10 +215,8 @@ def _result_record(result: Transport3DResult, contract: Mapping[str, Any]) -> di
         "escaped_weight": result.escaped_weight,
         "absorbed_weight": result.absorbed_weight,
         "terminated_weight": result.terminated_weight,
-        "valid_ray_count": int(len(result.escape_weights)),
-        "terminated_ray_count": max(
-            0, result.launched_ray_count - len(result.escape_primary_ray_indices)
-        ),
+        "escape_event_count": int(result.escape_event_count),
+        "escaped_primary_count": int(result.escaped_primary_count),
         "energy_balance_error": result.energy_balance_error,
         "object_absorbed_weight": result.object_absorbed_weight,
         "object_transmitted_weight": result.object_transmitted_weight,
@@ -166,7 +226,8 @@ def _result_record(result: Transport3DResult, contract: Mapping[str, Any]) -> di
         "carrier_transmitted_weight": result.carrier_transmitted_weight,
         "carrier_interface_incident_weight": result.carrier_interface_incident_weight,
         "carrier_reflected_weight": result.carrier_reflected_weight,
-        "path_diagnostics": _plain(result.geometry_metadata),
+        "carrier_contact_triangle_count": int(result.carrier_contact_triangle_count),
+        "path_diagnostics": _plain(_path_diagnostics(result, contract)),
     }
 
 
@@ -332,8 +393,8 @@ def load_case_artifact(
         terminated_weight=float(record["terminated_weight"]),
         energy_balance_error=float(record["energy_balance_error"]),
         ray_count=int(record["ray_count"]),
-        valid_ray_count=int(record["valid_ray_count"]),
-        terminated_ray_count=int(record["terminated_ray_count"]),
+        escape_event_count=int(record["escape_event_count"]),
+        escaped_primary_count=int(record["escaped_primary_count"]),
         path_diagnostics=record.get("path_diagnostics", {}),
         morphology_id=str(record.get("morphology_id", "")),
         morphology_fingerprint=str(record.get("morphology_fingerprint", "")),
@@ -355,6 +416,9 @@ def load_case_artifact(
             record.get("carrier_interface_incident_weight", 0.0)
         ),
         carrier_reflected_weight=float(record.get("carrier_reflected_weight", 0.0)),
+        carrier_contact_triangle_count=int(
+            record.get("carrier_contact_triangle_count", 0)
+        ),
     )
 
 
@@ -364,7 +428,8 @@ __all__ = [
     "fingerprint_mapping",
     "load_case_artifact",
     "native_field_separability",
-    "optical_material_parameters",
+    "energy_record",
+    "optical_physics_parameters",
     "save_case_artifact",
     "transport_configuration",
 ]

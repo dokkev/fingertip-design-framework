@@ -143,10 +143,10 @@ def prepare_fingertip_mesh(
 
     if not isinstance(volume_mesh, FingertipVolumeMesh):
         raise TypeError("volume_mesh must be FingertipVolumeMesh")
-    if not volume_mesh.fingertip.validation.passed:
+    if not volume_mesh.validation.passed:
         raise InvalidFingertipMesh(
             "refusing invalid FingertipVolumeMesh: "
-            + ", ".join(volume_mesh.fingertip.validation.errors)
+            + ", ".join(volume_mesh.validation.errors)
         )
     if not volume_mesh.nodes or not volume_mesh.tetrahedra:
         raise ValueError("FingertipVolumeMesh must contain nodes and tetrahedra")

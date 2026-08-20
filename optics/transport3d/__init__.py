@@ -3,6 +3,7 @@
 from optics.transport3d.result import Transport3DResult, Transport3DResultError
 from optics.transport3d.geometry import (
     CARRIER_CONTACT_INTERFACE,
+    Full3DSurfaceProvenance,
     build_full3d_transport_geometry,
     build_fixed_transport_surfaces,
 )
@@ -26,6 +27,7 @@ __all__ = [
     "Transport3DTraceError",
     "build_full3d_transport_geometry",
     "CARRIER_CONTACT_INTERFACE",
+    "Full3DSurfaceProvenance",
     "build_fixed_transport_surfaces",
     "build_fingertip_volume_state_geometry",
     "trace_geometry",

@@ -35,6 +35,7 @@ from optimization.deformed_state_artifact import (
 )
 from optimization.optical_artifact import (
     fingerprint_mapping,
+    optical_physics_parameters,
     save_case_artifact,
     transport_configuration,
 )
@@ -179,9 +180,9 @@ def _trace_bundle(
         case.mechanics_artifact_path,
         case.mechanics_artifact_sha256,
         carrier_optics=CarrierOptics("absorber"),
+        carrier_mapping_tolerance_mm=mapping_tolerance_mm,
         metadata={
             "contact_state_fingerprint": contact_state["contact_state_fingerprint"],
-            "carrier_mapping_tolerance_mm": mapping_tolerance_mm,
         },
     )
     legacy_geometry = build_fingertip_volume_state_geometry(
@@ -191,17 +192,13 @@ def _trace_bundle(
             tip.geometry,
             mesh_settings_for_level("medium"),
         ),
+        full3d_surface_provenance="actual_deformed_3d_volume_state",
         metadata={
             "contact_state_fingerprint": contact_state["contact_state_fingerprint"],
-            "carrier_mapping_tolerance_mm": mapping_tolerance_mm,
         },
+        carrier_mapping_tolerance_mm=mapping_tolerance_mm,
     )
-    material = {
-        "refractive_index_air": tip.optical.refractive_index_air,
-        "refractive_index_silicone": tip.optical.refractive_index_silicone,
-        "absorption_per_mm": tip.optical.absorption_per_mm,
-        "scattering_per_mm": tip.optical.scattering_per_mm,
-    }
+    material = optical_physics_parameters(tip)
     configuration = transport_configuration(
         settings,
         material=material,
@@ -272,14 +269,13 @@ def _result_summary(bundle: StateBundle) -> dict[str, Any]:
     legacy = bundle.legacy_result
     carrier = bundle.carrier_result
     field_difference = np.asarray(carrier.field) - np.asarray(legacy.field)
-    carrier_interface = carrier.path_diagnostics.get("carrier_interface", {})
     return {
         "label": bundle.label,
         "travel_mm": bundle.travel_mm,
         "mechanics": dict(bundle.case.indentation.diagnostics),
         "contact_state": bundle.contact_state,
         "carrier_optical_contact_triangle_count": int(
-            carrier_interface.get("contact_triangle_count", 0)
+            carrier.carrier_contact_triangle_count
         ),
         "legacy_air": {
             "escaped_weight": legacy.escaped_weight,

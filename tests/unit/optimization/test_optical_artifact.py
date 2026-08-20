@@ -6,8 +6,13 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from model import Fingertip, LED, OpticalMaterial
 from optics.transport3d import Transport3DResult
-from optimization.optical_artifact import load_case_artifact, save_case_artifact
+from optimization.optical_artifact import (
+    load_case_artifact,
+    optical_physics_parameters,
+    save_case_artifact,
+)
 
 
 def _result() -> Transport3DResult:
@@ -77,3 +82,20 @@ def test_direct_result_keeps_carrier_energy_channels_distinct() -> None:
     assert result.carrier_absorbed_weight == pytest.approx(0.4)
     assert result.object_absorbed_weight == pytest.approx(0.05)
     assert result.object_absorbed_weight != result.carrier_absorbed_weight
+
+
+def test_optical_fingerprint_inputs_match_full3d_transport_inputs() -> None:
+    tip = Fingertip(
+        led=LED(relative_radiant_power=2.0, emission_half_angle_deg=60.0),
+        optical=OpticalMaterial(scattering_per_mm=9.0),
+    )
+
+    parameters = optical_physics_parameters(tip)
+
+    assert parameters == {
+        "refractive_index_air": 1.0,
+        "refractive_index_silicone": 1.41,
+        "absorption_per_mm": 0.02,
+        "relative_radiant_power": 2.0,
+        "emission_half_angle_deg": 60.0,
+    }

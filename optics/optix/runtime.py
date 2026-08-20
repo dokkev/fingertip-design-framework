@@ -9,7 +9,7 @@ from typing import Any
 
 import numpy as np
 
-from optics.optix.paths import discover_paths
+from optics.optix._paths import _discover_include_paths
 
 
 class OptixRuntimeError(RuntimeError):
@@ -84,7 +84,7 @@ class OptixRuntime:
             ) from exc
         try:
             stage = "optix_header_resolution"
-            paths = discover_paths()
+            paths = _discover_include_paths()
             stage = "cuda_device"
             device = cp.cuda.Device()
             device.use()
@@ -104,8 +104,8 @@ class OptixRuntime:
             options = [
                 b"--std=c++17",
                 f"--gpu-architecture=compute_{compute_capability}".encode(),
-                f"-I{paths.optix_include}".encode(),
-                f"-I{paths.cuda_include}".encode(),
+                f"-I{paths.optix}".encode(),
+                f"-I{paths.cuda}".encode(),
             ]
             compiled = nvrtc.nvrtcCompileProgram(program, len(options), options)
             if int(compiled[0]) != 0:
@@ -174,10 +174,10 @@ class OptixRuntime:
                 "nvrtc_version": _require_cuda_result(
                     nvrtc.nvrtcVersion(), "nvrtcVersion"
                 )[0:2],
-                "optix_include": str(paths.optix_include),
-                "cuda_include": str(paths.cuda_include),
-                "optix_include_resolution_source": paths.optix_resolution_source,
-                "cuda_include_resolution_source": paths.cuda_resolution_source,
+                "optix_include": str(paths.optix),
+                "cuda_include": str(paths.cuda),
+                "optix_include_resolution_source": paths.optix_source,
+                "cuda_include_resolution_source": paths.cuda_source,
                 "module_setup_seconds": time.perf_counter() - started,
                 "module_log": module_log,
                 "program_group_log": group_log,

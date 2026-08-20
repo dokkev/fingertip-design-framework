@@ -63,7 +63,7 @@ def test_default_zero_clearance_mesh_passes_validation(
     zero_clearance_medium,
 ) -> None:
     model, mesh = zero_clearance_medium
-    assert mesh.fingertip.validation.passed, mesh.fingertip.validation.errors
+    assert mesh.validation.passed, mesh.validation.errors
     assert mesh.settings.level == "medium"
 
 
@@ -71,7 +71,7 @@ def test_nonzero_u_clearance_mesh_preserves_unpaired_void_boundary(
     u_clearance_medium,
 ) -> None:
     _, mesh = u_clearance_medium
-    assert mesh.fingertip.validation.passed, mesh.fingertip.validation.errors
+    assert mesh.validation.passed, mesh.validation.errors
     assert mesh.boundary_edges["pad_void_unpaired"]
 
 
@@ -105,8 +105,8 @@ def test_all_source_and_adapter_boundary_tags_are_preserved(
     }
     assert set(mesh.boundary_edges) == expected
     assert all(mesh.boundary_edges[tag] for tag in model.boundaries.segments)
-    assert mesh.fingertip.validation.checks["semantic_edges_lie_on_source_segments"]
-    assert mesh.fingertip.validation.checks["no_edge_has_multiple_semantic_tags"]
+    assert mesh.validation.checks["semantic_edges_lie_on_source_segments"]
+    assert mesh.validation.checks["no_edge_has_multiple_semantic_tags"]
 
 
 @pytest.mark.parametrize(
@@ -150,6 +150,12 @@ def test_zero_clearance_contact_nodes_are_distinct_and_coincident(
 ) -> None:
     model, mesh = zero_clearance_medium
     for pair in mesh.contact_pairs:
+        assert pair.measured_mesh_gap_mm == pytest.approx(
+            pair.initial_normal_gap_mm,
+            abs=mesh.settings.classification_tolerance_mm,
+        )
+        if pair.initial_normal_gap_mm > model.parameters.geometry_tolerance:
+            continue
         pad_edges = mesh.boundary_edges[pair.pad_boundary_tag]
         stem_edges = mesh.boundary_edges[pair.stem_boundary_tag]
         pad_ids = {node_id for edge in pad_edges for node_id in edge.node_ids}

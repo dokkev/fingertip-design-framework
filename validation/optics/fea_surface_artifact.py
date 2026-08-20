@@ -264,6 +264,7 @@ class Full3DSurfaceArtifact:
                 "contact_state_fingerprint": self.contact_state_fingerprint,
                 "mechanics_source": self.mechanics_source,
             },
+            full3d_surface_provenance="actual_deformed_3d_fea_surface",
         )
 
 

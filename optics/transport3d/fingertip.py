@@ -15,6 +15,7 @@ from model.fingertip import Fingertip
 from .geometry import (
     AIR_INTERFACE,
     CARRIER_CONTACT_INTERFACE,
+    Full3DSurfaceProvenance,
     INTERNAL_INTERFACE,
     TriangleSurface,
     Transport3DGeometryError,
@@ -337,6 +338,7 @@ def build_fingertip_volume_state_geometry(
     carrier_contact_source_node_ids: frozenset[int] | set[int] | tuple[int, ...] = frozenset(),
     carrier_optics: CarrierOptics | None = None,
     carrier_mapping_tolerance_mm: float | None = None,
+    full3d_surface_provenance: Full3DSurfaceProvenance,
     metadata: Mapping[str, Any] | None = None,
 ) -> Any:
     """Build direct ``full3d_surface`` geometry without FEA artifacts.
@@ -367,27 +369,22 @@ def build_fingertip_volume_state_geometry(
         state,
         carrier_contact_source_node_ids=contact_node_ids,
     )
-    carrier_triangle_mask = np.asarray(
-        [tag == CARRIER_CONTACT_INTERFACE for tag in silicone.interface_tags or ()],
-        dtype=bool,
-    )
     metadata_values = {} if metadata is None else dict(metadata)
-    if carrier_mapping_tolerance_mm is None:
-        raw_tolerance = metadata_values.pop("carrier_mapping_tolerance_mm", None)
-        carrier_mapping_tolerance_mm = (
-            None if raw_tolerance is None else float(raw_tolerance)
+    if "carrier_mapping_tolerance_mm" in metadata_values:
+        raise Transport3DGeometryError(
+            "carrier_mapping_tolerance_mm must be supplied as an explicit argument"
         )
-    else:
-        metadata_values.pop("carrier_mapping_tolerance_mm", None)
+    if "full3d_surface_provenance" in metadata_values:
+        raise Transport3DGeometryError(
+            "full3d_surface_provenance is owned by the geometry builder"
+        )
     geometry_metadata = {
         "morphology_fingerprint": state.morphology_fingerprint,
         "mechanics_source": "solver_neutral.FingertipVolumeState",
         "volume_mesh_tier": state.settings.tier,
         "volume_state_source_node_count": len(state.source_node_ids),
-        "full3d_surface_provenance": "actual_deformed_3d_volume_state",
         "rigid_geometry_source": "shared_authoritative_fingertip_geometry",
         "carrier_contact_source_node_ids": sorted(contact_node_ids),
-        "carrier_optical_contact_triangle_count": int(np.count_nonzero(carrier_triangle_mask)),
         "carrier_optics_enabled": carrier_optics is not None,
         "carrier_boundary_model": (
             None if carrier_optics is None else carrier_optics.boundary_model
@@ -403,6 +400,7 @@ def build_fingertip_volume_state_geometry(
         source_position_mm=source_position,
         source_medium=source_medium,
         metadata=geometry_metadata,
+        full3d_surface_provenance=full3d_surface_provenance,
         carrier_optics=carrier_optics,
         carrier_mapping_tolerance_mm=carrier_mapping_tolerance_mm,
     )

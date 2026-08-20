@@ -106,13 +106,14 @@ def test_volume_state_direct_adapter_builds_full3d_geometry_without_fea_artifact
             tip.geometry,
             mesh_settings_for_level("medium"),
         ),
+        full3d_surface_provenance="actual_reference_3d_volume_state",
     )
 
     assert geometry.metadata["geometry_mode"] == "full3d_surface"
     assert geometry.depth_mm == pytest.approx(11.0)
     assert geometry.z_min_mm == pytest.approx(-5.5)
     assert geometry.z_max_mm == pytest.approx(5.5)
-    assert geometry.metadata["full3d_surface_provenance"] == "actual_deformed_3d_volume_state"
+    assert geometry.metadata["full3d_surface_provenance"] == "actual_reference_3d_volume_state"
     assert set(geometry.silicone.semantic_tags or ()) == set(volume_mesh.surface_triangles) - {
         "longitudinal_end_minus",
         "longitudinal_end_plus",
@@ -150,6 +151,7 @@ def test_surface_coordinates_use_canonical_ids_when_surface_nodes_are_not_a_pref
             tip.geometry,
             mesh_settings_for_level("medium"),
         ),
+        full3d_surface_provenance="actual_reference_3d_volume_state",
     )
 
     surface_node_ids = _surface_node_ids(volume_mesh)
@@ -176,6 +178,7 @@ def test_external_surface_orientation_is_outward_from_canonical_tetrahedra() -> 
             tip.geometry,
             mesh_settings_for_level("medium"),
         ),
+        full3d_surface_provenance="actual_reference_3d_volume_state",
     )
     surface_node_ids = _surface_node_ids(volume_mesh)
     canonical_index = {node_id: index for index, node_id in enumerate(state.source_node_ids)}
@@ -219,6 +222,7 @@ def test_u_material_coordinates_are_reference_based_and_backend_independent() ->
             tip.geometry,
             mesh_settings_for_level("medium"),
         ),
+        full3d_surface_provenance="actual_reference_3d_volume_state",
     )
     deformed_geometry = build_fingertip_volume_state_geometry(
         tip,
@@ -227,6 +231,7 @@ def test_u_material_coordinates_are_reference_based_and_backend_independent() ->
             tip.geometry,
             mesh_settings_for_level("medium"),
         ),
+        full3d_surface_provenance="actual_deformed_3d_volume_state",
     )
 
     np.testing.assert_array_equal(

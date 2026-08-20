@@ -46,9 +46,10 @@ from optimization.design_space import (
 )
 from optimization.deformed_state_artifact import restore_deformed_optical_state
 from optimization.optical_artifact import (
+    energy_record,
     fingerprint_mapping,
     native_field_separability,
-    optical_material_parameters,
+    optical_physics_parameters,
     save_case_artifact,
     transport_configuration,
 )
@@ -106,11 +107,11 @@ def make_candidate_id(parameters: FingertipParameters) -> str:
 
 
 def make_material(tip: Fingertip) -> dict[str, float]:
-    return optical_material_parameters(tip.optical)
+    return optical_physics_parameters(tip)
 
 
 def make_energy_record(result: Any) -> dict[str, Any]:
-    return result.energy_record()
+    return energy_record(result)
 LUMO3D_EVALUATION_CONTRACT: dict[str, Any] = {
     "schema": "lumo3d-multi-contact-evaluation-v1",
     "bounds_mm": [spec.to_dict() for spec in PRODUCTION_SEARCH_BOUNDS],
@@ -344,14 +345,14 @@ class Lumo3DEvaluator:
                     case.mechanics_artifact_path,
                     case.mechanics_artifact_sha256,
                     carrier_optics=CarrierOptics("absorber"),
+                    carrier_mapping_tolerance_mm=contact_state[
+                        "carrier_mapping_tolerance_mm"
+                    ],
                     metadata={
                         "contact_state_fingerprint": contact_state["contact_state_fingerprint"],
                         "contact_location_u": case.normalized_location,
                         "observation_level": LUMO3D_OBSERVATION_LEVEL,
                         "carrier_optical_boundary_model": "absorber",
-                        "carrier_mapping_tolerance_mm": contact_state[
-                            "carrier_mapping_tolerance_mm"
-                        ],
                     },
                 )
                 result = trace_geometry(

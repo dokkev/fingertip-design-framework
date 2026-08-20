@@ -13,9 +13,59 @@ from optics.transport3d.physics import (
     periodic_plane_distance,
     wrapped_periodic_z,
 )
-from optics.transport3d.transport import _accumulate_segment_path_3d
 from optics.transport3d.result import Transport3DResult
 from optics.transport3d.settings import Transport3DSettings
+
+
+def _accumulate_reference_segment_path_3d(
+    density: np.ndarray,
+    x_edges: np.ndarray,
+    y_edges: np.ndarray,
+    z_edges: np.ndarray,
+    optical_mask: np.ndarray,
+    start: np.ndarray,
+    end: np.ndarray,
+    start_weight: float,
+    end_weight: float,
+    *,
+    maximum_spacing: float,
+) -> None:
+    """Accumulate one weighted straight path for dependency-light tests."""
+    displacement = np.asarray(end, dtype=float) - np.asarray(start, dtype=float)
+    length = float(np.linalg.norm(displacement))
+    if length <= 0.0:
+        return
+    sample_count = max(1, int(np.ceil(length / maximum_spacing)))
+    fractions = (np.arange(sample_count, dtype=float) + 0.5) / sample_count
+    samples = (
+        np.asarray(start, dtype=float)[None, :]
+        + fractions[:, None] * displacement[None, :]
+    )
+    x_indices = np.searchsorted(x_edges, samples[:, 0], side="right") - 1
+    y_indices = np.searchsorted(y_edges, samples[:, 1], side="right") - 1
+    z_indices = np.searchsorted(z_edges, samples[:, 2], side="right") - 1
+    valid = (
+        (x_indices >= 0)
+        & (x_indices < len(x_edges) - 1)
+        & (y_indices >= 0)
+        & (y_indices < len(y_edges) - 1)
+        & (z_indices >= 0)
+        & (z_indices < len(z_edges) - 1)
+    )
+    if not np.any(valid):
+        return
+    x_indices = x_indices[valid]
+    y_indices = y_indices[valid]
+    z_indices = z_indices[valid]
+    inside = optical_mask[y_indices, x_indices]
+    if not np.any(inside):
+        return
+    representative_weight = 0.5 * (float(start_weight) + float(end_weight))
+    np.add.at(
+        density,
+        (z_indices[inside], y_indices[inside], x_indices[inside]),
+        representative_weight * length / sample_count,
+    )
 
 
 def test_full_sampling_is_deterministic_and_three_dimensional() -> None:
@@ -113,7 +163,7 @@ def test_simple_internal_path_accumulation_and_z_integration() -> None:
     y_edges = np.asarray([0.0, 1.0, 2.0])
     z_edges = np.asarray([-1.0, 0.0, 1.0])
     optical_mask = np.ones((2, 2), dtype=bool)
-    _accumulate_segment_path_3d(
+    _accumulate_reference_segment_path_3d(
         density,
         x_edges,
         y_edges,
@@ -125,7 +175,7 @@ def test_simple_internal_path_accumulation_and_z_integration() -> None:
         0.5,
         maximum_spacing=0.25,
     )
-    _accumulate_segment_path_3d(
+    _accumulate_reference_segment_path_3d(
         repeated_density,
         x_edges,
         y_edges,
@@ -162,7 +212,7 @@ def test_periodic_segments_accumulate_path_and_attenuation() -> None:
         medium="silicone",
         absorption_per_mm=0.2,
     )
-    _accumulate_segment_path_3d(
+    _accumulate_reference_segment_path_3d(
         density,
         edges,
         edges,
@@ -174,7 +224,7 @@ def test_periodic_segments_accumulate_path_and_attenuation() -> None:
         first_end,
         maximum_spacing=0.25,
     )
-    _accumulate_segment_path_3d(
+    _accumulate_reference_segment_path_3d(
         density,
         edges,
         edges,
@@ -198,7 +248,7 @@ def test_rigid_blocker_mask_prevents_internal_path_accumulation() -> None:
     y_edges = np.asarray([0.0, 1.0])
     z_edges = np.asarray([-1.0, 1.0])
     optical_mask = np.asarray([[True, False]])
-    _accumulate_segment_path_3d(
+    _accumulate_reference_segment_path_3d(
         density,
         x_edges,
         y_edges,

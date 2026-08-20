@@ -25,6 +25,7 @@ from optics.transport3d.optix_backend import create_runtime
 from optics.optix.smoke import run_production_optix_smoke
 from optimization.deformed_state_artifact import restore_deformed_optical_state
 from optimization.optical_artifact import (
+    optical_physics_parameters,
     fingerprint_mapping,
     native_field_separability,
     save_case_artifact,
@@ -56,12 +57,7 @@ def _settings(
 
 
 def _material(tip: Fingertip) -> dict[str, float]:
-    return {
-        "refractive_index_air": tip.optical.refractive_index_air,
-        "refractive_index_silicone": tip.optical.refractive_index_silicone,
-        "absorption_per_mm": tip.optical.absorption_per_mm,
-        "scattering_per_mm": tip.optical.scattering_per_mm,
-    }
+    return optical_physics_parameters(tip)
 
 
 def _contact_state(case: dict[str, Any], fingerprint: str) -> dict[str, Any]:
@@ -101,7 +97,13 @@ def _result_summary(result, *, artifact: Path, contract: dict[str, Any]) -> dict
         "object_transmitted_weight": result.object_transmitted_weight,
         "object_reflected_weight": result.object_reflected_weight,
         "energy_balance_error": result.energy_balance_error,
-        "path_diagnostics": dict(result.path_diagnostics),
+        "transport_diagnostics": {
+            "processed_segment_count": result.processed_segment_count,
+            "periodic_wrap_termination_count": result.periodic_wrap_termination_count,
+            "no_event_termination_count": result.no_event_termination_count,
+            "interface_normal_fallback_count": result.interface_normal_fallback_count,
+            "carrier_contact_triangle_count": result.carrier_contact_triangle_count,
+        },
     }
 
 
@@ -161,10 +163,10 @@ def run_lumo3d_optix_stage(
             tip.geometry,
             mesh_settings_for_level("medium"),
         ),
+        full3d_surface_provenance="actual_reference_3d_volume_state",
         metadata={
             "contact_state_fingerprint": reference_fingerprint,
             "optical_state_id": "reference-unloaded",
-            "full3d_surface_provenance": "actual_reference_3d_volume_state",
             "mechanics_contract": stage2_payload["search_contract"],
         },
     )

@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import math
 from types import MappingProxyType
-from typing import Any, Mapping
+from typing import Any, Literal, Mapping
 
 import numpy as np
 
@@ -21,6 +21,14 @@ from optics.geometry.extrusion import (
 
 class Transport3DGeometryError(ValueError):
     """Raised when a periodic transport scene cannot be built safely."""
+
+
+Full3DSurfaceProvenance = Literal[
+    "actual_reference_3d_volume_state",
+    "actual_deformed_3d_fea_surface",
+    "actual_deformed_3d_vbd_surface",
+    "actual_deformed_3d_volume_state",
+]
 
 
 EXTERNAL_SURFACE_TAGS = (
@@ -357,6 +365,7 @@ def build_full3d_transport_geometry(
     source_position_mm: tuple[float, float, float],
     source_medium: int,
     metadata: Mapping[str, Any],
+    full3d_surface_provenance: Full3DSurfaceProvenance,
     carrier_optics: ObjectBoundaryOptics | None = None,
     carrier_mapping_tolerance_mm: float | None = None,
     depth_mm: float = 11.0,
@@ -374,10 +383,23 @@ def build_full3d_transport_geometry(
         raise TypeError("tip must be a Fingertip")
     if not isinstance(metadata, Mapping):
         raise TypeError("metadata must be a mapping")
-    if carrier_mapping_tolerance_mm is None:
-        raw_tolerance = metadata.get("carrier_mapping_tolerance_mm")
-        carrier_mapping_tolerance_mm = (
-            None if raw_tolerance is None else float(raw_tolerance)
+    if "carrier_mapping_tolerance_mm" in metadata:
+        raise Transport3DGeometryError(
+            "carrier_mapping_tolerance_mm must be supplied as an explicit argument"
+        )
+    if "full3d_surface_provenance" in metadata:
+        raise Transport3DGeometryError(
+            "full3d_surface_provenance must be supplied as an explicit argument"
+        )
+    if full3d_surface_provenance not in {
+        "actual_reference_3d_volume_state",
+        "actual_deformed_3d_fea_surface",
+        "actual_deformed_3d_vbd_surface",
+        "actual_deformed_3d_volume_state",
+    }:
+        raise Transport3DGeometryError(
+            "full 3D surface provenance must identify a direct FEA or VBD "
+            "deformed surface"
         )
     source = tuple(float(value) for value in source_position_mm)
     if len(source) != 3 or not np.all(np.isfinite(source)):
@@ -400,25 +422,8 @@ def build_full3d_transport_geometry(
         if not np.all(np.isfinite(surface.vertices[:, 2])):
             raise Transport3DGeometryError(f"{name} surface has a non-finite longitudinal coordinate")
     enriched_metadata = dict(metadata)
-    enriched_metadata.pop("carrier_mapping_tolerance_mm", None)
     enriched_metadata["geometry_mode"] = "full3d_surface"
-    provenance = str(
-        enriched_metadata.get(
-            "full3d_surface_provenance",
-            "actual_deformed_3d_fea_surface",
-        )
-    )
-    if provenance not in {
-        "actual_reference_3d_volume_state",
-        "actual_deformed_3d_fea_surface",
-        "actual_deformed_3d_vbd_surface",
-        "actual_deformed_3d_volume_state",
-    }:
-        raise Transport3DGeometryError(
-            "full 3D surface provenance must identify a direct FEA or VBD "
-            "deformed surface"
-        )
-    enriched_metadata["full3d_surface_provenance"] = provenance
+    provenance = full3d_surface_provenance
     enriched_metadata["reference_periodic_z_planes_mm"] = [-depth_mm / 2.0, depth_mm / 2.0]
     enriched_metadata["deformed_surface_z_extent_mm"] = [
         float(np.min(silicone.vertices[:, 2])),
@@ -436,6 +441,11 @@ def build_full3d_transport_geometry(
         raise Transport3DGeometryError(
             "carrier contact triangles require an explicit carrier optical boundary"
         )
+    if has_carrier_contact and carrier_mapping_tolerance_mm is None:
+        raise Transport3DGeometryError(
+            "carrier contact triangles require an explicit mapping tolerance"
+        )
+    enriched_metadata["full3d_surface_provenance"] = provenance
     enriched_metadata["carrier_contact_active"] = has_carrier_contact
     enriched_metadata["carrier_boundary_model"] = (
         None if carrier_optics is None else carrier_optics.boundary_model
@@ -460,6 +470,7 @@ __all__ = [
     "CARRIER_CONTACT_INTERFACE",
     "EXTERNAL_SURFACE_TAGS",
     "ExtrudedTransportGeometry",
+    "Full3DSurfaceProvenance",
     "INTERNAL_INTERFACE",
     "OBJECT_CONTACT_INTERFACE",
     "TriangleSurface",

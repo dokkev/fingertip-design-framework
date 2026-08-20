@@ -16,7 +16,11 @@ def _imports(package: str) -> set[str]:
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 imported.update(alias.name for alias in node.names)
-            elif isinstance(node, ast.ImportFrom) and node.module:
+            elif (
+                isinstance(node, ast.ImportFrom)
+                and node.module
+                and node.level == 0
+            ):
                 imported.add(node.module)
     return imported
 
@@ -84,5 +88,5 @@ def test_removed_legacy_packages_are_absent() -> None:
 
 
 def test_physics_has_one_flattened_newton_implementation() -> None:
-    assert (REPOSITORY_ROOT / "physics" / "newton_vbd.py").is_file()
+    assert (REPOSITORY_ROOT / "physics" / "newton" / "vbd.py").is_file()
     assert not any((REPOSITORY_ROOT / "physics" / "backends").glob("*.py"))
