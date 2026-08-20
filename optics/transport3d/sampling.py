@@ -6,7 +6,7 @@ from math import radians
 
 import numpy as np
 
-from model.optical import LED
+from model.led import LED
 from optics.cross_section.settings import TraceSettings
 from optics.cross_section.transport import sample_primary_directions
 

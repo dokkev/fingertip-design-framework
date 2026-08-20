@@ -15,7 +15,7 @@ from mesh.indenter import (
 from mesh import mesh_settings_for_level
 from mesh.fingertip import generate_fingertip_mesh
 from model import Fingertip, FingertipParameters, LED
-from model.optical import OpticalMaterial
+from model.led import OpticalMaterial
 from optics import IndenterOptics, TraceSettings
 from optics.cross_section.domain import (
     CrossSectionOpticsError,

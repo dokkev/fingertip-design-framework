@@ -22,7 +22,7 @@ from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 
 from model.fingertip_model import PolygonalGeometry
-from model.optical import LED, OpticalMaterial
+from model.led import LED, OpticalMaterial
 from optics.cross_section.domain import (
     CrossSectionOpticsError,
     _OpticalDomain,

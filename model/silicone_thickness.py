@@ -18,7 +18,7 @@ from math import cos, hypot, pi, sin
 from shapely.geometry import LineString
 from shapely.ops import nearest_points
 
-from model.fingertip_parameters import (
+from model.fingertip_model import (
     FingertipParameters,
     InvalidFingertipParameters,
     PRODUCTION_MINIMUM_SILICONE_THICKNESS_MM,

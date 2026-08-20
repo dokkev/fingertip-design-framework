@@ -5,7 +5,7 @@ import pytest
 from shapely.geometry import Polygon
 
 from model import Fingertip, FingertipParameters, LED
-from model.optical import OpticalMaterial
+from model.led import OpticalMaterial
 from optics.cross_section.domain import _OpticalDomain
 from optics.cross_section.transport import (
     _interface_directions_and_reflectance,

@@ -9,9 +9,10 @@ from shapely import affinity
 from shapely.geometry import LineString, MultiLineString, MultiPolygon, Polygon, box
 from shapely.ops import linemerge, unary_union
 
-from model.fingertip_model import FingertipModel, InvalidFingertipGeometry
-from model.fingertip_parameters import (
+from model.fingertip_model import (
     FingertipParameters,
+    FingertipModel,
+    InvalidFingertipGeometry,
     InvalidFingertipParameters,
     fingertip_parameters_fingerprint,
 )

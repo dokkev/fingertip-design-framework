@@ -7,7 +7,7 @@ import math
 
 import pytest
 
-from model.fingertip_parameters import FingertipParameters, InvalidFingertipParameters
+from model.fingertip_model import FingertipParameters, InvalidFingertipParameters
 
 
 def _removed_width_name(prefix: str) -> str:

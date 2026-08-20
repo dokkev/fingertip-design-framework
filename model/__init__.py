@@ -1,7 +1,7 @@
 """Public physical fingertip model."""
 
 from model.fingertip import Fingertip, InvalidFingertip
-from model.fingertip_parameters import (
+from model.fingertip_model import (
     FingertipParameters,
     InvalidFingertipParameters,
     MAX_TOTAL_PAD_DEPTH_MM,
@@ -14,7 +14,7 @@ from model.silicone_thickness import (
     silicone_thickness_measures,
     validate_minimum_silicone_thickness,
 )
-from model.optical import LED, OpticalMaterial
+from model.led import LED, OpticalMaterial
 from model.solid import (
     DEFAULT_EXTRUSION_DEPTH_MM,
     FingertipSolid,

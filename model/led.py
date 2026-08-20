@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from model.validation import require_finite
+from util import require_finite, require_nonnegative, require_positive
 
 
 @dataclass(frozen=True)
@@ -25,8 +25,7 @@ class LED:
         require_finite("emission_half_angle_deg", self.emission_half_angle_deg)
         if self.width_mm <= 0.0 or self.height_mm <= 0.0:
             raise ValueError("LED width and height must be greater than zero")
-        if self.relative_radiant_power < 0.0:
-            raise ValueError("relative_radiant_power must be nonnegative")
+        require_nonnegative("relative_radiant_power", self.relative_radiant_power)
         if not 0.0 < self.emission_half_angle_deg < 90.0:
             raise ValueError(
                 "emission_half_angle_deg must be between 0 and 90 degrees"
@@ -60,10 +59,10 @@ class OpticalMaterial:
         require_finite("absorption_per_mm", self.absorption_per_mm)
         require_finite("scattering_per_mm", self.scattering_per_mm)
         require_finite("anisotropy_g", self.anisotropy_g)
-        if self.refractive_index_air <= 0.0:
-            raise ValueError("refractive_index_air must be greater than zero")
-        if self.refractive_index_silicone <= 0.0:
-            raise ValueError("refractive_index_silicone must be greater than zero")
+        require_positive("refractive_index_air", self.refractive_index_air)
+        require_positive(
+            "refractive_index_silicone", self.refractive_index_silicone
+        )
         if self.absorption_per_mm < 0.0 or self.scattering_per_mm < 0.0:
             raise ValueError(
                 "absorption_per_mm and scattering_per_mm must be nonnegative"

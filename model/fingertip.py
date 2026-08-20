@@ -6,9 +6,8 @@ from dataclasses import dataclass, field
 
 from shapely.geometry import Polygon, box
 
-from model.fingertip_model import FingertipModel
-from model.fingertip_parameters import FingertipParameters
-from model.optical import LED, OpticalMaterial
+from model.fingertip_model import FingertipModel, FingertipParameters
+from model.led import LED, OpticalMaterial
 from model.solid import FingertipSolid, build_fingertip_solid
 
 

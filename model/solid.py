@@ -11,12 +11,13 @@ from typing import Literal
 from shapely.geometry import MultiLineString, MultiPolygon, Polygon
 from shapely.geometry.base import BaseGeometry
 
-from model.fingertip_model import FingertipModel, PolygonalGeometry
-from model.fingertip_parameters import (
+from model.fingertip_model import (
     FingertipParameters,
+    FingertipModel,
+    PolygonalGeometry,
     fingertip_parameters_fingerprint,
 )
-from model.validation import require_finite
+from util import require_finite
 
 
 DEFAULT_EXTRUSION_DEPTH_MM = 11.0

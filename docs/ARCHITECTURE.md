@@ -76,7 +76,7 @@ directories named `case/`, `examples/`, `fem/`, `visualization/`, or
 
 | If you need to understand... | Start here | Then inspect |
 | --- | --- | --- |
-| morphology and constraints | `model/fingertip_parameters.py` | `model/fingertip.py`, `model/solid.py` |
+| morphology and constraints | `model/fingertip_model.py::FingertipParameters` | `model/fingertip.py`, `model/solid.py` |
 | neutral volume mesh | `mesh/volume_types.py` | `mesh/volume3d.py`, `mesh/volume_state.py` |
 | rigid object/carrier mesh | `mesh/rigid_object.py` | `mesh/rigid_carrier.py` |
 | neutral rigid pose | `mesh/rigid_object.py::RigidPose3D` | `contact/`, `physics/` |

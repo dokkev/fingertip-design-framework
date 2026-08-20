@@ -7,7 +7,7 @@ from functools import cached_property
 import math
 from typing import Any, Literal
 
-from model.fingertip_parameters import FingertipParameters
+from model.fingertip_model import FingertipParameters
 
 MeshLevel = Literal["medium", "fine"]
 MeshDomain = Literal["pad", "rigid_carrier"]
