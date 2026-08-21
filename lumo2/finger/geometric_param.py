@@ -173,7 +173,7 @@ def semiellipse_depth_at_x_mm(
 
 
 __all__ = [
-    "FingertipParameters",
+    "FingertipGeometry",
     "InvalidFingertipParameters",
     "semiellipse_depth_at_x_mm",
 ]

@@ -14,5 +14,6 @@ Current ownership is intentionally limited to:
 - `mechanics/` — mechanics behavior
 - `ray_tracing/` — ray-tracing behavior
 
-These packages are only skeletons at this stage. No production behavior has
-been migrated or implemented yet.
+The packages are still intentionally small. The initial fingertip parameter
+value objects are implemented in `finger/`; no production solver, meshing, or
+transport behavior has been migrated yet.
