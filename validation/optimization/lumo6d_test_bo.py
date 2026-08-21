@@ -21,7 +21,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from lumo.mesh.volume.mesh import VolumeMeshDependencyError
-from lumo.finger import silicone_thickness_measures
+from lumo.finger import FingertipParameters, silicone_thickness_measures
 from lumo.ray_tracing.optical_mechanics import Transport3DDependencyError
 from lumo.optimization.optical_contract import fingerprint_mapping
 from scripts.tools.optix_smoke import run as run_optix_smoke
@@ -33,7 +33,10 @@ from lumo.optimization.adapters.ax import (
     run_ax_optimization,
 )
 from lumo.optimization.design_space import (
+    DesignSpace,
+    DesignVariable,
     OPTIMIZABLE_PARAMETER_NAMES,
+    PRODUCTION_NOMINAL_VOID_HEIGHT_MM,
     PRODUCTION_LINEAR_CONSTRAINTS,
     PRODUCTION_SEARCH_BOUNDS,
 )
@@ -41,9 +44,8 @@ from lumo.optimization.objectives import ObjectiveIdentifier
 from lumo.physics import PhysicsDependencyError
 from lumo.optimization.evaluation_registry import EvaluationRegistry, REGISTRY_SCHEMA_VERSION
 from lumo.optimization.evaluator import (
-    Lumo3DTrajectoryStudy,
+    Lumo3DTrajectoryEvaluator,
     TRAJECTORY_EVALUATION_SCHEMA,
-    create_lumo3d_trajectory_study,
 )
 from lumo.simulation import (
     LUMO3D_OBSERVATION_LEVEL,
@@ -75,6 +77,17 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _production_design_space() -> DesignSpace:
+    return DesignSpace(
+        FingertipParameters(void_height=PRODUCTION_NOMINAL_VOID_HEIGHT_MM),
+        tuple(
+            DesignVariable(spec.name, True, spec.lower, spec.upper)
+            for spec in PRODUCTION_SEARCH_BOUNDS
+        ),
+        linear_constraints=PRODUCTION_LINEAR_CONSTRAINTS,
+    )
+
+
 def _write_json(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(path.name + ".tmp")
@@ -104,9 +117,9 @@ def _optical_grid() -> dict[str, Any]:
     }
 
 
-def _search_mechanics(study: Lumo3DTrajectoryStudy) -> dict[str, object]:
+def _search_mechanics(evaluator: Lumo3DTrajectoryEvaluator) -> dict[str, object]:
     """Return the serializable mechanics contract for campaign metadata."""
-    return study.create_evaluator().mechanics_contract.to_dict()
+    return evaluator.mechanics_contract.to_dict()
 
 
 def _rms_displacement_from_artifact(path: object) -> float | None:
@@ -219,14 +232,14 @@ def _status_contract(status: str) -> str:
 
 def _trial_payload(
     record: Any,
-    study: Lumo3DTrajectoryStudy,
+    design_space: DesignSpace,
     attempt_index: int | None,
 ) -> dict[str, Any]:
     parameters = _parameter_values(record.parameters)
     candidate = None
     measures = None
     try:
-        candidate = study.design_space.decode(parameters)
+        candidate = design_space.decode(parameters)
         measures = silicone_thickness_measures(candidate)
     except Exception:
         pass
@@ -348,16 +361,16 @@ def _trial_payload(
     }
 
 
-def _pre_run_sanity(study: Lumo3DTrajectoryStudy) -> dict[str, Any]:
-    if len(study.design_space.active_variables) != 6:
+def _pre_run_sanity(design_space: DesignSpace) -> dict[str, Any]:
+    if len(design_space.active_variables) != 6:
         raise RuntimeError("SIX_D_PARAMETERIZATION_BLOCKER")
-    if tuple(variable.name for variable in study.design_space.active_variables) != tuple(
+    if tuple(variable.name for variable in design_space.active_variables) != tuple(
         OPTIMIZABLE_PARAMETER_NAMES
     ):
         raise RuntimeError("active variable names do not match the six-variable contract")
 
     client = create_ax_client(
-        study,
+        design_space,
         AxSettings(
             initialization_trials=SOBOL_TRIALS,
             search_trials=BO_TRIALS,
@@ -380,11 +393,11 @@ def _pre_run_sanity(study: Lumo3DTrajectoryStudy) -> dict[str, Any]:
     if len(set(total_depths)) < 2:
         raise RuntimeError("total pad depth remained coupled in the pre-run suggestions")
     return {
-        "active_variable_count": len(study.design_space.active_variables),
+        "active_variable_count": len(design_space.active_variables),
         "active_variables": list(OPTIMIZABLE_PARAMETER_NAMES),
         "numerical_envelopes": [spec.to_dict() for spec in PRODUCTION_SEARCH_BOUNDS],
         "linear_constraints": [
-            constraint.to_ax_expression() for constraint in PRODUCTION_LINEAR_CONSTRAINTS
+            constraint.expression for constraint in PRODUCTION_LINEAR_CONSTRAINTS
         ],
         "suggestions": values,
         "flat_pad_height_unique_count": len(flat_values),
@@ -634,10 +647,11 @@ def run_lumo6d_test_bo(output_dir: str | Path = OUTPUT_DIRECTORY) -> dict[str, A
     plots = output / "plots"
     plots.mkdir(parents=True, exist_ok=True)
     started = time.perf_counter()
-    study = create_lumo3d_trajectory_study(output / "artifacts")
-    contract_id = study.evaluation_contract_id
-    search_mechanics = _search_mechanics(study)
-    sanity = _pre_run_sanity(study)
+    design_space = _production_design_space()
+    evaluator = Lumo3DTrajectoryEvaluator(output / "artifacts")
+    contract_id = evaluator.evaluation_contract_id
+    search_mechanics = _search_mechanics(evaluator)
+    sanity = _pre_run_sanity(design_space)
     grid = _optical_grid()
     configuration = {
         "schema": "lumo6d-test-bo-v1",
@@ -653,7 +667,7 @@ def run_lumo6d_test_bo(output_dir: str | Path = OUTPUT_DIRECTORY) -> dict[str, A
         "active_variables": list(OPTIMIZABLE_PARAMETER_NAMES),
         "numerical_envelopes": [spec.to_dict() for spec in PRODUCTION_SEARCH_BOUNDS],
         "linear_constraints": [
-            constraint.to_ax_expression() for constraint in PRODUCTION_LINEAR_CONSTRAINTS
+            constraint.expression for constraint in PRODUCTION_LINEAR_CONSTRAINTS
         ],
         "contract_id": contract_id,
         "registry_schema_version": REGISTRY_SCHEMA_VERSION,
@@ -676,15 +690,15 @@ def run_lumo6d_test_bo(output_dir: str | Path = OUTPUT_DIRECTORY) -> dict[str, A
         _write_json(output / "checkpoint.json", state)
 
         # Evaluate and persist nominal before the first get_next_trials call.
-        nominal_evaluator = study.create_evaluator()
+        nominal_evaluator = evaluator
         nominal_parameters = _parameter_values({
-            name: getattr(study.design_space.nominal_parameters, name)
+            name: getattr(design_space.nominal_parameters, name)
             for name in OPTIMIZABLE_PARAMETER_NAMES
         })
         nominal_started = time.perf_counter()
         try:
             nominal_evaluation = nominal_evaluator.evaluate(
-                study.design_space.nominal_parameters
+                design_space.nominal_parameters
             )
         except Transport3DDependencyError as exc:
             raise CampaignInfrastructureError(
@@ -711,7 +725,7 @@ def run_lumo6d_test_bo(output_dir: str | Path = OUTPUT_DIRECTORY) -> dict[str, A
             "wall_time_seconds": time.perf_counter() - nominal_started,
             "registry_key": None,
         })()
-        nominal_payload = _trial_payload(nominal_record, study, None)
+        nominal_payload = _trial_payload(nominal_record, design_space, None)
         if nominal_evaluation.status != "success":
             raise RuntimeError(
                 "NOMINAL_FEASIBILITY_BLOCKER: "
@@ -746,7 +760,7 @@ def run_lumo6d_test_bo(output_dir: str | Path = OUTPUT_DIRECTORY) -> dict[str, A
             for record in records:
                 if record.phase == "nominal":
                     continue
-                payload = _trial_payload(record, study, attempt)
+                payload = _trial_payload(record, design_space, attempt)
                 records_by_trial[int(record.trial_index)] = payload
                 attempt += 1
             ordered = [records_by_trial[index] for index in sorted(records_by_trial)]
@@ -765,7 +779,8 @@ def run_lumo6d_test_bo(output_dir: str | Path = OUTPUT_DIRECTORY) -> dict[str, A
             max_consecutive_known_proposals=MAX_CONSECUTIVE_KNOWN_PROPOSALS,
         )
         result = run_ax_optimization(
-            study,
+            design_space,
+            evaluator,
             settings,
             on_record=persist,
             evaluation_registry=registry,

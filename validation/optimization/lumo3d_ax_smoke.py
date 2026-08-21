@@ -14,27 +14,19 @@ from lumo.optimization.adapters.ax import (
 )
 from lumo.optimization.evaluation_registry import EvaluationRegistry
 from lumo.optimization.design_space import (
+    DesignSpace,
+    DesignVariable,
     PRODUCTION_NOMINAL_VOID_HEIGHT_MM,
     PRODUCTION_SEARCH_BOUNDS,
 )
 from lumo.optimization.objectives import ObjectiveIdentifier
 from lumo.finger import Fingertip, FingertipParameters
-from lumo.optimization.evaluator import create_lumo3d_trajectory_study
 from lumo.simulation import LUMO3D_OBSERVATION_LEVEL
 
 
 CONTACT_STATE_SEPARATION_OBJECTIVE = ObjectiveIdentifier(
     "contact_state_separation", 1
 )
-
-
-@dataclass(frozen=True)
-class _SyntheticStudy:
-    design_space: Any
-    evaluator: "_SyntheticEvaluator"
-
-    def create_evaluator(self) -> "_SyntheticEvaluator":
-        return self.evaluator
 
 
 class _SyntheticEvaluator:
@@ -82,10 +74,16 @@ def run_lumo3d_ax_smoke(output_dir: str | Path) -> dict[str, Any]:
     """Run nominal + Sobol + MBM using the installed Ax 1.3.1 Client."""
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
-    wiring = create_lumo3d_trajectory_study(output)
-    contract_id = wiring.evaluation_contract_id
+    nominal = FingertipParameters(void_height=PRODUCTION_NOMINAL_VOID_HEIGHT_MM)
+    design_space = DesignSpace(
+        nominal,
+        tuple(
+            DesignVariable(spec.name, True, spec.lower, spec.upper)
+            for spec in PRODUCTION_SEARCH_BOUNDS
+        ),
+    )
+    contract_id = "lumo3d-ax-smoke-v1"
     evaluator = _SyntheticEvaluator()
-    study = _SyntheticStudy(wiring.design_space, evaluator)
     registry_path = output / "registry.json"
     suffix = 0
     while registry_path.exists():
@@ -93,7 +91,8 @@ def run_lumo3d_ax_smoke(output_dir: str | Path) -> dict[str, Any]:
         registry_path = output / f"registry.rerun-{suffix}.json"
     registry = EvaluationRegistry(registry_path)
     result = run_ax_optimization(
-        study,
+        design_space,
+        evaluator,
         AxSettings(
             initialization_trials=1,
             search_trials=1,

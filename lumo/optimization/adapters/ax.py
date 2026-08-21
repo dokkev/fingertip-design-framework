@@ -196,10 +196,10 @@ class AxRunResult:
         return best
 
 
-def create_ax_client(study: object, settings: AxSettings) -> Client:
+def create_ax_client(design_space: DesignSpace, settings: AxSettings) -> Client:
     """Configure one Ax client from active design variables and run settings."""
-    if not hasattr(study, "design_space"):
-        raise TypeError("study must provide a design_space")
+    if not isinstance(design_space, DesignSpace):
+        raise TypeError("design_space must be DesignSpace")
     if not isinstance(settings, AxSettings):
         raise TypeError("settings must be AxSettings")
 
@@ -209,14 +209,14 @@ def create_ax_client(study: object, settings: AxSettings) -> Client:
             bounds=(variable.lower, variable.upper),
             parameter_type="float",
         )
-        for variable in study.design_space.active_variables
+        for variable in design_space.active_variables
     ]
     client = Client(random_seed=settings.seed)
     client.configure_experiment(
         parameters=parameters,
         parameter_constraints=tuple(
-            constraint.to_ax_expression()
-            for constraint in study.design_space.linear_constraints
+            constraint.expression
+            for constraint in design_space.linear_constraints
         ),
     )
     client.configure_optimization(objective=settings.objective_name)
@@ -461,7 +461,8 @@ def _ax_ready_for_search(client: Client) -> bool:
 
 
 def run_ax_optimization(
-    study: object,
+    design_space: DesignSpace,
+    evaluator: object,
     settings: AxSettings,
     *,
     on_record: Callable[[Client, tuple[AxTrialRecord, ...]], None] | None = None,
@@ -478,8 +479,10 @@ def run_ax_optimization(
     need durable per-trial provenance. It is called only after Ax has marked a
     trial complete, failed, or abandoned as a known duplicate.
     """
-    if not hasattr(study, "design_space") or not hasattr(study, "create_evaluator"):
-        raise TypeError("study must provide design_space and create_evaluator()")
+    if not isinstance(design_space, DesignSpace):
+        raise TypeError("design_space must be DesignSpace")
+    if not callable(getattr(evaluator, "evaluate", None)):
+        raise TypeError("evaluator must provide evaluate()")
     if not isinstance(settings, AxSettings):
         raise TypeError("settings must be AxSettings")
     if max_consecutive_known_proposals is None:
@@ -504,7 +507,7 @@ def run_ax_optimization(
     ):
         raise ValueError("max_proposals must be a positive integer or None")
 
-    client = create_ax_client(study, settings)
+    client = create_ax_client(design_space, settings)
     historical_success_count = 0
     historical_failure_count = 0
     if evaluation_registry is not None:
@@ -516,7 +519,6 @@ def run_ax_optimization(
                 settings.objective_name,
             )
         )
-    evaluator = study.create_evaluator()
     records: list[AxTrialRecord] = []
 
     def result(
@@ -567,7 +569,7 @@ def run_ax_optimization(
         record = _evaluate_trial(
             client,
             evaluator,
-            study.design_space,
+            design_space,
             trial_index,
             phase,
             candidate,
@@ -626,10 +628,10 @@ def run_ax_optimization(
 
     nominal_values = {
         variable.name: getattr(
-            study.design_space.nominal_parameters,
+            design_space.nominal_parameters,
             variable.name,
         )
-        for variable in study.design_space.active_variables
+        for variable in design_space.active_variables
     }
     # Leave the arm name to Ax. A historical bootstrap may already contain
     # this exact morphology under its historical arm name; forcing "nominal"

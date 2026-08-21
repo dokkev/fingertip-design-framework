@@ -109,7 +109,7 @@ def _candidate(value: float) -> dict[str, float]:
 
 def test_create_ax_client_translates_all_six_active_morphology_variables() -> None:
     client = create_ax_client(
-        SimpleNamespace(design_space=_space()),
+        _space(),
         AxSettings(initialization_trials=1, search_trials=1, seed=7),
     )
     assert set(client._experiment.parameters.keys()) == {
@@ -136,11 +136,11 @@ def test_run_ax_optimization_evaluates_morphology_without_mechanics_or_optics(
 ) -> None:
     client = _ClientDouble([_candidate(5.5)])
     evaluator = _Evaluator()
-    study = SimpleNamespace(design_space=_space(), create_evaluator=lambda: evaluator)
     monkeypatch.setattr(ax_adapter, "create_ax_client", lambda *_: client)
 
     result = run_ax_optimization(
-        study,
+        _space(),
+        evaluator,
         AxSettings(
             initialization_trials=1,
             search_trials=1,
@@ -174,12 +174,12 @@ class _CandidateFailureEvaluator:
 def test_shared_physics_dependency_abandons_ax_trial_and_aborts_campaign(monkeypatch) -> None:
     client = _ClientDouble([_candidate(5.5)])
     evaluator = _PhysicsDependencyEvaluator()
-    study = SimpleNamespace(design_space=_space(), create_evaluator=lambda: evaluator)
     monkeypatch.setattr(ax_adapter, "create_ax_client", lambda *_: client)
 
     with pytest.raises(CampaignInfrastructureError) as raised:
         run_ax_optimization(
-            study,
+            _space(),
+            evaluator,
             AxSettings(
                 initialization_trials=1,
                 search_trials=1,
@@ -196,13 +196,13 @@ def test_shared_physics_dependency_abandons_ax_trial_and_aborts_campaign(monkeyp
 def test_candidate_failure_is_registered_in_real_evaluation_registry(monkeypatch, tmp_path) -> None:
     client = _ClientDouble([_candidate(5.5)])
     evaluator = _CandidateFailureEvaluator()
-    study = SimpleNamespace(design_space=_space(), create_evaluator=lambda: evaluator)
     registry = EvaluationRegistry(tmp_path / "registry.json")
     registered_counts: list[int] = []
     monkeypatch.setattr(ax_adapter, "create_ax_client", lambda *_: client)
 
     result = run_ax_optimization(
-        study,
+        _space(),
+        evaluator,
         AxSettings(
             initialization_trials=1,
             search_trials=1,
@@ -242,15 +242,13 @@ def test_registry_uses_each_candidate_evaluation_artifact_path(
                 result_artifact_path=str(artifact),
             )
 
-    study = SimpleNamespace(
-        design_space=_space(),
-        create_evaluator=_ArtifactEvaluator,
-    )
+    evaluator = _ArtifactEvaluator()
     registry = EvaluationRegistry(tmp_path / "registry.json")
     monkeypatch.setattr(ax_adapter, "create_ax_client", lambda *_: client)
 
     run_ax_optimization(
-        study,
+        _space(),
+        evaluator,
         AxSettings(
             initialization_trials=1,
             search_trials=1,
@@ -294,13 +292,13 @@ def test_infrastructure_failure_is_not_registered_in_real_evaluation_registry(
             raise exception
 
     evaluator = _InfrastructureFailureEvaluator()
-    study = SimpleNamespace(design_space=_space(), create_evaluator=lambda: evaluator)
     registry = EvaluationRegistry(tmp_path / "registry.json")
     monkeypatch.setattr(ax_adapter, "create_ax_client", lambda *_: client)
 
     with pytest.raises(CampaignInfrastructureError) as raised:
         run_ax_optimization(
-            study,
+            _space(),
+            evaluator,
             AxSettings(
                 initialization_trials=1,
                 search_trials=1,

@@ -22,10 +22,8 @@ def test_removed_failure_vocabulary_is_not_silently_current() -> None:
 
 def test_test_bo_serializes_the_mechanics_contract_at_the_setup_boundary() -> None:
     contract = MechanicsContract()
-    study = SimpleNamespace(
-        create_evaluator=lambda: SimpleNamespace(mechanics_contract=contract)
-    )
+    evaluator = SimpleNamespace(mechanics_contract=contract)
 
-    search_mechanics = _search_mechanics(study)
+    search_mechanics = _search_mechanics(evaluator)
 
     assert search_mechanics == contract.to_dict()

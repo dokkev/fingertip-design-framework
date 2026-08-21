@@ -62,7 +62,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         MaximumCutoutWidth,
         OptimizableParameterName,
         TrajectoryEvaluationProtocol,
-        TrajectorySeparationObjective,
+        TrajectoryObjectiveConfig,
         render_run_result,
         run_optimization_campaign,
         run_production_preflight,
@@ -173,7 +173,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     # 5. Select the scientific objective and load expert numerical settings at
     # one typed initialization boundary. Raw YAML does not enter the evaluator.
-    objective = TrajectorySeparationObjective(
+    objective = TrajectoryObjectiveConfig(
         radius_penalty_weight=1.0,
     )
     execution = load_lumo_execution_config(args.execution_config)

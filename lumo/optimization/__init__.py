@@ -15,7 +15,6 @@ from lumo.optimization.design_space import (
 from lumo.optimization.evaluator import Lumo3DTrajectoryEvaluator
 from lumo.optimization.objectives import (
     TrajectoryObjectiveConfig,
-    TrajectorySeparationObjective,
 )
 from lumo.optimization.protocol import (
     DEFAULT_TRAJECTORY_PROTOCOL,
@@ -32,5 +31,4 @@ __all__ = [
     "ParameterSpec",
     "TrajectoryEvaluationProtocol",
     "TrajectoryObjectiveConfig",
-    "TrajectorySeparationObjective",
 ]

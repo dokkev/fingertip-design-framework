@@ -487,7 +487,7 @@ def run_validation(output: str | Path, *, device: str = "cuda:0") -> dict[str, A
                 "validation/optimization/lumo3d_common.py",
                 "validation/physics/deformed_state_artifact.py",
                 "lumo.optimization.scenarios",
-                "lumo.optimization.study",
+                "lumo.optimization.evaluator",
                 "case",
                 "fem",
                 "examples",

@@ -18,15 +18,33 @@ from lumo.finger import (
 )
 from lumo.physics import CandidateMechanicsError
 from lumo.optimization.objectives import TrajectoryObservation, compute_trajectory_objective
-from lumo.optimization.design_space import ParameterSpec
+from lumo.optimization.design_space import (
+    DesignSpace,
+    DesignVariable,
+    ParameterSpec,
+    PRODUCTION_SEARCH_BOUNDS,
+)
 from lumo.optimization.protocol import DEFAULT_TRAJECTORY_PROTOCOL, TrajectoryEvaluationProtocol
+from lumo.optimization.deformed_state_artifact import ContactState, ContactStateIdentity
 from lumo.optimization.evaluator import (
     Lumo3DTrajectoryEvaluator,
     _objective_failure,
-    create_lumo3d_trajectory_study,
 )
 from lumo.ray_tracing.optical_mechanics import Transport3DResultError, Transport3DSettings
 import lumo.optimization.evaluator as evaluator_module
+
+
+def _design_space(
+    nominal_parameters: FingertipParameters | None = None,
+    bounds: tuple[ParameterSpec, ...] = PRODUCTION_SEARCH_BOUNDS,
+) -> DesignSpace:
+    return DesignSpace(
+        nominal_parameters or FingertipParameters(void_height=0.25),
+        tuple(
+            DesignVariable(spec.name, True, spec.lower, spec.upper)
+            for spec in bounds
+        ),
+    )
 
 
 def test_default_checkpoint_state_identities_are_unique() -> None:
@@ -35,14 +53,49 @@ def test_default_checkpoint_state_identities_are_unique() -> None:
     assert len(set(states)) == 18
 
 
-def test_custom_protocol_is_consumed_by_study_without_evaluator_changes(tmp_path) -> None:
+def test_contact_state_reads_checkpoint_identity_from_one_source_of_truth() -> None:
+    identity = ContactStateIdentity(
+        morphology_fingerprint="morphology",
+        protocol_fingerprint="protocol",
+        contact_location_u=0.5,
+        indenter_radius_mm=5.0,
+        checkpoint_depth_mm=1.0,
+        checkpoint_fraction=0.5,
+        normalized_indentation_ratio=0.2,
+        post_contact_travel_mm=1.0,
+        unintended_boundary_clearance_mm=2.0,
+        mechanics_artifact_sha256="artifact",
+    )
+    state = ContactState(
+        identity=identity,
+        contact_state_fingerprint="contact-state",
+        initial_gap_mm=0.25,
+        first_contact_travel_mm=0.1,
+        spawn_clearance_mm=0.01,
+        carrier_contact_active=False,
+        carrier_contact_occurred=False,
+        carrier_mechanical_contact_count=0,
+        carrier_mechanical_contact_vertex_count=0,
+        first_carrier_contact_step=None,
+        carrier_contact_source_node_ids=(),
+        carrier_mapping_tolerance_mm=0.0625,
+    )
+
+    assert state.normalized_location == identity.contact_location_u
+    assert state.indenter_radius_mm == identity.indenter_radius_mm
+    assert state.checkpoint_depth_mm == identity.checkpoint_depth_mm
+    assert state.post_contact_travel_mm == identity.post_contact_travel_mm
+    assert state.mechanics_artifact_sha256 == identity.mechanics_artifact_sha256
+    assert "normalized_location" not in state.__dict__
+
+
+def test_custom_protocol_is_consumed_by_evaluator_without_wrapper_study(tmp_path) -> None:
     protocol = TrajectoryEvaluationProtocol(
         contact_locations_u=(0.2, 0.5, 0.8),
         indenter_radii_mm=(3.5, 4.5, 5.0),
         checkpoint_depths_mm=(0.5, 1.0, 1.5, 2.0),
     )
-    study = create_lumo3d_trajectory_study(tmp_path, protocol=protocol)
-    evaluator = study.create_evaluator()
+    evaluator = Lumo3DTrajectoryEvaluator(tmp_path, protocol=protocol)
     assert evaluator.protocol is protocol
     assert evaluator.protocol.optical_state_count == 36
     assert evaluator.mechanics_contract.max_load_increment_mm == 0.05
@@ -56,7 +109,7 @@ def test_evaluator_requires_the_native_field_for_its_objective(tmp_path) -> None
         )
 
 
-def test_study_accepts_explicit_search_bounds(tmp_path) -> None:
+def test_design_space_accepts_explicit_search_bounds() -> None:
     bounds = (
         ParameterSpec("flat_pad_height", 4.0, 6.0),
         ParameterSpec("semielliptical_pad_height", 8.0, 10.0),
@@ -66,17 +119,17 @@ def test_study_accepts_explicit_search_bounds(tmp_path) -> None:
         ParameterSpec("void_height", 0.0, 1.0),
     )
 
-    study = create_lumo3d_trajectory_study(tmp_path, search_bounds=bounds)
+    design_space = _design_space(bounds=bounds)
 
     assert tuple(
         (variable.name.value, variable.lower, variable.upper)
-        for variable in study.design_space.active_variables
+        for variable in design_space.active_variables
     ) == tuple((bound.name.value, bound.lower, bound.upper) for bound in bounds)
 
 
 def test_evaluation_contract_id_changes_with_fixed_scientific_inputs(tmp_path) -> None:
-    base = create_lumo3d_trajectory_study(tmp_path / "base")
-    changed_protocol = create_lumo3d_trajectory_study(
+    base = Lumo3DTrajectoryEvaluator(tmp_path / "base")
+    changed_protocol = Lumo3DTrajectoryEvaluator(
         tmp_path / "protocol",
         protocol=TrajectoryEvaluationProtocol(
             contact_locations_u=(0.2, 0.5, 0.8),
@@ -84,32 +137,32 @@ def test_evaluation_contract_id_changes_with_fixed_scientific_inputs(tmp_path) -
             checkpoint_depths_mm=(1.0,),
         ),
     )
-    changed_led = create_lumo3d_trajectory_study(
+    changed_led = Lumo3DTrajectoryEvaluator(
         tmp_path / "led",
         led=LED(emission_half_angle_deg=60.0),
     )
-    changed_led_size = create_lumo3d_trajectory_study(
+    changed_led_size = Lumo3DTrajectoryEvaluator(
         tmp_path / "led-size",
         led=LED(width_mm=5.0),
     )
-    changed_material = create_lumo3d_trajectory_study(
+    changed_material = Lumo3DTrajectoryEvaluator(
         tmp_path / "material",
-        nominal_parameters=FingertipParameters(
+        fixed_parameters=FingertipParameters(
             optical=OpticalParameters(absorption_per_mm=0.03),
         ),
     )
-    changed_fixed_geometry = create_lumo3d_trajectory_study(
+    changed_fixed_geometry = Lumo3DTrajectoryEvaluator(
         tmp_path / "fixed-geometry",
-        nominal_parameters=FingertipParameters(
+        fixed_parameters=FingertipParameters(
             link_thickness=4.0,
             void_height=0.25,
         ),
     )
-    changed_mechanics = create_lumo3d_trajectory_study(
+    changed_mechanics = Lumo3DTrajectoryEvaluator(
         tmp_path / "mechanics",
         mechanics_contract=MechanicsContract(vbd_iterations=11),
     )
-    changed_first_contact = create_lumo3d_trajectory_study(
+    changed_first_contact = Lumo3DTrajectoryEvaluator(
         tmp_path / "first-contact",
         mechanics_contract=replace(
             base.mechanics_contract,
@@ -119,16 +172,16 @@ def test_evaluation_contract_id_changes_with_fixed_scientific_inputs(tmp_path) -
             ),
         ),
     )
-    changed_path_sampling = create_lumo3d_trajectory_study(
+    changed_path_sampling = Lumo3DTrajectoryEvaluator(
         tmp_path / "path-sampling",
         optical_settings=replace(
-            base.optical_settings,
+            base.settings,
             internal_max_samples_per_segment=8,
         ),
     )
-    changed_viscoelastic = create_lumo3d_trajectory_study(
+    changed_viscoelastic = Lumo3DTrajectoryEvaluator(
         tmp_path / "viscoelastic",
-        nominal_parameters=FingertipParameters(
+        fixed_parameters=FingertipParameters(
             viscoelastic=ViscoelasticParameters(k_mu_pa=2.0e5),
         ),
     )
@@ -346,8 +399,6 @@ def test_unexpected_objective_error_propagates(
         "build_contact_state_record",
         lambda **_kwargs: _ContactState(),
     )
-    monkeypatch.setattr(evaluator_module, "_final_pose_error_mm", lambda *_args: 0.0)
-
     class _Result:
         field = np.ones((2, 2), dtype=float)
         total_transport = 1.0

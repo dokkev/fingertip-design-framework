@@ -105,11 +105,6 @@ class LinearConstraint:
             raise ValueError("linear constraint expression must be non-empty")
         object.__setattr__(self, "expression", self.expression.strip())
 
-    def to_ax_expression(self) -> str:
-        """Return the framework expression at the Ax adapter boundary."""
-
-        return self.expression
-
 PRODUCTION_SEARCH_BOUNDS: tuple[ParameterSpec, ...] = (
     ParameterSpec(OptimizableParameterName.FLAT_PAD_HEIGHT, 0.5, 29.5),
     ParameterSpec(OptimizableParameterName.SEMIELLIPTICAL_PAD_HEIGHT, 0.5, 29.5),

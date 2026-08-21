@@ -211,21 +211,6 @@ class TrajectoryObjectiveResult:
         }
 
 
-class TrajectorySeparationObjective:
-    """Concrete canonical objective used by the production evaluator."""
-
-    identifier = TRAJECTORY_SEPARATION_OBJECTIVE
-
-    def __init__(self, config: TrajectoryObjectiveConfig | None = None) -> None:
-        self.config = config or TrajectoryObjectiveConfig()
-
-    def evaluate(
-        self,
-        observations: Iterable[TrajectoryObservation],
-    ) -> TrajectoryObjectiveResult:
-        return _compute_trajectory_objective(observations, self.config, self.identifier)
-
-
 def _pair_record(
     first: TrajectoryObservation,
     second: TrajectoryObservation,
@@ -327,7 +312,11 @@ def compute_trajectory_objective(
 ) -> TrajectoryObjectiveResult:
     """Evaluate the canonical trajectory-separation objective."""
 
-    return TrajectorySeparationObjective(config).evaluate(observations)
+    return _compute_trajectory_objective(
+        observations,
+        config or TrajectoryObjectiveConfig(),
+        TRAJECTORY_SEPARATION_OBJECTIVE,
+    )
 
 
 __all__ = [
@@ -338,7 +327,6 @@ __all__ = [
     "TrajectoryObservation",
     "TrajectoryPairDistance",
     "TrajectoryObjectiveResult",
-    "TrajectorySeparationObjective",
     "compute_trajectory_objective",
     "normalized_field_distance",
 ]

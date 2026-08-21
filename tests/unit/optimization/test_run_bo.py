@@ -86,7 +86,7 @@ def test_preflight_builds_configuration_under_requested_output_root(
     requested_output.mkdir()
     marker = requested_output / "existing.txt"
     marker.write_text("keep", encoding="utf-8")
-    study_roots: list[object] = []
+    evaluator_roots: list[object] = []
 
     monkeypatch.setattr(
         run_bo.importlib,
@@ -94,17 +94,11 @@ def test_preflight_builds_configuration_under_requested_output_root(
         lambda _name: object(),
     )
 
-    def create_study(root, **_kwargs):
-        study_roots.append(root)
-        return SimpleNamespace(
-            design_space=SimpleNamespace(
-                active_variables=[
-                    SimpleNamespace(name=SimpleNamespace(value="flat_pad_height"))
-                ]
-            )
-        )
+    class _Evaluator:
+        def __init__(self, root, **_kwargs):
+            evaluator_roots.append(root)
 
-    monkeypatch.setattr(run_bo, "create_lumo3d_trajectory_study", create_study)
+    monkeypatch.setattr(run_bo, "Lumo3DTrajectoryEvaluator", _Evaluator)
     monkeypatch.setattr(
         run_bo,
         "_run_optix_smoke",
@@ -119,6 +113,6 @@ def test_preflight_builds_configuration_under_requested_output_root(
     payload = run_bo._preflight_payload(requested_output)
 
     assert payload["status"] == "PASS"
-    assert study_roots == [requested_output / "preflight-artifacts"]
+    assert evaluator_roots == [requested_output / "preflight-artifacts"]
     assert requested_output != run_bo.DEFAULT_OUTPUT
     assert marker.read_text(encoding="utf-8") == "keep"

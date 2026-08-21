@@ -36,10 +36,15 @@ from lumo.optimization.adapters.ax import (
     run_ax_optimization,
 )
 from lumo.optimization.evaluation_registry import EvaluationRegistry
-from lumo.optimization.design_space import ParameterSpec, PRODUCTION_LINEAR_CONSTRAINTS
+from lumo.optimization.design_space import (
+    DesignSpace,
+    DesignVariable,
+    ParameterSpec,
+    PRODUCTION_LINEAR_CONSTRAINTS,
+)
 from lumo.optimization.evaluator import (
     TRAJECTORY_EVALUATION_SCHEMA,
-    create_lumo3d_trajectory_study,
+    Lumo3DTrajectoryEvaluator,
 )
 from lumo.optimization.objectives import (
     TRAJECTORY_SEPARATION_OBJECTIVE,
@@ -129,6 +134,20 @@ def _search_bounds_payload(
     search_bounds: tuple[ParameterSpec, ...],
 ) -> list[dict[str, object]]:
     return [bound.to_dict() for bound in search_bounds]
+
+
+def _design_space(
+    nominal_parameters: FingertipParameters,
+    search_bounds: tuple[ParameterSpec, ...],
+) -> DesignSpace:
+    return DesignSpace(
+        nominal_parameters,
+        tuple(
+            DesignVariable(spec.name, True, spec.lower, spec.upper)
+            for spec in search_bounds
+        ),
+        linear_constraints=PRODUCTION_LINEAR_CONSTRAINTS,
+    )
 
 
 def _json_write(path: Path, payload: Any) -> None:
@@ -238,7 +257,7 @@ def _user_config_payload(
                 "evaluated separately"
             ),
             "linear_constraints": [
-                constraint.to_ax_expression()
+                constraint.expression
                 for constraint in PRODUCTION_LINEAR_CONSTRAINTS
             ],
         },
@@ -280,7 +299,8 @@ def _preflight_payload(
 
     try:
         Fingertip(USER_PARAMETERS, led=USER_LED)
-        study = create_lumo3d_trajectory_study(
+        design_space = _design_space(USER_PARAMETERS, search_bounds)
+        evaluator = Lumo3DTrajectoryEvaluator(
             preflight_root / "preflight-artifacts",
             protocol=protocol,
             objective_config=objective_config,
@@ -288,13 +308,12 @@ def _preflight_payload(
             device=DEVICE,
             optical_settings=USER_OPTICAL_SETTINGS,
             led=USER_LED,
-            nominal_parameters=USER_PARAMETERS,
-            search_bounds=search_bounds,
+            fixed_parameters=USER_PARAMETERS,
         )
         checks["production_configuration"] = {
             "status": "PASS",
             "active_variables": [
-                variable.name.value for variable in study.design_space.active_variables
+                variable.name.value for variable in design_space.active_variables
             ],
             "protocol_fingerprint": protocol.fingerprint,
             "mechanics_contract_fingerprint": USER_MECHANICS_CONTRACT.fingerprint,
@@ -387,7 +406,8 @@ def run_campaign(
             + ", ".join(preflight["failed_checks"])
         )
 
-    study = create_lumo3d_trajectory_study(
+    design_space = _design_space(USER_PARAMETERS, USER_SEARCH_BOUNDS)
+    evaluator = Lumo3DTrajectoryEvaluator(
         root / "artifacts",
         protocol=protocol,
         objective_config=USER_OBJECTIVE,
@@ -395,8 +415,7 @@ def run_campaign(
         device=DEVICE,
         optical_settings=USER_OPTICAL_SETTINGS,
         led=USER_LED,
-        nominal_parameters=USER_PARAMETERS,
-        search_bounds=USER_SEARCH_BOUNDS,
+        fixed_parameters=USER_PARAMETERS,
     )
     selected_registry_path = (
         root / "registry.json" if registry_path is None else Path(registry_path)
@@ -410,7 +429,7 @@ def run_campaign(
     )
     config.update(
         {
-            "contract_id": study.evaluation_contract_id,
+            "contract_id": evaluator.evaluation_contract_id,
             "evaluation_schema": TRAJECTORY_EVALUATION_SCHEMA,
             "output": str(root),
             "registry": str(selected_registry_path),
@@ -433,11 +452,12 @@ def run_campaign(
     )
     try:
         result = run_ax_optimization(
-            study,
+            design_space,
+            evaluator,
             settings,
             on_record=persist,
             evaluation_registry=registry,
-            evaluation_contract_id=study.evaluation_contract_id,
+            evaluation_contract_id=evaluator.evaluation_contract_id,
             campaign_id=root.name,
             max_proposals=trials,
         )

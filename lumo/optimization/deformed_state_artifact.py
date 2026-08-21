@@ -109,14 +109,7 @@ class ContactState:
 
     identity: ContactStateIdentity
     contact_state_fingerprint: str
-    normalized_location: float
-    indenter_radius_mm: float
     initial_gap_mm: float
-    checkpoint_depth_mm: float
-    checkpoint_fraction: float
-    normalized_indentation_ratio: float
-    post_contact_travel_mm: float
-    unintended_boundary_clearance_mm: float
     first_contact_travel_mm: float
     spawn_clearance_mm: float
     carrier_contact_active: bool
@@ -126,21 +119,13 @@ class ContactState:
     first_carrier_contact_step: int | None
     carrier_contact_source_node_ids: tuple[int, ...]
     carrier_mapping_tolerance_mm: float
-    mechanics_artifact_sha256: str
 
     def __init__(
         self,
         *,
         identity: ContactStateIdentity,
         contact_state_fingerprint: str,
-        normalized_location: float,
-        indenter_radius_mm: float,
         initial_gap_mm: float,
-        checkpoint_depth_mm: float,
-        checkpoint_fraction: float,
-        normalized_indentation_ratio: float,
-        post_contact_travel_mm: float,
-        unintended_boundary_clearance_mm: float,
         first_contact_travel_mm: float,
         spawn_clearance_mm: float,
         carrier_contact_active: bool,
@@ -150,7 +135,6 @@ class ContactState:
         first_carrier_contact_step: int | None,
         carrier_contact_source_node_ids: tuple[int, ...],
         carrier_mapping_tolerance_mm: float,
-        mechanics_artifact_sha256: str,
     ) -> None:
         if not isinstance(identity, ContactStateIdentity):
             raise TypeError("identity must be ContactStateIdentity")
@@ -158,20 +142,7 @@ class ContactState:
         object.__setattr__(self, "contact_state_fingerprint", str(contact_state_fingerprint))
         if not self.contact_state_fingerprint:
             raise ValueError("contact_state_fingerprint must be non-empty")
-        object.__setattr__(self, "normalized_location", _finite_nonnegative("normalized_location", normalized_location))
-        object.__setattr__(self, "indenter_radius_mm", _finite_nonnegative("indenter_radius_mm", indenter_radius_mm))
         object.__setattr__(self, "initial_gap_mm", _finite_nonnegative("initial_gap_mm", initial_gap_mm))
-        object.__setattr__(self, "checkpoint_depth_mm", _finite_nonnegative("checkpoint_depth_mm", checkpoint_depth_mm))
-        object.__setattr__(self, "checkpoint_fraction", _finite_nonnegative("checkpoint_fraction", checkpoint_fraction))
-        object.__setattr__(self, "normalized_indentation_ratio", _finite_nonnegative(
-            "normalized_indentation_ratio", normalized_indentation_ratio
-        ))
-        object.__setattr__(self, "post_contact_travel_mm", _finite_nonnegative(
-            "post_contact_travel_mm", post_contact_travel_mm
-        ))
-        object.__setattr__(self, "unintended_boundary_clearance_mm", _finite_nonnegative(
-            "unintended_boundary_clearance_mm", unintended_boundary_clearance_mm
-        ))
         object.__setattr__(self, "first_contact_travel_mm", _finite_nonnegative(
             "first_contact_travel_mm", first_contact_travel_mm
         ))
@@ -206,9 +177,38 @@ class ContactState:
         object.__setattr__(self, "carrier_mapping_tolerance_mm", _finite_nonnegative(
             "carrier_mapping_tolerance_mm", carrier_mapping_tolerance_mm
         ))
-        object.__setattr__(self, "mechanics_artifact_sha256", str(mechanics_artifact_sha256))
-        if not self.mechanics_artifact_sha256:
-            raise ValueError("mechanics_artifact_sha256 must be non-empty")
+
+    @property
+    def normalized_location(self) -> float:
+        return self.identity.contact_location_u
+
+    @property
+    def indenter_radius_mm(self) -> float:
+        return self.identity.indenter_radius_mm
+
+    @property
+    def checkpoint_depth_mm(self) -> float:
+        return self.identity.checkpoint_depth_mm
+
+    @property
+    def checkpoint_fraction(self) -> float:
+        return self.identity.checkpoint_fraction
+
+    @property
+    def normalized_indentation_ratio(self) -> float:
+        return self.identity.normalized_indentation_ratio
+
+    @property
+    def post_contact_travel_mm(self) -> float:
+        return self.identity.post_contact_travel_mm
+
+    @property
+    def unintended_boundary_clearance_mm(self) -> float:
+        return self.identity.unintended_boundary_clearance_mm
+
+    @property
+    def mechanics_artifact_sha256(self) -> str:
+        return self.identity.mechanics_artifact_sha256
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -284,14 +284,7 @@ def build_contact_state_record(
     return ContactState(
         identity=identity,
         contact_state_fingerprint=contact_fingerprint,
-        normalized_location=location_u,
-        indenter_radius_mm=radius_mm,
         initial_gap_mm=protocol.initial_gap_mm,
-        checkpoint_depth_mm=post_contact_travel_mm,
-        checkpoint_fraction=checkpoint.checkpoint_fraction,
-        normalized_indentation_ratio=checkpoint.normalized_indentation_ratio,
-        post_contact_travel_mm=post_contact_travel_mm,
-        unintended_boundary_clearance_mm=unintended_boundary_clearance_mm,
         first_contact_travel_mm=state.first_contact_travel_mm,
         spawn_clearance_mm=state.spawn_clearance_mm,
         carrier_contact_active=state.carrier_contact_active,
@@ -301,7 +294,6 @@ def build_contact_state_record(
         first_carrier_contact_step=state.first_carrier_contact_step,
         carrier_contact_source_node_ids=source_ids,
         carrier_mapping_tolerance_mm=0.5 * state.rigid_sdf_target_voxel_mm,
-        mechanics_artifact_sha256=mechanics_artifact_sha256,
     )
 
 
