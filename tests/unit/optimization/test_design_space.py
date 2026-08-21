@@ -7,7 +7,11 @@ import math
 
 import pytest
 
-from lumo.finger import Fingertip, FingertipParameters
+from lumo.finger import (
+    Fingertip,
+    FingertipParameters,
+    validate_minimum_silicone_thickness,
+)
 from lumo.optimization.design_space import (
     DesignSpace,
     DesignVariable,
@@ -148,18 +152,24 @@ def test_void_height_decodes_into_authoritative_geometry(void_height: float) -> 
     assert solid.parameters.void_height == void_height
 
 
-def test_latent_corners_are_feasible_or_explicitly_rejected() -> None:
+def test_latent_boundaries_and_center_are_feasible_by_construction() -> None:
     space = _space()
-    assert space.parameterization_version == "feasible-morphology-v1"
+    assert space.parameterization_version == "feasible-morphology-v2"
     assert tuple(variable.name for variable in space.search_variables) == LATENT_PARAMETER_NAMES
     for point in (
         {name: 0.0 for name in LATENT_PARAMETER_NAMES},
         {name: 0.5 for name in LATENT_PARAMETER_NAMES},
         {name: 1.0 for name in LATENT_PARAMETER_NAMES},
+        {
+            name: float(index % 2)
+            for index, name in enumerate(LATENT_PARAMETER_NAMES)
+        },
+        {
+            name: float((index + 1) % 2)
+            for index, name in enumerate(LATENT_PARAMETER_NAMES)
+        },
     ):
-        try:
-            parameters = space.decode(point)
-        except ValueError:
-            continue
+        parameters = space.decode(point)
         assert parameters.flat_pad_height + parameters.semielliptical_pad_height <= 30.0
         assert parameters.stem_width + 2.0 * parameters.void_width <= 20.0
+        validate_minimum_silicone_thickness(parameters)

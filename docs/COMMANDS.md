@@ -111,6 +111,13 @@ registration; a morphology failure is recorded as a candidate result. The
 `--trials` value counts Ax-generated proposals; the nominal baseline is
 evaluated separately.
 
+To continue an interrupted campaign, pass `--resume` explicitly with the
+campaign directory, its `checkpoint.json` pointer, or an immutable checkpoint
+directory. The runner restores the public Ax JSON state, reconciles any
+pending candidate before requesting a new proposal, and fails fast on fixed
+input, budget, source, or Ax-package mismatches. Existing output alone never
+triggers resume.
+
 ## Newton viewer helpers
 
 Interactive Newton viewer support is kept in `lumo.physics.newton.viewer` for debugging.

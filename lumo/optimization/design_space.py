@@ -14,6 +14,7 @@ from lumo.finger import (
     InvalidFingertipParameters,
     MAX_TOTAL_PAD_DEPTH_MM,
     PRODUCTION_MINIMUM_SILICONE_THICKNESS_MM,
+    silicone_thickness_measures,
     validate_minimum_silicone_thickness,
 )
 
@@ -55,7 +56,7 @@ _OPTIMIZABLE_PARAMETER_SET = frozenset(OptimizableParameterName)
 _FIXED_FLAT_PAD_WIDTH_MM = 30.0
 PRODUCTION_MAX_TOTAL_PAD_DEPTH_MM = MAX_TOTAL_PAD_DEPTH_MM
 PRODUCTION_NOMINAL_VOID_HEIGHT_MM = 0.25
-FEASIBLE_PARAMETERIZATION_VERSION = "feasible-morphology-v1"
+FEASIBLE_PARAMETERIZATION_VERSION = "feasible-morphology-v2"
 LATENT_PARAMETER_NAMES: tuple[str, ...] = (
     "latent_cutout_width",
     "latent_pad_depth",
@@ -578,6 +579,50 @@ class DesignSpace:
         total: float,
         cutout_width: float,
     ) -> tuple[float, float]:
+        lower, upper = self._pad_height_interval_with_vertical_margin(
+            total,
+            cutout_width,
+        )
+        cutout_depth = self._minimum_cutout_depth()
+        if not self._has_minimum_silicone_thickness(
+            flat=upper,
+            semi=total - upper,
+            cutout_width=cutout_width,
+            cutout_depth=cutout_depth,
+        ):
+            raise DesignSpaceFeasibilityError(
+                f"no pad-height split provides a 5 mm wall for cutout {cutout_width:g} mm",
+                constraint="minimum_silicone_thickness",
+            )
+        if self._has_minimum_silicone_thickness(
+            flat=lower,
+            semi=total - lower,
+            cutout_width=cutout_width,
+            cutout_depth=cutout_depth,
+        ):
+            return lower, upper
+
+        infeasible_lower = lower
+        feasible_lower = upper
+        for _ in range(48):
+            middle = 0.5 * (infeasible_lower + feasible_lower)
+            if self._has_minimum_silicone_thickness(
+                flat=middle,
+                semi=total - middle,
+                cutout_width=cutout_width,
+                cutout_depth=cutout_depth,
+            ):
+                feasible_lower = middle
+            else:
+                infeasible_lower = middle
+        return feasible_lower, upper
+
+    def _pad_height_interval_with_vertical_margin(
+        self,
+        total: float,
+        cutout_width: float,
+    ) -> tuple[float, float]:
+        """Return the analytic interval before exact global-thickness refinement."""
         lower, upper = self._pad_height_interval(total)
         factor = sqrt(
             1.0 - (cutout_width / _FIXED_FLAT_PAD_WIDTH_MM) ** 2
@@ -597,10 +642,18 @@ class DesignSpace:
 
     def _pad_split_has_margin(self, total: float, cutout_width: float) -> bool:
         try:
-            self._pad_height_interval_with_margin(total, cutout_width)
+            _, upper = self._pad_height_interval_with_vertical_margin(
+                total,
+                cutout_width,
+            )
         except DesignSpaceFeasibilityError:
             return False
-        return True
+        return self._has_minimum_silicone_thickness(
+            flat=upper,
+            semi=total - upper,
+            cutout_width=cutout_width,
+            cutout_depth=self._minimum_cutout_depth(),
+        )
 
     def _minimum_cutout_width(self) -> float:
         return self._physical_variable("stem_width").lower + 2.0 * self._physical_variable(
@@ -658,7 +711,67 @@ class DesignSpace:
                 "minimum cutout depth cannot satisfy silicone thickness",
                 constraint="minimum_silicone_thickness",
             )
-        return upper
+        if not self._has_minimum_silicone_thickness(
+            flat=flat,
+            semi=semi,
+            cutout_width=cutout,
+            cutout_depth=lower,
+        ):
+            raise DesignSpaceFeasibilityError(
+                "minimum cutout depth cannot satisfy global silicone thickness",
+                constraint="minimum_silicone_thickness",
+            )
+        if self._has_minimum_silicone_thickness(
+            flat=flat,
+            semi=semi,
+            cutout_width=cutout,
+            cutout_depth=upper,
+        ):
+            return upper
+
+        feasible_lower = lower
+        infeasible_upper = upper
+        for _ in range(48):
+            middle = 0.5 * (feasible_lower + infeasible_upper)
+            if self._has_minimum_silicone_thickness(
+                flat=flat,
+                semi=semi,
+                cutout_width=cutout,
+                cutout_depth=middle,
+            ):
+                feasible_lower = middle
+            else:
+                infeasible_upper = middle
+        return feasible_lower
+
+    def _has_minimum_silicone_thickness(
+        self,
+        *,
+        flat: float,
+        semi: float,
+        cutout_width: float,
+        cutout_depth: float,
+    ) -> bool:
+        """Evaluate the authoritative global wall measure for aggregate geometry."""
+        stem_width, void_width = self._decode_width_split(cutout_width, 0.0)
+        stem_height, void_height = self._decode_height_split_at_lower(cutout_depth)
+        try:
+            parameters = replace(
+                self.nominal_parameters,
+                flat_pad_height=flat,
+                semielliptical_pad_height=semi,
+                stem_width=stem_width,
+                stem_height=stem_height,
+                void_width=void_width,
+                void_height=void_height,
+                flat_pad_width=_FIXED_FLAT_PAD_WIDTH_MM,
+            )
+        except InvalidFingertipParameters:
+            return False
+        return (
+            silicone_thickness_measures(parameters).minimum_silicone_thickness_mm
+            >= PRODUCTION_MINIMUM_SILICONE_THICKNESS_MM
+        )
 
     def _decode_width_split(
         self,

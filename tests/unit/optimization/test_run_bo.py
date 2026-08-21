@@ -4,7 +4,10 @@ from dataclasses import asdict
 import json
 from types import SimpleNamespace
 
+import pytest
+
 import scripts.optimization.run_bo as run_bo
+from lumo.optimization.adapters.ax import AxTerminationReason
 
 
 def test_user_config_contains_the_production_search_controls() -> None:
@@ -32,7 +35,82 @@ def test_user_config_contains_the_production_search_controls() -> None:
     ]
     assert payload["ax"]["initialization_trials"] == run_bo.INITIALIZATION_TRIALS
     assert payload["ax"]["search_trials"] == 4 - run_bo.INITIALIZATION_TRIALS
+    assert payload["ax"]["max_feasibility_resamples"] == (
+        run_bo.MAX_FEASIBILITY_RESAMPLES
+    )
     json.dumps(payload, allow_nan=False)
+
+
+def test_controlled_campaign_failure_returns_nonzero_cli_status(
+    monkeypatch,
+    capsys,
+    tmp_path,
+) -> None:
+    monkeypatch.setattr(
+        run_bo,
+        "run_campaign",
+        lambda *_args, **_kwargs: {"status": "FAILED"},
+    )
+
+    assert (
+        run_bo.main(
+            ["--trials", "1", "--smoke", "--output", str(tmp_path / "failed")]
+        )
+        == 3
+    )
+    assert json.loads(capsys.readouterr().out)["status"] == "FAILED"
+
+
+def test_configuration_or_persistence_failure_returns_infrastructure_status(
+    monkeypatch,
+    capsys,
+    tmp_path,
+) -> None:
+    def fail_campaign(*_args, **_kwargs):
+        raise FileExistsError("output already exists")
+
+    monkeypatch.setattr(run_bo, "run_campaign", fail_campaign)
+
+    assert (
+        run_bo.main(
+            ["--trials", "1", "--output", str(tmp_path / "existing")]
+        )
+        == 2
+    )
+    assert "CAMPAIGN_ABORTED" in capsys.readouterr().err
+
+
+def test_campaign_acceptance_requires_a_generated_success() -> None:
+    result = SimpleNamespace(
+        nominal_successful=True,
+        successful_initialization_count=1,
+        successful_search_count=0,
+        termination_reason=AxTerminationReason.REQUESTED_BUDGET_REACHED,
+    )
+
+    assert run_bo._campaign_acceptance(result, smoke=False) == (
+        "FAILED",
+        ["no_successful_search_trial"],
+    )
+
+
+def test_record_payload_does_not_hide_non_rejected_decode_failure() -> None:
+    design_space = run_bo._design_space(
+        run_bo.USER_PARAMETERS,
+        run_bo.USER_SEARCH_BOUNDS,
+    )
+    invalid = {
+        variable.name: 0.0 for variable in design_space.search_variables
+    }
+    invalid["latent_cutout_width"] = 1.1
+    record = SimpleNamespace(
+        evaluation=None,
+        feasibility_rejection=False,
+        parameters=invalid,
+    )
+
+    with pytest.raises(ValueError, match="latent bounds"):
+        run_bo._record_payload(record, design_space)
 
 
 def test_preflight_only_reports_external_failure_without_starting_campaign(

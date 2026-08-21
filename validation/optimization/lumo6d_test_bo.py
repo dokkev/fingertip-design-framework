@@ -32,17 +32,17 @@ from lumo.optimization.adapters.ax import (
     ax_client_snapshot,
     create_ax_client,
     run_ax_optimization,
+    validate_successful_evaluation_objective,
 )
 from lumo.optimization.design_space import (
     DesignSpace,
     DesignVariable,
-    FEASIBLE_PARAMETERIZATION_VERSION,
     OPTIMIZABLE_PARAMETER_NAMES,
     PRODUCTION_NOMINAL_VOID_HEIGHT_MM,
     PRODUCTION_LINEAR_CONSTRAINTS,
     PRODUCTION_SEARCH_BOUNDS,
 )
-from lumo.optimization.objectives import TRAJECTORY_SEPARATION_OBJECTIVE
+from lumo.optimization.objectives import ObjectiveIdentifier
 from lumo.physics import PhysicsDependencyError
 from lumo.optimization.evaluation_registry import EvaluationRegistry, REGISTRY_SCHEMA_VERSION
 from lumo.optimization.evaluator import (
@@ -56,7 +56,6 @@ from lumo.simulation import (
 )
 
 
-OBJECTIVE = TRAJECTORY_SEPARATION_OBJECTIVE
 MAX_FEASIBILITY_RESAMPLES = 100
 
 
@@ -66,15 +65,6 @@ BO_TRIALS = 4
 MAX_ATTEMPTED_TRIALS = SOBOL_TRIALS + BO_TRIALS
 MAX_CONSECUTIVE_KNOWN_PROPOSALS = 20
 OUTPUT_DIRECTORY = Path("output/validation/optimization/lumo6d_test_bo")
-TRAJECTORY_EVALUATION_CONTRACT = {
-    "schema": TRAJECTORY_EVALUATION_SCHEMA,
-    "objective": OBJECTIVE.serialized_name,
-    "parameterization_version": FEASIBLE_PARAMETERIZATION_VERSION,
-    "observation_level": LUMO3D_OBSERVATION_LEVEL,
-    "optical_mode": "FULL_3D",
-}
-
-
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -245,7 +235,7 @@ def _trial_payload(
     }
     candidate = None
     measures = None
-    try:
+    if not record.feasibility_rejection:
         if record.phase == "nominal":
             candidate = design_space.from_physical_values(raw_parameters)
             latent_parameters = design_space.encode(candidate)
@@ -253,8 +243,6 @@ def _trial_payload(
             candidate = design_space.decode(latent_parameters)
         parameters = design_space.physical_values(candidate)
         measures = silicone_thickness_measures(candidate)
-    except Exception:
-        pass
     evaluation = record.evaluation
     status = _status_contract(record.status)
     mechanics = (
@@ -303,6 +291,9 @@ def _trial_payload(
         "phase": record.phase,
         "status": status,
         "raw_status": record.status,
+        "feasibility_rejection": record.feasibility_rejection,
+        "feasibility_constraint": record.feasibility_constraint,
+        "generation_attempt_index": attempt_index,
         **parameters,
         "latent_parameters": latent_parameters,
         "total_pad_depth_mm": (
@@ -376,7 +367,10 @@ def _trial_payload(
     }
 
 
-def _pre_run_sanity(design_space: DesignSpace) -> dict[str, Any]:
+def _pre_run_sanity(
+    design_space: DesignSpace,
+    objective: ObjectiveIdentifier,
+) -> dict[str, Any]:
     if len(design_space.active_variables) != 6:
         raise RuntimeError("SIX_D_PARAMETERIZATION_BLOCKER")
     if tuple(variable.name for variable in design_space.active_variables) != tuple(
@@ -390,7 +384,7 @@ def _pre_run_sanity(design_space: DesignSpace) -> dict[str, Any]:
             initialization_trials=SOBOL_TRIALS,
             search_trials=BO_TRIALS,
             seed=SEED,
-            objective=OBJECTIVE,
+            objective=objective,
         ),
     )
     suggestions = client.get_next_trials(max_trials=SOBOL_TRIALS)
@@ -667,9 +661,17 @@ def run_lumo6d_test_bo(output_dir: str | Path = OUTPUT_DIRECTORY) -> dict[str, A
     started = time.perf_counter()
     design_space = _production_design_space()
     evaluator = Lumo3DTrajectoryEvaluator(output / "artifacts")
+    objective = evaluator.objective_identifier
     contract_id = evaluator.evaluation_contract_id
+    evaluation_contract = {
+        "schema": TRAJECTORY_EVALUATION_SCHEMA,
+        "objective": objective.serialized_name,
+        "parameterization_version": design_space.parameterization_version,
+        "observation_level": LUMO3D_OBSERVATION_LEVEL,
+        "optical_mode": "FULL_3D",
+    }
     search_mechanics = _search_mechanics(evaluator)
-    sanity = _pre_run_sanity(design_space)
+    sanity = _pre_run_sanity(design_space, objective)
     grid = _optical_grid()
     configuration = {
         "schema": "lumo6d-test-bo-v1",
@@ -695,17 +697,24 @@ def run_lumo6d_test_bo(output_dir: str | Path = OUTPUT_DIRECTORY) -> dict[str, A
         ],
         "contract_id": contract_id,
         "registry_schema_version": REGISTRY_SCHEMA_VERSION,
-        "evaluation_contract": TRAJECTORY_EVALUATION_CONTRACT,
+        "evaluation_contract": evaluation_contract,
         "observation_level": LUMO3D_OBSERVATION_LEVEL,
-        "objective_name": OBJECTIVE.serialIZED_NAME,
-        "objective_name": OBJECTIVE.serialized_name,
+        "objective_name": objective.serialized_name,
         "objective_direction": "maximize",
         "common_optical_grid": grid,
         "search_mechanics": search_mechanics,
         "pre_run_sanity": sanity,
     }
     _write_json(output / "config.json", configuration)
-    state: dict[str, Any] = {"schema": configuration["schema"], "status": "INITIALIZING", "records": [], "created_at": _now()}
+    state: dict[str, Any] = {
+        "schema": configuration["schema"],
+        "status": "INITIALIZING",
+        "records": [],
+        "created_at": _now(),
+        "contract_id": contract_id,
+        "objective_name": objective.serialized_name,
+        "parameterization_version": design_space.parameterization_version,
+    }
     _write_json(output / "checkpoint.json", state)
 
     try:
@@ -749,6 +758,8 @@ def run_lumo6d_test_bo(output_dir: str | Path = OUTPUT_DIRECTORY) -> dict[str, A
             "failure_message": nominal_evaluation.failure_message,
             "wall_time_seconds": time.perf_counter() - nominal_started,
             "registry_key": None,
+            "feasibility_rejection": False,
+            "feasibility_constraint": None,
         })()
         nominal_payload = _trial_payload(nominal_record, design_space, None)
         if nominal_evaluation.status != "success":
@@ -756,6 +767,10 @@ def run_lumo6d_test_bo(output_dir: str | Path = OUTPUT_DIRECTORY) -> dict[str, A
                 "NOMINAL_FEASIBILITY_BLOCKER: "
                 f"{nominal_evaluation.status}: {nominal_evaluation.failure_message}"
             )
+        nominal_objective_value = validate_successful_evaluation_objective(
+            nominal_evaluation,
+            objective,
+        )
         _write_json(output / "nominal.json", nominal_payload)
 
         # Seed the fresh registry with the separately evaluated nominal so the
@@ -768,8 +783,8 @@ def run_lumo6d_test_bo(output_dir: str | Path = OUTPUT_DIRECTORY) -> dict[str, A
             first_trial_index=0,
             first_campaign_id=output.name,
             result_artifact_path=str((output / "nominal.json").resolve()),
-            objective=OBJECTIVE,
-            objective_value=float(nominal_evaluation.objective_value),
+            objective=objective,
+            objective_value=nominal_objective_value,
             failure_category=None,
             failure_message=None,
             failure_scenario=None,
@@ -803,7 +818,7 @@ def run_lumo6d_test_bo(output_dir: str | Path = OUTPUT_DIRECTORY) -> dict[str, A
             initialization_trials=SOBOL_TRIALS,
             search_trials=BO_TRIALS,
             seed=SEED,
-            objective=OBJECTIVE,
+            objective=objective,
             max_consecutive_known_proposals=MAX_CONSECUTIVE_KNOWN_PROPOSALS,
         )
         result = run_ax_optimization(
@@ -839,6 +854,7 @@ def run_lumo6d_test_bo(output_dir: str | Path = OUTPUT_DIRECTORY) -> dict[str, A
         state.update({
             "status": status,
             "ax_status": result.status,
+            "ax_termination_reason": result.termination_reason.value,
             "ax_proposal_count": result.ax_proposal_count,
             "generation_attempt_count": result.generation_attempt_count,
             "feasible_proposal_count": result.feasible_proposal_count,
@@ -848,6 +864,13 @@ def run_lumo6d_test_bo(output_dir: str | Path = OUTPUT_DIRECTORY) -> dict[str, A
             ),
             "last_feasibility_rejection": result.last_feasibility_rejection,
             "successful_count": result.unique_success_count,
+            "successful_initialization_count": (
+                result.successful_initialization_count
+            ),
+            "successful_search_count": result.successful_search_count,
+            "failure_count_by_status": dict(result.failure_count_by_status),
+            "reused_evaluation_count": result.reused_evaluation_count,
+            "nominal_successful": result.nominal_successful,
             "completed_at": _now(),
             "total_wall_time_seconds": time.perf_counter() - started,
         })
@@ -868,10 +891,23 @@ def run_lumo6d_test_bo(output_dir: str | Path = OUTPUT_DIRECTORY) -> dict[str, A
         summary = {
             "status": status,
             "ax_status": result.status,
+            "ax_termination_reason": result.termination_reason.value,
             "nominal": nominal_payload,
             "attempted_trials": len(ordered),
+            "generation_attempt_count": result.generation_attempt_count,
+            "feasible_proposal_count": result.feasible_proposal_count,
+            "feasibility_rejection_count": result.feasibility_rejection_count,
+            "feasibility_rejection_counts": dict(
+                result.feasibility_rejection_counts
+            ),
+            "successful_initialization_count": (
+                result.successful_initialization_count
+            ),
+            "successful_search_count": result.successful_search_count,
+            "failure_count_by_status": dict(result.failure_count_by_status),
+            "reused_evaluation_count": result.reused_evaluation_count,
             "diagnostics": diagnostics,
-            "objective_name": OBJECTIVE.serialized_name,
+            "objective_name": objective.serialized_name,
             "objective_direction": "maximize",
             "contract_id": contract_id,
             "artifact_directory": str(output),

@@ -11,7 +11,9 @@ import lumo.optimization.adapters.ax as ax_adapter
 from lumo.mesh.volume.mesh import VolumeMeshDependencyError
 from lumo.finger import FingertipParameters
 from lumo.optimization.adapters.ax import (
+    AxRunResult,
     AxSettings,
+    AxTerminationReason,
     CampaignInfrastructureError,
     create_ax_client,
     run_ax_optimization,
@@ -49,8 +51,19 @@ class _Evaluation:
     failure_message: str | None = None
     result_artifact_path: str | None = None
 
+    @property
+    def objective(self):
+        if self.objective_value is None:
+            return None
+        return SimpleNamespace(
+            objective=TEST_OBJECTIVE,
+            objective_value=self.objective_value,
+        )
+
 
 class _Evaluator:
+    objective_identifier = TEST_OBJECTIVE
+
     def __init__(self) -> None:
         self.calls: list[object] = []
 
@@ -123,6 +136,16 @@ def test_ax_rejects_non_finite_objective_values(value: float) -> None:
         )
 
 
+def test_ax_run_result_rejects_contradictory_status_and_termination() -> None:
+    with pytest.raises(ValueError, match="status and termination reason disagree"):
+        AxRunResult(
+            records=(),
+            status="nominal_evaluation_failed",
+            objective=TEST_OBJECTIVE,
+            termination_reason=AxTerminationReason.REQUESTED_BUDGET_REACHED,
+        )
+
+
 def test_run_ax_optimization_evaluates_morphology_without_mechanics_or_optics(
     monkeypatch,
 ) -> None:
@@ -142,14 +165,274 @@ def test_run_ax_optimization_evaluates_morphology_without_mechanics_or_optics(
     )
 
     assert result.status == "COMPLETE"
+    assert result.termination_reason == AxTerminationReason.REQUESTED_BUDGET_REACHED
     assert result.ax_proposal_count == 1
+    assert result.successful_initialization_count == 0
+    assert result.successful_search_count == 1
+    assert result.successful_generated_count == 1
+    assert result.nominal_successful is True
+    assert result.failure_count_by_status == {}
     assert result.unique_success_count == 2  # manually attached nominal + proposal
     assert len(evaluator.calls) == 2
-    assert all(record.status == "success" for record in result.records)
+
+
+def test_objective_identity_mismatch_fails_before_ax_generation(monkeypatch) -> None:
+    class _MismatchedEvaluator(_Evaluator):
+        @property
+        def objective_identifier(self):
+            return ObjectiveIdentifier("other_objective", 1)
+
+    create_called = False
+
+    def create_client(*_args):
+        nonlocal create_called
+        create_called = True
+        return _ClientDouble([])
+
+    monkeypatch.setattr(ax_adapter, "create_ax_client", create_client)
+    with pytest.raises(ValueError, match="does not match"):
+        run_ax_optimization(
+            _space(),
+            _MismatchedEvaluator(),
+            AxSettings(
+                initialization_trials=1,
+                search_trials=1,
+                seed=7,
+                objective=TEST_OBJECTIVE,
+            ),
+        )
+    assert create_called is False
+
+
+def test_missing_objective_identity_fails_before_ax_generation(monkeypatch) -> None:
+    class _UnidentifiedEvaluator:
+        def evaluate(self, _parameters):
+            raise AssertionError("evaluation must not start")
+
+    create_called = False
+
+    def create_client(*_args):
+        nonlocal create_called
+        create_called = True
+        return _ClientDouble([])
+
+    monkeypatch.setattr(ax_adapter, "create_ax_client", create_client)
+    with pytest.raises(TypeError, match="typed objective_identifier"):
+        run_ax_optimization(
+            _space(),
+            _UnidentifiedEvaluator(),
+            AxSettings(
+                initialization_trials=1,
+                search_trials=1,
+                seed=7,
+                objective=TEST_OBJECTIVE,
+            ),
+        )
+    assert create_called is False
+
+
+def test_nested_objective_identity_mismatch_is_not_registered(monkeypatch, tmp_path) -> None:
+    class _NestedEvaluator:
+        objective_identifier = TEST_OBJECTIVE
+
+        def evaluate(self, _parameters):
+            return SimpleNamespace(
+                status="success",
+                objective_value=1.0,
+                objective=SimpleNamespace(
+                    objective=ObjectiveIdentifier("wrong_objective", 1),
+                    objective_value=1.0,
+                ),
+                failure_message=None,
+            )
+
+    client = _ClientDouble([_candidate(5.5)])
+    registry = EvaluationRegistry(tmp_path / "registry.json")
+    monkeypatch.setattr(ax_adapter, "create_ax_client", lambda *_: client)
+
+    with pytest.raises(ValueError, match="nested objective"):
+        run_ax_optimization(
+            _space(),
+            _NestedEvaluator(),
+            AxSettings(
+                initialization_trials=1,
+                search_trials=1,
+                seed=7,
+                objective=TEST_OBJECTIVE,
+            ),
+            evaluation_registry=registry,
+            evaluation_contract_id="objective-mismatch-v1",
+            campaign_id="objective-mismatch-campaign",
+        )
+    assert registry.records_for_contract("objective-mismatch-v1") == ()
+    assert client.trials[0].status == "ABANDONED"
+
+
+@pytest.mark.parametrize(
+    "nested_objective",
+    (
+        None,
+        SimpleNamespace(objective=TEST_OBJECTIVE, objective_value=2.0),
+    ),
+)
+def test_missing_or_inconsistent_nested_objective_is_not_registered(
+    monkeypatch,
+    tmp_path,
+    nested_objective,
+) -> None:
+    class _NestedEvaluator:
+        objective_identifier = TEST_OBJECTIVE
+
+        def evaluate(self, _parameters):
+            return SimpleNamespace(
+                status="success",
+                objective_value=1.0,
+                objective=nested_objective,
+                failure_message=None,
+            )
+
+    client = _ClientDouble([_candidate(5.5)])
+    registry = EvaluationRegistry(tmp_path / "registry.json")
+    monkeypatch.setattr(ax_adapter, "create_ax_client", lambda *_: client)
+
+    with pytest.raises(ValueError, match="nested objective|disagrees"):
+        run_ax_optimization(
+            _space(),
+            _NestedEvaluator(),
+            AxSettings(
+                initialization_trials=1,
+                search_trials=1,
+                seed=7,
+                objective=TEST_OBJECTIVE,
+            ),
+            evaluation_registry=registry,
+            evaluation_contract_id="nested-objective-invalid-v1",
+            campaign_id="nested-objective-invalid-campaign",
+        )
+    assert registry.records_for_contract("nested-objective-invalid-v1") == ()
+    assert client.trials[0].status == "ABANDONED"
+
+
+def test_cached_nominal_success_is_accepted_without_reevaluation(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    client = _ClientDouble([_candidate(5.5)])
+    evaluator = _Evaluator()
+    registry = EvaluationRegistry(tmp_path / "registry.json")
+    space = _space()
+    nominal = space.physical_values(space.nominal_parameters)
+    registry.register(
+        "cached-nominal-v1",
+        nominal,
+        status="success",
+        first_trial_index=0,
+        first_campaign_id="previous-campaign",
+        result_artifact_path=None,
+        objective=TEST_OBJECTIVE,
+        objective_value=0.0,
+        failure_category=None,
+        failure_message=None,
+        failure_scenario=None,
+        evaluation_wall_time_seconds=0.0,
+    )
+    monkeypatch.setattr(ax_adapter, "create_ax_client", lambda *_: client)
+
+    result = run_ax_optimization(
+        space,
+        evaluator,
+        AxSettings(
+            initialization_trials=1,
+            search_trials=1,
+            seed=7,
+            objective=TEST_OBJECTIVE,
+        ),
+        evaluation_registry=registry,
+        evaluation_contract_id="cached-nominal-v1",
+        campaign_id="new-campaign",
+    )
+
+    assert result.nominal_successful is True
+    assert result.reused_evaluation_count == 1
+    assert result.records[0].status == "duplicate_skipped"
+    assert result.records[0].reused_evaluation_status == "success"
+    assert len(evaluator.calls) == 1
+    assert result.records[1].status == "success"
+
+
+def test_registry_objective_mismatch_fails_before_reuse(monkeypatch, tmp_path) -> None:
+    client = _ClientDouble([])
+    registry = EvaluationRegistry(tmp_path / "registry.json")
+    space = _space()
+    registry.register(
+        "registry-objective-mismatch-v1",
+        space.physical_values(space.nominal_parameters),
+        status="success",
+        first_trial_index=0,
+        first_campaign_id="previous-campaign",
+        result_artifact_path=None,
+        objective=ObjectiveIdentifier("wrong_objective", 1),
+        objective_value=0.0,
+        failure_category=None,
+        failure_message=None,
+        failure_scenario=None,
+        evaluation_wall_time_seconds=0.0,
+    )
+    monkeypatch.setattr(ax_adapter, "create_ax_client", lambda *_: client)
+
+    with pytest.raises(ValueError, match="registry objective"):
+        run_ax_optimization(
+            space,
+            _Evaluator(),
+            AxSettings(
+                initialization_trials=1,
+                search_trials=1,
+                seed=7,
+                objective=TEST_OBJECTIVE,
+            ),
+            evaluation_registry=registry,
+            evaluation_contract_id="registry-objective-mismatch-v1",
+            campaign_id="new-campaign",
+        )
+    assert client.trials == {}
+
+
+def test_nominal_candidate_failure_stops_before_ax_proposals(monkeypatch) -> None:
+    class _NominalFailureEvaluator:
+        objective_identifier = TEST_OBJECTIVE
+
+        def evaluate(self, _parameters):
+            return _Evaluation(
+                status="mechanics_failure",
+                objective_value=None,
+                diagnostics={},
+                failure_message="nominal mechanics failed",
+            )
+
+    client = _ClientDouble([_candidate(5.5)])
+    monkeypatch.setattr(ax_adapter, "create_ax_client", lambda *_: client)
+
+    result = run_ax_optimization(
+        _space(),
+        _NominalFailureEvaluator(),
+        AxSettings(
+            initialization_trials=1,
+            search_trials=1,
+            seed=7,
+            objective=TEST_OBJECTIVE,
+        ),
+    )
+
+    assert result.status == "nominal_evaluation_failed"
+    assert result.termination_reason == AxTerminationReason.NOMINAL_FAILED
+    assert result.nominal_successful is False
+    assert result.ax_proposal_count == 0
+    assert len(client.trials) == 1
 
 
 def test_infeasible_latent_proposal_is_abandoned_and_resampled(monkeypatch) -> None:
     invalid = {name: 0.0 for name in LATENT_PARAMETER_NAMES}
+    invalid["latent_cutout_width"] = 1.1
     client = _ClientDouble([invalid, _candidate(5.5)])
     evaluator = _Evaluator()
     monkeypatch.setattr(ax_adapter, "create_ax_client", lambda *_: client)
@@ -170,9 +453,9 @@ def test_infeasible_latent_proposal_is_abandoned_and_resampled(monkeypatch) -> N
     assert result.ax_proposal_count == 2
     assert result.feasible_proposal_count == 1
     assert result.feasibility_rejection_count == 1
-    assert result.feasibility_rejection_counts["minimum_silicone_thickness"] == 1
+    assert result.feasibility_rejection_counts["latent_bounds"] == 1
     assert result.records[1].status == "feasibility_rejected"
-    assert result.records[1].feasibility_constraint == "minimum_silicone_thickness"
+    assert result.records[1].feasibility_constraint == "latent_bounds"
     assert client.trials[1].status == "ABANDONED"
     assert len(evaluator.calls) == 2
 
@@ -182,6 +465,7 @@ def test_feasibility_generation_exhaustion_does_not_reach_evaluator(
     tmp_path,
 ) -> None:
     invalid = {name: 0.0 for name in LATENT_PARAMETER_NAMES}
+    invalid["latent_cutout_width"] = 1.1
     client = _ClientDouble([invalid])
     evaluator = _Evaluator()
     registry = EvaluationRegistry(tmp_path / "registry.json")
@@ -210,11 +494,15 @@ def test_feasibility_generation_exhaustion_does_not_reach_evaluator(
 
 
 class _PhysicsDependencyEvaluator:
+    objective_identifier = TEST_OBJECTIVE
+
     def evaluate(self, parameters):
         raise PhysicsDependencyError("Warp runtime unavailable")
 
 
 class _CandidateFailureEvaluator:
+    objective_identifier = TEST_OBJECTIVE
+
     def __init__(self) -> None:
         self.calls = 0
 
@@ -299,6 +587,8 @@ def test_registry_uses_each_candidate_evaluation_artifact_path(
     client = _ClientDouble([_candidate(5.5)])
 
     class _ArtifactEvaluator:
+        objective_identifier = TEST_OBJECTIVE
+
         def evaluate(self, parameters):
             artifact = tmp_path / f"candidate_{parameters.flat_pad_height:g}.json"
             return _Evaluation(
@@ -354,6 +644,8 @@ def test_infrastructure_failure_is_not_registered_in_real_evaluation_registry(
     client = _ClientDouble([_candidate(5.5)])
 
     class _InfrastructureFailureEvaluator:
+        objective_identifier = TEST_OBJECTIVE
+
         def evaluate(self, parameters):
             raise exception
 

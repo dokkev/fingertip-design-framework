@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import json
 from pathlib import Path
 from typing import Any
-from dataclasses import replace
 
 from lumo.optimization.adapters.ax import (
     AxSettings,
@@ -20,7 +19,10 @@ from lumo.optimization.design_space import (
     PRODUCTION_NOMINAL_VOID_HEIGHT_MM,
     PRODUCTION_SEARCH_BOUNDS,
 )
-from lumo.optimization.objectives import TRAJECTORY_SEPARATION_OBJECTIVE
+from lumo.optimization.objectives import (
+    ObjectiveIdentifier,
+    TRAJECTORY_SEPARATION_OBJECTIVE,
+)
 from lumo.finger import Fingertip, FingertipParameters
 from lumo.simulation import LUMO3D_OBSERVATION_LEVEL
 
@@ -33,6 +35,10 @@ class _SyntheticEvaluator:
 
     def __init__(self) -> None:
         self.calls: list[dict[str, float]] = []
+
+    @property
+    def objective_identifier(self) -> ObjectiveIdentifier:
+        return OBJECTIVE
 
     def evaluate(self, parameters):
         values = {
@@ -51,6 +57,10 @@ class _SyntheticEvaluator:
         return _SyntheticEvaluation(
             status="success",
             objective_value=score,
+            objective=_SyntheticObjective(
+                objective=OBJECTIVE,
+                objective_value=score,
+            ),
             diagnostics={
                 "objective_name": OBJECTIVE.serialized_name,
                 "observation_level": LUMO3D_OBSERVATION_LEVEL,
@@ -59,9 +69,16 @@ class _SyntheticEvaluator:
 
 
 @dataclass(frozen=True)
+class _SyntheticObjective:
+    objective: ObjectiveIdentifier
+    objective_value: float
+
+
+@dataclass(frozen=True)
 class _SyntheticEvaluation:
     status: str
     objective_value: float
+    objective: _SyntheticObjective
     diagnostics: dict[str, Any]
 
     @property
@@ -83,6 +100,7 @@ def run_lumo3d_ax_smoke(output_dir: str | Path) -> dict[str, Any]:
     )
     contract_id = (
         "lumo3d-ax-smoke-v1:"
+        f"{OBJECTIVE.serialized_name}:"
         f"{design_space.parameterization_version}"
     )
     evaluator = _SyntheticEvaluator()
@@ -120,6 +138,12 @@ def run_lumo3d_ax_smoke(output_dir: str | Path) -> dict[str, Any]:
         raise RuntimeError(f"unexpected Ax smoke statuses: {statuses!r}")
     if result.feasible_proposal_count != 2:
         raise RuntimeError("Ax smoke did not count only feasible proposals")
+    for record in result.records:
+        if record.phase == "nominal" or record.feasibility_rejection:
+            continue
+        design_space.validate_physical_parameters(
+            design_space.decode(record.parameters)
+        )
     if result.objective_name != OBJECTIVE.serialized_name:
         raise RuntimeError("Ax smoke objective name did not survive orchestration")
     if result.best_record is None or result.best_record.evaluation is None:
@@ -129,6 +153,8 @@ def run_lumo3d_ax_smoke(output_dir: str | Path) -> dict[str, Any]:
     stored = registry.records_for_contract(contract_id)
     if len(stored) != 3 or any(record.objective_value is None for record in stored):
         raise RuntimeError("Ax smoke registry did not persist objective_value")
+    if any(record.objective != OBJECTIVE for record in stored):
+        raise RuntimeError("Ax smoke registry objective identity drifted")
     summary = {
         "status": "PASS",
         "objective_name": result.objective_name,
@@ -136,6 +162,7 @@ def run_lumo3d_ax_smoke(output_dir: str | Path) -> dict[str, Any]:
         "phases": phases,
         "statuses": statuses,
         "ax_proposal_count": result.ax_proposal_count,
+        "termination_reason": result.termination_reason.value,
         "feasible_proposal_count": result.feasible_proposal_count,
         "feasibility_rejection_count": result.feasibility_rejection_count,
         "new_evaluation_count": result.new_evaluation_count,

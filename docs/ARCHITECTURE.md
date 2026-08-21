@@ -67,7 +67,7 @@ lumo.finger.FingertipParameters
 | `lumo/physics/` | Newton 1.4 / Warp mechanics and trajectory state | one production mechanics path |
 | `lumo/ray_tracing/` | optical contracts and FULL_3D transport implementation | production BO path |
 | `lumo/` | reusable concrete LUMO simulation state and execution orchestration | production orchestration boundary |
-| `lumo/optimization/` | fixed protocol, objective, registry, Ax boundary, evaluator, persistence | production evaluation and search boundary |
+| `lumo/optimization/` | fixed protocol, objective, registry, Ax boundary, evaluator, artifact and atomic checkpoint persistence | production evaluation and search boundary |
 | `validation/` | reports, smoke tests, regression/reference workflows, bounded campaign runners | domain/solver/transport ownership; production evaluation is in `lumo/optimization/` |
 | `validation/reference/` | preserved fixed-state and Kratos reference implementations | validation-only |
 | `visualization/config/` | plot and persisted-field display configuration | repository-only, not installed core |
@@ -265,7 +265,10 @@ owns the objective formula.
 provenance and reusable results. It is a cache of scientific outcomes, not a
 replacement for Ax model state. `lumo.optimization.adapters.ax` is the only Ax
 boundary; it distinguishes duplicate lookup, candidate failure, and campaign
-infrastructure failure.
+infrastructure failure. `lumo.optimization.checkpoint` owns versioned
+immutable Ax checkpoints, their atomic current pointer, and the single-writer
+lock. The registry remains a scientific-outcome cache and is never a
+replacement for Ax generation state.
 
 
 ## Public and data boundaries

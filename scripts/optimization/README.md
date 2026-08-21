@@ -37,8 +37,20 @@ number of Ax-generated proposals; the nominal baseline is evaluated separately,
 so `--trials 1` performs two candidate evaluations when both succeed. Use a
 larger trial count only when the measured campaign is explicitly authorized.
 The runner refuses to overwrite a non-empty output directory and writes
-`config.json`, `preflight.json`, `trials.json`, `registry.json`, and
-`summary.json` with finite, structured JSON values.
+`config.json`, `preflight.json`, `registry.json`, `summary.json`, and a
+versioned atomic checkpoint tree. Each checkpoint contains the public Ax JSON
+state, the trial audit, and resume contract state. To resume explicitly after
+an interruption, pass the campaign directory (or its `checkpoint.json`
+pointer) with the same budget and fixed inputs:
+
+```bash
+conda run -n lit python scripts/optimization/run_bo.py \
+  --resume output/optimization/bo_smoke \
+  --smoke \
+  --trials 1
+```
+
+The runner never resumes merely because an output directory already exists.
 
 Optimization contracts and the production evaluator remain owned by
 `lumo/optimization/`. Validation-only Test BO and scientific comparison

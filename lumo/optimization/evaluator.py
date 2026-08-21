@@ -44,6 +44,7 @@ from lumo.mechanics_contract import (
     MechanicsContract,
 )
 from lumo.optimization.objectives import (
+    ObjectiveIdentifier,
     TRAJECTORY_SEPARATION_OBJECTIVE,
     TrajectoryObjectiveConfig,
     TrajectoryObservation,
@@ -304,7 +305,7 @@ class Lumo3DTrajectoryEvaluator:
         )
 
     @property
-    def objective_identifier(self):
+    def objective_identifier(self) -> ObjectiveIdentifier:
         """Return the objective identity owned by this evaluator."""
         return TRAJECTORY_SEPARATION_OBJECTIVE
 
@@ -370,7 +371,7 @@ class Lumo3DTrajectoryEvaluator:
             configuration_fingerprint = fingerprint_mapping(configuration)
             objective_contract = {
                 "schema": "trajectory-objective-contract-fixed-depth-v1",
-                "name": TRAJECTORY_SEPARATION_OBJECTIVE.serialized_name,
+                "name": self.objective_identifier.serialized_name,
                 "radius_penalty_weight": self.objective_config.radius_penalty_weight,
             }
             evaluation_identity = {
@@ -442,7 +443,10 @@ class Lumo3DTrajectoryEvaluator:
                         checkpoint_records.append(record)
                         contract = {
                             "schema": TRAJECTORY_EVALUATION_SCHEMA,
-                            "objective": TRAJECTORY_SEPARATION_OBJECTIVE.serialized_name,
+                            "objective": self.objective_identifier.serialized_name,
+                            "parameterization_version": (
+                                FEASIBLE_PARAMETERIZATION_VERSION
+                            ),
                             "observation_level": LUMO3D_OBSERVATION_LEVEL,
                             "morphology_id": morphology_id,
                             "morphology_fingerprint": volume_mesh.morphology_fingerprint,
@@ -481,7 +485,8 @@ class Lumo3DTrajectoryEvaluator:
             trajectory_metrics = _trajectory_metrics(observations, checkpoint_records)
             summary = {
                 "schema": TRAJECTORY_EVALUATION_SCHEMA,
-                "objective_name": TRAJECTORY_SEPARATION_OBJECTIVE.serialized_name,
+                "objective_name": self.objective_identifier.serialized_name,
+                "parameterization_version": FEASIBLE_PARAMETERIZATION_VERSION,
                 "objective_value": objective.objective_value,
                 "protocol": self.protocol.to_dict(),
                 "protocol_fingerprint": self.protocol.fingerprint,
@@ -584,7 +589,10 @@ def trajectory_evaluation_contract_id(
     payload = {
         "schema": TRAJECTORY_EVALUATION_SCHEMA,
         "protocol": protocol.to_dict(),
-        "objective": asdict(objective_config),
+        "objective": {
+            "identifier": asdict(TRAJECTORY_SEPARATION_OBJECTIVE),
+            "config": asdict(objective_config),
+        },
         "mechanics": mechanics_contract.to_dict(),
         "execution": {
             "schema": LUMO_EXECUTION_CONTRACT,
