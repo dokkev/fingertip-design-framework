@@ -13,6 +13,7 @@ from validation.optimization.lumo6d_test_bo import (
     _optical_grid,
     _search_mechanics,
     _status_contract,
+    _trial_payload,
 )
 
 
@@ -50,6 +51,31 @@ def test_test_bo_optical_grid_comes_from_typed_execution_config() -> None:
     assert grid["x_bounds_mm"] == list(execution.transport.x_bounds_mm)
     assert grid["y_bounds_mm"] == list(execution.transport.y_bounds_mm)
     assert grid["fingerprint"]
+
+
+def test_trial_payload_uses_the_resolved_optical_grid_fingerprint() -> None:
+    design_space = test_bo._production_design_space()
+    record = SimpleNamespace(
+        parameters=design_space.encode(design_space.nominal_parameters),
+        phase="initialization",
+        trial_index=7,
+        evaluation=None,
+        status="feasibility_rejected",
+        failure_message="rejected before evaluation",
+        wall_time_seconds=0.0,
+        registry_key=None,
+        feasibility_rejection=True,
+        feasibility_constraint="test_constraint",
+    )
+
+    payload = _trial_payload(
+        record,
+        design_space,
+        0,
+        optical_grid_fingerprint="resolved-grid-fingerprint",
+    )
+
+    assert payload["optical_grid_fingerprint"] == "resolved-grid-fingerprint"
 
 
 def test_bounded_bo_cli_returns_nonzero_for_controlled_gate_failure(

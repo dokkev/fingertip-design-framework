@@ -10,10 +10,12 @@ import pytest
 from lumo.finger import (
     Fingertip,
     FingertipParameters,
+    LED,
     validate_minimum_silicone_thickness,
 )
 from lumo.optimization.design_space import (
     DesignSpace,
+    DesignSpaceFeasibilityError,
     DesignVariable,
     OPTIMIZABLE_PARAMETER_NAMES,
     PRODUCTION_SEARCH_BOUNDS,
@@ -154,7 +156,7 @@ def test_void_height_decodes_into_authoritative_geometry(void_height: float) -> 
 
 def test_latent_boundaries_and_center_are_feasible_by_construction() -> None:
     space = _space()
-    assert space.parameterization_version == "feasible-morphology-v2"
+    assert space.parameterization_version == "feasible-morphology-v3"
     assert tuple(variable.name for variable in space.search_variables) == LATENT_PARAMETER_NAMES
     for point in (
         {name: 0.0 for name in LATENT_PARAMETER_NAMES},
@@ -172,4 +174,68 @@ def test_latent_boundaries_and_center_are_feasible_by_construction() -> None:
         parameters = space.decode(point)
         assert parameters.flat_pad_height + parameters.semielliptical_pad_height <= 30.0
         assert parameters.stem_width + 2.0 * parameters.void_width <= 20.0
+        Fingertip(parameters, led=space.fixed_led)
         validate_minimum_silicone_thickness(parameters)
+
+
+def test_latent_mapping_respects_the_fixed_led_package_by_construction() -> None:
+    fixed_led = LED(width_mm=5.0, height_mm=3.0)
+    base = _space()
+    space = DesignSpace(
+        base.nominal_parameters,
+        base.variables,
+        fixed_led=fixed_led,
+    )
+
+    for point in (
+        {name: 0.0 for name in LATENT_PARAMETER_NAMES},
+        {name: 0.5 for name in LATENT_PARAMETER_NAMES},
+        {name: 1.0 for name in LATENT_PARAMETER_NAMES},
+    ):
+        parameters = space.decode(point)
+        tolerance = parameters.geometry_length_tolerance_mm
+        assert parameters.stem_width + tolerance >= fixed_led.width_mm
+        assert parameters.stem_height + tolerance >= fixed_led.height_mm
+        Fingertip(parameters, led=fixed_led)
+
+    package_boundary = replace(
+        space.nominal_parameters,
+        stem_width=fixed_led.width_mm,
+        stem_height=fixed_led.height_mm,
+    )
+    decoded_boundary = space.decode(space.encode(package_boundary))
+    assert decoded_boundary.stem_width == pytest.approx(fixed_led.width_mm)
+    assert decoded_boundary.stem_height == pytest.approx(fixed_led.height_mm)
+
+    previously_failed_latent = {
+        "latent_cutout_depth": 0.7104968428611755,
+        "latent_cutout_width": 0.009906559251248837,
+        "latent_pad_depth": 0.8659080862998962,
+        "latent_pad_split": 0.0658731684088707,
+        "latent_stem_height_split": 0.11772258579730988,
+        "latent_stem_width_split": 0.3402809500694275,
+    }
+    Fingertip(space.decode(previously_failed_latent), led=fixed_led)
+
+    invalid = replace(
+        space.nominal_parameters,
+        stem_width=fixed_led.width_mm - 0.1,
+    )
+    with pytest.raises(ValueError, match="LED package width"):
+        space.validate_physical_parameters(invalid)
+
+    assert space.to_dict()["fixed_component_feasibility"] == {
+        "led_package_width_mm": 5.0,
+        "led_package_height_mm": 3.0,
+    }
+
+
+def test_fixed_led_package_that_cannot_fit_fails_when_space_is_created() -> None:
+    base = _space()
+    with pytest.raises(DesignSpaceFeasibilityError) as exc_info:
+        DesignSpace(
+            base.nominal_parameters,
+            base.variables,
+            fixed_led=LED(width_mm=21.0),
+        )
+    assert exc_info.value.constraint == "fixed_led_package_fit"

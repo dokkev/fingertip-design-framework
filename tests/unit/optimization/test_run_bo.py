@@ -47,6 +47,14 @@ def test_user_config_contains_the_production_search_controls() -> None:
     assert payload["ax"]["max_feasibility_resamples"] == (
         run_bo.MAX_FEASIBILITY_RESAMPLES
     )
+    assert payload["seed"] == run_bo.SEED
+    assert run_bo._user_config_payload(
+        execution=execution,
+        budget=budget,
+        campaign_mode="smoke",
+        seed=run_bo.SMOKE_SEED,
+    )["seed"] == run_bo.SMOKE_SEED
+    assert run_bo.SMOKE_SEED != run_bo.SEED
     json.dumps(payload, allow_nan=False)
 
 

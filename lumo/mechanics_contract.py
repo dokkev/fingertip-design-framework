@@ -8,6 +8,9 @@ import math
 from lumo.contact import DEFAULT_FIRST_CONTACT_SETTINGS, FirstContactSettings
 
 
+PRESCRIBED_POSE_ERROR_METRIC_VERSION = "warp-float32-metre-target-v2"
+
+
 @dataclass(frozen=True)
 class MechanicsContract:
     """Solver, contact, and checkpoint-acceptance settings.
@@ -76,7 +79,11 @@ class MechanicsContract:
             raise ValueError("contact settings must be non-negative")
 
     def to_dict(self) -> dict[str, object]:
-        return asdict(self)
+        return asdict(self) | {
+            "prescribed_pose_error_metric_version": (
+                PRESCRIBED_POSE_ERROR_METRIC_VERSION
+            )
+        }
 
     @property
     def fingerprint(self) -> str:
@@ -91,4 +98,8 @@ class MechanicsContract:
 DEFAULT_MECHANICS_CONTRACT = MechanicsContract()
 
 
-__all__ = ["DEFAULT_MECHANICS_CONTRACT", "MechanicsContract"]
+__all__ = [
+    "DEFAULT_MECHANICS_CONTRACT",
+    "MechanicsContract",
+    "PRESCRIBED_POSE_ERROR_METRIC_VERSION",
+]

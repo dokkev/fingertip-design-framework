@@ -9,7 +9,7 @@ import pytest
 
 import lumo.optimization.adapters.ax as ax_adapter
 from lumo.mesh.volume.mesh import VolumeMeshDependencyError
-from lumo.finger import FingertipParameters
+from lumo.finger import FingertipParameters, LED
 from lumo.optimization.adapters.ax import (
     AxRunResult,
     AxSettings,
@@ -63,6 +63,7 @@ class _Evaluation:
 
 class _Evaluator:
     objective_identifier = TEST_OBJECTIVE
+    led = LED()
 
     def __init__(self) -> None:
         self.calls: list[object] = []
@@ -197,6 +198,31 @@ def test_objective_identity_mismatch_fails_before_ax_generation(monkeypatch) -> 
             AxSettings(
                 initialization_trials=1,
                 search_trials=1,
+                seed=7,
+                objective=TEST_OBJECTIVE,
+            ),
+        )
+    assert create_called is False
+
+
+def test_fixed_led_mismatch_fails_before_ax_generation(monkeypatch) -> None:
+    evaluator = _Evaluator()
+    evaluator.led = LED(width_mm=5.0)
+    create_called = False
+
+    def _create(*_args, **_kwargs):
+        nonlocal create_called
+        create_called = True
+        raise AssertionError("Ax client must not be created")
+
+    monkeypatch.setattr(ax_adapter, "create_ax_client", _create)
+    with pytest.raises(ValueError, match="fixed LED package dimensions"):
+        run_ax_optimization(
+            _space(),
+            evaluator,
+            AxSettings(
+                initialization_trials=1,
+                search_trials=0,
                 seed=7,
                 objective=TEST_OBJECTIVE,
             ),

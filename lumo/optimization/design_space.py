@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from itertools import product
 from math import isfinite, sqrt
@@ -10,8 +10,11 @@ from numbers import Real
 from typing import Mapping
 
 from lumo.finger import (
+    Fingertip,
     FingertipParameters,
+    InvalidFingertip,
     InvalidFingertipParameters,
+    LED,
     MAX_TOTAL_PAD_DEPTH_MM,
     PRODUCTION_MINIMUM_SILICONE_THICKNESS_MM,
     silicone_thickness_measures,
@@ -56,7 +59,7 @@ _OPTIMIZABLE_PARAMETER_SET = frozenset(OptimizableParameterName)
 _FIXED_FLAT_PAD_WIDTH_MM = 30.0
 PRODUCTION_MAX_TOTAL_PAD_DEPTH_MM = MAX_TOTAL_PAD_DEPTH_MM
 PRODUCTION_NOMINAL_VOID_HEIGHT_MM = 0.25
-FEASIBLE_PARAMETERIZATION_VERSION = "feasible-morphology-v2"
+FEASIBLE_PARAMETERIZATION_VERSION = "feasible-morphology-v3"
 LATENT_PARAMETER_NAMES: tuple[str, ...] = (
     "latent_cutout_width",
     "latent_pad_depth",
@@ -204,10 +207,13 @@ class DesignSpace:
     nominal_parameters: FingertipParameters
     variables: tuple[DesignVariable, ...]
     linear_constraints: tuple[LinearConstraint, ...] = PRODUCTION_LINEAR_CONSTRAINTS
+    fixed_led: LED = field(default_factory=LED)
 
     def __post_init__(self) -> None:
         if not isinstance(self.nominal_parameters, FingertipParameters):
             raise TypeError("nominal_parameters must be FingertipParameters")
+        if not isinstance(self.fixed_led, LED):
+            raise TypeError("fixed_led must be an LED")
         if self.nominal_parameters.flat_pad_width != _FIXED_FLAT_PAD_WIDTH_MM:
             raise ValueError("production DesignSpace requires flat_pad_width=30.0")
 
@@ -276,6 +282,10 @@ class DesignSpace:
             "parameterization_version": self.parameterization_version,
             "physical_variables": [variable.to_dict() for variable in self.variables],
             "latent_variables": [variable.to_dict() for variable in self.search_variables],
+            "fixed_component_feasibility": {
+                "led_package_width_mm": float(self.fixed_led.width_mm),
+                "led_package_height_mm": float(self.fixed_led.height_mm),
+            },
             "linear_constraints": [
                 constraint.expression for constraint in self.linear_constraints
             ],
@@ -489,6 +499,12 @@ class DesignSpace:
             raise DesignSpaceFeasibilityError(
                 str(exc), constraint="minimum_silicone_thickness"
             ) from exc
+        try:
+            Fingertip(parameters, led=self.fixed_led)
+        except InvalidFingertip as exc:
+            raise DesignSpaceFeasibilityError(
+                str(exc), constraint="fixed_led_package_fit"
+            ) from exc
 
     def _validate_linear_constraints(self, parameters: FingertipParameters) -> None:
         normalized = {
@@ -656,9 +672,23 @@ class DesignSpace:
         )
 
     def _minimum_cutout_width(self) -> float:
-        return self._physical_variable("stem_width").lower + 2.0 * self._physical_variable(
+        return self._minimum_stem_width() + 2.0 * self._physical_variable(
             "void_width"
         ).lower
+
+    def _minimum_stem_width(self) -> float:
+        stem = self._physical_variable("stem_width")
+        minimum = max(
+            stem.lower,
+            float(self.fixed_led.width_mm)
+            - self.nominal_parameters.geometry_length_tolerance_mm,
+        )
+        if minimum > stem.upper:
+            raise DesignSpaceFeasibilityError(
+                "stem-width bounds cannot contain the fixed LED package",
+                constraint="fixed_led_package_fit",
+            )
+        return minimum
 
     def _maximum_cutout_width(self) -> float:
         stem = self._physical_variable("stem_width")
@@ -785,7 +815,7 @@ class DesignSpace:
     def _width_split_bounds(self, cutout: float) -> tuple[float, float]:
         stem = self._physical_variable("stem_width")
         void = self._physical_variable("void_width")
-        lower = max(stem.lower, cutout - 2.0 * void.upper)
+        lower = max(self._minimum_stem_width(), cutout - 2.0 * void.upper)
         upper = min(stem.upper, cutout - 2.0 * void.lower)
         if upper < lower:
             raise DesignSpaceFeasibilityError(
@@ -795,9 +825,23 @@ class DesignSpace:
         return lower, upper
 
     def _minimum_cutout_depth(self) -> float:
-        return self._physical_variable("stem_height").lower + self._physical_variable(
+        return self._minimum_stem_height() + self._physical_variable(
             "void_height"
         ).lower
+
+    def _minimum_stem_height(self) -> float:
+        stem = self._physical_variable("stem_height")
+        minimum = max(
+            stem.lower,
+            float(self.fixed_led.height_mm)
+            - self.nominal_parameters.geometry_length_tolerance_mm,
+        )
+        if minimum > stem.upper:
+            raise DesignSpaceFeasibilityError(
+                "stem-height bounds cannot contain the fixed LED package",
+                constraint="fixed_led_package_fit",
+            )
+        return minimum
 
     def _decode_height_split(self, depth: float, split: float) -> tuple[float, float]:
         lower, upper = self._height_split_bounds(depth)
@@ -811,7 +855,7 @@ class DesignSpace:
     def _height_split_bounds(self, depth: float) -> tuple[float, float]:
         stem = self._physical_variable("stem_height")
         void = self._physical_variable("void_height")
-        lower = max(stem.lower, depth - void.upper)
+        lower = max(self._minimum_stem_height(), depth - void.upper)
         upper = min(stem.upper, depth - void.lower)
         if upper < lower:
             raise DesignSpaceFeasibilityError(

@@ -372,8 +372,46 @@ def _solve_vbd_context(
     }
 
 
+def _warp_translation_m(pose) -> np.ndarray:
+    """Return the exact float32 translation submitted to Warp, in metres."""
+    return (
+        np.asarray(pose.translation_mm, dtype=np.float32)
+        * np.float32(1.0e-3)
+    )
+
+
+def _represented_translation_mm(pose) -> np.ndarray:
+    """Return the prescribed translation after the Warp float32 round-trip."""
+    return _warp_translation_m(pose).astype(np.float64) * 1.0e3
+
+
+def _prescribed_pose_error_mm(
+    actual_translation_m: np.ndarray,
+    submitted_target_translation_m: np.ndarray,
+) -> float:
+    """Measure solver deviation in native metres, then convert once to mm."""
+    actual = np.asarray(actual_translation_m, dtype=np.float32)
+    target = np.asarray(submitted_target_translation_m, dtype=np.float32)
+    if actual.shape != (3,) or target.shape != (3,):
+        raise ValueError("pose translations must have shape (3,)")
+    return float(
+        np.linalg.norm(actual.astype(np.float64) - target.astype(np.float64))
+        * 1.0e3
+    )
+
+
+def _prescribed_pose_quantization_error_mm(pose) -> float:
+    """Measure only ideal-mm to submitted-float32-metre quantization."""
+    return float(
+        np.linalg.norm(
+            _represented_translation_mm(pose)
+            - np.asarray(pose.translation_mm, dtype=np.float64)
+        )
+    )
+
+
 def _warp_pose(pose, *, device: object):
-    translation_m = np.asarray(pose.translation_mm, dtype=np.float32) * 1.0e-3
+    translation_m = _warp_translation_m(pose)
     return wp.transform(
         wp.vec3(float(translation_m[0]), float(translation_m[1]), float(translation_m[2])),
         wp.quat(*pose.quaternion_xyzw),
@@ -944,18 +982,21 @@ def _solve_newton_vbd_indentation_path_with_schedule(
                 np.cross(points[:, 1] - points[:, 0], points[:, 2] - points[:, 0]),
                 points[:, 3] - points[:, 0],
             )
-            actual_body_translation_mm = np.asarray(
+            actual_body_translation_m = np.asarray(
                 context.state_in.body_q.numpy()[context.indenter_body][:3],
                 dtype=np.float32,
-            ) * 1.0e3
-            target_body_translation_mm = np.asarray(
-                target_pose.translation_mm,
-                dtype=np.float32,
             )
-            final_pose_error_mm = float(
-                np.linalg.norm(
-                    actual_body_translation_mm - target_body_translation_mm
-                )
+            target_body_translation_m = _warp_translation_m(target_pose)
+            actual_body_translation_mm = (
+                actual_body_translation_m.astype(np.float64) * 1.0e3
+            )
+            target_body_translation_mm = _represented_translation_mm(target_pose)
+            final_pose_error_mm = _prescribed_pose_error_mm(
+                actual_body_translation_m,
+                target_body_translation_m,
+            )
+            prescribed_pose_quantization_error_mm = (
+                _prescribed_pose_quantization_error_mm(target_pose)
             )
             snapshot_diagnostics: dict[str, object] = {
                 "device": mechanics_settings.device,
@@ -1016,6 +1057,9 @@ def _solve_newton_vbd_indentation_path_with_schedule(
                 "final_body_y_mm": float(actual_body_translation_mm[1]),
                 "final_body_z_mm": float(actual_body_translation_mm[2]),
                 "final_pose_error_mm": final_pose_error_mm,
+                "prescribed_pose_quantization_error_mm": (
+                    prescribed_pose_quantization_error_mm
+                ),
             }
             if first_contact is not None:
                 snapshot_diagnostics.update(

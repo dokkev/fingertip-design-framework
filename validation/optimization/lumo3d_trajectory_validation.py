@@ -4,18 +4,29 @@ from __future__ import annotations
 
 import argparse
 import csv
+from dataclasses import asdict, replace
 import json
 from pathlib import Path
 from typing import Any, Mapping
 
 import numpy as np
 
+from lumo.config import LumoExecutionConfig, load_lumo_execution_config
 from lumo.finger import FingertipParameters
 from lumo.optimization.objectives import normalized_field_distance
 from lumo.optimization.protocol import DEFAULT_TRAJECTORY_PROTOCOL, TrajectoryEvaluationProtocol
 from validation.physics.multi_location_sphere_contact import run_multi_location_sphere_contact
 from lumo.optimization.evaluator import Lumo3DTrajectoryEvaluator
 from validation.reference.lumo3d_fixed_state_oracle import FixedStateLumo3DOracle
+from scripts.optimization.run_bo import (
+    DEFAULT_EXECUTION_CONFIG,
+    USER_LED,
+    USER_OBJECTIVE,
+    USER_PARAMETERS,
+    USER_PROTOCOL,
+    _enforce_source_policy,
+    _source_provenance,
+)
 
 
 OUTPUT_NAME = "lumo3d_fixed_depth_trajectory_evaluator_v1"
@@ -33,27 +44,13 @@ def _six_volumes(vertices: np.ndarray, tetrahedra: np.ndarray) -> np.ndarray:
 
 
 def _nominal() -> FingertipParameters:
-    return FingertipParameters(
-        flat_pad_height=5.0,
-        semielliptical_pad_height=9.0,
-        stem_width=7.6,
-        stem_height=6.0,
-        void_width=1.0,
-        void_height=0.25,
-    )
+    return USER_PARAMETERS
 
 
 def _probe() -> FingertipParameters:
     """Return a nearby, deterministic feasible morphology for M6 coverage."""
 
-    return FingertipParameters(
-        flat_pad_height=5.0,
-        semielliptical_pad_height=9.0,
-        stem_width=7.6,
-        stem_height=6.0,
-        void_width=1.2,
-        void_height=0.25,
-    )
+    return replace(USER_PARAMETERS, void_width=1.2)
 
 
 def _write_json(path: Path, payload: Any) -> None:
@@ -273,18 +270,51 @@ def _plot_outputs(root: Path, evaluations: dict[str, Any]) -> None:
     plt.close(figure)
 
 
-def run_validation(output: str | Path, *, device: str = "cuda:0") -> dict[str, Any]:
+def run_validation(
+    output: str | Path,
+    *,
+    execution_config: str | Path | LumoExecutionConfig = DEFAULT_EXECUTION_CONFIG,
+) -> dict[str, Any]:
     root = Path(output)
+    if root.exists() and any(root.iterdir()):
+        raise FileExistsError(f"refusing to overwrite non-empty validation output: {root}")
+    execution = (
+        execution_config
+        if isinstance(execution_config, LumoExecutionConfig)
+        else load_lumo_execution_config(execution_config)
+    )
+    source = _source_provenance(excluded_paths=(root,))
+    _enforce_source_policy(source, smoke=True, allow_dirty=True)
     root.mkdir(parents=True, exist_ok=True)
-    protocol = DEFAULT_TRAJECTORY_PROTOCOL
+    protocol = USER_PROTOCOL
+    device = execution.device
+
+    def evaluator(path: Path, *, selected_protocol=protocol) -> Lumo3DTrajectoryEvaluator:
+        return Lumo3DTrajectoryEvaluator(
+            path,
+            protocol=selected_protocol,
+            objective_config=USER_OBJECTIVE,
+            mechanics_contract=execution.mechanics,
+            device=device,
+            optical_settings=execution.transport,
+            led=USER_LED,
+            fixed_parameters=USER_PARAMETERS,
+            volume_mesh_settings=execution.volume_mesh,
+        )
+
     _write_json(root / "protocol.json", protocol.to_dict() | {"fingerprint": protocol.fingerprint})
     _write_json(
         root / "config.json",
         {
             "schema": "lumo3d-fixed-depth-trajectory-validation-v1",
             "device": device,
+            "source": source,
+            "execution_config": execution.to_dict(),
             "protocol": protocol.to_dict(),
-            "morphologies": {"nominal": _nominal().__dict__, "probe": _probe().__dict__},
+            "morphologies": {
+                "nominal": asdict(_nominal()),
+                "probe": asdict(_probe()),
+            },
             "bo_run": False,
         },
     )
@@ -302,8 +332,7 @@ def run_validation(output: str | Path, *, device: str = "cuda:0") -> dict[str, A
 
     evaluations: dict[str, Any] = {}
     for label, parameters in (("nominal", _nominal()), ("probe", _probe())):
-        evaluator = Lumo3DTrajectoryEvaluator(root / label, device=device)
-        result = evaluator.evaluate(parameters)
+        result = evaluator(root / label).evaluate(parameters)
         if result.status != "success":
             raise RuntimeError(f"{label} trajectory evaluation failed: {result.status}: {result.failure_message}")
         evaluations[label] = result
@@ -342,7 +371,10 @@ def run_validation(output: str | Path, *, device: str = "cuda:0") -> dict[str, A
         indenter_radii_mm=(5.0,),
         checkpoint_depths_mm=(1.5,),
     )
-    reduced_new = Lumo3DTrajectoryEvaluator(root / "legacy_reduction_new", protocol=reduced_protocol, device=device).evaluate(_nominal())
+    reduced_new = evaluator(
+        root / "legacy_reduction_new",
+        selected_protocol=reduced_protocol,
+    ).evaluate(_nominal())
     if reduced_new.status != "success":
         raise RuntimeError("legacy reduction comparison could not complete")
     legacy = FixedStateLumo3DOracle(
@@ -412,7 +444,10 @@ def run_validation(output: str | Path, *, device: str = "cuda:0") -> dict[str, A
         indenter_radii_mm=(6.0,),
         checkpoint_depths_mm=(1.5,),
     )
-    domain_result = Lumo3DTrajectoryEvaluator(root / "domain_check", protocol=incompatible, device=device).evaluate(_nominal())
+    domain_result = evaluator(
+        root / "domain_check",
+        selected_protocol=incompatible,
+    ).evaluate(_nominal())
     _write_json(root / "radius_domain_check.json", {
         "radius_mm": 6.0,
         "status": domain_result.status,
@@ -440,6 +475,17 @@ def run_validation(output: str | Path, *, device: str = "cuda:0") -> dict[str, A
     summary = {
         "schema": "lumo3d-fixed-depth-trajectory-validation-summary-v1",
         "status": validation_status,
+        "source": source,
+        "execution_config": execution.to_dict(),
+        "evaluation_contract_id": evaluations["nominal"].report.get(
+            "evaluation_contract_id"
+        ),
+        "objective_identifier": evaluations["nominal"].report.get(
+            "objective_name"
+        ),
+        "parameterization_version": evaluations["nominal"].report.get(
+            "parameterization_version"
+        ),
         "protocol": protocol.to_dict(),
         "protocol_fingerprint": protocol.fingerprint,
         "morphologies": {
@@ -509,11 +555,14 @@ def run_validation(output: str | Path, *, device: str = "cuda:0") -> dict[str, A
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", default=f"output/validation/optimization/{OUTPUT_NAME}")
-    parser.add_argument("--device", default="cuda:0")
+    parser.add_argument("--execution-config", default=DEFAULT_EXECUTION_CONFIG)
     args = parser.parse_args()
-    summary = run_validation(args.output, device=args.device)
+    summary = run_validation(
+        args.output,
+        execution_config=args.execution_config,
+    )
     print(json.dumps(summary, indent=2, sort_keys=True))
-    return 0
+    return 0 if summary["status"] == "PASS" else 3
 
 
 if __name__ == "__main__":

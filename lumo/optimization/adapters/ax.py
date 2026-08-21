@@ -912,6 +912,19 @@ def run_ax_optimization(
         raise ValueError(
             "Ax objective does not match the evaluator objective identifier"
         )
+    evaluator_led = getattr(evaluator, "led", None)
+    if evaluator_led is not None:
+        design_led = design_space.fixed_led
+        if (
+            float(getattr(evaluator_led, "width_mm", float("nan")))
+            != float(design_led.width_mm)
+            or float(getattr(evaluator_led, "height_mm", float("nan")))
+            != float(design_led.height_mm)
+        ):
+            raise ValueError(
+                "DesignSpace fixed LED package dimensions do not match the "
+                "evaluator LED"
+            )
     registry_objective = evaluator_objective
     if max_consecutive_known_proposals is None:
         max_consecutive_known_proposals = settings.max_consecutive_known_proposals

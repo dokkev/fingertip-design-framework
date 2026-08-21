@@ -72,6 +72,9 @@ from lumo.optimization.protocol import (
 
 # ------------------------------ USER CONFIG ------------------------------
 SEED = 20260820
+# The one-proposal integration smoke uses a stable interior Sobol fixture;
+# production keeps its independent campaign seed and failure slack.
+SMOKE_SEED = 20260842
 SMOKE_INITIALIZATION_SUCCESS_TARGET = 1
 PRODUCTION_INITIALIZATION_SUCCESS_TARGET = 6
 MAX_CONSECUTIVE_KNOWN_PROPOSALS = 20
@@ -185,6 +188,8 @@ def _search_bounds_payload(
 def _design_space(
     nominal_parameters: FingertipParameters,
     search_bounds: tuple[ParameterSpec, ...],
+    *,
+    fixed_led: LED = USER_LED,
 ) -> DesignSpace:
     return DesignSpace(
         nominal_parameters,
@@ -193,6 +198,7 @@ def _design_space(
             for spec in search_bounds
         ),
         linear_constraints=PRODUCTION_LINEAR_CONSTRAINTS,
+        fixed_led=fixed_led,
     )
 
 
@@ -392,6 +398,7 @@ def _campaign_resume_contract(
     source: dict[str, object],
     allow_cross_revision_cache: bool,
     allow_dirty: bool,
+    seed: int,
 ) -> dict[str, object]:
     """Build the exact fixed-input contract required before resuming."""
     return {
@@ -413,7 +420,7 @@ def _campaign_resume_contract(
         "led": asdict(USER_LED),
         "objective_config": asdict(objective_config),
         "registry_path": str(registry_path.resolve()),
-        "seed": SEED,
+        "seed": seed,
         "budget": budget.to_dict()
         | {"max_feasibility_resamples": max_feasibility_resamples},
         "ax_package_version": _ax_package_version(),
@@ -548,6 +555,7 @@ def _user_config_payload(
     campaign_mode: str = "production",
     objective_config: TrajectoryObjectiveConfig = USER_OBJECTIVE,
     search_bounds: tuple[ParameterSpec, ...] = USER_SEARCH_BOUNDS,
+    seed: int = SEED,
 ) -> dict[str, Any]:
     tip = Fingertip(
         USER_PARAMETERS,
@@ -556,7 +564,7 @@ def _user_config_payload(
     payload = {
         "schema": "lumo-production-bo-user-config-v2",
         "device": execution.device,
-        "seed": SEED,
+        "seed": seed,
         "campaign_mode": campaign_mode,
         "nominal_parameters": asdict(USER_PARAMETERS),
         "search_bounds": _search_bounds_payload(search_bounds),
@@ -878,6 +886,7 @@ def _run_campaign_locked(
     root.mkdir(parents=True, exist_ok=True)
 
     protocol = SMOKE_PROTOCOL if smoke else USER_PROTOCOL
+    campaign_seed = SMOKE_SEED if smoke else SEED
     design_space = _design_space(USER_PARAMETERS, USER_SEARCH_BOUNDS)
     evaluator = Lumo3DTrajectoryEvaluator(
         root / "artifacts",
@@ -903,6 +912,7 @@ def _run_campaign_locked(
         source=source,
         allow_cross_revision_cache=allow_cross_revision_cache,
         allow_dirty=allow_dirty,
+        seed=campaign_seed,
     )
     config = _user_config_payload(
         execution=execution,
@@ -911,6 +921,7 @@ def _run_campaign_locked(
         campaign_mode="smoke" if smoke else "production",
         objective_config=USER_OBJECTIVE,
         search_bounds=USER_SEARCH_BOUNDS,
+        seed=campaign_seed,
     )
     config.update(
         {
@@ -1032,7 +1043,7 @@ def _run_campaign_locked(
             "design_space": design_space.to_dict(),
             "parameterization_version": design_space.parameterization_version,
             "ax_package_version": _ax_package_version(),
-            "seed": SEED,
+            "seed": campaign_seed,
             "budget": expected_resume_contract["budget"],
             "counts": {
                 "historical_success_count": event.historical_success_count,
@@ -1077,7 +1088,7 @@ def _run_campaign_locked(
     settings = AxSettings(
         initialization_trials=budget.initialization_success_target,
         search_trials=budget.search_success_target,
-        seed=SEED,
+        seed=campaign_seed,
         objective=evaluator.objective_identifier,
         max_consecutive_known_proposals=MAX_CONSECUTIVE_KNOWN_PROPOSALS,
     )

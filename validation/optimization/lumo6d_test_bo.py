@@ -92,6 +92,7 @@ def _production_design_space() -> DesignSpace:
             for spec in USER_SEARCH_BOUNDS
         ),
         linear_constraints=PRODUCTION_LINEAR_CONSTRAINTS,
+        fixed_led=USER_LED,
     )
 
 
@@ -242,6 +243,8 @@ def _trial_payload(
     record: Any,
     design_space: DesignSpace,
     attempt_index: int | None,
+    *,
+    optical_grid_fingerprint: str,
 ) -> dict[str, Any]:
     raw_parameters = dict(record.parameters)
     latent_parameters = raw_parameters
@@ -368,7 +371,7 @@ def _trial_payload(
             )
             if item is not None
         ],
-        "optical_grid_fingerprint": _optical_grid()["fingerprint"],
+        "optical_grid_fingerprint": optical_grid_fingerprint,
         "transport_configuration_fingerprint": evaluation_diagnostics.get(
             "transport_configuration_fingerprint"
         ),
@@ -869,7 +872,12 @@ def run_lumo6d_test_bo(
             "feasibility_rejection": False,
             "feasibility_constraint": None,
         })()
-        nominal_payload = _trial_payload(nominal_record, design_space, None)
+        nominal_payload = _trial_payload(
+            nominal_record,
+            design_space,
+            None,
+            optical_grid_fingerprint=str(grid["fingerprint"]),
+        )
         if nominal_evaluation.status != "success":
             raise RuntimeError(
                 "NOMINAL_FEASIBILITY_BLOCKER: "
@@ -909,7 +917,12 @@ def run_lumo6d_test_bo(
             for record in records:
                 if record.phase == "nominal":
                     continue
-                payload = _trial_payload(record, design_space, attempt)
+                payload = _trial_payload(
+                    record,
+                    design_space,
+                    attempt,
+                    optical_grid_fingerprint=str(grid["fingerprint"]),
+                )
                 records_by_trial[int(record.trial_index)] = payload
                 attempt += 1
             ordered = [records_by_trial[index] for index in sorted(records_by_trial)]

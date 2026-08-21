@@ -108,6 +108,7 @@ def _production_design_space() -> DesignSpace:
             for spec in USER_SEARCH_BOUNDS
         ),
         linear_constraints=PRODUCTION_LINEAR_CONSTRAINTS,
+        fixed_led=USER_LED,
     )
 
 
