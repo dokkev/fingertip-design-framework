@@ -20,27 +20,27 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-from mesh.volume.mesh import VolumeMeshDependencyError
-from finger import silicone_thickness_measures
-from ray_tracing.optical_mechanics import Transport3DDependencyError
-from optimization.optical_contract import fingerprint_mapping
+from lumo.mesh.volume.mesh import VolumeMeshDependencyError
+from lumo.finger import silicone_thickness_measures
+from lumo.ray_tracing.optical_mechanics import Transport3DDependencyError
+from lumo.optimization.optical_contract import fingerprint_mapping
 from scripts.tools.optix_smoke import run as run_optix_smoke
-from optimization.adapters.ax import (
+from lumo.optimization.adapters.ax import (
     AxSettings,
     CampaignInfrastructureError,
     InfrastructureFailureKind,
     create_ax_client,
     run_ax_optimization,
 )
-from optimization.design_space import (
+from lumo.optimization.design_space import (
     OPTIMIZABLE_PARAMETER_NAMES,
     PRODUCTION_LINEAR_CONSTRAINTS,
     PRODUCTION_SEARCH_BOUNDS,
 )
-from optimization.objectives import ObjectiveIdentifier
-from physics import PhysicsDependencyError
-from optimization.evaluation_registry import EvaluationRegistry, REGISTRY_SCHEMA_VERSION
-from optimization.evaluator import (
+from lumo.optimization.objectives import ObjectiveIdentifier
+from lumo.physics import PhysicsDependencyError
+from lumo.optimization.evaluation_registry import EvaluationRegistry, REGISTRY_SCHEMA_VERSION
+from lumo.optimization.evaluator import (
     Lumo3DTrajectoryStudy,
     TRAJECTORY_EVALUATION_SCHEMA,
     create_lumo3d_trajectory_study,

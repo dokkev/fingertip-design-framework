@@ -179,7 +179,7 @@ Production mechanics uses those material values through
 contact coefficients, and checkpoint-acceptance thresholds.
 
 The LED package and emission model remain the separate `LED` descriptor in
-`finger.led`; bulk optical values are owned by `FingertipParameters.optical`.
+`lumo.finger.led`; bulk optical values are owned by `FingertipParameters.optical`.
 
 The repository does not currently define or calibrate a Young's-modulus and
 Poisson-ratio material model, and therefore does not expose disconnected

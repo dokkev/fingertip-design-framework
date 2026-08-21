@@ -4,7 +4,7 @@ import json
 import inspect
 from pathlib import Path
 
-from ray_tracing.optix._paths import _discover_include_paths
+from lumo.ray_tracing.optix._paths import _discover_include_paths
 from scripts.tools.optix_doctor import _diagnose_include_paths, main as doctor_main
 from scripts.tools import optix_smoke
 

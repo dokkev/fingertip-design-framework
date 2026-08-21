@@ -7,7 +7,7 @@ import math
 
 import pytest
 
-from finger.fingertip_parameters import (
+from lumo.finger.fingertip_parameters import (
     FingertipParameters,
     InvalidFingertipParameters,
     OpticalParameters,

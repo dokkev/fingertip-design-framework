@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from finger import (
+from lumo.finger import (
     FingertipParameters,
     InvalidFingertipParameters,
     PRODUCTION_MINIMUM_SILICONE_THICKNESS_MM,

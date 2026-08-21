@@ -10,8 +10,8 @@ from typing import Mapping
 
 from nicegui import ui
 
-from finger import Fingertip, FingertipParameters, LED, OpticalParameters
-from optimization.design_space import (
+from lumo.finger import Fingertip, FingertipParameters, LED, OpticalParameters
+from lumo.optimization.design_space import (
     OPTIMIZABLE_PARAMETER_NAMES,
     DesignSpace,
     DesignVariable,

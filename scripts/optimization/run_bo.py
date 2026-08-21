@@ -19,14 +19,9 @@ from typing import Any
 
 import numpy as np
 
-# Support the documented ``python scripts/optimization/run_bo.py`` invocation
-# as well as ``python -m scripts.optimization.run_bo``.
-if __package__ in (None, ""):
-    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-
 from lumo import DEFAULT_MECHANICS_CONTRACT
 from lumo.simulation import lumo_optical_settings
-from finger import (
+from lumo.finger import (
     Fingertip,
     FingertipParameters,
     LED,
@@ -34,23 +29,23 @@ from finger import (
     ViscoelasticParameters,
     fingertip_parameters_fingerprint,
 )
-from ray_tracing.optical_mechanics.settings import Transport3DSettings
-from optimization.adapters.ax import (
+from lumo.ray_tracing.optical_mechanics.settings import Transport3DSettings
+from lumo.optimization.adapters.ax import (
     AxSettings,
     CampaignInfrastructureError,
     run_ax_optimization,
 )
-from optimization.evaluation_registry import EvaluationRegistry
-from optimization.design_space import ParameterSpec, PRODUCTION_LINEAR_CONSTRAINTS
-from optimization.evaluator import (
+from lumo.optimization.evaluation_registry import EvaluationRegistry
+from lumo.optimization.design_space import ParameterSpec, PRODUCTION_LINEAR_CONSTRAINTS
+from lumo.optimization.evaluator import (
     TRAJECTORY_EVALUATION_SCHEMA,
     create_lumo3d_trajectory_study,
 )
-from optimization.objectives import (
+from lumo.optimization.objectives import (
     TRAJECTORY_SEPARATION_OBJECTIVE,
     TrajectoryObjectiveConfig,
 )
-from optimization.protocol import (
+from lumo.optimization.protocol import (
     DEFAULT_TRAJECTORY_PROTOCOL,
     TrajectoryEvaluationProtocol,
 )
@@ -153,8 +148,8 @@ def _run_optix_smoke() -> Any:
 
 def _run_newton_smoke() -> dict[str, Any]:
     """Advance a tiny neutral tetrahedral block through the real Newton backend."""
-    from physics import NewtonSettings, TetMeshData
-    from physics.newton.solve import solve
+    from lumo.physics import NewtonSettings, TetMeshData
+    from lumo.physics.newton.solve import solve
 
     vertices = np.asarray(
         (

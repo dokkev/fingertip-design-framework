@@ -7,18 +7,18 @@ import sys
 import numpy as np
 import pytest
 
-from finger import LED
-from ray_tracing.optical_mechanics.path_field import PathFieldAccumulator
-from ray_tracing.optical_mechanics.physics import (
+from lumo.finger import LED
+from lumo.ray_tracing.optical_mechanics.path_field import PathFieldAccumulator
+from lumo.ray_tracing.optical_mechanics.physics import (
     attenuated_weight,
     periodic_plane_distance,
     wrapped_periodic_z,
 )
-from ray_tracing.optical_mechanics.result import (
+from lumo.ray_tracing.optical_mechanics.result import (
     Transport3DResult,
     Transport3DResultError,
 )
-from ray_tracing.optical_mechanics.settings import Transport3DSettings
+from lumo.ray_tracing.optical_mechanics.settings import Transport3DSettings
 
 
 def _accumulate_segment_path_3d(
@@ -51,7 +51,7 @@ def _accumulate_segment_path_3d(
 
 
 def test_full_sampling_is_deterministic_and_three_dimensional() -> None:
-    from ray_tracing.optical_mechanics.sampling import sample_directions
+    from lumo.ray_tracing.optical_mechanics.sampling import sample_directions
 
     led = LED()
     full_first = sample_directions(led, (0.0, -1.0), ray_count=257)
@@ -288,7 +288,7 @@ def test_nested_result_metadata_is_immutable() -> None:
 
 
 def test_normal_optics_import_does_not_load_optional_optix() -> None:
-    import ray_tracing
+    from lumo import ray_tracing
 
     assert not hasattr(ray_tracing, "trace")
     assert hasattr(ray_tracing, "CarrierOptics")

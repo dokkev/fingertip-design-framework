@@ -6,13 +6,13 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from finger import Fingertip, FingertipParameters, LED, OpticalParameters
-from ray_tracing.optical_mechanics import Transport3DResult
-from optimization.optical_artifact import (
+from lumo.finger import Fingertip, FingertipParameters, LED, OpticalParameters
+from lumo.ray_tracing.optical_mechanics import Transport3DResult
+from lumo.optimization.optical_artifact import (
     load_case_artifact,
     save_case_artifact,
 )
-from optimization.optical_contract import optical_physics_parameters
+from lumo.optimization.optical_contract import optical_physics_parameters
 
 
 def _result() -> Transport3DResult:

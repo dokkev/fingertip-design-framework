@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 import math
 
-from contact import DEFAULT_FIRST_CONTACT_SETTINGS, FirstContactSettings
+from lumo.contact import DEFAULT_FIRST_CONTACT_SETTINGS, FirstContactSettings
 
 
 @dataclass(frozen=True)
@@ -13,7 +13,7 @@ class MechanicsContract:
     """Solver, contact, and checkpoint-acceptance settings.
 
     Fingertip material and inertial inputs belong to
-    :class:`finger.fingertip_parameters.ViscoelasticParameters`; this contract
+    :class:`lumo.finger.fingertip_parameters.ViscoelasticParameters`; this contract
     only describes how the mechanics solver executes and how its result is
     accepted.
     """

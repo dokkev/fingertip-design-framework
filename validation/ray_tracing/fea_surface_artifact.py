@@ -10,8 +10,8 @@ from typing import Any, Mapping
 
 import numpy as np
 
-from finger.fingertip import Fingertip
-from ray_tracing.optical_mechanics.geometry import (
+from lumo.finger.fingertip import Fingertip
+from lumo.ray_tracing.optical_mechanics.geometry import (
     TriangleSurface,
     Transport3DGeometryError,
     build_full3d_transport_geometry,

@@ -7,8 +7,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from mesh.io.obj import RigidMeshAssetError, load_obj, load_obj_directory, save_obj
-from mesh.rigid.object import make_box_mesh, make_sphere_mesh
+from lumo.mesh.io.obj import RigidMeshAssetError, load_obj, load_obj_directory, save_obj
+from lumo.mesh.rigid.object import make_box_mesh, make_sphere_mesh
 
 
 def test_save_and_load_obj_round_trip_preserves_rigid_mesh(tmp_path: Path) -> None:

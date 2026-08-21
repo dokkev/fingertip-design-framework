@@ -5,13 +5,13 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from contact import (
+from lumo.contact import (
     canonical_sphere_alignment,
     sphere_alignment_at_normalized_location,
 )
-from mesh.rigid.object import make_sphere_mesh
-from finger.fingertip_geometry import FingertipModel
-from finger.fingertip_parameters import FingertipParameters
+from lumo.mesh.rigid.object import make_sphere_mesh
+from lumo.finger.fingertip_geometry import FingertipModel
+from lumo.finger.fingertip_parameters import FingertipParameters
 
 
 @pytest.fixture(scope="module")

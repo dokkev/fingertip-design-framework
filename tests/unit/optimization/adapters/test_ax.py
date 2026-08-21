@@ -7,20 +7,20 @@ from types import SimpleNamespace
 
 import pytest
 
-import optimization.adapters.ax as ax_adapter
-from mesh.volume.mesh import VolumeMeshDependencyError
-from finger import FingertipParameters
-from optimization.adapters.ax import (
+import lumo.optimization.adapters.ax as ax_adapter
+from lumo.mesh.volume.mesh import VolumeMeshDependencyError
+from lumo.finger import FingertipParameters
+from lumo.optimization.adapters.ax import (
     AxSettings,
     CampaignInfrastructureError,
     create_ax_client,
     run_ax_optimization,
 )
-from optimization.design_space import DesignSpace, DesignVariable, PRODUCTION_SEARCH_BOUNDS
-from optimization.evaluation_registry import EvaluationRegistry
-from optimization.objectives import ObjectiveIdentifier
-from ray_tracing.optical_mechanics import Transport3DDependencyError
-from physics import PhysicsDependencyError
+from lumo.optimization.design_space import DesignSpace, DesignVariable, PRODUCTION_SEARCH_BOUNDS
+from lumo.optimization.evaluation_registry import EvaluationRegistry
+from lumo.optimization.objectives import ObjectiveIdentifier
+from lumo.ray_tracing.optical_mechanics import Transport3DDependencyError
+from lumo.physics import PhysicsDependencyError
 
 
 TEST_OBJECTIVE = ObjectiveIdentifier("contact_state_separation", 1)

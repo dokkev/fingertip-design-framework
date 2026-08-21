@@ -24,40 +24,40 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 from scipy.stats import kendalltau, rankdata, spearmanr
 
-from physics import (
+from lumo.physics import (
     NewtonSettings,
     make_fingertip_volume_state as make_vbd_volume_state,
     prepare_fingertip_mesh,
 )
-from physics.newton.session import NewtonSession
-from mesh.rigid.carrier import make_distal_phalanx_mesh
-from mesh.volume.mesh import generate_volume_mesh
-from mesh.volume.contracts import volume_mesh_settings_for_tier
-from finger.fingertip import Fingertip
-from finger.fingertip_geometry import FingertipModel
-from finger.fingertip_parameters import FingertipParameters
-from finger.extrusion import build_fingertip_solid
-from ray_tracing.optical_mechanics import (
+from lumo.physics.newton.session import NewtonSession
+from lumo.mesh.rigid.carrier import make_distal_phalanx_mesh
+from lumo.mesh.volume.mesh import generate_volume_mesh
+from lumo.mesh.volume.contracts import volume_mesh_settings_for_tier
+from lumo.finger.fingertip import Fingertip
+from lumo.finger.fingertip_geometry import FingertipModel
+from lumo.finger.fingertip_parameters import FingertipParameters
+from lumo.finger.extrusion import build_fingertip_solid
+from lumo.ray_tracing.optical_mechanics import (
     build_fingertip_volume_state_geometry,
     trace_geometry,
 )
-from ray_tracing.optical_mechanics.optix_backend import create_runtime
-from ray_tracing.optical_mechanics.settings import Transport3DSettings
+from lumo.ray_tracing.optical_mechanics.optix_backend import create_runtime
+from lumo.ray_tracing.optical_mechanics.settings import Transport3DSettings
 from validation.common.io import atomic_write_json, strict_read_json
 from validation.common.provenance import sha256_file
-from optimization.optical_artifact import (
+from lumo.optimization.optical_artifact import (
     UNIFIED_ARTIFACT_SCHEMA,
     load_case_artifact,
     native_field_separability,
     save_case_artifact,
 )
-from optimization.optical_contract import (
+from lumo.optimization.optical_contract import (
     fingerprint_mapping,
     optical_physics_parameters,
     transport_configuration,
 )
 from validation.ray_tracing.fea_surface_artifact import load_full3d_surface_artifact
-from mesh.volume.state import make_fingertip_volume_state as make_volume_state
+from lumo.mesh.volume.state import make_fingertip_volume_state as make_volume_state
 
 from .correspondence import (
     VBD_CORRESPONDENCE_DT,
@@ -777,7 +777,7 @@ def run_comparison(
                 vbd_contract = {
                     **common_contract,
                     "branch": "VBD",
-                    "mechanics_source": "physics.NewtonSession",
+                    "mechanics_source": "lumo.physics.NewtonSession",
                     "native_manifest": str(side_state["case"]["native_manifest"]),
                     "native_manifest_sha256": side_state["case"]["native_manifest_sha256"],
                     "vbd_state_fingerprint": side_state["vbd_fp"],
@@ -905,13 +905,13 @@ def run_comparison(
             "source_artifacts": [str(row["native_manifest"]) for row in rows],
         },
         "vbd": {
-            "solver": "physics.NewtonSession/Newton SolverVBD",
+            "solver": "lumo.physics.NewtonSession/Newton SolverVBD",
             "warp_version": _package_version("warp-lang"),
             "newton_version": _package_version("newton"),
             "settings": asdict(prepared_groups[0]["prepared_candidates"][0]["vbd_settings"]),
         },
         "optics": {
-            "runtime": "ray_tracing.optical_mechanics.trace_geometry",
+            "runtime": "lumo.ray_tracing.optical_mechanics.trace_geometry",
             "settings": asdict(optix_settings),
             "configuration_scope": "one frozen full-3D transport configuration and common field bounds for all states",
             "source_configuration": "existing Fingertip optical source carried by each exact morphology; identical FEA/VBD within each state",

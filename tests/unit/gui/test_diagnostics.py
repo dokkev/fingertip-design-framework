@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import asdict
 
-from finger import FingertipParameters, LED
+from lumo.finger import FingertipParameters, LED
 from gui.diagnostics import (
     diagnose_design_space,
     diagnose_geometry,

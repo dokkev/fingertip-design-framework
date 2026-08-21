@@ -3,19 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 import sys
 import time
 from typing import Any, Mapping
 
-# Support both ``python scripts/tools/optix_smoke.py`` and
-# ``python -m scripts.tools.optix_smoke`` from the repository root.
-if __package__ in (None, ""):
-    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-
 import numpy as np
 
-from ray_tracing.optix.runtime import OptixRuntime, OptixRuntimeError
+from lumo.ray_tracing.optix.runtime import OptixRuntime, OptixRuntimeError
 
 
 _DEVICE_SOURCE = r"""

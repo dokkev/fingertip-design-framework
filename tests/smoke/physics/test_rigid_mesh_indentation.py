@@ -11,14 +11,14 @@ pytest.importorskip("newton")
 
 import warp as wp
 
-from contact import (
+from lumo.contact import (
     FirstContactSettings,
     canonical_sphere_alignment,
     find_first_contact,
     intersects,
     make_outer_compliant_surface,
 )
-from physics import (
+from lumo.physics import (
     IndentationSettings,
     NewtonSettings,
     RigidIndenter3D,
@@ -26,15 +26,15 @@ from physics import (
     prepare_fingertip_mesh,
     solve_fingertip_indentation,
 )
-from mesh.rigid.object import RigidPose3D
-from physics.newton.vbd import solve_newton_vbd_indentation
-from mesh.rigid.carrier import make_distal_phalanx_mesh
-from mesh.rigid.object import make_box_mesh, make_cylinder_mesh, make_sphere_mesh
-from mesh.volume.mesh import generate_volume_mesh
-from mesh.volume.contracts import volume_mesh_settings_for_tier
-from finger.fingertip_geometry import FingertipModel
-from finger.fingertip_parameters import FingertipParameters
-from finger.extrusion import build_fingertip_solid
+from lumo.mesh.rigid.object import RigidPose3D
+from lumo.physics.newton.vbd import solve_newton_vbd_indentation
+from lumo.mesh.rigid.carrier import make_distal_phalanx_mesh
+from lumo.mesh.rigid.object import make_box_mesh, make_cylinder_mesh, make_sphere_mesh
+from lumo.mesh.volume.mesh import generate_volume_mesh
+from lumo.mesh.volume.contracts import volume_mesh_settings_for_tier
+from lumo.finger.fingertip_geometry import FingertipModel
+from lumo.finger.fingertip_parameters import FingertipParameters
+from lumo.finger.extrusion import build_fingertip_solid
 
 
 def _six_volumes(vertices: np.ndarray, tetrahedra: np.ndarray) -> np.ndarray:
@@ -379,8 +379,8 @@ def test_triangle_mesh_model_path_accepts_primitive_family(object_mesh) -> None:
         [[0, 1, 3, 4], [1, 2, 3, 6], [1, 3, 4, 6], [1, 4, 5, 6], [3, 4, 6, 7]],
         dtype=np.int32,
     )
-    from physics.trajectory.fingertip import PreparedFingertipMesh
-    from physics.contracts.types import TetMeshData
+    from lumo.physics.trajectory.fingertip_adapter import PreparedFingertipMesh
+    from lumo.physics.contracts.types import TetMeshData
 
     prepared = PreparedFingertipMesh(
         TetMeshData(vertices, tetrahedra),

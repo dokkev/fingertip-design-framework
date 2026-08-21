@@ -11,13 +11,13 @@ pytest.importorskip("newton")
 
 import warp as wp
 
-from physics import NewtonSettings, prepare_fingertip_mesh
-from physics.newton.session import NewtonSession
-from mesh.volume.mesh import generate_volume_mesh
-from mesh.volume.contracts import volume_mesh_settings_for_tier
-from finger.fingertip_geometry import FingertipModel
-from finger.fingertip_parameters import FingertipParameters
-from finger.extrusion import build_fingertip_solid
+from lumo.physics import NewtonSettings, prepare_fingertip_mesh
+from lumo.physics.newton.session import NewtonSession
+from lumo.mesh.volume.mesh import generate_volume_mesh
+from lumo.mesh.volume.contracts import volume_mesh_settings_for_tier
+from lumo.finger.fingertip_geometry import FingertipModel
+from lumo.finger.fingertip_parameters import FingertipParameters
+from lumo.finger.extrusion import build_fingertip_solid
 from validation.physics.correspondence import (
     VBD_CORRESPONDENCE_DT,
     VBD_CORRESPONDENCE_ITERATIONS,

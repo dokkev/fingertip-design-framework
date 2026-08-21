@@ -1,7 +1,7 @@
 # Optimization entry points
 
 `run_bo.py` is the bounded, concrete campaign entry point. It uses the
-production `optimization.evaluator.Lumo3DTrajectoryEvaluator` through the
+production `lumo.optimization.evaluator.Lumo3DTrajectoryEvaluator` through the
 production Ax adapter; it is not a second evaluator.
 
 The file has a visible `USER CONFIG` section for the nominal
@@ -40,6 +40,6 @@ The runner refuses to overwrite a non-empty output directory and writes
 `config.json`, `preflight.json`, `trials.json`, `registry.json`, and
 `summary.json` with finite, structured JSON values.
 
-Optimization contracts and the production evaluator remain owned by the
-top-level `optimization/` package. Validation-only Test BO and scientific
-comparison workflows remain under `validation/optimization/`.
+Optimization contracts and the production evaluator remain owned by
+`lumo/optimization/`. Validation-only Test BO and scientific comparison
+workflows remain under `validation/optimization/`.

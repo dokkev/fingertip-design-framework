@@ -16,22 +16,22 @@ from typing import Any, Iterable
 
 import numpy as np
 
-from physics import prepare_fingertip_mesh
-from mesh import FingertipVolumeState, volume_mesh_settings_for_tier
-from mesh.rigid.carrier import make_distal_phalanx_mesh
-from mesh.volume.mesh import generate_volume_mesh
-from finger import Fingertip, FingertipParameters
-from ray_tracing.contracts.objects import CarrierOptics
-from ray_tracing.optical_mechanics import (
+from lumo.physics import prepare_fingertip_mesh
+from lumo.mesh import FingertipVolumeState, volume_mesh_settings_for_tier
+from lumo.mesh.rigid.carrier import make_distal_phalanx_mesh
+from lumo.mesh.volume.mesh import generate_volume_mesh
+from lumo.finger import Fingertip, FingertipParameters
+from lumo.ray_tracing.contracts.objects import CarrierOptics
+from lumo.ray_tracing.optical_mechanics import (
     Transport3DSettings,
     build_fingertip_volume_state_geometry,
     trace_geometry,
 )
-from ray_tracing.optical_mechanics.optix_backend import create_runtime
-from optimization.optical_artifact import (
+from lumo.ray_tracing.optical_mechanics.optix_backend import create_runtime
+from lumo.optimization.optical_artifact import (
     save_case_artifact,
 )
-from optimization.optical_contract import (
+from lumo.optimization.optical_contract import (
     fingerprint_mapping,
     optical_physics_parameters,
     transport_configuration,

@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from physics import PreparedFingertipMesh, NewtonResult, TetMeshData
+from lumo.physics import PreparedFingertipMesh, NewtonResult, TetMeshData
 from validation.physics.correspondence import compare_mechanics_states
 from validation.reference.kratos3d.fea3d_reference import FEA3DReferenceState
 

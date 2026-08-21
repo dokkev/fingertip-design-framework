@@ -2,7 +2,7 @@
 
 This module is intentionally outside the production optimization package.  It
 preserves the older fixed-depth implementation as a read-only comparison
-oracle; new campaigns must use :mod:`optimization.evaluator`.
+oracle; new campaigns must use :mod:`lumo.optimization.evaluator`.
 """
 
 from __future__ import annotations
@@ -16,24 +16,24 @@ from typing import Any, Literal, Mapping
 
 import numpy as np
 
-from physics import (
+from lumo.physics import (
     InvalidFingertipMesh,
     PhysicsDependencyError,
     prepare_fingertip_mesh,
 )
-from mesh import volume_mesh_settings_for_tier
-from mesh.rigid.carrier import make_distal_phalanx_mesh
-from mesh.volume.mesh import generate_volume_mesh
-from mesh.volume.mesh import VolumeMeshDependencyError, VolumeMeshingError
-from finger import (
+from lumo.mesh import volume_mesh_settings_for_tier
+from lumo.mesh.rigid.carrier import make_distal_phalanx_mesh
+from lumo.mesh.volume.mesh import generate_volume_mesh
+from lumo.mesh.volume.mesh import VolumeMeshDependencyError, VolumeMeshingError
+from lumo.finger import (
     Fingertip,
     FingertipParameters,
     InvalidFingertip,
     InvalidFingertipParameters,
     validate_minimum_silicone_thickness,
 )
-from ray_tracing.contracts.objects import CarrierOptics
-from ray_tracing.optical_mechanics import (
+from lumo.ray_tracing.contracts.objects import CarrierOptics
+from lumo.ray_tracing.optical_mechanics import (
     Transport3DDependencyError,
     Transport3DGeometryError,
     Transport3DPhysicsError,
@@ -42,18 +42,18 @@ from ray_tracing.optical_mechanics import (
     Transport3DTraceError,
     trace_geometry,
 )
-from ray_tracing.optical_mechanics.optix_backend import create_runtime
-from optimization.design_space import (
+from lumo.ray_tracing.optical_mechanics.optix_backend import create_runtime
+from lumo.optimization.design_space import (
     PRODUCTION_SEARCH_BOUNDS,
 )
-from optimization.objectives import ObjectiveIdentifier
+from lumo.optimization.objectives import ObjectiveIdentifier
 from validation.ray_tracing.deformed_state_restore import restore_deformed_optical_state
-from optimization.optical_artifact import (
+from lumo.optimization.optical_artifact import (
     energy_record,
     native_field_separability,
     save_case_artifact,
 )
-from optimization.optical_contract import (
+from lumo.optimization.optical_contract import (
     fingerprint_mapping,
     optical_physics_parameters,
     transport_configuration,

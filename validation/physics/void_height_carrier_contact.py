@@ -29,14 +29,14 @@ from typing import Any, Iterable, Mapping
 import numpy as np
 from shapely.geometry import Point
 
-from contact import (
+from lumo.contact import (
     FirstContactSettings,
     find_first_contact,
     intersects,
     make_outer_compliant_surface,
     sphere_alignment_at_normalized_location,
 )
-from physics import (
+from lumo.physics import (
     IndentationResult,
     IndentationSettings,
     NewtonSettings,
@@ -44,10 +44,10 @@ from physics import (
     prepare_fingertip_mesh,
     solve_fingertip_indentation,
 )
-from mesh import make_distal_phalanx_mesh, make_sphere_mesh
-from mesh.volume.mesh import generate_volume_mesh
-from mesh.volume.contracts import volume_mesh_settings_for_tier
-from finger import Fingertip, FingertipParameters
+from lumo.mesh import make_distal_phalanx_mesh, make_sphere_mesh
+from lumo.mesh.volume.mesh import generate_volume_mesh
+from lumo.mesh.volume.contracts import volume_mesh_settings_for_tier
+from lumo.finger import Fingertip, FingertipParameters
 
 
 OUTPUT_DIR = Path("output/validation/physics/void_height_carrier_contact")

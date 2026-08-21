@@ -6,11 +6,11 @@ import pytest
 
 pytest.importorskip("gmsh")
 
-from physics import prepare_fingertip_mesh
-from mesh.rigid.carrier import make_distal_phalanx_mesh
-from mesh.volume.mesh import generate_volume_mesh
-from mesh.volume.contracts import volume_mesh_settings_for_tier
-from finger import Fingertip, FingertipParameters
+from lumo.physics import prepare_fingertip_mesh
+from lumo.mesh.rigid.carrier import make_distal_phalanx_mesh
+from lumo.mesh.volume.mesh import generate_volume_mesh
+from lumo.mesh.volume.contracts import volume_mesh_settings_for_tier
+from lumo.finger import Fingertip, FingertipParameters
 
 
 def test_positive_void_height_preserves_support_bonds_and_free_void_bottom() -> None:

@@ -11,7 +11,7 @@ from pathlib import Path
 import sys
 from typing import Any
 
-from ray_tracing.optix._paths import _cuda_candidates, _optix_candidates
+from lumo.ray_tracing.optix._paths import _cuda_candidates, _optix_candidates
 
 
 def _header_status(

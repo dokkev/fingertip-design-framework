@@ -10,9 +10,9 @@ pytest.importorskip("newton")
 
 import warp as wp
 
-from physics import NewtonSettings, TetMeshData
-from physics.contracts.load import ParticleLoad
-from physics.newton.session import NewtonSession
+from lumo.physics import NewtonSettings, TetMeshData
+from lumo.physics.contracts.load import ParticleLoad
+from lumo.physics.newton.session import NewtonSession
 
 
 def _cube_mesh() -> TetMeshData:

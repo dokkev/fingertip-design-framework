@@ -5,11 +5,11 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from ray_tracing.optical_mechanics.optix_backend import (
+from lumo.ray_tracing.optical_mechanics.optix_backend import (
     OptixScene,
     Transport3DDependencyError,
 )
-from ray_tracing.optix.runtime import OptixRuntime, OptixRuntimeError
+from lumo.ray_tracing.optix.runtime import OptixRuntime, OptixRuntimeError
 
 
 def _surface() -> SimpleNamespace:

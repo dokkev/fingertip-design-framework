@@ -7,7 +7,7 @@ import time
 
 import numpy as np
 
-from contact import (
+from lumo.contact import (
     CandidateContactError,
     FirstContactResult,
     FingertipContactSurface,
@@ -17,26 +17,26 @@ from contact import (
     sphere_alignment_at_normalized_location,
     unintended_boundary_clearance_mm,
 )
-from contact.sphere_alignment import SphereAlignment
+from lumo.contact.sphere_alignment import SphereAlignment
 from lumo.mechanics_contract import DEFAULT_MECHANICS_CONTRACT, MechanicsContract
-from mesh import volume_mesh_settings_for_tier
-from mesh.rigid.carrier import RigidCarrierMesh, make_distal_phalanx_mesh
-from mesh.rigid.object import make_sphere_mesh
-from mesh.volume.contracts import FingertipVolumeMesh
-from mesh.volume.mesh import generate_volume_mesh
-from mesh.volume.state import FingertipVolumeState, InvalidDeformedFingertipState
-from finger import Fingertip
-from ray_tracing.contracts.objects import CarrierOptics
-from ray_tracing.optical_mechanics import (
+from lumo.mesh import volume_mesh_settings_for_tier
+from lumo.mesh.rigid.carrier import RigidCarrierMesh, make_distal_phalanx_mesh
+from lumo.mesh.rigid.object import make_sphere_mesh
+from lumo.mesh.volume.contracts import FingertipVolumeMesh
+from lumo.mesh.volume.mesh import generate_volume_mesh
+from lumo.mesh.volume.state import FingertipVolumeState, InvalidDeformedFingertipState
+from lumo.finger import Fingertip
+from lumo.ray_tracing.contracts.objects import CarrierOptics
+from lumo.ray_tracing.optical_mechanics import (
     Transport3DResult,
     Transport3DSettings,
     build_fingertip_volume_state_geometry,
     trace_geometry,
 )
-from ray_tracing.optical_mechanics.geometry import TransportGeometry
-from ray_tracing.optical_mechanics.optix_backend import create_runtime
-from ray_tracing.optix.runtime import OptixRuntime
-from physics import (
+from lumo.ray_tracing.optical_mechanics.geometry import TransportGeometry
+from lumo.ray_tracing.optical_mechanics.optix_backend import create_runtime
+from lumo.ray_tracing.optix.runtime import OptixRuntime
+from lumo.physics import (
     CandidateMechanicsError,
     IndentationCheckpoint,
     IndentationSettings,

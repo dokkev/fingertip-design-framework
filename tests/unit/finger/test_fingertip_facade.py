@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from finger import Fingertip, FingertipParameters, LED, OpticalParameters
+from lumo.finger import Fingertip, FingertipParameters, LED, OpticalParameters
 
 
 def test_fingertip_uses_authoritative_nominal_parameters_by_default() -> None:

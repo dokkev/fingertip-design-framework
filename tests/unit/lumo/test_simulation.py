@@ -7,14 +7,14 @@ import numpy as np
 import pytest
 
 import lumo.simulation as simulation_module
-from contact import make_outer_compliant_surface
+from lumo.contact import make_outer_compliant_surface
 from lumo import MechanicsContract
 from lumo.simulation import LumoSimulation
-from mesh import generate_volume_mesh, volume_mesh_settings_for_tier
-from mesh.rigid.carrier import make_distal_phalanx_mesh
-from finger import Fingertip
-from physics import CandidateMechanicsError, MechanicsCheckpointState
-from physics import prepare_fingertip_mesh
+from lumo.mesh import generate_volume_mesh, volume_mesh_settings_for_tier
+from lumo.mesh.rigid.carrier import make_distal_phalanx_mesh
+from lumo.finger import Fingertip
+from lumo.physics import CandidateMechanicsError, MechanicsCheckpointState
+from lumo.physics import prepare_fingertip_mesh
 
 
 @pytest.fixture(scope="module")

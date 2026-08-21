@@ -14,24 +14,24 @@ pytest.importorskip("newton")
 
 import warp as wp
 
-from contact import (
+from lumo.contact import (
     FirstContactSettings,
     canonical_sphere_alignment,
     find_first_contact,
     make_outer_compliant_surface,
 )
-from physics import (
+from lumo.physics import (
     IndentationSettings,
     NewtonSettings,
     RigidIndenter3D,
     prepare_fingertip_mesh,
     solve_fingertip_indentation,
 )
-from mesh.rigid.carrier import make_distal_phalanx_mesh
-from mesh.rigid.object import make_sphere_mesh
-from mesh.volume.mesh import generate_volume_mesh
-from mesh.volume.contracts import volume_mesh_settings_for_tier
-from finger import Fingertip, FingertipParameters
+from lumo.mesh.rigid.carrier import make_distal_phalanx_mesh
+from lumo.mesh.rigid.object import make_sphere_mesh
+from lumo.mesh.volume.mesh import generate_volume_mesh
+from lumo.mesh.volume.contracts import volume_mesh_settings_for_tier
+from lumo.finger import Fingertip, FingertipParameters
 
 
 def _six_volumes(vertices: np.ndarray, tetrahedra: np.ndarray) -> np.ndarray:

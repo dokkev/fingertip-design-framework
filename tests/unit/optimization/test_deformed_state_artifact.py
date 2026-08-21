@@ -9,11 +9,11 @@ import pytest
 
 pytest.importorskip("gmsh")
 
-from physics import prepare_fingertip_mesh
-from mesh import volume_mesh_settings_for_tier
-from mesh.rigid.carrier import make_distal_phalanx_mesh
-from mesh.volume.mesh import generate_volume_mesh
-from finger import Fingertip
+from lumo.physics import prepare_fingertip_mesh
+from lumo.mesh import volume_mesh_settings_for_tier
+from lumo.mesh.rigid.carrier import make_distal_phalanx_mesh
+from lumo.mesh.volume.mesh import generate_volume_mesh
+from lumo.finger import Fingertip
 from validation.ray_tracing.deformed_state_restore import restore_deformed_optical_state
 
 

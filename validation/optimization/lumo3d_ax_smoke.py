@@ -8,18 +8,18 @@ from pathlib import Path
 from typing import Any
 from dataclasses import replace
 
-from optimization.adapters.ax import (
+from lumo.optimization.adapters.ax import (
     AxSettings,
     run_ax_optimization,
 )
-from optimization.evaluation_registry import EvaluationRegistry
-from optimization.design_space import (
+from lumo.optimization.evaluation_registry import EvaluationRegistry
+from lumo.optimization.design_space import (
     PRODUCTION_NOMINAL_VOID_HEIGHT_MM,
     PRODUCTION_SEARCH_BOUNDS,
 )
-from optimization.objectives import ObjectiveIdentifier
-from finger import Fingertip, FingertipParameters
-from optimization.evaluator import create_lumo3d_trajectory_study
+from lumo.optimization.objectives import ObjectiveIdentifier
+from lumo.finger import Fingertip, FingertipParameters
+from lumo.optimization.evaluator import create_lumo3d_trajectory_study
 from lumo.simulation import LUMO3D_OBSERVATION_LEVEL
 
 

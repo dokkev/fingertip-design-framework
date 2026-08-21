@@ -7,9 +7,9 @@ import pytest
 
 pytest.importorskip("gmsh")
 
-from mesh import FingertipVolumeState, generate_volume_mesh, volume_mesh_settings_for_tier
-from mesh.volume.contracts import SurfaceTriangle
-from finger import Fingertip
+from lumo.mesh import FingertipVolumeState, generate_volume_mesh, volume_mesh_settings_for_tier
+from lumo.mesh.volume.contracts import SurfaceTriangle
+from lumo.finger import Fingertip
 
 
 @pytest.fixture(scope="module")

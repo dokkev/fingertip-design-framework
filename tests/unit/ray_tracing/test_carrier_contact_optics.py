@@ -5,13 +5,13 @@ import pytest
 
 pytest.importorskip("gmsh")
 
-from mesh import FingertipVolumeState, volume_mesh_settings_for_tier
-from mesh.rigid.carrier import make_distal_phalanx_mesh
-from mesh.volume.mesh import generate_volume_mesh
-from finger import Fingertip
-from ray_tracing.contracts.objects import CarrierOptics, IndenterOptics
-from ray_tracing.optical_mechanics import build_fingertip_volume_state_geometry
-from ray_tracing.optical_mechanics.geometry import CARRIER_CONTACT_INTERFACE
+from lumo.mesh import FingertipVolumeState, volume_mesh_settings_for_tier
+from lumo.mesh.rigid.carrier import make_distal_phalanx_mesh
+from lumo.mesh.volume.mesh import generate_volume_mesh
+from lumo.finger import Fingertip
+from lumo.ray_tracing.contracts.objects import CarrierOptics, IndenterOptics
+from lumo.ray_tracing.optical_mechanics import build_fingertip_volume_state_geometry
+from lumo.ray_tracing.optical_mechanics.geometry import CARRIER_CONTACT_INTERFACE
 
 
 @pytest.fixture(scope="module")

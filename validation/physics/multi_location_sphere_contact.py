@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Iterable
 
 import numpy as np
-from contact import (
+from lumo.contact import (
     FirstContactResult,
     FirstContactSettings,
     find_first_contact,
@@ -23,7 +23,7 @@ from contact import (
     sphere_alignment_at_normalized_location,
     unintended_boundary_clearance_mm,
 )
-from physics import (
+from lumo.physics import (
     IndentationResult,
     IndentationSettings,
     NewtonSettings,
@@ -31,11 +31,11 @@ from physics import (
     prepare_fingertip_mesh,
     solve_fingertip_indentation,
 )
-from mesh.rigid.object import make_sphere_mesh
-from mesh.rigid.carrier import make_distal_phalanx_mesh
-from mesh.volume.mesh import generate_volume_mesh
-from mesh.volume.contracts import volume_mesh_settings_for_tier
-from finger import Fingertip, FingertipParameters
+from lumo.mesh.rigid.object import make_sphere_mesh
+from lumo.mesh.rigid.carrier import make_distal_phalanx_mesh
+from lumo.mesh.volume.mesh import generate_volume_mesh
+from lumo.mesh.volume.contracts import volume_mesh_settings_for_tier
+from lumo.finger import Fingertip, FingertipParameters
 
 
 SEARCH_SPHERE_SUBDIVISIONS = 3

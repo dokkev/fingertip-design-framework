@@ -24,14 +24,22 @@ per morphology.
 
 ## Repository map
 
-- `finger/`: parametric morphology and optical source/material records;
-- `mesh/`: semantic geometry and volume/rigid meshes;
-- `contact/`: geometry-derived alignment and first-contact search;
-- `physics/`: the single Newton/Warp mechanics implementation;
-- `ray_tracing/`: FULL_3D OptiX transport and production runtime;
-- `optimization/`: named design space, protocol, objective, registry, and Ax;
-- `validation/`: current scientific runners and validation-only references;
-- `gui/`: deferred design-space diagnostics.
+- `lumo/`: the only installable framework namespace;
+- `lumo/finger/`: parametric morphology and optical source/material records;
+- `lumo/mesh/`: semantic geometry and volume/rigid meshes;
+- `lumo/contact/`: geometry-derived alignment and first-contact search;
+- `lumo/physics/`: the single Newton/Warp mechanics implementation;
+- `lumo/ray_tracing/`: FULL_3D OptiX transport and production runtime;
+- `lumo/optimization/`: design space, protocol, objective, registry, and Ax;
+- `visualization/config/`: repository-only plot and persisted-field display configuration;
+- `validation/`: repository-only scientific runners and reference workflows;
+- `gui/`: repository-only deferred design-space diagnostics;
+- `scripts/`: executable user and developer workflows.
+
+Framework imports therefore use one unambiguous namespace, for example
+`from lumo.finger import FingertipParameters` and
+`from lumo.optimization import DesignSpace`. Scripts assume the project has
+been installed and do not modify `sys.path`.
 
 The old 2D FEM, case, examples, and generic plotting layers are intentionally
 not part of this branch.

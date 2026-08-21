@@ -7,7 +7,7 @@ from math import isfinite
 from numbers import Real
 from typing import Literal, Mapping
 
-from finger import (
+from lumo.finger import (
     Fingertip,
     FingertipParameters,
     KinematicParameters,
@@ -17,7 +17,7 @@ from finger import (
     ellipse_depth_at_cutout_mm,
     silicone_thickness_measures,
 )
-from optimization.design_space import OPTIMIZABLE_PARAMETER_NAMES
+from lumo.optimization.design_space import OPTIMIZABLE_PARAMETER_NAMES
 
 
 DiagnosticSeverity = Literal["INFO", "WARN", "ERROR"]

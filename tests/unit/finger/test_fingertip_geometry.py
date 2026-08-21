@@ -9,11 +9,11 @@ from shapely import affinity
 from shapely.geometry import LineString, MultiLineString, MultiPolygon, Polygon, box
 from shapely.ops import linemerge, unary_union
 
-from finger.fingertip_geometry import (
+from lumo.finger.fingertip_geometry import (
     FingertipModel,
     InvalidFingertipGeometry,
 )
-from finger.fingertip_parameters import (
+from lumo.finger.fingertip_parameters import (
     FingertipParameters,
     InvalidFingertipParameters,
     fingertip_parameters_fingerprint,

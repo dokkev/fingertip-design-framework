@@ -9,14 +9,14 @@ from typing import Iterable
 
 import numpy as np
 
-from mesh.rigid.carrier import RigidCarrierMesh
-from mesh.volume.contracts import FingertipVolumeMesh
-from mesh.volume.state import FingertipVolumeState
-from finger.fingertip import Fingertip
-from ray_tracing.contracts.objects import CarrierOptics
-from ray_tracing.optical_mechanics import build_fingertip_volume_state_geometry
-from ray_tracing.optical_mechanics.geometry import TransportGeometry
-from physics.trajectory.fingertip import PreparedFingertipMesh
+from lumo.mesh.rigid.carrier import RigidCarrierMesh
+from lumo.mesh.volume.contracts import FingertipVolumeMesh
+from lumo.mesh.volume.state import FingertipVolumeState
+from lumo.finger.fingertip import Fingertip
+from lumo.ray_tracing.contracts.objects import CarrierOptics
+from lumo.ray_tracing.optical_mechanics import build_fingertip_volume_state_geometry
+from lumo.ray_tracing.optical_mechanics.geometry import TransportGeometry
+from lumo.physics.trajectory.fingertip_adapter import PreparedFingertipMesh
 
 
 @dataclass(frozen=True)

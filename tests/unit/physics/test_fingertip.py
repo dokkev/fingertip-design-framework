@@ -9,12 +9,12 @@ import pytest
 
 pytest.importorskip("gmsh")
 
-from mesh.volume.mesh import generate_volume_mesh
-from mesh.volume.contracts import VolumeMeshValidation, volume_mesh_settings_for_tier
-from finger.fingertip_geometry import FingertipModel
-from finger.fingertip_parameters import FingertipParameters
-from finger.extrusion import build_fingertip_solid
-from physics import (
+from lumo.mesh.volume.mesh import generate_volume_mesh
+from lumo.mesh.volume.contracts import VolumeMeshValidation, volume_mesh_settings_for_tier
+from lumo.finger.fingertip_geometry import FingertipModel
+from lumo.finger.fingertip_parameters import FingertipParameters
+from lumo.finger.extrusion import build_fingertip_solid
+from lumo.physics import (
     NewtonResult,
     make_fingertip_volume_state,
     prepare_fingertip_mesh,

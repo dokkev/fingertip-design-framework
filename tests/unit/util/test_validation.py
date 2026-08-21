@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from util.validation import require_finite, require_nonnegative, require_positive
+from lumo.util.validation import require_finite, require_nonnegative, require_positive
 
 
 def test_require_finite_accepts_finite_values() -> None:

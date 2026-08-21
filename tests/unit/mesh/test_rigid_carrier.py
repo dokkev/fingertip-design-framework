@@ -6,10 +6,10 @@ import numpy as np
 from shapely.geometry import Polygon, box
 from shapely.ops import unary_union
 
-from mesh.rigid.carrier import make_distal_phalanx_mesh
-from finger.fingertip_geometry import FingertipModel
-from finger.fingertip_parameters import FingertipParameters
-from finger.extrusion import FingertipSolid, build_fingertip_solid
+from lumo.mesh.rigid.carrier import make_distal_phalanx_mesh
+from lumo.finger.fingertip_geometry import FingertipModel
+from lumo.finger.fingertip_parameters import FingertipParameters
+from lumo.finger.extrusion import FingertipSolid, build_fingertip_solid
 
 
 def _solid():

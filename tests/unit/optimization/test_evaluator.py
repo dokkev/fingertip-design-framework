@@ -7,26 +7,26 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from contact import CandidateContactError
-from mesh.volume.mesh import VolumeMeshDependencyError
+from lumo.contact import CandidateContactError
+from lumo.mesh.volume.mesh import VolumeMeshDependencyError
 from lumo import MechanicsContract
-from finger import (
+from lumo.finger import (
     FingertipParameters,
     LED,
     OpticalParameters,
     ViscoelasticParameters,
 )
-from physics import CandidateMechanicsError
-from optimization.objectives import TrajectoryObservation, compute_trajectory_objective
-from optimization.design_space import ParameterSpec
-from optimization.protocol import DEFAULT_TRAJECTORY_PROTOCOL, TrajectoryEvaluationProtocol
-from optimization.evaluator import (
+from lumo.physics import CandidateMechanicsError
+from lumo.optimization.objectives import TrajectoryObservation, compute_trajectory_objective
+from lumo.optimization.design_space import ParameterSpec
+from lumo.optimization.protocol import DEFAULT_TRAJECTORY_PROTOCOL, TrajectoryEvaluationProtocol
+from lumo.optimization.evaluator import (
     Lumo3DTrajectoryEvaluator,
     _objective_failure,
     create_lumo3d_trajectory_study,
 )
-from ray_tracing.optical_mechanics import Transport3DResultError, Transport3DSettings
-import optimization.evaluator as evaluator_module
+from lumo.ray_tracing.optical_mechanics import Transport3DResultError, Transport3DSettings
+import lumo.optimization.evaluator as evaluator_module
 
 
 def test_default_checkpoint_state_identities_are_unique() -> None:

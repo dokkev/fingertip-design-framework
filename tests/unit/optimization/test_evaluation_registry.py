@@ -6,12 +6,12 @@ import json
 
 import pytest
 
-from optimization.evaluation_registry import (
+from lumo.optimization.evaluation_registry import (
     EvaluationRegistry,
     canonical_morphology,
     evaluation_key,
 )
-from optimization.objectives import ObjectiveIdentifier
+from lumo.optimization.objectives import ObjectiveIdentifier
 
 
 CONTRACT = "production-contract-a"

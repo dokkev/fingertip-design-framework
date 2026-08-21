@@ -7,8 +7,8 @@ import math
 
 import pytest
 
-from finger import Fingertip, FingertipParameters
-from optimization import (
+from lumo.finger import Fingertip, FingertipParameters
+from lumo.optimization.design_space import (
     DesignSpace,
     DesignVariable,
     OPTIMIZABLE_PARAMETER_NAMES,

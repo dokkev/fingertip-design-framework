@@ -205,13 +205,13 @@ def _six_volumes(vertices: np.ndarray, tetrahedra: np.ndarray) -> np.ndarray:
 
 
 def _prepare_case() -> _PreparedCase:
-    from contact import make_outer_compliant_surface
-    from physics import prepare_fingertip_mesh
-    from mesh.volume.mesh import generate_volume_mesh
-    from mesh.volume.contracts import volume_mesh_settings_for_tier
-    from finger.fingertip_geometry import FingertipModel
-    from finger.fingertip_parameters import FingertipParameters
-    from finger.extrusion import build_fingertip_solid
+    from lumo.contact import make_outer_compliant_surface
+    from lumo.physics import prepare_fingertip_mesh
+    from lumo.mesh.volume.mesh import generate_volume_mesh
+    from lumo.mesh.volume.contracts import volume_mesh_settings_for_tier
+    from lumo.finger.fingertip_geometry import FingertipModel
+    from lumo.finger.fingertip_parameters import FingertipParameters
+    from lumo.finger.extrusion import build_fingertip_solid
 
     model = FingertipModel(
         FingertipParameters(
@@ -235,19 +235,19 @@ def _prepare_case() -> _PreparedCase:
 
 
 def _run_case(case: _PreparedCase, config: SweepConfig, device: str) -> _RunBundle:
-    from contact import (
+    from lumo.contact import (
         FirstContactSettings,
         canonical_sphere_alignment,
         find_first_contact,
         intersects,
     )
-    from physics import (
+    from lumo.physics import (
         IndentationSettings,
         NewtonSettings,
         RigidIndenter3D,
         solve_fingertip_indentation,
     )
-    from mesh import make_sphere_mesh
+    from lumo.mesh import make_sphere_mesh
 
     record = _base_record(config, device)
     started = time.perf_counter()

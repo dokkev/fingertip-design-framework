@@ -6,8 +6,8 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from mesh.io.obj import save_obj
-from mesh.rigid.object import make_sphere_mesh
+from lumo.mesh.io.obj import save_obj
+from lumo.mesh.rigid.object import make_sphere_mesh
 
 
 def _default_sphere_path(radius_mm: float, subdivisions: int) -> Path:

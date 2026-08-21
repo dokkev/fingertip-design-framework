@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from mesh.rigid.object import (
+from lumo.mesh.rigid.object import (
     RigidObjectMesh,
     make_box_mesh,
     make_cube_mesh,

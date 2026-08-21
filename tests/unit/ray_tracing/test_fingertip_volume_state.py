@@ -7,11 +7,11 @@ import pytest
 
 pytest.importorskip("gmsh")
 
-from mesh import FingertipVolumeState, volume_mesh_settings_for_tier
-from mesh.rigid.carrier import make_distal_phalanx_mesh
-from mesh.volume.mesh import generate_volume_mesh
-from finger import Fingertip
-from ray_tracing.optical_mechanics import build_fingertip_volume_state_geometry
+from lumo.mesh import FingertipVolumeState, volume_mesh_settings_for_tier
+from lumo.mesh.rigid.carrier import make_distal_phalanx_mesh
+from lumo.mesh.volume.mesh import generate_volume_mesh
+from lumo.finger import Fingertip
+from lumo.ray_tracing.optical_mechanics import build_fingertip_volume_state_geometry
 
 
 def _relabel_with_surface_nodes_outside_the_canonical_prefix(volume_mesh):

@@ -14,6 +14,8 @@ python -m pip install -e ".[mesh,physics,ax,test]"
 
 `mesh` supplies Gmsh, `physics` supplies Newton/Warp, and `ax` supplies Ax
 1.3.1. CUDA, OptiX, and GPU drivers are externally managed.
+The editable install exposes the sole framework namespace from `lumo/`;
+repository scripts do not insert the checkout into `sys.path`.
 
 ## Focused tests
 
@@ -111,7 +113,7 @@ evaluated separately.
 
 ## Newton viewer helpers
 
-Interactive Newton viewer support is kept in `physics.newton.viewer` for debugging.
+Interactive Newton viewer support is kept in `lumo.physics.newton.viewer` for debugging.
 It is intentionally not a general plotting framework. Production evaluation
 does not open a viewer or alter solver state for display.
 
@@ -126,8 +128,8 @@ python scripts/assets/prepare_object_mesh.py \
 ```
 
 The default output is under `assets/objects/`. Runtime code can load one
-asset with `mesh.load_obj()` or load all top-level OBJ files in a directory
-with `mesh.load_obj_directory()`. The loader requires an explicit
+asset with `lumo.mesh.load_obj()` or load all top-level OBJ files in a directory
+with `lumo.mesh.load_obj_directory()`. The loader requires an explicit
 `scale_mm_per_unit` and validates the neutral closed rigid-mesh contract.
 
 ## Generated artifacts

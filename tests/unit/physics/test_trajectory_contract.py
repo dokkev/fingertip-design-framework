@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from physics import CheckpointStep, checkpoint_step_schedule
+from lumo.physics import CheckpointStep, checkpoint_step_schedule
 
 
 def test_checkpoint_schedule_lands_exactly_and_respects_increment() -> None:

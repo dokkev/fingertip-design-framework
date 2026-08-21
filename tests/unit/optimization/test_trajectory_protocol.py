@@ -6,12 +6,12 @@ import sys
 import numpy as np
 import pytest
 
-from optimization.objectives import (
+from lumo.optimization.objectives import (
     TrajectoryObservation,
     compute_trajectory_objective,
     normalized_field_distance,
 )
-from optimization.protocol import DEFAULT_TRAJECTORY_PROTOCOL, TrajectoryEvaluationProtocol
+from lumo.optimization.protocol import DEFAULT_TRAJECTORY_PROTOCOL, TrajectoryEvaluationProtocol
 
 
 def test_default_protocol_counts_and_absolute_depths() -> None:
@@ -102,7 +102,7 @@ def test_one_radius_has_zero_radius_nuisance_term() -> None:
 def test_optimization_import_does_not_initialize_heavy_runtimes() -> None:
     code = """
 import sys
-import optimization
+import lumo.optimization
 assert 'newton' not in sys.modules
 assert 'warp' not in sys.modules
 assert 'cupy' not in sys.modules

@@ -6,10 +6,10 @@ from types import SimpleNamespace
 
 import pytest
 
-import mesh.volume.mesh as volume_mesh_module
-from mesh.volume.contracts import volume_mesh_settings_for_tier
-from mesh.volume.mesh import VolumeMeshDependencyError, VolumeMeshingError
-from finger import Fingertip
+import lumo.mesh.volume.mesh as volume_mesh_module
+from lumo.mesh.volume.contracts import volume_mesh_settings_for_tier
+from lumo.mesh.volume.mesh import VolumeMeshDependencyError, VolumeMeshingError
+from lumo.finger import Fingertip
 
 
 def _failed_gmsh() -> SimpleNamespace:

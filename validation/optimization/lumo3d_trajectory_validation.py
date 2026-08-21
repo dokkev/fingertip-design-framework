@@ -10,11 +10,11 @@ from typing import Any, Mapping
 
 import numpy as np
 
-from finger import FingertipParameters
-from optimization.objectives import normalized_field_distance
-from optimization.protocol import DEFAULT_TRAJECTORY_PROTOCOL, TrajectoryEvaluationProtocol
+from lumo.finger import FingertipParameters
+from lumo.optimization.objectives import normalized_field_distance
+from lumo.optimization.protocol import DEFAULT_TRAJECTORY_PROTOCOL, TrajectoryEvaluationProtocol
 from validation.physics.multi_location_sphere_contact import run_multi_location_sphere_contact
-from optimization.evaluator import Lumo3DTrajectoryEvaluator
+from lumo.optimization.evaluator import Lumo3DTrajectoryEvaluator
 from validation.reference.lumo3d_fixed_state_oracle import FixedStateLumo3DOracle
 
 
@@ -467,16 +467,16 @@ def run_validation(output: str | Path, *, device: str = "cuda:0") -> dict[str, A
         "objective_pathology": objective_pathology,
         "code_cleanup": {
             "files_simplified": [
-                "physics/trajectory/indentation.py",
-                "physics/newton/vbd.py",
-                "optimization/__init__.py",
+                "lumo/physics/trajectory/indentation.py",
+                "lumo/physics/newton/vbd.py",
+                "lumo/optimization/__init__.py",
             ],
             "modules_added": [
-                "optimization/protocol.py",
+                "lumo/optimization/protocol.py",
                 "lumo/mechanics_contract.py",
-                "optimization/objectives.py",
-                "optimization/evaluator.py",
-                "optimization/deformed_state_artifact.py",
+                "lumo/optimization/objectives.py",
+                "lumo/optimization/evaluator.py",
+                "lumo/optimization/deformed_state_artifact.py",
             ],
             "duplicate_constants_removed_from_active_path": True,
             "legacy_modules_retained": {
@@ -486,8 +486,8 @@ def run_validation(output: str | Path, *, device: str = "cuda:0") -> dict[str, A
                 "validation/optimization/lumo3d_trajectory_evaluator.py",
                 "validation/optimization/lumo3d_common.py",
                 "validation/physics/deformed_state_artifact.py",
-                "optimization.scenarios",
-                "optimization.study",
+                "lumo.optimization.scenarios",
+                "lumo.optimization.study",
                 "case",
                 "fem",
                 "examples",

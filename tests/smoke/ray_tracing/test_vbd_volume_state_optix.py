@@ -12,22 +12,22 @@ pytest.importorskip("cuda")
 
 import warp as wp
 
-from mesh.rigid.carrier import make_distal_phalanx_mesh
-from mesh.volume.mesh import generate_volume_mesh
-from mesh.volume.contracts import volume_mesh_settings_for_tier
-from physics import (
+from lumo.mesh.rigid.carrier import make_distal_phalanx_mesh
+from lumo.mesh.volume.mesh import generate_volume_mesh
+from lumo.mesh.volume.contracts import volume_mesh_settings_for_tier
+from lumo.physics import (
     NewtonSettings,
     make_fingertip_volume_state,
     prepare_fingertip_mesh,
 )
-from physics.newton.solve import solve
-from finger import Fingertip
-from ray_tracing.optical_mechanics import (
+from lumo.physics.newton.solve import solve
+from lumo.finger import Fingertip
+from lumo.ray_tracing.optical_mechanics import (
     Transport3DSettings,
     build_fingertip_volume_state_geometry,
     trace_geometry,
 )
-from ray_tracing.optical_mechanics.optix_backend import create_runtime
+from lumo.ray_tracing.optical_mechanics.optix_backend import create_runtime
 
 
 @pytest.mark.smoke

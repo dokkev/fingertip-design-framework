@@ -5,17 +5,17 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from physics import (
+from lumo.physics import (
     IndentationResult,
     IndentationSettings,
     NewtonSettings,
     NewtonResult,
     RigidIndenter3D,
 )
-from physics.trajectory.fingertip import PreparedFingertipMesh
-from physics.contracts.types import TetMeshData
-from physics.trajectory.indentation import _validate_support_constraints
-from mesh.rigid.object import RigidPose3D, make_cube_mesh
+from lumo.physics.trajectory.fingertip_adapter import PreparedFingertipMesh
+from lumo.physics.contracts.types import TetMeshData
+from lumo.physics.trajectory.indentation import _validate_support_constraints
+from lumo.mesh.rigid.object import RigidPose3D, make_cube_mesh
 
 
 def test_pose_and_direction_are_normalized_without_solver_imports() -> None:
