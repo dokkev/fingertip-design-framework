@@ -10,6 +10,7 @@ from dataclasses import replace
 
 from lumo.optimization.adapters.ax import (
     AxSettings,
+    ax_client_snapshot,
     run_ax_optimization,
 )
 from lumo.optimization.evaluation_registry import EvaluationRegistry
@@ -19,14 +20,12 @@ from lumo.optimization.design_space import (
     PRODUCTION_NOMINAL_VOID_HEIGHT_MM,
     PRODUCTION_SEARCH_BOUNDS,
 )
-from lumo.optimization.objectives import ObjectiveIdentifier
+from lumo.optimization.objectives import TRAJECTORY_SEPARATION_OBJECTIVE
 from lumo.finger import Fingertip, FingertipParameters
 from lumo.simulation import LUMO3D_OBSERVATION_LEVEL
 
 
-CONTACT_STATE_SEPARATION_OBJECTIVE = ObjectiveIdentifier(
-    "contact_state_separation", 1
-)
+OBJECTIVE = TRAJECTORY_SEPARATION_OBJECTIVE
 
 
 class _SyntheticEvaluator:
@@ -53,7 +52,7 @@ class _SyntheticEvaluator:
             status="success",
             objective_value=score,
             diagnostics={
-                "objective_name": CONTACT_STATE_SEPARATION_OBJECTIVE.serialized_name,
+                "objective_name": OBJECTIVE.serialized_name,
                 "observation_level": LUMO3D_OBSERVATION_LEVEL,
             },
         )
@@ -82,7 +81,10 @@ def run_lumo3d_ax_smoke(output_dir: str | Path) -> dict[str, Any]:
             for spec in PRODUCTION_SEARCH_BOUNDS
         ),
     )
-    contract_id = "lumo3d-ax-smoke-v1"
+    contract_id = (
+        "lumo3d-ax-smoke-v1:"
+        f"{design_space.parameterization_version}"
+    )
     evaluator = _SyntheticEvaluator()
     registry_path = output / "registry.json"
     suffix = 0
@@ -90,6 +92,11 @@ def run_lumo3d_ax_smoke(output_dir: str | Path) -> dict[str, Any]:
         suffix += 1
         registry_path = output / f"registry.rerun-{suffix}.json"
     registry = EvaluationRegistry(registry_path)
+    latest_client: list[Any] = []
+
+    def persist(client: Any, _records: tuple[Any, ...]) -> None:
+        latest_client[:] = [client]
+
     result = run_ax_optimization(
         design_space,
         evaluator,
@@ -97,20 +104,23 @@ def run_lumo3d_ax_smoke(output_dir: str | Path) -> dict[str, Any]:
             initialization_trials=1,
             search_trials=1,
             seed=20260819,
-            objective=CONTACT_STATE_SEPARATION_OBJECTIVE,
+            objective=OBJECTIVE,
         ),
         evaluation_registry=registry,
         evaluation_contract_id=contract_id,
         campaign_id="lumo3d-ax-smoke",
         result_artifact_path=str(output / "checkpoint.json"),
+        on_record=persist,
     )
     phases = [record.phase for record in result.records]
     statuses = [record.status for record in result.records]
-    if phases != ["nominal", "initialization", "search"]:
+    if phases[:2] != ["nominal", "initialization"] or phases[-1] != "search":
         raise RuntimeError(f"unexpected Ax generation phases: {phases!r}")
-    if statuses != ["success", "success", "success"]:
+    if statuses[0] != "success" or statuses[1] != "success" or statuses[-1] != "success":
         raise RuntimeError(f"unexpected Ax smoke statuses: {statuses!r}")
-    if result.objective_name != CONTACT_STATE_SEPARATION_OBJECTIVE.serialized_name:
+    if result.feasible_proposal_count != 2:
+        raise RuntimeError("Ax smoke did not count only feasible proposals")
+    if result.objective_name != OBJECTIVE.serialized_name:
         raise RuntimeError("Ax smoke objective name did not survive orchestration")
     if result.best_record is None or result.best_record.evaluation is None:
         raise RuntimeError("Ax smoke did not retain a successful best record")
@@ -126,6 +136,8 @@ def run_lumo3d_ax_smoke(output_dir: str | Path) -> dict[str, Any]:
         "phases": phases,
         "statuses": statuses,
         "ax_proposal_count": result.ax_proposal_count,
+        "feasible_proposal_count": result.feasible_proposal_count,
+        "feasibility_rejection_count": result.feasibility_rejection_count,
         "new_evaluation_count": result.new_evaluation_count,
         "objective_values": [
             float(record.evaluation.objective_value)
@@ -138,7 +150,17 @@ def run_lumo3d_ax_smoke(output_dir: str | Path) -> dict[str, Any]:
         "fe_backend_invoked": False,
         "optix_backend_invoked": False,
         "observation_level": LUMO3D_OBSERVATION_LEVEL,
+        "parameterization_version": design_space.parameterization_version,
     }
+    if latest_client:
+        (output / "ax_client.json").write_text(
+            json.dumps(
+                ax_client_snapshot(latest_client[0], design_space),
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n"
+        )
     (output / "summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
     return summary
 

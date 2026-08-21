@@ -16,7 +16,12 @@ from lumo.optimization.adapters.ax import (
     create_ax_client,
     run_ax_optimization,
 )
-from lumo.optimization.design_space import DesignSpace, DesignVariable, PRODUCTION_SEARCH_BOUNDS
+from lumo.optimization.design_space import (
+    DesignSpace,
+    DesignVariable,
+    LATENT_PARAMETER_NAMES,
+    PRODUCTION_SEARCH_BOUNDS,
+)
 from lumo.optimization.evaluation_registry import EvaluationRegistry
 from lumo.optimization.objectives import ObjectiveIdentifier
 from lumo.ray_tracing.optical_mechanics import Transport3DDependencyError
@@ -97,14 +102,8 @@ class _ClientDouble:
 
 
 def _candidate(value: float) -> dict[str, float]:
-    return {
-        "flat_pad_height": value,
-        "semielliptical_pad_height": 9.0,
-        "stem_width": 7.6,
-        "stem_height": 6.0,
-        "void_width": 1.0,
-        "void_height": 0.25,
-    }
+    parameters = FingertipParameters(flat_pad_height=value, void_height=0.25)
+    return _space().encode(parameters)
 
 
 def test_create_ax_client_translates_all_six_active_morphology_variables() -> None:
@@ -112,14 +111,7 @@ def test_create_ax_client_translates_all_six_active_morphology_variables() -> No
         _space(),
         AxSettings(initialization_trials=1, search_trials=1, seed=7),
     )
-    assert set(client._experiment.parameters.keys()) == {
-        "flat_pad_height",
-        "semielliptical_pad_height",
-        "stem_width",
-        "stem_height",
-        "void_width",
-        "void_height",
-    }
+    assert set(client._experiment.parameters.keys()) == set(LATENT_PARAMETER_NAMES)
 
 
 @pytest.mark.parametrize("value", (float("nan"), float("inf"), float("-inf")))
@@ -156,13 +148,80 @@ def test_run_ax_optimization_evaluates_morphology_without_mechanics_or_optics(
     assert all(record.status == "success" for record in result.records)
 
 
+def test_infeasible_latent_proposal_is_abandoned_and_resampled(monkeypatch) -> None:
+    invalid = {name: 0.0 for name in LATENT_PARAMETER_NAMES}
+    client = _ClientDouble([invalid, _candidate(5.5)])
+    evaluator = _Evaluator()
+    monkeypatch.setattr(ax_adapter, "create_ax_client", lambda *_: client)
+
+    result = run_ax_optimization(
+        _space(),
+        evaluator,
+        AxSettings(
+            initialization_trials=1,
+            search_trials=1,
+            seed=7,
+            objective=TEST_OBJECTIVE,
+        ),
+        max_feasibility_resamples=1,
+    )
+
+    assert result.status == "COMPLETE"
+    assert result.ax_proposal_count == 2
+    assert result.feasible_proposal_count == 1
+    assert result.feasibility_rejection_count == 1
+    assert result.feasibility_rejection_counts["minimum_silicone_thickness"] == 1
+    assert result.records[1].status == "feasibility_rejected"
+    assert result.records[1].feasibility_constraint == "minimum_silicone_thickness"
+    assert client.trials[1].status == "ABANDONED"
+    assert len(evaluator.calls) == 2
+
+
+def test_feasibility_generation_exhaustion_does_not_reach_evaluator(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    invalid = {name: 0.0 for name in LATENT_PARAMETER_NAMES}
+    client = _ClientDouble([invalid])
+    evaluator = _Evaluator()
+    registry = EvaluationRegistry(tmp_path / "registry.json")
+    monkeypatch.setattr(ax_adapter, "create_ax_client", lambda *_: client)
+
+    result = run_ax_optimization(
+        _space(),
+        evaluator,
+        AxSettings(
+            initialization_trials=1,
+            search_trials=1,
+            seed=7,
+            objective=TEST_OBJECTIVE,
+        ),
+        evaluation_registry=registry,
+        evaluation_contract_id="feasibility-exhaustion-v1",
+        campaign_id="feasibility-exhaustion-campaign",
+        max_feasibility_resamples=0,
+    )
+
+    assert result.status == "feasible_generation_exhausted"
+    assert result.feasibility_rejection_count == 1
+    assert len(evaluator.calls) == 1  # nominal only
+    assert len(registry.records_for_contract("feasibility-exhaustion-v1")) == 1
+    assert client.trials[1].status == "ABANDONED"
+
+
 class _PhysicsDependencyEvaluator:
     def evaluate(self, parameters):
         raise PhysicsDependencyError("Warp runtime unavailable")
 
 
 class _CandidateFailureEvaluator:
+    def __init__(self) -> None:
+        self.calls = 0
+
     def evaluate(self, parameters):
+        self.calls += 1
+        if self.calls == 1:
+            return _Evaluation("success", 0.0, {})
         return _Evaluation(
             status="mechanics_failure",
             objective_value=None,
@@ -217,12 +276,19 @@ def test_candidate_failure_is_registered_in_real_evaluation_registry(monkeypatch
         ),
     )
 
-    assert all(record.status == "mechanics_failure" for record in result.records)
+    assert [record.status for record in result.records] == [
+        "success",
+        "mechanics_failure",
+    ]
     stored = registry.records_for_contract("candidate-contact-test-v1")
     assert len(stored) == 2
-    assert all(record.status == "mechanics_failure" for record in stored)
+    assert [record.status for record in stored] == [
+        "success",
+        "mechanics_failure",
+    ]
     assert registered_counts == [1, 2]
-    assert all(trial.status == "FAILED" for trial in client.trials.values())
+    assert client.trials[0].status == "COMPLETED"
+    assert client.trials[1].status == "FAILED"
     assert all(trial.status != "ABANDONED" for trial in client.trials.values())
 
 

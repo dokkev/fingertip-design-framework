@@ -12,6 +12,7 @@ pytest.importorskip("optix")
 pytest.importorskip("cuda.bindings.nvrtc")
 
 import scripts.optimization.run_bo as run_bo
+from lumo.optimization.evaluation_registry import REGISTRY_SCHEMA_VERSION
 
 
 @pytest.mark.smoke
@@ -28,6 +29,8 @@ def test_one_trial_uses_the_real_bo_campaign_boundary(tmp_path) -> None:
     assert config["campaign_mode"] == "smoke"
     assert config["trajectory_protocol"] == run_bo.SMOKE_PROTOCOL.to_dict()
     assert summary["ax_proposal_count"] == 1
-    assert summary["new_evaluation_count"] >= 1
-    assert summary["status"] in {"COMPLETE", "proposal_budget_exhausted"}
-    assert registry["schema_version"] == 2
+    assert summary["new_evaluation_count"] >= 2
+    assert summary["status"] == "PASS"
+    assert summary["ax_status"] == "COMPLETE"
+    assert summary["feasible_proposal_count"] >= 1
+    assert registry["schema_version"] == REGISTRY_SCHEMA_VERSION

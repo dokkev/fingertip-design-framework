@@ -36,6 +36,7 @@ from lumo.ray_tracing.optical_mechanics import (
 )
 from lumo.ray_tracing.optical_mechanics.result import Transport3DResult
 from lumo.optimization.design_space import (
+    FEASIBLE_PARAMETERIZATION_VERSION,
     OPTIMIZABLE_PARAMETER_NAMES,
 )
 from lumo.mechanics_contract import (
@@ -301,6 +302,11 @@ class Lumo3DTrajectoryEvaluator:
             fixed_parameters=self.fixed_parameters,
             device=self.device,
         )
+
+    @property
+    def objective_identifier(self):
+        """Return the objective identity owned by this evaluator."""
+        return TRAJECTORY_SEPARATION_OBJECTIVE
 
     def _domain_failure(self, radius_mm: float) -> str | None:
         clearance = CURRENT_CELL_HALF_LENGTH_MM - float(radius_mm)
@@ -586,6 +592,7 @@ def trajectory_evaluation_contract_id(
             "representative_cell_half_length_mm": CURRENT_CELL_HALF_LENGTH_MM,
             "volume_mesh": asdict(volume_mesh_settings_for_tier("search")),
             "fixed_fingertip_inputs": _fixed_fingertip_inputs(fixed_parameters),
+            "parameterization_version": FEASIBLE_PARAMETERIZATION_VERSION,
         },
         "transport": asdict(optical_settings),
         "led": {

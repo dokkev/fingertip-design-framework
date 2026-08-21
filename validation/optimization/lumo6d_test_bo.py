@@ -29,18 +29,20 @@ from lumo.optimization.adapters.ax import (
     AxSettings,
     CampaignInfrastructureError,
     InfrastructureFailureKind,
+    ax_client_snapshot,
     create_ax_client,
     run_ax_optimization,
 )
 from lumo.optimization.design_space import (
     DesignSpace,
     DesignVariable,
+    FEASIBLE_PARAMETERIZATION_VERSION,
     OPTIMIZABLE_PARAMETER_NAMES,
     PRODUCTION_NOMINAL_VOID_HEIGHT_MM,
     PRODUCTION_LINEAR_CONSTRAINTS,
     PRODUCTION_SEARCH_BOUNDS,
 )
-from lumo.optimization.objectives import ObjectiveIdentifier
+from lumo.optimization.objectives import TRAJECTORY_SEPARATION_OBJECTIVE
 from lumo.physics import PhysicsDependencyError
 from lumo.optimization.evaluation_registry import EvaluationRegistry, REGISTRY_SCHEMA_VERSION
 from lumo.optimization.evaluator import (
@@ -54,9 +56,8 @@ from lumo.simulation import (
 )
 
 
-CONTACT_STATE_SEPARATION_OBJECTIVE = ObjectiveIdentifier(
-    "contact_state_separation", 1
-)
+OBJECTIVE = TRAJECTORY_SEPARATION_OBJECTIVE
+MAX_FEASIBILITY_RESAMPLES = 100
 
 
 SEED = 20260819
@@ -67,7 +68,8 @@ MAX_CONSECUTIVE_KNOWN_PROPOSALS = 20
 OUTPUT_DIRECTORY = Path("output/validation/optimization/lumo6d_test_bo")
 TRAJECTORY_EVALUATION_CONTRACT = {
     "schema": TRAJECTORY_EVALUATION_SCHEMA,
-    "objective": CONTACT_STATE_SEPARATION_OBJECTIVE.serialized_name,
+    "objective": OBJECTIVE.serialized_name,
+    "parameterization_version": FEASIBLE_PARAMETERIZATION_VERSION,
     "observation_level": LUMO3D_OBSERVATION_LEVEL,
     "optical_mode": "FULL_3D",
 }
@@ -227,6 +229,7 @@ def _status_contract(status: str) -> str:
         "optics_failure": "optics_failed",
         "mesh_failure": "geometry_rejected",
         "duplicate_skipped": "duplicate_skipped",
+        "feasibility_rejected": "feasibility_rejected",
     }.get(status, "infrastructure_failed")
 
 
@@ -235,11 +238,20 @@ def _trial_payload(
     design_space: DesignSpace,
     attempt_index: int | None,
 ) -> dict[str, Any]:
-    parameters = _parameter_values(record.parameters)
+    raw_parameters = dict(record.parameters)
+    latent_parameters = raw_parameters
+    parameters: dict[str, float | None] = {
+        name: None for name in OPTIMIZABLE_PARAMETER_NAMES
+    }
     candidate = None
     measures = None
     try:
-        candidate = design_space.decode(parameters)
+        if record.phase == "nominal":
+            candidate = design_space.from_physical_values(raw_parameters)
+            latent_parameters = design_space.encode(candidate)
+        else:
+            candidate = design_space.decode(latent_parameters)
+        parameters = design_space.physical_values(candidate)
         measures = silicone_thickness_measures(candidate)
     except Exception:
         pass
@@ -292,6 +304,7 @@ def _trial_payload(
         "status": status,
         "raw_status": record.status,
         **parameters,
+        "latent_parameters": latent_parameters,
         "total_pad_depth_mm": (
             None
             if candidate is None
@@ -307,6 +320,7 @@ def _trial_payload(
             status not in {
                 "geometry_rejected",
                 "domain_incompatible",
+                "feasibility_rejected",
                 "infrastructure_failed",
             }
             and candidate is not None
@@ -316,6 +330,7 @@ def _trial_payload(
             if status not in {
                 "geometry_rejected",
                 "domain_incompatible",
+                "feasibility_rejected",
                 "invalid_design",
             }
             else record.failure_message
@@ -375,11 +390,14 @@ def _pre_run_sanity(design_space: DesignSpace) -> dict[str, Any]:
             initialization_trials=SOBOL_TRIALS,
             search_trials=BO_TRIALS,
             seed=SEED,
-            objective=CONTACT_STATE_SEPARATION_OBJECTIVE,
+            objective=OBJECTIVE,
         ),
     )
     suggestions = client.get_next_trials(max_trials=SOBOL_TRIALS)
-    values = [dict(parameters) for parameters in suggestions.values()]
+    values = [
+        design_space.physical_values(design_space.decode(parameters))
+        for parameters in suggestions.values()
+    ]
     for trial_index in suggestions:
         client.mark_trial_abandoned(trial_index=trial_index)
     total_depths = [
@@ -663,8 +681,14 @@ def run_lumo6d_test_bo(output_dir: str | Path = OUTPUT_DIRECTORY) -> dict[str, A
             "search_trials": BO_TRIALS,
             "max_attempted_proposals": MAX_ATTEMPTED_TRIALS,
             "max_consecutive_known_proposals": MAX_CONSECUTIVE_KNOWN_PROPOSALS,
+            "max_feasibility_resamples": MAX_FEASIBILITY_RESAMPLES,
+            "parameterization_version": design_space.parameterization_version,
         },
         "active_variables": list(OPTIMIZABLE_PARAMETER_NAMES),
+        "latent_variables": [
+            variable.to_dict() for variable in design_space.search_variables
+        ],
+        "parameterization_version": design_space.parameterization_version,
         "numerical_envelopes": [spec.to_dict() for spec in PRODUCTION_SEARCH_BOUNDS],
         "linear_constraints": [
             constraint.expression for constraint in PRODUCTION_LINEAR_CONSTRAINTS
@@ -673,7 +697,8 @@ def run_lumo6d_test_bo(output_dir: str | Path = OUTPUT_DIRECTORY) -> dict[str, A
         "registry_schema_version": REGISTRY_SCHEMA_VERSION,
         "evaluation_contract": TRAJECTORY_EVALUATION_CONTRACT,
         "observation_level": LUMO3D_OBSERVATION_LEVEL,
-        "objective_name": CONTACT_STATE_SEPARATION_OBJECTIVE.serialized_name,
+        "objective_name": OBJECTIVE.serialIZED_NAME,
+        "objective_name": OBJECTIVE.serialized_name,
         "objective_direction": "maximize",
         "common_optical_grid": grid,
         "search_mechanics": search_mechanics,
@@ -743,7 +768,7 @@ def run_lumo6d_test_bo(output_dir: str | Path = OUTPUT_DIRECTORY) -> dict[str, A
             first_trial_index=0,
             first_campaign_id=output.name,
             result_artifact_path=str((output / "nominal.json").resolve()),
-            objective=CONTACT_STATE_SEPARATION_OBJECTIVE,
+            objective=OBJECTIVE,
             objective_value=float(nominal_evaluation.objective_value),
             failure_category=None,
             failure_message=None,
@@ -768,14 +793,17 @@ def run_lumo6d_test_bo(output_dir: str | Path = OUTPUT_DIRECTORY) -> dict[str, A
             state["updated_at"] = _now()
             _write_json(output / "trials.json", ordered)
             _persist_csv(output / "trials.csv", ordered)
-            _write_json(output / "ax_client.json", client._to_json_snapshot())
+            _write_json(
+                output / "ax_client.json",
+                ax_client_snapshot(client, design_space),
+            )
             _write_json(output / "checkpoint.json", state)
 
         settings = AxSettings(
             initialization_trials=SOBOL_TRIALS,
             search_trials=BO_TRIALS,
             seed=SEED,
-            objective=CONTACT_STATE_SEPARATION_OBJECTIVE,
+            objective=OBJECTIVE,
             max_consecutive_known_proposals=MAX_CONSECUTIVE_KNOWN_PROPOSALS,
         )
         result = run_ax_optimization(
@@ -789,6 +817,7 @@ def run_lumo6d_test_bo(output_dir: str | Path = OUTPUT_DIRECTORY) -> dict[str, A
             result_artifact_path=str((output / "checkpoint.json").resolve()),
             max_consecutive_known_proposals=MAX_CONSECUTIVE_KNOWN_PROPOSALS,
             max_proposals=MAX_ATTEMPTED_TRIALS,
+            max_feasibility_resamples=MAX_FEASIBILITY_RESAMPLES,
         )
         ordered = [records_by_trial[index] for index in sorted(records_by_trial)]
         _write_json(output / "trials.json", ordered)
@@ -811,6 +840,13 @@ def run_lumo6d_test_bo(output_dir: str | Path = OUTPUT_DIRECTORY) -> dict[str, A
             "status": status,
             "ax_status": result.status,
             "ax_proposal_count": result.ax_proposal_count,
+            "generation_attempt_count": result.generation_attempt_count,
+            "feasible_proposal_count": result.feasible_proposal_count,
+            "feasibility_rejection_count": result.feasibility_rejection_count,
+            "feasibility_rejection_counts": dict(
+                result.feasibility_rejection_counts
+            ),
+            "last_feasibility_rejection": result.last_feasibility_rejection,
             "successful_count": result.unique_success_count,
             "completed_at": _now(),
             "total_wall_time_seconds": time.perf_counter() - started,
@@ -835,7 +871,7 @@ def run_lumo6d_test_bo(output_dir: str | Path = OUTPUT_DIRECTORY) -> dict[str, A
             "nominal": nominal_payload,
             "attempted_trials": len(ordered),
             "diagnostics": diagnostics,
-            "objective_name": CONTACT_STATE_SEPARATION_OBJECTIVE.serialized_name,
+            "objective_name": OBJECTIVE.serialized_name,
             "objective_direction": "maximize",
             "contract_id": contract_id,
             "artifact_directory": str(output),

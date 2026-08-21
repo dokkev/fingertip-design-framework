@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 import math
 import time
@@ -13,11 +13,11 @@ from ax.api.client import Client
 from ax.api.configs import RangeParameterConfig
 
 from lumo.mesh.volume.mesh import VolumeMeshDependencyError
-from lumo.finger import InvalidFingertipParameters
 from lumo.physics import PhysicsDependencyError
 from lumo.ray_tracing.optical_mechanics import Transport3DDependencyError
 from lumo.optimization.design_space import (
     DesignSpace,
+    DesignSpaceFeasibilityError,
 )
 from lumo.optimization.evaluation_registry import (
     EvaluationRegistry,
@@ -109,6 +109,8 @@ class AxTrialRecord:
     duplicate_of_trial_index: int | None = None
     duplicate_of_campaign_id: str | None = None
     duplicate_of_artifact_path: str | None = None
+    feasibility_rejection: bool = False
+    feasibility_constraint: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -122,6 +124,8 @@ class AxTrialRecord:
         """Return the persisted scientific or optimizer-control status."""
         if self.duplicate_of_trial_index is not None:
             return "duplicate_skipped"
+        if self.feasibility_rejection:
+            return "feasibility_rejected"
         if self.evaluation is None:
             return "invalid_design"
         return self.evaluation.status
@@ -134,18 +138,33 @@ class AxRunResult:
     records: tuple[AxTrialRecord, ...]
     status: Literal[
         "COMPLETE",
+        "nominal_evaluation_failed",
         "optimizer_stalled_on_known_evaluations",
         "proposal_budget_exhausted",
+        "feasible_generation_exhausted",
     ] = "COMPLETE"
     consecutive_known_proposals: int = 0
     historical_success_count: int = 0
     historical_failure_count: int = 0
     objective: ObjectiveIdentifier = TRAJECTORY_SEPARATION_OBJECTIVE
+    generation_attempt_count: int = 0
+    feasibility_rejection_counts: Mapping[str, int] = field(default_factory=dict)
+    last_feasibility_rejection: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "records", tuple(self.records))
         if not isinstance(self.objective, ObjectiveIdentifier):
             raise TypeError("objective must be an ObjectiveIdentifier")
+        object.__setattr__(
+            self,
+            "feasibility_rejection_counts",
+            MappingProxyType(
+                {
+                    str(name): int(count)
+                    for name, count in self.feasibility_rejection_counts.items()
+                }
+            ),
+        )
 
     @property
     def objective_name(self) -> str:
@@ -153,8 +172,25 @@ class AxRunResult:
 
     @property
     def ax_proposal_count(self) -> int:
-        """Return only trials created by ``get_next_trials``."""
+        """Return all Ax generation attempts, including abandoned rejects."""
         return sum(record.phase != "nominal" for record in self.records)
+
+    @property
+    def feasible_proposal_count(self) -> int:
+        """Return generated proposals that reached evaluation."""
+        return sum(
+            record.phase != "nominal"
+            and not record.feasibility_rejection
+            and record.duplicate_of_trial_index is None
+            for record in self.records
+        )
+
+    @property
+    def feasibility_rejection_count(self) -> int:
+        return sum(
+            record.phase != "nominal" and record.feasibility_rejection
+            for record in self.records
+        )
 
     @property
     def duplicate_proposal_count(self) -> int:
@@ -165,7 +201,10 @@ class AxRunResult:
 
     @property
     def new_evaluation_count(self) -> int:
-        return sum(record.status != "duplicate_skipped" for record in self.records)
+        return sum(
+            record.status not in ("duplicate_skipped", "feasibility_rejected")
+            for record in self.records
+        )
 
     @property
     def unique_success_count(self) -> int:
@@ -174,7 +213,8 @@ class AxRunResult:
     @property
     def unique_failure_count(self) -> int:
         return sum(
-            record.status not in ("success", "duplicate_skipped")
+            record.status
+            not in ("success", "duplicate_skipped", "feasibility_rejected")
             for record in self.records
         )
 
@@ -205,19 +245,19 @@ def create_ax_client(design_space: DesignSpace, settings: AxSettings) -> Client:
 
     parameters = [
         RangeParameterConfig(
-            name=variable.name.value,
+            name=variable.name,
             bounds=(variable.lower, variable.upper),
             parameter_type="float",
         )
-        for variable in design_space.active_variables
+        for variable in design_space.search_variables
     ]
     client = Client(random_seed=settings.seed)
     client.configure_experiment(
         parameters=parameters,
-        parameter_constraints=tuple(
-            constraint.expression
-            for constraint in design_space.linear_constraints
-        ),
+        # Physical constraints are enforced by the latent parameterization.
+        # Sending their physical names to Ax would be both redundant and
+        # incorrect because Ax only knows the normalized latent variables.
+        parameter_constraints=(),
     )
     client.configure_optimization(objective=settings.objective_name)
     client.configure_generation_strategy(
@@ -228,6 +268,19 @@ def create_ax_client(design_space: DesignSpace, settings: AxSettings) -> Client:
         allow_exceeding_initialization_budget=False,
     )
     return client
+
+
+def ax_client_snapshot(client: Client, design_space: DesignSpace) -> dict[str, object]:
+    """Persist Ax state together with the LUMO latent-space contract."""
+    if not isinstance(design_space, DesignSpace):
+        raise TypeError("design_space must be DesignSpace")
+    snapshot = client._to_json_snapshot()
+    return {
+        "schema": "lumo-ax-client-snapshot-v1",
+        "parameterization_version": design_space.parameterization_version,
+        "design_space": design_space.to_dict(),
+        "ax": snapshot,
+    }
 
 
 def _failure_message(evaluation: object) -> str:
@@ -304,6 +357,7 @@ def _failure_scenario(evaluation: object | None) -> str | None:
 def _bootstrap_historical_registry(
     client: Client,
     registry: EvaluationRegistry,
+    design_space: DesignSpace,
     contract_id: str,
     objective_name: str,
 ) -> tuple[int, int]:
@@ -311,8 +365,11 @@ def _bootstrap_historical_registry(
     success_count = 0
     failure_count = 0
     for position, record in enumerate(registry.records_for_contract(contract_id)):
+        latent = design_space.encode(
+            design_space.from_physical_values(record.morphology)
+        )
         trial_index = client.attach_trial(
-            parameters=dict(record.morphology),
+            parameters=latent,
             arm_name=f"historical-registry-{position}",
         )
         if record.status == "success":
@@ -332,31 +389,40 @@ def _bootstrap_historical_registry(
     return success_count, failure_count
 
 
+def _feasibility_rejection_record(
+    client: Client,
+    trial_index: int,
+    phase: AxTrialPhase,
+    candidate: Mapping[str, float],
+    rejection: DesignSpaceFeasibilityError,
+) -> AxTrialRecord:
+    """Abandon a latent proposal without recording it as a morphology result."""
+    client.mark_trial_abandoned(
+        trial_index=trial_index,
+    )
+    return AxTrialRecord(
+        trial_index=trial_index,
+        phase=phase,
+        parameters=dict(candidate),
+        evaluation=None,
+        failure_message=f"{rejection.constraint}: {rejection}",
+        feasibility_rejection=True,
+        feasibility_constraint=rejection.constraint,
+    )
+
+
 def _evaluate_trial(
     client: Client,
     evaluator: object,
-    design_space: DesignSpace,
     trial_index: int,
     phase: AxTrialPhase,
     candidate: Mapping[str, float],
     objective_name: str,
+    decoded: object,
 ) -> AxTrialRecord:
-    """Decode, evaluate, and report one already-created Ax trial."""
+    """Evaluate one already-decoded feasible morphology."""
     parameters = dict(candidate)
     try:
-        try:
-            decoded = design_space.decode(parameters)
-        except InvalidFingertipParameters as exc:
-            message = f"InvalidFingertipParameters: {exc}"
-            _mark_failed(client, trial_index, message)
-            return AxTrialRecord(
-                trial_index=trial_index,
-                phase=phase,
-                parameters=parameters,
-                evaluation=None,
-                failure_message=message,
-            )
-
         evaluation = evaluator.evaluate(decoded)  # type: ignore[attr-defined]
         if evaluation.status != "success":
             message = _failure_message(evaluation)
@@ -472,6 +538,7 @@ def run_ax_optimization(
     result_artifact_path: str | None = None,
     max_consecutive_known_proposals: int | None = None,
     max_proposals: int | None = None,
+    max_feasibility_resamples: int = 100,
 ) -> AxRunResult:
     """Evaluate nominal, initialization, and search attempts in order.
 
@@ -485,6 +552,14 @@ def run_ax_optimization(
         raise TypeError("evaluator must provide evaluate()")
     if not isinstance(settings, AxSettings):
         raise TypeError("settings must be AxSettings")
+    evaluator_objective = getattr(evaluator, "objective_identifier", None)
+    if (
+        evaluator_objective is not None
+        and evaluator_objective != settings.objective
+    ):
+        raise ValueError(
+            "Ax objective does not match the evaluator objective identifier"
+        )
     if max_consecutive_known_proposals is None:
         max_consecutive_known_proposals = settings.max_consecutive_known_proposals
     if evaluation_registry is not None:
@@ -506,6 +581,12 @@ def run_ax_optimization(
         or max_proposals < 1
     ):
         raise ValueError("max_proposals must be a positive integer or None")
+    if (
+        not isinstance(max_feasibility_resamples, int)
+        or isinstance(max_feasibility_resamples, bool)
+        or max_feasibility_resamples < 0
+    ):
+        raise ValueError("max_feasibility_resamples must be a non-negative integer")
 
     client = create_ax_client(design_space, settings)
     historical_success_count = 0
@@ -515,18 +596,22 @@ def run_ax_optimization(
             _bootstrap_historical_registry(
                 client,
                 evaluation_registry,
+                design_space,
                 evaluation_contract_id,  # type: ignore[arg-type]
                 settings.objective_name,
             )
         )
     records: list[AxTrialRecord] = []
+    last_feasibility_rejection: str | None = None
 
     def result(
         *,
         status: Literal[
             "COMPLETE",
+            "nominal_evaluation_failed",
             "optimizer_stalled_on_known_evaluations",
             "proposal_budget_exhausted",
+            "feasible_generation_exhausted",
         ] = "COMPLETE",
         consecutive_known_proposals: int = 0,
     ) -> AxRunResult:
@@ -537,18 +622,36 @@ def run_ax_optimization(
             historical_success_count=historical_success_count,
             historical_failure_count=historical_failure_count,
             objective=settings.objective,
+            generation_attempt_count=sum(
+                record.phase != "nominal" for record in records
+            ),
+            feasibility_rejection_counts={
+                constraint: sum(
+                    record.feasibility_rejection
+                    and record.feasibility_constraint == constraint
+                    for record in records
+                )
+                for constraint in {
+                    record.feasibility_constraint
+                    for record in records
+                    if record.feasibility_rejection
+                }
+            },
+            last_feasibility_rejection=last_feasibility_rejection,
         )
 
     def evaluate_and_record(
         trial_index: int,
         phase: AxTrialPhase,
         candidate: Mapping[str, float],
+        decoded: object,
     ) -> bool:
         parameters = dict(candidate)
+        physical_parameters = design_space.physical_values(decoded)  # type: ignore[arg-type]
         if evaluation_registry is not None:
             known = evaluation_registry.lookup(
                 evaluation_contract_id,  # type: ignore[arg-type]
-                parameters,
+                physical_parameters,
             )
             if known is not None:
                 record = _duplicate_record(
@@ -569,11 +672,11 @@ def run_ax_optimization(
         record = _evaluate_trial(
             client,
             evaluator,
-            design_space,
             trial_index,
             phase,
             candidate,
             settings.objective_name,
+            decoded,
         )
         record = replace(
             record,
@@ -587,7 +690,7 @@ def run_ax_optimization(
             evaluation = record.evaluation
             registry_record = evaluation_registry.register(
                 evaluation_contract_id,  # type: ignore[arg-type]
-                parameters,
+                physical_parameters,
                 status="invalid_design" if evaluation is None else evaluation.status,
                 first_trial_index=record.trial_index,
                 first_campaign_id=campaign_id,  # type: ignore[arg-type]
@@ -626,13 +729,7 @@ def run_ax_optimization(
                 on_record(client, tuple(records))
         return True
 
-    nominal_values = {
-        variable.name: getattr(
-            design_space.nominal_parameters,
-            variable.name,
-        )
-        for variable in design_space.active_variables
-    }
+    nominal_values = design_space.encode(design_space.nominal_parameters)
     # Leave the arm name to Ax. A historical bootstrap may already contain
     # this exact morphology under its historical arm name; forcing "nominal"
     # would make Ax reject the duplicate arm before the registry can abandon it.
@@ -641,14 +738,18 @@ def run_ax_optimization(
         nominal_trial,
         "nominal",
         nominal_values,
+        design_space.nominal_parameters,
     )
+
+    if not records or records[-1].status != "success":
+        return result(status="nominal_evaluation_failed")
 
     # Nominal is a manually attached baseline, not an Ax proposal. A cached
     # nominal therefore does not contribute to the generated-proposal stall
     # counter or duplicate-proposal budget.
     del nominal_is_new
     consecutive_known = 0
-    proposal_count = 0
+    feasible_proposal_count = 0
 
     # Ax owns the Sobol -> MBM transition. Failed/abandoned Sobol trials do
     # not satisfy Ax's initialization criterion, so keep requesting candidates
@@ -656,14 +757,35 @@ def run_ax_optimization(
     # requested search budget.
     search_evaluations = 0
     while True:
-        if max_proposals is not None and proposal_count >= max_proposals:
+        if max_proposals is not None and feasible_proposal_count >= max_proposals:
             return result(status="proposal_budget_exhausted")
-        proposal_count += 1
+        proposal_count = sum(record.phase != "nominal" for record in records) + 1
         trial_index, candidate, phase = _next_candidate(
             client,
             proposal_count,
         )
-        is_new = evaluate_and_record(trial_index, phase, candidate)
+        try:
+            decoded = design_space.decode(candidate)
+        except DesignSpaceFeasibilityError as exc:
+            record = _feasibility_rejection_record(
+                client,
+                trial_index,
+                phase,
+                candidate,
+                exc,
+            )
+            records.append(record)
+            last_feasibility_rejection = record.failure_message
+            if on_record is not None:
+                on_record(client, tuple(records))
+            if (
+                result().feasibility_rejection_count
+                > max_feasibility_resamples
+            ):
+                return result(status="feasible_generation_exhausted")
+            continue
+
+        is_new = evaluate_and_record(trial_index, phase, candidate, decoded)
         if not is_new:
             consecutive_known += 1
             if (
@@ -677,6 +799,7 @@ def run_ax_optimization(
             continue
 
         consecutive_known = 0
+        feasible_proposal_count += 1
         if (
             settings.search_trials == 0
             and phase == "initialization"
@@ -702,6 +825,7 @@ __all__ = [
     "AxSettings",
     "AxTrialPhase",
     "AxTrialRecord",
+    "ax_client_snapshot",
     "create_ax_client",
     "run_ax_optimization",
 ]

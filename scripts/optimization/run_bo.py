@@ -33,6 +33,7 @@ from lumo.ray_tracing.optical_mechanics.settings import Transport3DSettings
 from lumo.optimization.adapters.ax import (
     AxSettings,
     CampaignInfrastructureError,
+    ax_client_snapshot,
     run_ax_optimization,
 )
 from lumo.optimization.evaluation_registry import EvaluationRegistry
@@ -61,6 +62,7 @@ DEVICE = "cuda:0"
 SEED = 20260820
 INITIALIZATION_TRIALS = 1
 MAX_CONSECUTIVE_KNOWN_PROPOSALS = 20
+MAX_FEASIBILITY_RESAMPLES = 100
 DEFAULT_OUTPUT = Path("output/optimization/bo")
 
 USER_VISCOELASTIC = ViscoelasticParameters(
@@ -234,6 +236,9 @@ def _user_config_payload(
         "campaign_mode": campaign_mode,
         "nominal_parameters": asdict(USER_PARAMETERS),
         "search_bounds": _search_bounds_payload(search_bounds),
+        "parameterization_version": (
+            _design_space(USER_PARAMETERS, search_bounds).parameterization_version
+        ),
         "led": asdict(USER_LED),
         "optical_parameters": asdict(USER_PARAMETERS.optical),
         "trajectory_protocol": protocol.to_dict(),
@@ -252,6 +257,7 @@ def _user_config_payload(
             ),
             "max_proposals": trials,
             "max_consecutive_known_proposals": MAX_CONSECUTIVE_KNOWN_PROPOSALS,
+            "max_feasibility_resamples": MAX_FEASIBILITY_RESAMPLES,
             "trials_semantics": (
                 "number of Ax-generated proposals; the nominal baseline is "
                 "evaluated separately"
@@ -355,13 +361,25 @@ def _preflight_payload(
     }
 
 
-def _record_payload(record: Any) -> dict[str, Any]:
+def _record_payload(record: Any, design_space: DesignSpace) -> dict[str, Any]:
     evaluation = record.evaluation
+    physical_parameters: dict[str, float] | None = None
+    if not record.feasibility_rejection:
+        try:
+            physical_parameters = design_space.physical_values(
+                design_space.decode(record.parameters)
+            )
+        except Exception:
+            physical_parameters = None
     return {
         "trial_index": record.trial_index,
         "phase": record.phase,
         "parameters": dict(record.parameters),
+        "latent_parameters": dict(record.parameters),
+        "physical_parameters": physical_parameters,
         "status": record.status,
+        "feasibility_rejection": record.feasibility_rejection,
+        "feasibility_constraint": record.feasibility_constraint,
         "objective": (
             None
             if evaluation is None
@@ -431,6 +449,8 @@ def run_campaign(
         {
             "contract_id": evaluator.evaluation_contract_id,
             "evaluation_schema": TRAJECTORY_EVALUATION_SCHEMA,
+            "parameterization_version": design_space.parameterization_version,
+            "design_space": design_space.to_dict(),
             "output": str(root),
             "registry": str(selected_registry_path),
         }
@@ -440,8 +460,12 @@ def run_campaign(
     records: list[dict[str, Any]] = []
 
     def persist(_client: Any, observed: tuple[Any, ...]) -> None:
-        records[:] = [_record_payload(record) for record in observed]
+        records[:] = [_record_payload(record, design_space) for record in observed]
         _json_write(root / "trials.json", records)
+        _json_write(
+            root / "ax_client.json",
+            ax_client_snapshot(_client, design_space),
+        )
 
     settings = AxSettings(
         initialization_trials=INITIALIZATION_TRIALS,
@@ -460,6 +484,7 @@ def run_campaign(
             evaluation_contract_id=evaluator.evaluation_contract_id,
             campaign_id=root.name,
             max_proposals=trials,
+            max_feasibility_resamples=MAX_FEASIBILITY_RESAMPLES,
         )
     except CampaignInfrastructureError as exc:
         summary = {
@@ -473,6 +498,7 @@ def run_campaign(
 
     summary = {
         "status": result.status,
+        "ax_status": result.status,
         "objective_name": result.objective_name,
         "ax_proposal_count": result.ax_proposal_count,
         "new_evaluation_count": result.new_evaluation_count,
@@ -481,10 +507,28 @@ def run_campaign(
         "best_trial": (
             None
             if result.best_record is None
-            else _record_payload(result.best_record)
+            else _record_payload(result.best_record, design_space)
         ),
         "records": records,
+        "feasible_proposal_count": result.feasible_proposal_count,
+        "generation_attempt_count": result.generation_attempt_count,
+        "feasibility_rejection_count": result.feasibility_rejection_count,
+        "feasibility_rejection_counts": dict(result.feasibility_rejection_counts),
+        "last_feasibility_rejection": result.last_feasibility_rejection,
     }
+    nominal_success = any(
+        record.phase == "nominal" and record.status == "success"
+        for record in result.records
+    )
+    bo_success = any(
+        record.phase == "search" and record.status == "success"
+        for record in result.records
+    )
+    summary["status"] = (
+        "PASS"
+        if result.status == "COMPLETE" and nominal_success and (smoke or bo_success)
+        else "FAILED"
+    )
     _json_write(root / "summary.json", summary)
     return summary
 
@@ -541,7 +585,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"CAMPAIGN_ABORTED: {exc}", file=sys.stderr)
         return 2
     print(json.dumps(summary, indent=2, sort_keys=True, allow_nan=False))
-    return 0
+    return 0 if summary.get("status") == "PASS" else 2
 
 
 if __name__ == "__main__":

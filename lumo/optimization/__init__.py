@@ -7,7 +7,10 @@ surface.
 """
 from lumo.optimization.design_space import (
     DesignSpace,
+    DesignSpaceFeasibilityError,
     DesignVariable,
+    FEASIBLE_PARAMETERIZATION_VERSION,
+    LatentVariable,
     LinearConstraint,
     OptimizableParameterName,
     ParameterSpec,
@@ -24,8 +27,11 @@ from lumo.optimization.protocol import (
 __all__ = [
     "DEFAULT_TRAJECTORY_PROTOCOL",
     "DesignSpace",
+    "DesignSpaceFeasibilityError",
     "DesignVariable",
+    "FEASIBLE_PARAMETERIZATION_VERSION",
     "LinearConstraint",
+    "LatentVariable",
     "Lumo3DTrajectoryEvaluator",
     "OptimizableParameterName",
     "ParameterSpec",

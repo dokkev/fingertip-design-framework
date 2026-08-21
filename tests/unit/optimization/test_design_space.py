@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict
+from dataclasses import asdict, replace
 import math
 
 import pytest
@@ -13,6 +13,7 @@ from lumo.optimization.design_space import (
     DesignVariable,
     OPTIMIZABLE_PARAMETER_NAMES,
     PRODUCTION_SEARCH_BOUNDS,
+    LATENT_PARAMETER_NAMES,
 )
 
 
@@ -81,18 +82,21 @@ def test_decode_uses_independent_flat_and_semielliptical_heights() -> None:
         "void_width": 1.5,
         "void_height": 1.25,
     }
-    decoded = space.decode(values)
+    decoded = space.decode(space.encode(FingertipParameters(**values)))
     assert decoded.flat_pad_width == 30.0
     assert decoded.flat_pad_height == 6.25
     assert decoded.semielliptical_pad_height == 10.5
     assert decoded.flat_pad_height + decoded.semielliptical_pad_height == 16.75
     assert decoded.void_height == 1.25
     with pytest.raises(ValueError, match="missing"):
-        space.decode({name: value for name, value in values.items() if name != "void_width"})
+        latent = space.encode(FingertipParameters(**values))
+        space.decode({name: value for name, value in latent.items() if name != "latent_cutout_width"})
     with pytest.raises(ValueError, match="unknown"):
-        space.decode({**values, "flat_pad_width": 31.0})
-    with pytest.raises(ValueError, match="outside"):
-        space.decode({**values, "void_width": 10.1})
+        space.decode({**space.encode(FingertipParameters(**values)), "flat_pad_width": 31.0})
+    with pytest.raises(ValueError, match="latent bounds"):
+        invalid = space.encode(FingertipParameters(**values))
+        invalid["latent_cutout_width"] = 1.1
+        space.decode(invalid)
 
 
 def test_decode_preserves_fixed_geometry_and_representation_fields() -> None:
@@ -103,16 +107,16 @@ def test_decode_preserves_fixed_geometry_and_representation_fields() -> None:
         arc_resolution=64,
         void_height=0.25,
     )
-    decoded = _space(nominal).decode(
-        {
-            "flat_pad_height": 5.5,
-            "semielliptical_pad_height": 9.5,
-            "stem_width": 8.0,
-            "stem_height": 6.5,
-            "void_width": 1.25,
-            "void_height": 0.75,
-        }
+    physical = replace(
+        nominal,
+        flat_pad_height=5.5,
+        semielliptical_pad_height=9.5,
+        stem_width=8.0,
+        stem_height=6.5,
+        void_width=1.25,
+        void_height=0.75,
     )
+    decoded = _space(nominal).decode(_space(nominal).encode(physical))
     before = asdict(nominal)
     for name in (
         "link_thickness",
@@ -134,16 +138,28 @@ def test_corner_values_are_deterministic_for_six_variables() -> None:
 
 @pytest.mark.parametrize("void_height", (0.25, 1.5, 2.0))
 def test_void_height_decodes_into_authoritative_geometry(void_height: float) -> None:
-    parameters = _space().decode(
-        {
-            variable.name: (
-                void_height
-                if variable.name == "void_height"
-                else getattr(_space().nominal_parameters, variable.name)
-            )
-            for variable in _space().active_variables
-        }
+    physical = replace(
+        _space().nominal_parameters,
+        void_height=void_height,
     )
+    parameters = _space().decode(_space().encode(physical))
     solid = Fingertip(parameters).solid()
     assert parameters.void_height == void_height
     assert solid.parameters.void_height == void_height
+
+
+def test_latent_corners_are_feasible_or_explicitly_rejected() -> None:
+    space = _space()
+    assert space.parameterization_version == "feasible-morphology-v1"
+    assert tuple(variable.name for variable in space.search_variables) == LATENT_PARAMETER_NAMES
+    for point in (
+        {name: 0.0 for name in LATENT_PARAMETER_NAMES},
+        {name: 0.5 for name in LATENT_PARAMETER_NAMES},
+        {name: 1.0 for name in LATENT_PARAMETER_NAMES},
+    ):
+        try:
+            parameters = space.decode(point)
+        except ValueError:
+            continue
+        assert parameters.flat_pad_height + parameters.semielliptical_pad_height <= 30.0
+        assert parameters.stem_width + 2.0 * parameters.void_width <= 20.0
