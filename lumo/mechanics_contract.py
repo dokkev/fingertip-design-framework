@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass, field
 import math
 
 from lumo.contact import DEFAULT_FIRST_CONTACT_SETTINGS, FirstContactSettings
+from lumo.physics.contracts import VBDDeterminismMode
 
 
 PRESCRIBED_POSE_ERROR_METRIC_VERSION = "warp-float32-metre-target-v2"
@@ -24,6 +25,7 @@ class MechanicsContract:
     sphere_subdivisions: int = 3
     max_load_increment_mm: float = 0.05
     vbd_iterations: int = 10
+    deterministic_mode: VBDDeterminismMode = VBDDeterminismMode.RUN_TO_RUN
     dt_s: float = 1.0e-3
     soft_contact_margin_mm: float = 0.02
     soft_contact_ke: float = 1.0e3
@@ -40,6 +42,8 @@ class MechanicsContract:
     def __post_init__(self) -> None:
         if not isinstance(self.first_contact, FirstContactSettings):
             raise TypeError("first_contact must be FirstContactSettings")
+        if not isinstance(self.deterministic_mode, VBDDeterminismMode):
+            raise TypeError("deterministic_mode must be a VBDDeterminismMode")
         for name, value in (
             ("sphere_subdivisions", self.sphere_subdivisions),
             ("vbd_iterations", self.vbd_iterations),

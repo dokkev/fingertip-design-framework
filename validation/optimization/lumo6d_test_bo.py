@@ -51,6 +51,7 @@ from lumo.optimization.evaluator import (
     Lumo3DTrajectoryEvaluator,
     TRAJECTORY_EVALUATION_SCHEMA,
 )
+from lumo.optimization.runtime_identity import runtime_identity_for_device
 from lumo.simulation import (
     LUMO3D_OBSERVATION_LEVEL,
 )
@@ -563,9 +564,20 @@ def _plot_parameter_history(records: list[Mapping[str, Any]], plots: Path) -> No
     x = np.arange(1, len(records) + 1)
     for axis, name in zip(axes.flat, OPTIMIZABLE_PARAMETER_NAMES, strict=True):
         for phase, color, label in (("sobol", "#4C78A8", "Sobol"), ("bo", "#E15759", "BO")):
-            selected = [i for i, record in enumerate(records) if record.get("generation_method") == phase]
+            selected = [
+                i
+                for i, record in enumerate(records)
+                if record.get("generation_method") == phase
+                and record.get(name) is not None
+            ]
             if selected:
-                axis.scatter(x[selected], [records[i][name] for i in selected], color=color, s=24, label=label)
+                axis.scatter(
+                    x[selected],
+                    [float(records[i][name]) for i in selected],
+                    color=color,
+                    s=24,
+                    label=label,
+                )
         axis.set_ylabel(name.replace("_", " "))
         axis.grid(alpha=0.2)
     axes[-1, 0].set_xlabel("attempted Ax trial")
@@ -751,6 +763,9 @@ def run_lumo6d_test_bo(
     plots.mkdir(parents=True, exist_ok=True)
     started = time.perf_counter()
     design_space = _production_design_space()
+    runtime_identity = runtime_identity_for_device(execution.device)
+    if runtime_identity.get("status") != "available":
+        raise RuntimeError("GPU/runtime identity is unavailable")
     evaluator = Lumo3DTrajectoryEvaluator(
         output / "artifacts",
         protocol=USER_PROTOCOL,
@@ -761,6 +776,7 @@ def run_lumo6d_test_bo(
         led=USER_LED,
         fixed_parameters=USER_PARAMETERS,
         volume_mesh_settings=execution.volume_mesh,
+        runtime_identity=runtime_identity,
     )
     objective = evaluator.objective_identifier
     contract_id = evaluator.evaluation_contract_id

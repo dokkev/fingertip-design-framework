@@ -60,11 +60,25 @@ The smoke command is the recommended explicit gate before unattended BO runs.
 
 ```bash
 python -m validation.optimization.lumo3d_trajectory_validation \
+  --execution-config config/lumo_execution.yaml \
   --output output/validation/lumo3d_trajectory
 ```
 
 This evaluates the fixed current protocol: three semantic locations, two
 radii, and three absolute depths. It writes only under `output/`.
+
+To verify exact evaluator reproducibility across fresh Python/Warp processes,
+run the nominal 18-state gate three times:
+
+```bash
+python -m validation.optimization.lumo3d_repeatability \
+  --execution-config config/lumo_execution.yaml \
+  --output output/validation/optimization/lumo3d_repeatability
+```
+
+The gate compares mechanics artifact digests, contact-state fingerprints,
+optical field artifact digests, scalar transport diagnostics, and hexadecimal
+objective values. Any differing bit or incomplete state grid is a failure.
 
 ## Bounded 6D Test BO
 
@@ -108,10 +122,12 @@ conda run -n lit python -m scripts.optimization.run_bo_ideal \
 Without `--smoke`, the runner uses the authoritative 18-state production
 protocol. `--smoke` is the only route to the reduced two-state protocol. Both
 use the production evaluator, Ax adapter, and exact-contract evaluation
-registry. Pass `--registry PATH` to reuse exact results across output
-directories; contract IDs prevent reuse across different fixed inputs. A
-Git-tracked registry is rejected, and concurrent campaigns targeting the same
-registry are serialized with an exclusive advisory lock. A
+registry. External `--registry PATH` reuse is currently limited to smoke and
+validation runs. Production rejects external registry reuse until
+same-contract evaluator reproducibility is established; its campaign-local
+registry remains available for exact resume and in-campaign duplicate handling.
+A Git-tracked registry is rejected, and concurrent campaigns targeting the
+same registry are serialized with an exclusive advisory lock. A
 shared CUDA/OptiX/Gmsh/Newton prerequisite failure aborts before candidate
 registration; a morphology failure is recorded as a candidate result. Smoke
 defaults to one successful Sobol observation, no MBM observation, two total
@@ -165,7 +181,10 @@ conda run -n lit python -m validation.optimization.lumo3d_scientific_convergence
 ```
 
 The workflow evaluates five deterministic feasible morphologies. Newton uses
-the preserved displacement thresholds; mesh and optical objective sensitivity
+the preserved displacement thresholds. The production mechanics setting is
+100 VBD iterations with a 0.0125 mm load increment at 0.00025 s; its strict
+reference uses 160 iterations with a 0.00625 mm increment at 0.000125 s, so
+both retain the same 50 mm/s prescribed indentation rate. Mesh and optical objective sensitivity
 remain `INCONCLUSIVE` until evidence-backed thresholds are reviewed. The
 current mechanics artifacts do not expose an approved reaction-force metric,
 so mesh force is recorded as `unsupported`, never fabricated as zero. This is

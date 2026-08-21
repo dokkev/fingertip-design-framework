@@ -11,7 +11,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from ..contracts.types import NewtonResult, TetMeshData
+from ..contracts.types import NewtonResult, TetMeshData, VBDDeterminismMode
 
 
 class PhysicsDependencyError(RuntimeError):
@@ -39,6 +39,7 @@ class NewtonSettings:
     dt: float = 1.0 / 60.0
     steps: int = 1
     iterations: int = 5
+    deterministic_mode: VBDDeterminismMode = VBDDeterminismMode.RUN_TO_RUN
     gravity: float = -9.81
     density: float = 1.0e3
     k_mu: float = 1.0e5
@@ -49,6 +50,8 @@ class NewtonSettings:
     def __post_init__(self) -> None:
         if not isinstance(self.device, str) or not self.device:
             raise ValueError("device must be a non-empty device string")
+        if not isinstance(self.deterministic_mode, VBDDeterminismMode):
+            raise TypeError("deterministic_mode must be a VBDDeterminismMode")
         for name in ("steps", "iterations"):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int):

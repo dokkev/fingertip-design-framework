@@ -3,8 +3,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import StrEnum
 
 import numpy as np
+
+
+class VBDDeterminismMode(StrEnum):
+    """Supported Warp determinism contract for the Newton VBD backend."""
+
+    RUN_TO_RUN = "run_to_run"
 
 
 def _readonly_array(value: np.ndarray, *, dtype: np.dtype) -> np.ndarray:

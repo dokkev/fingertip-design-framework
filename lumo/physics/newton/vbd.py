@@ -13,7 +13,11 @@ from shapely.geometry import Point
 
 from lumo.physics.newton.solve import NewtonSettings, PhysicsDependencyError
 from lumo.physics.contracts.load import ParticleLoad
-from lumo.physics.contracts.types import NewtonResult, TetMeshData
+from lumo.physics.contracts.types import (
+    NewtonResult,
+    TetMeshData,
+    VBDDeterminismMode,
+)
 from lumo.physics.trajectory.fingertip_adapter import PreparedFingertipMesh
 from lumo.physics.trajectory.indentation import (
     CandidateMechanicsError,
@@ -38,6 +42,14 @@ if TYPE_CHECKING:
 # corresponding per-body lists skip kinematic bodies in Newton 1.4.
 _RIGID_BODY_PARTICLE_CONTACT_BUFFER_SIZE = 1024
 _RIGID_CONTACT_BUFFER_SIZE = 64
+
+
+def _warp_deterministic_mode(mode: VBDDeterminismMode) -> wp.DeterministicMode:
+    """Translate the neutral mechanics contract at the Warp boundary."""
+
+    if mode is VBDDeterminismMode.RUN_TO_RUN:
+        return wp.DeterministicMode.RUN_TO_RUN
+    raise ValueError(f"unsupported VBD determinism mode: {mode!r}")
 
 
 def _require_cuda_device(device_name: str):
@@ -271,6 +283,7 @@ def _build_vbd_context(mesh: TetMeshData, settings: NewtonSettings):
         model=model,
         iterations=settings.iterations,
         particle_enable_self_contact=False,
+        deterministic=_warp_deterministic_mode(settings.deterministic_mode),
         particle_enable_tile_solve=False,
     )
     state_in = model.state()
@@ -616,6 +629,9 @@ def _build_indentation_context(
         particle_enable_tile_solve=False,
         rigid_contact_hard=True,
         rigid_body_particle_contact_buffer_size=_RIGID_BODY_PARTICLE_CONTACT_BUFFER_SIZE,
+        deterministic=_warp_deterministic_mode(
+            mechanics_settings.deterministic_mode
+        ),
     )
     state_in = model.state()
     state_out = model.state()
@@ -1000,6 +1016,9 @@ def _solve_newton_vbd_indentation_path_with_schedule(
             )
             snapshot_diagnostics: dict[str, object] = {
                 "device": mechanics_settings.device,
+                "vbd_deterministic_mode": (
+                    mechanics_settings.deterministic_mode.value
+                ),
                 "full_surface_contact": True,
                 "contact_buffer_status": "not_applicable_for_kinematic_indenter",
                 "first_contact_normalized": first_contact is not None,

@@ -6,7 +6,7 @@
 # inspect this raw YAML mapping.
 
 # Version of this YAML schema, not the scientific objective or result schema.
-schema_version: 1
+schema_version: 2
 
 runtime:
   # CUDA device on which Newton/Warp and OptiX execute.
@@ -24,11 +24,13 @@ newton:
   # Number of icosphere subdivision rounds used for the rigid spherical indenter.
   sphere_subdivisions: 3
   # Largest post-contact indentation increment solved in one step, in millimetres.
-  max_load_increment_mm: 0.05
+  max_load_increment_mm: 0.0125
   # Number of VBD solver iterations executed for each mechanics step.
-  vbd_iterations: 10
+  vbd_iterations: 100
+  # Warp atomic ordering guarantee used by SolverVBD on the selected GPU architecture.
+  deterministic_mode: run_to_run
   # Mechanics integration timestep, in seconds.
-  dt_s: 1.0e-3
+  dt_s: 2.5e-4
   # Newton soft-contact activation margin, in millimetres.
   soft_contact_margin_mm: 0.02
   # Newton soft-contact elastic coefficient used by the current contact model.

@@ -12,6 +12,9 @@ import warp as wp
 
 from lumo.physics import NewtonSettings, TetMeshData
 from lumo.physics.newton.solve import solve
+from validation.physics.multi_location_sphere_contact import (
+    run_multi_location_sphere_contact,
+)
 
 
 @pytest.mark.smoke
@@ -75,3 +78,36 @@ def test_newton_vbd_deforms_tiny_tet_block_on_cuda() -> None:
         rtol=0.0,
     )
     assert np.max(np.linalg.norm(result.displacement[free], axis=1)) > 1.0e-6
+
+
+@pytest.mark.smoke
+@pytest.mark.physics
+def test_nominal_carrier_contact_is_bit_exact_on_repeated_cuda_solve() -> None:
+    if not wp.is_device_available("cuda:0"):
+        pytest.skip("physics smoke requires cuda:0")
+
+    first = run_multi_location_sphere_contact(
+        normalized_locations=(0.5,),
+        carrier_contact=True,
+    ).locations[0].indentation
+    second = run_multi_location_sphere_contact(
+        normalized_locations=(0.5,),
+        carrier_contact=True,
+    ).locations[0].indentation
+
+    np.testing.assert_array_equal(
+        first.mechanics_result.rest_vertices,
+        second.mechanics_result.rest_vertices,
+    )
+    np.testing.assert_array_equal(
+        first.mechanics_result.deformed_vertices,
+        second.mechanics_result.deformed_vertices,
+    )
+    assert first.diagnostics["vbd_deterministic_mode"] == "run_to_run"
+    assert second.diagnostics["vbd_deterministic_mode"] == "run_to_run"
+    assert first.diagnostics["max_soft_contact_count"] == (
+        second.diagnostics["max_soft_contact_count"]
+    )
+    assert first.diagnostics["carrier_interface_contact_count"] == (
+        second.diagnostics["carrier_interface_contact_count"]
+    )

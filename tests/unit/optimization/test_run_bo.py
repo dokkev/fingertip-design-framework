@@ -150,6 +150,24 @@ def test_production_requires_at_least_six_successful_sobol_observations(
         )
 
 
+def test_production_rejects_external_registry_before_creating_output(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "campaign"
+
+    with pytest.raises(
+        ValueError,
+        match="production external registry reuse is disabled",
+    ):
+        run_bo.run_campaign(
+            output,
+            budget=run_bo.CampaignBudget(6, 1, 8, 7),
+            registry_path=tmp_path / "shared-registry.json",
+        )
+
+    assert not output.exists()
+
+
 def test_production_cli_rejects_reduced_sobol_target() -> None:
     with pytest.raises(SystemExit):
         run_bo.main(
@@ -394,6 +412,17 @@ def test_preflight_builds_configuration_under_requested_output_root(
             evaluator_roots.append(root)
 
     monkeypatch.setattr(run_bo, "Lumo3DTrajectoryEvaluator", _Evaluator)
+    runtime_identity = {
+        "status": "available",
+        "device": "cuda:0",
+        "compute_capability": "8.9",
+        "warp_version": "test",
+    }
+    monkeypatch.setattr(
+        run_bo,
+        "runtime_identity_for_device",
+        lambda _device: dict(runtime_identity),
+    )
     monkeypatch.setattr(
         run_bo,
         "_run_optix_smoke",
@@ -440,8 +469,9 @@ def test_campaign_resume_restores_public_ax_checkpoint_after_pre_evaluation(
         objective_identifier = TRAJECTORY_SEPARATION_OBJECTIVE
         evaluation_contract_id = "checkpoint-test-contract"
 
-        def __init__(self, *_args, **_kwargs) -> None:
+        def __init__(self, *_args, **kwargs) -> None:
             self.calls = 0
+            self.runtime_identity = kwargs["runtime_identity"]
 
         def evaluate(self, _parameters):
             self.calls += 1
@@ -458,6 +488,17 @@ def test_campaign_resume_restores_public_ax_checkpoint_after_pre_evaluation(
         },
     )
     monkeypatch.setattr(run_bo, "Lumo3DTrajectoryEvaluator", _Evaluator)
+    runtime_identity = {
+        "status": "available",
+        "device": "cuda:0",
+        "compute_capability": "8.9",
+        "warp_version": "test",
+    }
+    monkeypatch.setattr(
+        run_bo,
+        "runtime_identity_for_device",
+        lambda _device: dict(runtime_identity),
+    )
     output = tmp_path / "campaign"
     budget = run_bo.CampaignBudget(1, 0, 2, 1)
     original_write = CampaignCheckpointStore.write
@@ -484,6 +525,15 @@ def test_campaign_resume_restores_public_ax_checkpoint_after_pre_evaluation(
     assert (output / "checkpoints" / "000003" / "state.json").is_file()
 
     monkeypatch.setattr(CampaignCheckpointStore, "write", original_write)
+    runtime_identity["compute_capability"] = "9.0"
+    with pytest.raises(run_bo.CheckpointError, match="campaign config does not match"):
+        run_bo.run_campaign(
+            output,
+            budget=budget,
+            smoke=True,
+            resume=output,
+        )
+    runtime_identity["compute_capability"] = "8.9"
     summary = run_bo.run_campaign(
         output,
         budget=budget,

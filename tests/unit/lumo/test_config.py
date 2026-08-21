@@ -8,6 +8,7 @@ import yaml
 
 from lumo.config import LumoExecutionConfigError, load_lumo_execution_config
 from lumo.mesh import volume_mesh_settings_for_tier
+from lumo.physics.contracts import VBDDeterminismMode
 
 
 CANONICAL = Path(__file__).resolve().parents[3] / "config" / "lumo_execution.yaml"
@@ -22,8 +23,10 @@ def test_complete_execution_yaml_resolves_exact_typed_contract() -> None:
 
     assert loaded.device == "cuda:0"
     assert loaded.volume_mesh == volume_mesh_settings_for_tier("search")
-    assert loaded.mechanics.vbd_iterations == 10
-    assert loaded.mechanics.max_load_increment_mm == pytest.approx(0.05)
+    assert loaded.mechanics.vbd_iterations == 100
+    assert loaded.mechanics.deterministic_mode is VBDDeterminismMode.RUN_TO_RUN
+    assert loaded.mechanics.max_load_increment_mm == pytest.approx(0.0125)
+    assert loaded.mechanics.dt_s == pytest.approx(2.5e-4)
     assert loaded.mechanics.soft_contact_mu == pytest.approx(0.0)
     assert loaded.mechanics.rigid_sdf_target_voxel_mm == pytest.approx(0.125)
     assert loaded.transport.ray_count == 256
@@ -36,6 +39,12 @@ def test_complete_execution_yaml_resolves_exact_typed_contract() -> None:
     ("mutation", "message"),
     (
         (lambda payload: payload["newton"].pop("soft_contact_mu"), "newton keys mismatch"),
+        (
+            lambda payload: payload["newton"].__setitem__(
+                "deterministic_mode", "not_guaranteed"
+            ),
+            "mechanics",
+        ),
         (lambda payload: payload["transport"].__setitem__("typo", 1), "transport keys mismatch"),
         (lambda payload: payload["transport"].__setitem__("ray_count", True), "transport.ray_count"),
         (

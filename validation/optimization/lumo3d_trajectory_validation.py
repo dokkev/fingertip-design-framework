@@ -17,6 +17,7 @@ from lumo.optimization.objectives import normalized_field_distance
 from lumo.optimization.protocol import DEFAULT_TRAJECTORY_PROTOCOL, TrajectoryEvaluationProtocol
 from validation.physics.multi_location_sphere_contact import run_multi_location_sphere_contact
 from lumo.optimization.evaluator import Lumo3DTrajectoryEvaluator
+from lumo.optimization.runtime_identity import runtime_identity_for_device
 from validation.reference.lumo3d_fixed_state_oracle import FixedStateLumo3DOracle
 from scripts.optimization.run_bo import (
     DEFAULT_EXECUTION_CONFIG,
@@ -72,6 +73,90 @@ def _objective_payload(evaluation: Any) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise TypeError("objective to_dict() must return an object")
     return payload
+
+
+def _protocol_state_evidence(
+    evaluation: Any,
+    protocol: TrajectoryEvaluationProtocol,
+) -> dict[str, Any]:
+    """Verify that one evaluation contains the complete protocol state grid."""
+
+    expected = tuple(protocol.checkpoint_states())
+    actual = tuple(
+        (
+            float(record.normalized_location),
+            float(record.radius_mm),
+            float(record.checkpoint_depth_mm),
+        )
+        for record in evaluation.checkpoint_records
+    )
+    expected_set = set(expected)
+    actual_set = set(actual)
+    missing = sorted(expected_set - actual_set)
+    unexpected = sorted(actual_set - expected_set)
+    duplicate_count = len(actual) - len(actual_set)
+    return {
+        "expected_state_count": len(expected),
+        "actual_state_count": len(actual),
+        "unique_state_count": len(actual_set),
+        "duplicate_state_count": duplicate_count,
+        "missing_states": [list(state) for state in missing],
+        "unexpected_states": [list(state) for state in unexpected],
+        "pass": (
+            len(actual) == len(expected)
+            and duplicate_count == 0
+            and not missing
+            and not unexpected
+        ),
+    }
+
+
+def _trajectory_hard_checks(
+    *,
+    direct_path_equivalence_pass: bool,
+    domain_check_pass: bool,
+    no_objective_pathology: bool,
+) -> bool:
+    """Keep historical cross-contract comparisons out of the current gate."""
+
+    return bool(
+        direct_path_equivalence_pass
+        and domain_check_pass
+        and no_objective_pathology
+    )
+
+
+def _exact_mechanics_arrays(
+    direct: Mapping[str, np.ndarray],
+    evaluator: Mapping[str, np.ndarray],
+) -> dict[str, Any]:
+    """Require bit-exact state and topology for a same-contract direct path."""
+
+    evaluator_only = {
+        "checkpoint_index",
+        "post_contact_travel_mm",
+        "final_pose_error_mm",
+        "rigid_sdf_target_voxel_mm",
+    }
+    direct_names = set(direct)
+    evaluator_names = set(evaluator) - evaluator_only
+    key_sets_match = direct_names == evaluator_names
+    names = sorted(direct_names | evaluator_names)
+    matches = {
+        name: bool(
+            name in direct
+            and name in evaluator
+            and np.array_equal(direct[name], evaluator[name])
+        )
+        for name in names
+    }
+    return {
+        "array_key_sets_match": key_sets_match,
+        "direct_array_names": sorted(direct_names),
+        "evaluator_array_names": sorted(evaluator_names),
+        "arrays": matches,
+        "pass": key_sets_match and all(matches.values()),
+    }
 
 
 def _fields(evaluation: Any) -> tuple[np.ndarray, ...]:
@@ -288,6 +373,9 @@ def run_validation(
     root.mkdir(parents=True, exist_ok=True)
     protocol = USER_PROTOCOL
     device = execution.device
+    runtime_identity = runtime_identity_for_device(device)
+    if runtime_identity.get("status") != "available":
+        raise RuntimeError("GPU/runtime identity is unavailable")
 
     def evaluator(path: Path, *, selected_protocol=protocol) -> Lumo3DTrajectoryEvaluator:
         return Lumo3DTrajectoryEvaluator(
@@ -300,6 +388,7 @@ def run_validation(
             led=USER_LED,
             fixed_parameters=USER_PARAMETERS,
             volume_mesh_settings=execution.volume_mesh,
+            runtime_identity=runtime_identity,
         )
 
     _write_json(root / "protocol.json", protocol.to_dict() | {"fingerprint": protocol.fingerprint})
@@ -337,6 +426,41 @@ def run_validation(
             raise RuntimeError(f"{label} trajectory evaluation failed: {result.status}: {result.failure_message}")
         evaluations[label] = result
 
+    protocol_state_checks = {
+        label: _protocol_state_evidence(result, protocol)
+        for label, result in evaluations.items()
+    }
+    if not all(check["pass"] for check in protocol_state_checks.values()):
+        summary = {
+            "schema": "lumo3d-fixed-depth-trajectory-validation-summary-v1",
+            "status": "FAIL",
+            "source": source,
+            "execution_config": execution.to_dict(),
+            "evaluation_contract_id": evaluations["nominal"].report.get(
+                "evaluation_contract_id"
+            ),
+            "objective_identifier": evaluations["nominal"].report.get(
+                "objective_name"
+            ),
+            "parameterization_version": evaluations["nominal"].report.get(
+                "parameterization_version"
+            ),
+            "protocol": protocol.to_dict(),
+            "protocol_fingerprint": protocol.fingerprint,
+            "protocol_state_checks": protocol_state_checks,
+            "failure_reason": "protocol_state_grid_incomplete",
+            "bo_run": False,
+        }
+        _write_json(root / "summary.json", summary)
+        (root / "reviewer_audit.md").write_text(
+            "# Reviewer audit\n\n"
+            "This validation command does not perform an independent review. "
+            "The bundle contains deterministic implementation-agent checks only; "
+            "treat this file as a status note, not as reviewer evidence.\n",
+            encoding="utf-8",
+        )
+        return summary
+
     all_trajectory_records = {
         label: [record.to_dict() for record in result.checkpoint_records]
         for label, result in evaluations.items()
@@ -371,18 +495,39 @@ def run_validation(
         indenter_radii_mm=(5.0,),
         checkpoint_depths_mm=(1.5,),
     )
-    reduced_new = evaluator(
-        root / "legacy_reduction_new",
-        selected_protocol=reduced_protocol,
-    ).evaluate(_nominal())
-    if reduced_new.status != "success":
-        raise RuntimeError("legacy reduction comparison could not complete")
-    legacy = FixedStateLumo3DOracle(
-        root / "legacy_reduction_legacy",
-        device=device,
-        normalized_locations=(0.25, 0.50, 0.75),
-    ).evaluate(_nominal())
-    legacy_comparison = _compare_legacy_reduction(reduced_new, legacy)
+    try:
+        reduced_new = evaluator(
+            root / "legacy_reduction_new",
+            selected_protocol=reduced_protocol,
+        ).evaluate(_nominal())
+        if reduced_new.status != "success":
+            legacy_comparison = {
+                "status": "NOT_RUN",
+                "gate": False,
+                "reason": "current reduced evaluation did not complete",
+                "current_status": reduced_new.status,
+                "current_failure_message": reduced_new.failure_message,
+                "pass": False,
+            }
+        else:
+            legacy = FixedStateLumo3DOracle(
+                root / "legacy_reduction_legacy",
+                device=device,
+                normalized_locations=(0.25, 0.50, 0.75),
+            ).evaluate(_nominal())
+            legacy_comparison = {
+                "status": "COMPLETED",
+                "gate": False,
+                **_compare_legacy_reduction(reduced_new, legacy),
+            }
+    except Exception as exc:
+        legacy_comparison = {
+            "status": "ERROR",
+            "gate": False,
+            "error_type": type(exc).__name__,
+            "error": str(exc),
+            "pass": False,
+        }
     _write_json(root / "legacy_reduction_check.json", legacy_comparison)
 
     new_final = next(
@@ -399,15 +544,21 @@ def run_validation(
         travel_mm=1.5,
         normalized_locations=(0.5,),
         artifact_dir=old_root,
-        sphere_subdivisions=3,
-        max_load_increment_mm=0.05,
-        vbd_iterations=10,
+        mechanics_contract=execution.mechanics,
         carrier_contact=True,
     )
     old_case = old.locations[0]
-    old_vertices = old_case.indentation.mechanics_result.deformed_vertices
-    new_archive = np.load(new_final.mechanics_artifact_path, allow_pickle=False)
-    new_vertices = np.asarray(new_archive["deformed_vertices_mm"], dtype=float)
+    with np.load(old_case.mechanics_artifact_path, allow_pickle=False) as archive:
+        direct_arrays = {
+            name: np.array(archive[name], copy=True) for name in archive.files
+        }
+    with np.load(new_final.mechanics_artifact_path, allow_pickle=False) as archive:
+        evaluator_arrays = {
+            name: np.array(archive[name], copy=True) for name in archive.files
+        }
+    exact_mechanics = _exact_mechanics_arrays(direct_arrays, evaluator_arrays)
+    old_vertices = direct_arrays["deformed_vertices_mm"]
+    new_vertices = evaluator_arrays["deformed_vertices_mm"]
     mechanics_error = float(np.max(np.abs(old_vertices - new_vertices)))
     new_mechanics = (
         {} if new_final.debug_diagnostics is None else dict(new_final.debug_diagnostics)
@@ -436,7 +587,8 @@ def run_validation(
         "new_max_soft_contact_overflow": new_final.mechanics_state.max_soft_contact_overflow,
         "old_max_rigid_contact_overflow": int(old_mechanics.get("max_rigid_contact_overflow", 0)),
         "new_max_rigid_contact_overflow": new_final.mechanics_state.max_rigid_contact_overflow,
-        "pass": mechanics_error <= 2.0e-2,
+        "exact_array_identity": exact_mechanics,
+        "pass": exact_mechanics["pass"],
     })
 
     incompatible = TrajectoryEvaluationProtocol(
@@ -459,15 +611,14 @@ def run_validation(
         label: bool(getattr(result.objective, "objective_pathology", False))
         for label, result in evaluations.items()
     }
-    legacy_reduction_pass = bool(legacy_comparison.get("pass", False))
-    mechanics_regression_pass = mechanics_error <= 2.0e-2
+    historical_legacy_reduction_pass = bool(legacy_comparison.get("pass", False))
+    direct_path_equivalence_pass = bool(exact_mechanics["pass"])
     domain_check_pass = domain_result.status == "domain_incompatible"
     no_objective_pathology = not any(objective_pathology.values())
-    hard_checks_pass = (
-        legacy_reduction_pass
-        and mechanics_regression_pass
-        and domain_check_pass
-        and no_objective_pathology
+    hard_checks_pass = _trajectory_hard_checks(
+        direct_path_equivalence_pass=direct_path_equivalence_pass,
+        domain_check_pass=domain_check_pass,
+        no_objective_pathology=no_objective_pathology,
     )
     validation_status = (
         "PASS" if hard_checks_pass else "FAIL"
@@ -488,6 +639,7 @@ def run_validation(
         ),
         "protocol": protocol.to_dict(),
         "protocol_fingerprint": protocol.fingerprint,
+        "protocol_state_checks": protocol_state_checks,
         "morphologies": {
             label: {
                 "status": result.status,
@@ -495,6 +647,7 @@ def run_validation(
                 "trajectory_count": len({record.trajectory_id for record in result.checkpoint_records}),
                 "checkpoint_count": len(result.checkpoint_records),
                 "optical_state_count": len(result.checkpoint_records),
+                "protocol_state_check": protocol_state_checks[label],
                 "minimum_transport": min(record.total_transport for record in result.checkpoint_records),
                 "maximum_carrier_absorption": max(record.carrier_absorbed_weight for record in result.checkpoint_records),
             }
@@ -506,8 +659,10 @@ def run_validation(
         "legacy_reduction_absolute_error": legacy_comparison.get("objective_abs_error"),
         "mechanics_final_state_max_abs_error_mm": mechanics_error,
         "domain_check_status": domain_result.status,
-        "legacy_reduction_pass": legacy_reduction_pass,
-        "mechanics_regression_pass": mechanics_regression_pass,
+        "historical_legacy_reduction_pass": historical_legacy_reduction_pass,
+        "historical_legacy_reduction_gate": False,
+        "direct_path_equivalence_pass": direct_path_equivalence_pass,
+        "direct_path_mechanics_contract": execution.mechanics.to_dict(),
         "domain_check_pass": domain_check_pass,
         "no_objective_pathology": no_objective_pathology,
         "objective_pathology": objective_pathology,
@@ -544,9 +699,10 @@ def run_validation(
     }
     _write_json(root / "summary.json", summary)
     (root / "reviewer_audit.md").write_text(
-        "# Reviewer audit placeholder\n\n"
-        "The implementation-agent validation bundle is complete. A fresh read-only "
-        "reviewer audit is attached after this deterministic run.\n",
+        "# Reviewer audit\n\n"
+        "This validation command does not perform an independent review. "
+        "The bundle contains deterministic implementation-agent checks only; "
+        "treat this file as a status note, not as reviewer evidence.\n",
         encoding="utf-8",
     )
     return summary

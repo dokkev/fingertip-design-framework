@@ -4,14 +4,23 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+import warp as wp
 
 from lumo.mesh.rigid.object import RigidPose3D
+from lumo.physics.contracts import VBDDeterminismMode
 from lumo.physics.newton.vbd import (
     _prescribed_pose_error_mm,
     _prescribed_pose_quantization_error_mm,
     _represented_translation_mm,
+    _warp_deterministic_mode,
     _warp_translation_m,
 )
+
+
+def test_vbd_determinism_contract_maps_to_warp_run_to_run() -> None:
+    assert _warp_deterministic_mode(
+        VBDDeterminismMode.RUN_TO_RUN
+    ) is wp.DeterministicMode.RUN_TO_RUN
 
 
 @pytest.mark.parametrize(

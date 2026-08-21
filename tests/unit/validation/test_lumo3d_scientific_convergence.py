@@ -69,9 +69,19 @@ def test_convergence_plan_preserves_thresholds_and_unsupported_force() -> None:
     execution = load_lumo_execution_config(ROOT / "config" / "lumo_execution.yaml")
     plan = convergence_plan(execution)
 
-    assert plan["newton"]["production"]["vbd_iterations"] == 10
-    assert plan["newton"]["reference"]["vbd_iterations"] == 20
-    assert plan["newton"]["reference"]["max_load_increment_mm"] <= 0.025
+    assert plan["newton"]["production"]["vbd_iterations"] == 100
+    assert plan["newton"]["production"]["max_load_increment_mm"] == pytest.approx(
+        0.0125
+    )
+    assert plan["newton"]["reference"]["vbd_iterations"] == 160
+    assert plan["newton"]["reference"]["max_load_increment_mm"] == pytest.approx(
+        0.00625
+    )
+    assert plan["newton"]["loading_rate"] == {
+        "production_indentation_speed_mm_s": pytest.approx(50.0),
+        "reference_indentation_speed_mm_s": pytest.approx(50.0),
+        "preserved": True,
+    }
     assert plan["newton"]["acceptance"] == {
         "rms_vertex_difference_mm_max": NEWTON_RMS_THRESHOLD_MM,
         "relative_max_displacement_difference_max": NEWTON_RELATIVE_MAX_THRESHOLD,
@@ -90,7 +100,7 @@ def test_each_optical_sweep_changes_only_its_declared_family() -> None:
     specs = optical_sweep_settings(execution)
     baseline = asdict(specs[0]["settings"])
     allowed = {
-        "ray_count": {"ray_count"},
+        "ray_count": {"ray_count", "maximum_segment_count"},
         "max_interactions": {"max_interactions"},
         "maximum_segment_count": {"maximum_segment_count"},
         "path_field_grid": {
@@ -106,6 +116,14 @@ def test_each_optical_sweep_changes_only_its_declared_family() -> None:
         resolved = asdict(spec["settings"])
         changed = {name for name in baseline if baseline[name] != resolved[name]}
         assert changed == allowed[spec["family"]]
+        if spec["family"] == "ray_count":
+            assert spec["guard_adjustments"]["maximum_segment_count"] == (
+                resolved["maximum_segment_count"]
+            )
+            assert (
+                resolved["maximum_segment_count"] / resolved["ray_count"]
+                == baseline["maximum_segment_count"] / baseline["ray_count"]
+            )
     for family in allowed:
         family_specs = [spec for spec in specs if spec["family"] == family]
         assert [spec["role"] for spec in family_specs] == [

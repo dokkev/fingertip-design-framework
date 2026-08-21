@@ -68,6 +68,7 @@ from lumo.optimization.protocol import (
     DEFAULT_TRAJECTORY_PROTOCOL,
     TrajectoryEvaluationProtocol,
 )
+from lumo.optimization.runtime_identity import runtime_identity_for_device
 
 
 # ------------------------------ USER CONFIG ------------------------------
@@ -416,6 +417,7 @@ def _campaign_resume_contract(
         "transport_3d_settings": asdict(execution.transport),
         "volume_mesh_settings": asdict(execution.volume_mesh),
         "device": execution.device,
+        "runtime_identity": evaluator.runtime_identity,
         "fixed_parameters": asdict(USER_PARAMETERS),
         "led": asdict(USER_LED),
         "objective_config": asdict(objective_config),
@@ -641,6 +643,16 @@ def _preflight_payload(
             checks[module_name] = {"status": "PASS"}
 
     try:
+        runtime_identity = runtime_identity_for_device(execution.device)
+        if runtime_identity.get("status") != "available":
+            raise RuntimeError(
+                "GPU/runtime identity is unavailable: "
+                f"{runtime_identity.get('error', 'unknown error')}"
+            )
+        checks["runtime_identity"] = {
+            "status": "PASS",
+            "evidence": runtime_identity,
+        }
         Fingertip(USER_PARAMETERS, led=USER_LED)
         design_space = _design_space(USER_PARAMETERS, search_bounds)
         evaluator = Lumo3DTrajectoryEvaluator(
@@ -653,6 +665,7 @@ def _preflight_payload(
             led=USER_LED,
             fixed_parameters=USER_PARAMETERS,
             volume_mesh_settings=execution.volume_mesh,
+            runtime_identity=runtime_identity,
         )
         checks["production_configuration"] = {
             "status": "PASS",
@@ -665,6 +678,10 @@ def _preflight_payload(
             "search_bounds": _search_bounds_payload(search_bounds),
         }
     except Exception as exc:
+        checks.setdefault(
+            "runtime_identity",
+            {"status": "FAIL", "error": f"{type(exc).__name__}: {exc}"},
+        )
         checks["production_configuration"] = {
             "status": "FAIL",
             "error": f"{type(exc).__name__}: {exc}",
@@ -809,6 +826,11 @@ def run_campaign(
             "production campaign requires at least one successful MBM/search "
             "observation"
         )
+    if not smoke and registry_path is not None:
+        raise ValueError(
+            "production external registry reuse is disabled until same-contract "
+            "evaluator reproducibility is established"
+        )
     output_path = Path(output).expanduser()
     if resume is None:
         root = output_path
@@ -898,6 +920,7 @@ def _run_campaign_locked(
         led=USER_LED,
         fixed_parameters=USER_PARAMETERS,
         volume_mesh_settings=execution.volume_mesh,
+        runtime_identity=runtime_identity_for_device(execution.device),
     )
     expected_resume_contract = _campaign_resume_contract(
         root=root,
@@ -931,6 +954,7 @@ def _run_campaign_locked(
             "design_space": design_space.to_dict(),
             "output": str(root),
             "registry": str(selected_registry_path),
+            "runtime_identity": evaluator.runtime_identity,
             "source": source,
             "resume_contract": expected_resume_contract,
             "registry_cache_policy": {
@@ -1214,7 +1238,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--registry",
         type=Path,
-        help="reuse an existing exact-result registry outside the output directory",
+        help=(
+            "reuse an existing exact-result registry for smoke/validation only; "
+            "production external reuse is currently rejected"
+        ),
     )
     parser.add_argument(
         "--resume",

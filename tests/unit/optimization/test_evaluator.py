@@ -201,6 +201,14 @@ def test_evaluation_contract_id_changes_with_fixed_scientific_inputs(tmp_path) -
         tmp_path / "complete-evidence",
         complete_trajectory_after_optical_failure=True,
     )
+    changed_runtime = Lumo3DTrajectoryEvaluator(
+        tmp_path / "runtime",
+        runtime_identity={
+            "status": "available",
+            "device": "cuda:0",
+            "compute_capability": "9.0",
+        },
+    )
 
     assert len(base.evaluation_contract_id.split(":", 1)[1]) == 64
     assert base.evaluation_contract_id != changed_protocol.evaluation_contract_id
@@ -217,6 +225,7 @@ def test_evaluation_contract_id_changes_with_fixed_scientific_inputs(tmp_path) -
         base.evaluation_contract_id
         != changed_evidence_collection.evaluation_contract_id
     )
+    assert base.evaluation_contract_id != changed_runtime.evaluation_contract_id
 
 
 def test_validation_evidence_mode_completes_18_states_and_preserves_raw_failure_evidence(
@@ -247,6 +256,7 @@ def test_validation_evidence_mode_completes_18_states_and_preserves_raw_failure_
             self.post_contact_travel_mm = float(checkpoint.post_contact_travel_mm)
             self.unintended_boundary_clearance_mm = 1.0
             self.mechanics_artifact_sha256 = "mechanics-sha"
+            self.carrier_contact_active = False
 
         def to_dict(self):
             return {
@@ -254,6 +264,7 @@ def test_validation_evidence_mode_completes_18_states_and_preserves_raw_failure_
                 "indenter_radius_mm": self.indenter_radius_mm,
                 "checkpoint_depth_mm": self.checkpoint_depth_mm,
                 "mechanics_artifact_sha256": self.mechanics_artifact_sha256,
+                "carrier_contact_active": self.carrier_contact_active,
             }
 
     monkeypatch.setattr(
@@ -420,6 +431,30 @@ def test_validation_evidence_mode_completes_18_states_and_preserves_raw_failure_
     assert pathology_failure.report["volume_mesh"]["gmsh_version"] == "fake-gmsh"
     assert pathology_failure.report["failure_diagnostics"]["volume_mesh"] == (
         pathology_failure.report["volume_mesh"]
+    )
+
+    _Simulation.failure_mode = None
+    success_evaluator = Lumo3DTrajectoryEvaluator(tmp_path / "success")
+    success = success_evaluator.evaluate(FingertipParameters())
+
+    assert success.status == "success"
+    assert success.report["evaluation_contract_id"] == (
+        success_evaluator.evaluation_contract_id
+    )
+    assert success.report["actual_newton_trajectory_count"] == (
+        success_evaluator.protocol.trajectory_count
+    )
+    assert success.report["checkpoint_count"] == (
+        success_evaluator.protocol.optical_state_count
+    )
+    assert success.report["requested_checkpoint_count"] == (
+        success_evaluator.protocol.checkpoint_count
+    )
+    success_artifact = json.loads(
+        Path(success.result_artifact_path).read_text(encoding="utf-8")
+    )
+    assert success_artifact["evaluation_contract_id"] == (
+        success_evaluator.evaluation_contract_id
     )
 
 

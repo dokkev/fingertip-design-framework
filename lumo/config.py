@@ -16,10 +16,11 @@ from lumo.contact import FirstContactSettings
 from lumo.finger import DEFAULT_EXTRUSION_DEPTH_MM
 from lumo.mechanics_contract import MechanicsContract
 from lumo.mesh import VolumeMeshSettings
+from lumo.physics.contracts import VBDDeterminismMode
 from lumo.ray_tracing.optical_mechanics import Transport3DSettings
 
 
-EXECUTION_CONFIG_SCHEMA_VERSION = 1
+EXECUTION_CONFIG_SCHEMA_VERSION = 2
 
 
 class _UniqueKeySafeLoader(yaml.SafeLoader):
@@ -185,7 +186,7 @@ def load_lumo_execution_config(path: str | Path) -> LumoExecutionConfig:
 
     newton = _mapping(root["newton"], "newton", source)
     newton_keys = {
-        "sphere_subdivisions", "max_load_increment_mm", "vbd_iterations", "dt_s",
+        "sphere_subdivisions", "max_load_increment_mm", "vbd_iterations", "deterministic_mode", "dt_s",
         "soft_contact_margin_mm", "soft_contact_ke", "soft_contact_kd", "soft_contact_mu",
         "rigid_sdf_target_voxel_mm", "max_support_displacement_mm", "max_final_pose_error_mm",
         "max_carrier_penetration_voxel_fraction",
@@ -205,6 +206,9 @@ def load_lumo_execution_config(path: str | Path) -> LumoExecutionConfig:
             sphere_subdivisions=_integer(newton["sphere_subdivisions"], "newton.sphere_subdivisions", source),
             max_load_increment_mm=_number(newton["max_load_increment_mm"], "newton.max_load_increment_mm", source),
             vbd_iterations=_integer(newton["vbd_iterations"], "newton.vbd_iterations", source),
+            deterministic_mode=VBDDeterminismMode(
+                newton["deterministic_mode"]
+            ),
             dt_s=_number(newton["dt_s"], "newton.dt_s", source),
             soft_contact_margin_mm=_number(newton["soft_contact_margin_mm"], "newton.soft_contact_margin_mm", source),
             soft_contact_ke=_number(newton["soft_contact_ke"], "newton.soft_contact_ke", source),

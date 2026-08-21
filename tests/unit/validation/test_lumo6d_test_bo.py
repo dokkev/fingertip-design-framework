@@ -78,6 +78,35 @@ def test_trial_payload_uses_the_resolved_optical_grid_fingerprint() -> None:
     assert payload["optical_grid_fingerprint"] == "resolved-grid-fingerprint"
 
 
+def test_parameter_history_ignores_feasibility_rejection_parameters(
+    tmp_path: Path,
+) -> None:
+    records = [
+        {
+            "generation_method": "sobol",
+            "flat_pad_height": None,
+            "semielliptical_pad_height": None,
+            "stem_width": None,
+            "stem_height": None,
+            "void_width": None,
+            "void_height": None,
+        },
+        {
+            "generation_method": "sobol",
+            "flat_pad_height": 5.0,
+            "semielliptical_pad_height": 10.0,
+            "stem_width": 8.0,
+            "stem_height": 10.0,
+            "void_width": 1.0,
+            "void_height": 2.0,
+        },
+    ]
+
+    test_bo._plot_parameter_history(records, tmp_path)
+
+    assert (tmp_path / "parameter_history.png").is_file()
+
+
 def test_bounded_bo_cli_returns_nonzero_for_controlled_gate_failure(
     monkeypatch,
     capsys,

@@ -37,6 +37,7 @@ from lumo.optimization.optical_contract import (
     optical_physics_parameters,
     transport_configuration,
 )
+from lumo.optimization.runtime_identity import runtime_identity_for_device
 from lumo.physics import prepare_fingertip_mesh
 from lumo.ray_tracing.contracts.objects import CarrierOptics
 from lumo.ray_tracing.optical_mechanics import (
@@ -67,6 +68,12 @@ from scripts.optimization.run_bo import (
 
 
 SCHEMA = "lumo3d-scientific-convergence-v1"
+PRODUCTION_VBD_ITERATIONS = 100
+PRODUCTION_MAX_LOAD_INCREMENT_MM = 0.0125
+PRODUCTION_DT_S = 2.5e-4
+REFERENCE_VBD_ITERATIONS = 160
+REFERENCE_MAX_LOAD_INCREMENT_MM = 0.00625
+REFERENCE_DT_S = 1.25e-4
 DEFAULT_EXECUTION_CONFIG = Path(__file__).resolve().parents[2] / "config" / "lumo_execution.yaml"
 DEFAULT_OUTPUT = (
     Path(__file__).resolve().parents[2]
@@ -84,9 +91,16 @@ def _validate_production_baseline(execution: LumoExecutionConfig) -> None:
             "Phase-E baseline requires the fixed 1.5 mm search mesh settings"
         )
     mechanics = execution.mechanics
-    if mechanics.vbd_iterations != 10 or mechanics.max_load_increment_mm != 0.05:
+    if (
+        mechanics.vbd_iterations != PRODUCTION_VBD_ITERATIONS
+        or mechanics.max_load_increment_mm != PRODUCTION_MAX_LOAD_INCREMENT_MM
+        or mechanics.dt_s != PRODUCTION_DT_S
+    ):
         raise ValueError(
-            "Phase-E baseline requires 10 Newton iterations and 0.05 mm increment"
+            "Phase-E baseline requires the evidence-backed Newton setting: "
+            f"{PRODUCTION_VBD_ITERATIONS} iterations, "
+            f"{PRODUCTION_MAX_LOAD_INCREMENT_MM:g} mm increment, and "
+            f"{PRODUCTION_DT_S:g} s timestep"
         )
     transport = execution.transport
     if (
@@ -128,13 +142,29 @@ def optical_sweep_settings(execution: LumoExecutionConfig) -> tuple[dict[str, An
             "setting_id": "rays_512",
             "family": "ray_count",
             "role": "intermediate",
-            "settings": replace(base, ray_count=512),
+            "guard_adjustments": {
+                "maximum_segment_count": 8192,
+                "reason": "preserve the production segments-per-launched-ray guard",
+            },
+            "settings": replace(
+                base,
+                ray_count=512,
+                maximum_segment_count=8192,
+            ),
         },
         {
             "setting_id": "rays_1024",
             "family": "ray_count",
             "role": "reference",
-            "settings": replace(base, ray_count=1024),
+            "guard_adjustments": {
+                "maximum_segment_count": 16384,
+                "reason": "preserve the production segments-per-launched-ray guard",
+            },
+            "settings": replace(
+                base,
+                ray_count=1024,
+                maximum_segment_count=16384,
+            ),
         },
         {
             "setting_id": "interactions_8",
@@ -191,8 +221,15 @@ def convergence_plan(execution: LumoExecutionConfig) -> dict[str, Any]:
     _validate_production_baseline(execution)
     reference_mechanics = replace(
         execution.mechanics,
-        vbd_iterations=20,
-        max_load_increment_mm=min(0.025, execution.mechanics.max_load_increment_mm),
+        vbd_iterations=REFERENCE_VBD_ITERATIONS,
+        max_load_increment_mm=REFERENCE_MAX_LOAD_INCREMENT_MM,
+        dt_s=REFERENCE_DT_S,
+    )
+    production_rate = (
+        execution.mechanics.max_load_increment_mm / execution.mechanics.dt_s
+    )
+    reference_rate = (
+        reference_mechanics.max_load_increment_mm / reference_mechanics.dt_s
     )
     optical_specs = optical_sweep_settings(execution)
     return {
@@ -200,6 +237,37 @@ def convergence_plan(execution: LumoExecutionConfig) -> dict[str, Any]:
         "newton": {
             "production": execution.mechanics.to_dict(),
             "reference": reference_mechanics.to_dict(),
+            "loading_rate": {
+                "production_indentation_speed_mm_s": production_rate,
+                "reference_indentation_speed_mm_s": reference_rate,
+                "preserved": bool(
+                    np.isclose(production_rate, reference_rate, rtol=0.0, atol=1.0e-12)
+                ),
+            },
+            "selection_evidence": {
+                "status": "provisional_until_full_five_case_convergence",
+                "gate": False,
+                "case_id": "wide_cutout_edge",
+                "production_candidate": {
+                    "vbd_iterations": PRODUCTION_VBD_ITERATIONS,
+                    "max_load_increment_mm": PRODUCTION_MAX_LOAD_INCREMENT_MM,
+                    "dt_s": PRODUCTION_DT_S,
+                },
+                "strict_reference": {
+                    "vbd_iterations": REFERENCE_VBD_ITERATIONS,
+                    "max_load_increment_mm": REFERENCE_MAX_LOAD_INCREMENT_MM,
+                    "dt_s": REFERENCE_DT_S,
+                },
+                "diagnostic_bundle": (
+                    "output/validation/diagnostics_20260821/"
+                    "wide_cutout_newton_one_factor/"
+                    "production_candidate_iter100_summary.json"
+                ),
+                "reason": (
+                    "the preserved diagnostic selected this candidate, but the "
+                    "authoritative gate is the current-source five-case run"
+                ),
+            },
             "evidence_collection": {
                 "complete_trajectory_after_optical_failure": True,
                 "production_acceptance_unchanged": True,
@@ -225,6 +293,7 @@ def convergence_plan(execution: LumoExecutionConfig) -> dict[str, Any]:
                     "setting_id": item["setting_id"],
                     "family": item["family"],
                     "role": item["role"],
+                    "guard_adjustments": item.get("guard_adjustments"),
                     "settings": asdict(item["settings"]),
                 }
                 for item in optical_specs
@@ -767,6 +836,9 @@ def _execute_scientific_convergence(
     plan = convergence_plan(execution)
     source = _source_provenance()
     _enforce_source_policy(source, smoke=True, allow_dirty=True)
+    runtime_identity = runtime_identity_for_device(execution.device)
+    if runtime_identity.get("status") != "available":
+        raise RuntimeError("GPU/runtime identity is unavailable")
     root.mkdir(parents=True, exist_ok=True)
     config = {
         "schema": SCHEMA,
@@ -783,8 +855,9 @@ def _execute_scientific_convergence(
     optical_reference_sensitivities: list[dict[str, Any]] = []
     reference_mechanics = replace(
         execution.mechanics,
-        vbd_iterations=20,
-        max_load_increment_mm=min(0.025, execution.mechanics.max_load_increment_mm),
+        vbd_iterations=REFERENCE_VBD_ITERATIONS,
+        max_load_increment_mm=REFERENCE_MAX_LOAD_INCREMENT_MM,
+        dt_s=REFERENCE_DT_S,
     )
     for case in cases:
         production = Lumo3DTrajectoryEvaluator(
@@ -798,6 +871,7 @@ def _execute_scientific_convergence(
             fixed_parameters=USER_PARAMETERS,
             volume_mesh_settings=execution.volume_mesh,
             complete_trajectory_after_optical_failure=True,
+            runtime_identity=runtime_identity,
         ).evaluate(case.parameters)
         reference = Lumo3DTrajectoryEvaluator(
             root / "newton" / case.case_id / "reference",
@@ -810,6 +884,7 @@ def _execute_scientific_convergence(
             fixed_parameters=USER_PARAMETERS,
             volume_mesh_settings=execution.volume_mesh,
             complete_trajectory_after_optical_failure=True,
+            runtime_identity=runtime_identity,
         ).evaluate(case.parameters)
         newton_case = {"case": case.to_dict(), **compare_newton_evaluations(production, reference)}
         newton_results.append(newton_case)
@@ -826,6 +901,7 @@ def _execute_scientific_convergence(
             fixed_parameters=USER_PARAMETERS,
             volume_mesh_settings=volume_mesh_settings_for_tier("reference"),
             complete_trajectory_after_optical_failure=True,
+            runtime_identity=runtime_identity,
         ).evaluate(case.parameters)
         mesh_case = {"case": case.to_dict(), **compare_mesh_evaluations(production, mesh_reference)}
         mesh_results.append(mesh_case)
@@ -862,6 +938,7 @@ def _execute_scientific_convergence(
                 "setting_id": spec["setting_id"],
                 "family": spec["family"],
                 "role": spec["role"],
+                "guard_adjustments": spec.get("guard_adjustments"),
                 "settings": asdict(spec["settings"]),
                 **replay,
             }

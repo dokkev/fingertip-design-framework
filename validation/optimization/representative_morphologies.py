@@ -66,7 +66,11 @@ def representative_morphologies(
             center
             | {
                 "latent_cutout_width": 0.98,
-                "latent_pad_depth": 0.0,
+                # Stay on the 5 mm physical wall boundary while avoiding the
+                # singular meshing corner produced by the exact zero pad-depth
+                # latent endpoint.  Both search and reference mesh policies
+                # accept this deterministic boundary morphology.
+                "latent_pad_depth": 0.1,
                 "latent_cutout_depth": 1.0,
             },
         ),

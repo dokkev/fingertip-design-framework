@@ -141,6 +141,8 @@ def test_mechanics_contract_rejects_non_finite_or_non_integer_settings() -> None
         MechanicsContract(vbd_iterations=10.0)  # type: ignore[arg-type]
     with np.testing.assert_raises(TypeError):
         MechanicsContract(sphere_subdivisions=True)  # type: ignore[arg-type]
+    with np.testing.assert_raises(TypeError):
+        MechanicsContract(deterministic_mode="run_to_run")  # type: ignore[arg-type]
 
 
 def _acceptance_subject(

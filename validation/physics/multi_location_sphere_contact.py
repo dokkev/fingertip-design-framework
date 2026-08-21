@@ -36,6 +36,7 @@ from lumo.mesh.rigid.carrier import make_distal_phalanx_mesh
 from lumo.mesh.volume.mesh import generate_volume_mesh
 from lumo.mesh.volume.contracts import volume_mesh_settings_for_tier
 from lumo.finger import Fingertip, FingertipParameters
+from lumo.mechanics_contract import MechanicsContract
 
 
 SEARCH_SPHERE_SUBDIVISIONS = 3
@@ -50,6 +51,47 @@ DEFAULT_RADIUS_MM = 5.0
 DEFAULT_TRAVEL_MM = 1.5
 VALIDATION_MAX_LOAD_INCREMENT_MM = 0.025
 VALIDATION_VBD_ITERATIONS = 20
+
+
+def _direct_execution_settings(
+    contract: MechanicsContract,
+    parameters: FingertipParameters,
+    *,
+    device: str,
+    travel_mm: float,
+    support_vertex_indices: tuple[int, ...],
+) -> tuple[FirstContactSettings, NewtonSettings, IndentationSettings]:
+    """Translate the complete production mechanics contract for direct replay."""
+
+    if not isinstance(contract, MechanicsContract):
+        raise TypeError("contract must be a MechanicsContract")
+    viscoelastic = parameters.viscoelastic
+    newton_settings = NewtonSettings(
+        device=device,
+        gravity=0.0,
+        dt=contract.dt_s,
+        steps=1,
+        iterations=contract.vbd_iterations,
+        deterministic_mode=contract.deterministic_mode,
+        density=viscoelastic.density_kg_m3,
+        k_mu=viscoelastic.k_mu_pa,
+        k_lambda=viscoelastic.k_lambda_pa,
+        k_damp=viscoelastic.k_damp,
+        fixed_vertex_indices=support_vertex_indices,
+    )
+    indentation_settings = IndentationSettings(
+        travel_mm=travel_mm,
+        load_steps=load_steps_for_increment(
+            travel_mm,
+            max_increment_mm=contract.max_load_increment_mm,
+        ),
+        soft_contact_margin_mm=contract.soft_contact_margin_mm,
+        rigid_sdf_target_voxel_mm=contract.rigid_sdf_target_voxel_mm,
+        soft_contact_ke=contract.soft_contact_ke,
+        soft_contact_kd=contract.soft_contact_kd,
+        soft_contact_mu=contract.soft_contact_mu,
+    )
+    return contract.first_contact, newton_settings, indentation_settings
 
 
 def load_steps_for_increment(
@@ -140,7 +182,9 @@ class MultiLocationContactResult:
     sphere_subdivisions: int = SEARCH_SPHERE_SUBDIVISIONS
     max_load_increment_mm: float = SEARCH_MAX_LOAD_INCREMENT_MM
     vbd_iterations: int = SEARCH_VBD_ITERATIONS
+    dt_s: float = SEARCH_DT_S
     carrier_contact: bool = False
+    mechanics_contract: MechanicsContract | None = None
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -148,7 +192,10 @@ class MultiLocationContactResult:
             "radius_mm": self.radius_mm,
             "travel_mm": self.travel_mm,
             "initial_gap_mm": self.initial_gap_mm,
-            "search_contract": {
+            "search_contract": (
+                self.mechanics_contract.to_dict()
+                if self.mechanics_contract is not None
+                else {
                 "sphere_subdivisions": self.sphere_subdivisions,
                 "max_load_increment_mm": self.max_load_increment_mm,
                 "load_steps": load_steps_for_increment(
@@ -156,12 +203,16 @@ class MultiLocationContactResult:
                     max_increment_mm=self.max_load_increment_mm,
                 ),
                 "iterations": self.vbd_iterations,
-                "dt_s": SEARCH_DT_S,
+                "dt_s": self.dt_s,
+                "maximum_indentation_speed_mm_s": (
+                    self.max_load_increment_mm / self.dt_s
+                ),
                 "soft_contact_margin_mm": SEARCH_SOFT_CONTACT_MARGIN_MM,
                 "soft_contact_ke": SEARCH_SOFT_CONTACT_KE,
                 "soft_contact_kd": SEARCH_SOFT_CONTACT_KD,
                 "carrier_contact": self.carrier_contact,
-            },
+                }
+            ),
             "locations": [case.to_dict() for case in self.locations],
         }
 
@@ -178,9 +229,16 @@ def run_multi_location_sphere_contact(
     sphere_subdivisions: int = SEARCH_SPHERE_SUBDIVISIONS,
     max_load_increment_mm: float = SEARCH_MAX_LOAD_INCREMENT_MM,
     vbd_iterations: int = SEARCH_VBD_ITERATIONS,
+    dt_s: float = SEARCH_DT_S,
     carrier_contact: bool = False,
+    mechanics_contract: MechanicsContract | None = None,
 ) -> MultiLocationContactResult:
-    """Run the frozen SEARCH mechanics contract at three arc locations."""
+    """Run one direct mechanics path at the requested arc locations.
+
+    ``mechanics_contract`` is the authoritative route for same-contract
+    production equivalence checks. The scalar arguments remain only for the
+    frozen historical validation callers.
+    """
 
     selected_parameters = parameters or FingertipParameters()
     fingertip = Fingertip(selected_parameters)
@@ -209,33 +267,59 @@ def run_multi_location_sphere_contact(
         raise ValueError("max_load_increment_mm must be finite and positive")
     if vbd_iterations < 1:
         raise ValueError("vbd_iterations must be positive")
+    selected_dt_s = float(dt_s)
+    if not np.isfinite(selected_dt_s) or selected_dt_s <= 0.0:
+        raise ValueError("dt_s must be finite and positive")
+    if mechanics_contract is not None:
+        if not isinstance(mechanics_contract, MechanicsContract):
+            raise TypeError("mechanics_contract must be a MechanicsContract")
+        sphere_subdivisions = mechanics_contract.sphere_subdivisions
+        max_load_increment_mm = mechanics_contract.max_load_increment_mm
+        vbd_iterations = mechanics_contract.vbd_iterations
+        selected_dt_s = mechanics_contract.dt_s
     sphere_mesh = make_sphere_mesh(radius, subdivisions=sphere_subdivisions)
     carrier_mesh = make_distal_phalanx_mesh(volume_mesh.solid) if carrier_contact else None
     contact_surface = make_outer_compliant_surface(volume_mesh.solid)
-    contact_settings = FirstContactSettings(
-        coarse_step_mm=0.25,
-        tolerance_mm=1.0e-3,
-        spawn_clearance_mm=0.05,
-        max_travel_mm=20.0,
-    )
-    mechanics_settings = NewtonSettings(
-        device=device,
-        gravity=0.0,
-        dt=SEARCH_DT_S,
-        steps=1,
-        iterations=vbd_iterations,
-        fixed_vertex_indices=prepared.support_vertex_indices,
-    )
-    indentation_settings = IndentationSettings(
-        travel_mm=travel,
-        load_steps=load_steps_for_increment(
-            travel,
-            max_increment_mm=max_load_increment_mm,
-        ),
-        soft_contact_margin_mm=SEARCH_SOFT_CONTACT_MARGIN_MM,
-        soft_contact_ke=SEARCH_SOFT_CONTACT_KE,
-        soft_contact_kd=SEARCH_SOFT_CONTACT_KD,
-    )
+    if mechanics_contract is not None:
+        contact_settings, mechanics_settings, indentation_settings = (
+            _direct_execution_settings(
+                mechanics_contract,
+                selected_parameters,
+                device=device,
+                travel_mm=travel,
+                support_vertex_indices=prepared.support_vertex_indices,
+            )
+        )
+    else:
+        contact_settings = FirstContactSettings(
+            coarse_step_mm=0.25,
+            tolerance_mm=1.0e-3,
+            spawn_clearance_mm=0.05,
+            max_travel_mm=20.0,
+        )
+        viscoelastic = selected_parameters.viscoelastic
+        mechanics_settings = NewtonSettings(
+            device=device,
+            gravity=0.0,
+            dt=selected_dt_s,
+            steps=1,
+            iterations=vbd_iterations,
+            density=viscoelastic.density_kg_m3,
+            k_mu=viscoelastic.k_mu_pa,
+            k_lambda=viscoelastic.k_lambda_pa,
+            k_damp=viscoelastic.k_damp,
+            fixed_vertex_indices=prepared.support_vertex_indices,
+        )
+        indentation_settings = IndentationSettings(
+            travel_mm=travel,
+            load_steps=load_steps_for_increment(
+                travel,
+                max_increment_mm=max_load_increment_mm,
+            ),
+            soft_contact_margin_mm=SEARCH_SOFT_CONTACT_MARGIN_MM,
+            soft_contact_ke=SEARCH_SOFT_CONTACT_KE,
+            soft_contact_kd=SEARCH_SOFT_CONTACT_KD,
+        )
     selected_artifact_dir = Path(artifact_dir) if artifact_dir is not None else None
     if selected_artifact_dir is not None:
         selected_artifact_dir.mkdir(parents=True, exist_ok=True)
@@ -367,7 +451,9 @@ def run_multi_location_sphere_contact(
         sphere_subdivisions=sphere_subdivisions,
         max_load_increment_mm=float(max_load_increment_mm),
         vbd_iterations=vbd_iterations,
+        dt_s=selected_dt_s,
         carrier_contact=carrier_contact,
+        mechanics_contract=mechanics_contract,
     )
 
 

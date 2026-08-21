@@ -279,6 +279,7 @@ class Lumo3DTrajectoryEvaluator:
             "search"
         ),
         complete_trajectory_after_optical_failure: bool = False,
+        runtime_identity: Mapping[str, Any] | None = None,
     ) -> None:
         if not isinstance(protocol, TrajectoryEvaluationProtocol):
             raise TypeError("protocol must be TrajectoryEvaluationProtocol")
@@ -291,6 +292,13 @@ class Lumo3DTrajectoryEvaluator:
         self.objective_config = objective_config or TrajectoryObjectiveConfig()
         self.mechanics_contract = mechanics_contract
         self.device = device
+        self.runtime_identity = (
+            {"status": "unspecified", "device": device}
+            if runtime_identity is None
+            else dict(runtime_identity)
+        )
+        if not isinstance(self.runtime_identity, Mapping):
+            raise TypeError("runtime_identity must be a mapping")
         self.fixed_parameters = fixed_parameters or FingertipParameters()
         if not isinstance(self.fixed_parameters, FingertipParameters):
             raise TypeError("fixed_parameters must be FingertipParameters")
@@ -331,6 +339,7 @@ class Lumo3DTrajectoryEvaluator:
             led=self.led,
             fixed_parameters=self.fixed_parameters,
             device=self.device,
+            runtime_identity=self.runtime_identity,
             optical_numerical_acceptance=self.optical_numerical_acceptance,
             volume_mesh_settings=self.volume_mesh_settings,
             complete_trajectory_after_optical_failure=(
@@ -390,6 +399,7 @@ class Lumo3DTrajectoryEvaluator:
                 "objective_name": self.objective_identifier.serialized_name,
                 "parameterization_version": FEASIBLE_PARAMETERIZATION_VERSION,
                 "evaluation_contract_id": self.evaluation_contract_id,
+                "runtime_identity": self.runtime_identity,
                 "morphology_id": morphology_id,
                 "protocol_fingerprint": self.protocol.fingerprint,
                 "complete_trajectory_after_optical_failure": (
@@ -660,21 +670,28 @@ class Lumo3DTrajectoryEvaluator:
             if objective_failure is not None:
                 return persist_failure(objective_failure)
             trajectory_metrics = _trajectory_metrics(observations, checkpoint_records)
+            actual_trajectory_ids = {
+                record.trajectory_id for record in checkpoint_records
+            }
+            actual_checkpoint_count = len(checkpoint_records)
             summary = {
                 "schema": TRAJECTORY_EVALUATION_SCHEMA,
+                "evaluation_contract_id": self.evaluation_contract_id,
                 "objective_name": self.objective_identifier.serialized_name,
                 "parameterization_version": FEASIBLE_PARAMETERIZATION_VERSION,
                 "objective_value": objective.objective_value,
                 "protocol": self.protocol.to_dict(),
                 "protocol_fingerprint": self.protocol.fingerprint,
                 "mechanics_contract": self.mechanics_contract.to_dict(),
+                "runtime_identity": self.runtime_identity,
                 "objective_contract": objective_contract,
                 "evaluation_identity": evaluation_identity,
                 "evaluation_identity_fingerprint": fingerprint_mapping(evaluation_identity),
                 "requested_trajectory_count": self.protocol.trajectory_count,
-                "actual_newton_trajectory_count": self.protocol.trajectory_count,
-                "checkpoint_count": self.protocol.checkpoint_count,
-                "optical_state_count": len(checkpoint_records),
+                "actual_newton_trajectory_count": len(actual_trajectory_ids),
+                "requested_checkpoint_count": self.protocol.checkpoint_count,
+                "checkpoint_count": actual_checkpoint_count,
+                "optical_state_count": actual_checkpoint_count,
                 "complete_trajectory_after_optical_failure": (
                     self.complete_trajectory_after_optical_failure
                 ),
@@ -782,6 +799,7 @@ def trajectory_evaluation_contract_id(
     led: LED,
     fixed_parameters: FingertipParameters,
     device: str,
+    runtime_identity: Mapping[str, Any],
     optical_numerical_acceptance: OpticalNumericalAcceptanceContract = (
         DEFAULT_OPTICAL_NUMERICAL_ACCEPTANCE
     ),
@@ -804,6 +822,7 @@ def trajectory_evaluation_contract_id(
         "execution": {
             "schema": LUMO_EXECUTION_CONTRACT,
             "device": device,
+            "runtime_identity": dict(runtime_identity),
             "representative_cell_half_length_mm": CURRENT_CELL_HALF_LENGTH_MM,
             "volume_mesh": asdict(volume_mesh_settings),
             "fixed_fingertip_inputs": _fixed_fingertip_inputs(fixed_parameters),

@@ -511,6 +511,7 @@ class LumoSimulation:
             dt=self.mechanics_contract.dt_s,
             steps=1,
             iterations=self.mechanics_contract.vbd_iterations,
+            deterministic_mode=self.mechanics_contract.deterministic_mode,
             density=viscoelastic.density_kg_m3,
             k_mu=viscoelastic.k_mu_pa,
             k_lambda=viscoelastic.k_lambda_pa,

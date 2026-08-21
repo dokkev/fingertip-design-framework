@@ -14,7 +14,7 @@ from .trajectory.fingertip_adapter import (
     prepare_fingertip_mesh,
 )
 from .newton.solve import NewtonSettings, PhysicsDependencyError
-from .contracts.types import NewtonResult, TetMeshData
+from .contracts.types import NewtonResult, TetMeshData, VBDDeterminismMode
 from .trajectory.indentation import (
     CandidateMechanicsError,
     CheckpointStep,
@@ -45,6 +45,7 @@ __all__ = [
     "RigidIndenter3D",
     "checkpoint_step_schedule",
     "TetMeshData",
+    "VBDDeterminismMode",
     "make_fingertip_volume_state",
     "prepare_fingertip_mesh",
     "solve_fingertip_indentation",

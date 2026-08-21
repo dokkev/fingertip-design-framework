@@ -1,243 +1,368 @@
+1. LED는 generalized Lambertian으로 변경
+이건 찬성. 지금 cos θ + 80° hard cutoff보다 훨씬 논문에 쓰기 좋고, LED datasheet의 half-power angle도 자연스럽게 들어간다. 현재 LED.emission_half_angle_deg를 half-power semi-angle \(\theta_{1/2}\)로 정의하자. 
+Radiant intensity를
+\[
+I(\theta)=I_0\cos^m\theta,
+\qquad
+m=-\frac{\ln2}{\ln(\cos\theta_{1/2})}
+\]로 두면 된다.
+그리고 ray를 equal-weight deterministic quadrature로 쏘려면 normalized solid-angle distribution은
+\[
+p(\theta,\phi)
+=
+\frac{m+1}{2\pi}\cos^m\theta,
+\qquad
+0\le\theta\le\frac{\pi}{2}
+\]이고 inverse sampling은
+\[
+\cos\theta=(1-u)^{1/(m+1)},\qquad
+\phi=2\pi v.
+\]여기서 \(u,v\)만 지금처럼 Hammersley sequence로 만들면 됨.
+Generalized Lambertian model
+         ↓
+deterministic Hammersley samples
+         ↓
+equal ray weight P0/N
+이렇게 하면 ray count를 바꿔도 같은 continuous emission model을 더 촘촘하게 적분하는 것이 된다. 현재 sampling.py만 국소적으로 바꾸면 되는 방향이야. 
+6. Branch cutoff도 ray-count invariant하게 변경
+이것도 수정하자.
+현재는
+\[
+w_{\min}=\epsilon P_0
+\]인데 앞으로는
+\[
+\boxed{
+w_{\min}
+=
+\epsilon_b w_{\mathrm{primary}}
+=
+\epsilon_b\frac{P_0}{N}
+}
+\]으로 가는 게 논리적으로 맞아.
+즉 설정 이름도 가능하면
+minimum_branch_weight_fraction
+처럼 의미를 명확하게 하는 게 좋아.
+중요한 점은 지금 1e-4 값을 그대로 옮기자는 뜻은 아님.
+현재 1e-4는 total launched power 기준이어서 256 rays에서는 사실 primary의 2.56% cutoff였어. 새 formulation의 1e-4는 primary의 0.01%라 transport tree가 훨씬 커진다. 
+그러니 순서는:
+formulation 먼저 수정
+→ ε_b를 numerical convergence parameter로 취급
+→ branch cutoff / max interactions / segment budget convergence 확인
+→ production ε_b 고정
+이게 맞다.
+7. Virtual envelope가 뭐고, 어떻게 하는 게 논문에 제일 깔끔한가
+현재 구조를 단순화하면 ray가 매 step마다 세 물체를 찾고 있어.
+1. 실제 deformed silicone
+2. 실제 rigid carrier
+3. virtual envelope
+1, 2는 물리 geometry야.
+그런데 3은 물체가 아님.
+“이 선을 넘어가면 이제 fingertip optical domain 밖으로 나갔다고 치자”
 
+라는 계산용 경계야.
+현재 문제는 이 envelope가 undeformed/reference fingertip 형상을 이용해서 만들어진다는 거야. 
+예를 들어 deformation 때문에:
+reference boundary
+       │
+       │      deformed silicone
+       │          │
+LED ────────────────→ ray
+가 되면 ray는 아직 silicone 속에 있는데 reference envelope를 먼저 만날 수 있음.
+현재 구현은 그러면 escape로 처리할 수 있다. 이건 물리적으로 이상하지.
+내가 추천하는 논문용 방향
+reference fingertip-shaped envelope를 없애자.
+대신 고정된 observation domain \(\Omega_{\mathrm{obs}}\)를 정의하는 게 훨씬 깨끗해.
+이미 production field bounds가:
+x = [-16, 16] mm
+y = [-31, 4.5] mm
+z = [-5.5, 5.5] mm periodic
+로 있으니까 이걸 그대로 쓸 수 있어. 
+즉:
+        fixed observation domain
+┌───────────────────────────────┐
+│                               │
+│       deformed fingertip      │
+│            ████               │
+│         █████████             │
+│                               │
+└───────────────────────────────┘
+그리고 두 규칙만 지키자.
+첫째, 모든 deformed physical geometry가 observation domain 안에 있어야 한다.
+\[
+\mathcal G_{\mathrm{physical}}
+\subset
+\Omega_{\mathrm{obs}}.
+\]밖으로 나가면 candidate optical failure.
+둘째, observation boundary는 air ray에 대해서만 escape boundary다.
+silicone ray는 observation boundary를 무시하고 반드시 실제 silicone interface를 통과해야 한다.
+이렇게 하면 논문에서도 아주 깔끔해져.
+Rays propagate through the physical deformed geometry until they enter air. Airborne rays leaving a fixed observation domain are classified as escaped.
 
-BLOCKER
-1. 현재 6D search space에서 유효 후보 생성이 사실상 실패했습니다.
-기존 bounded Test BO 결과는 명시적으로 FAIL입니다. nominal만 성공했고, BO 제안 10개 중 geometry reject 9개, mechanics fail 1개, Sobol/MBM 성공은 0개였습니다. 따라서 Ax 모델 업데이트와 objective 비교가 한 번도 발생하지 않았습니다. [reviewer_audit.md (line 8)](/home/dk/workspace/lit_ws/output/validation/optimization/lumo6d_test_bo/reviewer_audit.md:8)
-원인은 Ax가 넓은 box bounds와 두 개의 선형 제약만 인식하고, 핵심 silicone-thickness 같은 비선형 제약은 proposal 이후에 reject하기 때문입니다.
-- 6D bounds: [design_space.py (line 108)](/home/dk/workspace/lit_ws/lumo/optimization/design_space.py:108)
-- Ax 선형 제약: [design_space.py (line 117)](/home/dk/workspace/lit_ws/lumo/optimization/design_space.py:117)
-- 사후 비선형 thickness 검증: [design_space.py (line 192)](/home/dk/workspace/lit_ws/lumo/optimization/design_space.py:192)
-- production도 동일한 bounds 사용: [run_bo.py (line 123)](/home/dk/workspace/lit_ws/scripts/optimization/run_bo.py:123)
-현재 상태로 큰 BO를 시작하면 대부분의 계산 예산을 invalid proposal에 소비할 가능성이 높습니다. 과학적 bounds를 임의로 좁혀 PASS시켜서는 안 되며, 승인된 feasible parameterization, feasibility-aware generation 또는 근거 있는 bounds 변경이 먼저 필요합니다.
+이게 제일 합당해 보여.
+그리고 구현도 굳이 OptiX용 envelope GAS가 필요 없을 수 있어.
+고정 rectangle이면 ray-box exit distance를 analytical하게 계산할 수 있거든.
+OptiX:
+  silicone hit
+  carrier hit
 
-2. 캠페인이 과학적으로 실패해도 프로세스가 성공 코드로 종료됩니다.
-Ax는 proposal_budget_exhausted나 optimizer stall을 정상 AxRunResult로 반환하지만, production runner는 결과 상태와 무관하게 항상 exit code 0을 반환합니다.
-- non-complete 상태 생성: [ax.py (line 658)](/home/dk/workspace/lit_ws/lumo/optimization/adapters/ax.py:658)
-- 상태는 summary에만 기록: [run_bo.py (line 474)](/home/dk/workspace/lit_ws/scripts/optimization/run_bo.py:474)
-- 무조건 return 0: [run_bo.py (line 543)](/home/dk/workspace/lit_ws/scripts/optimization/run_bo.py:543)
-실제 smoke 산출물도 첫 Ax 후보가 invalid_design, 최종 상태가 proposal_budget_exhausted였지만 CLI 관점에서는 성공입니다. [summary.json (line 40)](/home/dk/workspace/lit_ws/output/optimization/bo_smoke_20260820/summary.json:40)
-또한 authoritative nominal 평가가 실패해도 proposal loop가 계속됩니다. Production 진입 조건은 최소한 다음을 요구해야 합니다.
-- nominal 18-state 평가 성공
-- MBM/BO 성공 trial 최소 1개
-- 허용된 최종 상태만 exit 0
-- stall, proposal exhaustion, zero feasible BO result는 non-zero exit
-IMPORTANT
+analytic:
+  periodic z
+  fixed observation-box exit
+나는 이 방향 추천.
+8. Periodic z가 무슨 뜻인가
+지금 fingertip은 2D cross section을 11 mm 폭으로 extrusion해서 3D로 만든다. 
+그런데 ray가:
+z = +5.5 mm
+를 지나가면 끝에서 사라지는 게 아니라
+z = -5.5 mm
+에서 다시 나타난다.
+즉:
+... | cell | cell | cell | cell | ...
+        ↑
+     우리가 푸는
+      11mm cell
+로 생각하는 거야.
+수학적으로는
+\[
+(x,y,z_{\max})\sim(x,y,z_{\min}).
+\]그래서 실제로는 무한히 반복되는 fingertip strip 하나를 대표 cell로 푸는 것과 비슷해.
+왜 그렇게 했냐면
+만약 그냥 11 mm에서 잘라버리면 양쪽 end cap에서 빛이 빠져나가고, 그 결과가 우리가 최적화하려는 2D cross-sectional morphology보다 arbitrary extrusion width에 크게 영향을 받을 수 있어.
+현재 디자인 변수는 사실상 x-y cross section을 정의하잖아.
+그래서 논문이:
+cross-sectional contact morphology design
 
+을 중심으로 간다면 periodic z는 꽤 합리적인 modeling assumption이야.
+내 추천
+유지하자.
+다만 논문에서는 11 mm를 실제 physical finger width라고 표현하지 말고:
+a periodic 11-mm representative cell in the out-of-plane direction
 
-3. Ax model state가 영속화되지 않아 정확한 resume이 불가능합니다.
-Production callback은 trials.json만 기록하고 Ax client snapshot은 저장하지 않습니다. [run_bo.py (line 442)](/home/dk/workspace/lit_ws/scripts/optimization/run_bo.py:442)
-이는 registry가 Ax model state를 대체하지 않는다는 저장소 아키텍처 계약과 충돌합니다. [ARCHITECTURE.md (line 264)](/home/dk/workspace/lit_ws/docs/ARCHITECTURE.md:264)
-반면 bounded validation runner에는 이미 ax_client.json snapshot 저장 구현이 있습니다. [lumo6d_test_bo.py (line 758)](/home/dk/workspace/lit_ws/validation/optimization/lumo6d_test_bo.py:758)
-장시간 production BO 전에 snapshot의 원자적 저장과 명시적인 resume/load semantics가 필요합니다. 현재는 중단 후 결과 캐시는 재사용할 수 있어도 동일 캠페인의 생성 모델과 trial history를 정확히 복원할 수 없습니다.
+이라고 명시.
+그리고 가능하면 supplementary/validation에서 cell-width sensitivity 정도만 보여주면 더 강해.
+작은 코드 문제
+현재 periodic 방향 체크에 dimensionless \(d_z\)와 epsilon_mm를 비교하는 부분은 정리하는 게 좋다. 
+abs(direction_z) > direction_epsilon
+같은 dimensionless tolerance 하나로 분리하면 됨.
+이건 큰 physical issue는 아냐.
+9. Internal field가 왜 중요하냐
+이게 현재 BO objective의 입력이기 때문이야.
+Ray tracing을 엄청 잘 만들어도 최종적으로 optimizer가 보는 건 camera image가 아니야.
+현재 optimizer는 3D voxel field:
+\[
+F_{ijk}
+\]를 받고 이것을 normalize해서 비교한다. 
+그래서 우리가 무엇을 최적화하고 있는지 정확히 말해야 해.
+현재 \(F\)의 물리적 의미
+직관적으로는:
+각 공간 위치를 얼마나 많은 optical energy-carrying ray path가 지나갔는가
 
-4. 6D validation gate가 production과 다른 objective identity를 사용합니다.
-Validation은 contact_state_separation@1을 Ax/registry objective로 등록합니다. [lumo6d_test_bo.py (line 57)](/home/dk/workspace/lit_ws/validation/optimization/lumo6d_test_bo.py:57)
-하지만 현재 evaluator가 실제 계산하는 것은 trajectory_separation_margin_fixed_depth_v1입니다. [objectives.py (line 32)](/home/dk/workspace/lit_ws/lumo/optimization/objectives.py:32)
-Adapter는 이름을 대조하지 않고 objective_value만 읽기 때문에, 수치는 전달되지만 provenance상 잘못된 objective 이름으로 저장됩니다. Validation gate를 production과 동일한 objective identifier로 통일하고, evaluator/Ax/registry objective ID 일치 테스트가 필요합니다.
+야.
+예:
+low deformation                high deformation
 
-5. 현재 worktree에 대한 검증 증거가 없습니다.
-기존 smoke 산출물은 evaluator schema v1인데, 현재 코드는 schema v2입니다.
-- 기존 산출물: [config.json (line 11)](/home/dk/workspace/lit_ws/output/optimization/bo_smoke_20260820/config.json:11)
-- 현재 schema: [evaluator.py (line 80)](/home/dk/workspace/lit_ws/lumo/optimization/evaluator.py:80)
-더구나 현재 smoke test는 registry schema가 2라고 단정하지만 production 상수는 3입니다.
-- stale assertion: [test_run_bo_smoke.py (line 33)](/home/dk/workspace/lit_ws/tests/smoke/optimization/test_run_bo_smoke.py:33)
-- 실제 상수: [evaluation_registry.py (line 18)](/home/dk/workspace/lit_ws/lumo/optimization/evaluation_registry.py:18)
-따라서 현재 smoke gate는 정적으로도 실패가 확정되어 있습니다.
-NON-BLOCKING / 좋은 부분
-- evaluator contract fingerprint에 protocol, objective, mechanics, optics, device 및 fixed inputs가 포함됩니다.
-- candidate failure와 infrastructure failure가 구분되어 있습니다.
-- 18-state trajectory objective와 artifact 경로가 일관된 production boundary 안에 있습니다.
-- 과거 trajectory regression은 nominal/probe 총 36 state를 성공적으로 통과했습니다. 다만 현재 refactor 이전 증거이므로 production readiness 증거로 재사용할 수는 없습니다. [regression_summary.json (line 1)](/home/dk/workspace/lit_ws/output/validation/refactor/pep20_cleanup/regression_summary.json:1)
-최소 진입 순서는 다음입니다.
-1. exit-status, nominal fail-fast, objective identity, smoke schema 수정
-2. Ax snapshot/resume 추가
-3. 현재 코드 기준 unit → preflight → 1-trial smoke → 18-state validation 실행
-4. bounded 6D Test BO에서 실제 MBM 성공과 objective variation 확보
-5. 그 결과가 PASS일 때만 production budget 승인
-이번 작업은 read-only review였습니다. 파일은 수정하지 않았고 테스트·시뮬레이션·BO도 재실행하지 않았습니다. git diff --check만 통과했으며, 현재 production BO readiness 판정은 BLOCKED입니다.
+LED -----> ----->              LED -->\
+        ----->                           \-->
+                                          -->
+deformation에 따라 ray path distribution이 바뀌고 그걸 voxelize한다.
+즉 우리는:
+빛의 spatial transport pattern이 contact에 따라 얼마나 다르게 재배치되는가
 
+를 보고 있는 거야.
+왜 논문에서 이 distinction이 중요하냐
+이걸 그냥:
+optical intensity field
 
+라고 부르면 reviewer 입장에서는:
+“그럼 radiative transfer equation을 풀었나?”
+“이 값이 camera irradiance인가?”
+“각 voxel의 단위가 W/mm²인가?”
 
-Github Repo Review:
-1. 확실한 blocker: real BO smoke test가 현재 HEAD에서 stale함
-현재 production registry:
-REGISTRY_SCHEMA_VERSION = 3
-이다. 
-그런데 full-stack BO smoke test 마지막은:
-assert registry["schema_version"] == 2
-다. 
-그래서 GPU 환경에서 이 test를 실제로 돌리면 BO path 자체가 성공한 다음 마지막 assertion에서 실패할 가능성이 확정적이야.
-코드 bug라기보다 validation drift인데, BO readiness에서는 꽤 중요해. 지금 HEAD에는 visible CI workflow도 없어서 이런 drift가 자동으로 막히지 않는다.
-여기는 단순히 literal 2를 REGISTRY_SCHEMA_VERSION으로 바꾸는 게 더 좋겠어.
-그리고 이 smoke test는 한 가지 더 약점이 있어. 현재:
-assert summary["new_evaluation_count"] >= 1
-인데 nominal evaluation 하나만 성공해도 충족할 수 있어. sole Ax proposal이 invalid여도 test가 통과할 여지가 있다. 
-production-path smoke라면 가능하면 nominal + 최소 한 Ax-generated candidate 성공까지 보는 게 더 의미 있어.
-2. 가장 중요한 scientific issue: energy balance ≠ optical convergence
-이게 내가 지금 제일 신경 쓰는 부분이야.
-현재 production transport는:
-256 rays
-max_interactions = 6
-maximum_segment_count = 4096
-maximum_periodic_wraps = 8
-32 × 32 × 8 internal field
-를 사용한다. 
-그런데 transport에는 실제로 여러 numerical termination channel이 있어:
-branch cutoff
-max interactions
-segment budget
-periodic-wrap limit
-no-event termination
-그리고 이때 잘린 weight는 terminated_weight에 정상적으로 bookkeeping 된다. 
-그래서 극단적으로,
-launched = 1.0
-physical transport = 0.5
-numerically terminated = 0.5
-여도 energy balance는 완벽하게 1.0일 수 있어.
-즉 지금 아주 잘 구현된 energy bookkeeping은:
-계산 중 energy가 사라지지 않았음
+를 물을 수 있어.
+그런데 아니잖아.
+우리는 camera-independent optical transport proxy를 만든 거야.
+그래서 오히려 이렇게 주장하는 게 강하다.
+We intentionally optimize a camera-independent internal transport representation rather than a specific image formation model.
 
-을 증명하지,
-256 rays / 6 interactions / 4096 segments로 충분히 수렴했음
+이러면 morphology와 camera design을 분리할 수 있음.
+그리고 나중에 실제 camera signal과 correlation을 보여주면 훨씬 강해져.
+morphology
+   ↓
+internal optical transport proxy
+   ↓
+camera readout
+우리가 최적화하는 건 가운데 단계.
+즉 9번은 code bug 이야기가 아니라 논문의 claim boundary를 결정하는 문제야.
+10. 패스 👍
+11. Objective는 논문 관점에서 바꾸는 게 좋음
+현재 D_inter는 location만 다르면 radius/depth가 달라도 비교해. 
+나는 논문에는 이보다 matched-condition comparison이 훨씬 깨끗하다고 봐.
+Observation을
+\[
+F(u,r,d)
+\]라고 하자.
+- \(u\): contact location
+- \(r\): object radius
+- \(d\): indentation depth
+field normalization:
+\[
+\hat F(u,r,d)
+=
+\frac{F(u,r,d)}
+{\sum_vF_v(u,r,d)}.
+\]그리고 TV distance:
+\[
+D(F_a,F_b)
+=
+\frac12
+\|\hat F_a-\hat F_b\|_1.
+\]Contact-location separability
+내 추천:
+\[
+\boxed{
+D_{\mathrm{loc}}
+=
+\min_{r,d}
+\;
+\min_{u_i\neq u_j}
+D
+\left(
+F(u_i,r,d),
+F(u_j,r,d)
+\right)
+}
+\]즉 radius와 indentation은 같게 두고 location만 다르게 한다.
+해석:
+같은 contact condition에서 위치가 바뀌었을 때, 가장 구분하기 어려운 두 location도 충분히 떨어져 있어야 한다.
 
-을 증명하지 않아.
-문제는 objective가 nonzero field만 있으면 이 결과를 그대로 사용할 수 있다는 거야. objective_pathology=True여도 finite objective 자체는 유지하는 정책이고, 그게 test로도 명시되어 있다.  
-그러면 BO가 morphology effect 대신:
-이 morphology는 branching이 많아서 maximum_segment_count에 더 빨리 걸림
+아주 명확함.
+Radius robustness
+\[
+\boxed{
+D_{\mathrm{rad}}
+=
+\max_{u,d}
+\;
+\max_{r_i\neq r_j}
+D
+\left(
+F(u,r_i,d),
+F(u,r_j,d)
+\right)
+}
+\]해석:
+위치와 indentation이 동일할 때 object radius 변화 때문에 생기는 optical variation은 작았으면 좋겠다.
 
-같은 numerical truncation landscape를 배울 수 있어.
-내가 production 전에 반드시 확인할 것
-적어도 representative morphology들에서 256 → 512 → 1024 rays, interaction/segment budget 증가에 대해 objective, D_inter, D_radius가 안정적인지 봐야 해.
-특히 production 성공 조건으로는 적어도:
-segment_budget_termination_count == 0
-를 요구하는 걸 상당히 강하게 추천해.
-다른 termination weight 허용치는 지금 숫자를 임의로 정하지 말고 convergence sweep을 보고 결정하면 되고.
-3. internal path field가 grid 밖 값을 silent drop함
-Objective가 쓰는 native internal field에서 이게 꽤 중요한 부분이야.
-PathFieldAccumulator는 segment sample을 만든 뒤:
-valid &= inside_x & inside_y & inside_z
-로 거른 다음 valid sample만 field에 추가한다.
-grid 밖 sample의 count도, weighted path length도 기록하지 않는다. 
-현재 fixed field bounds는 꽤 넉넉해 보이고 valid search morphology에서 실제 clipping이 0일 가능성이 높아. 하지만 문제는 그 사실을 증명할 방법이 현재 result에 없다는 것이야.
-surface escape 쪽은 observation grid 밖 positive event가 나오면 fail-fast하는데, internal field는 조용히 버린다는 비대칭도 있어. 
-여기에는:
-clipped_sample_count
-clipped_weighted_path_length_mm
-정도 diagnostic을 추가하는 걸 추천해.
-그리고 production BO에서는 ideally 0이어야 함.
-이건 당장 physics formulation을 바꾸는 게 아니라 scientific observability를 추가하는 것이라 부담도 작아.
-4. candidate-specific optical failure 하나가 campaign 전체를 종료할 수 있음
-candidate mechanics 쪽은 잘 되어 있어.
-CandidateContactError, CandidateMechanicsError는 candidate failure로 변환되어 다음 trial로 진행한다. 
-그런데 optical geometry 단계에는 Transport3DGeometryError 같은 오류가 있고, deformed candidate geometry에 따라 발생할 수 있는 경우가 있다.
-현재 evaluator가 명시적으로 candidate failure로 잡아주는 optics exception이 제한적이라 이런 게 위로 올라가면 Ax boundary에서는:
-unknown exception
-→ current trial abandoned
-→ exception re-raise
-→ campaign abort
-가 된다. 
-반대로 Transport3DResultError 같은 실제 implementation/contract bug는 절대 candidate failure로 숨기면 안 된다. 현재 tests도 이 원칙을 잘 지키고 있어. 
-그래서 blanket catch가 아니라:
-CandidateOpticsError
-같이 candidate-dependent geometry/transport invalidity만 따로 분류하는 게 좋아.
-이건 unattended BO robustness 측면에서 HIGH라고 봐.
-5. 6D BO에 Sobol initialization = 1은 너무 공격적임
-현재 production:
-INITIALIZATION_TRIALS = 1
-이야. 
-그런데 같은 repo의 bounded 6D Test BO는 의도적으로:
-6 Sobol
-4 model-based
-를 쓴다. 
-나는 production도 최소 6 정도로 맞추는 쪽을 추천해.
-특히 지금 search box가 매우 넓어:
-flat       0.5 – 29.5
-semi       0.5 – 29.5
-stem_w     1   – 20
-stem_h     1   – 25
-void_w     0   – 10
-void_h     0   – 25
-인데 Ax에 전달되는 analytic constraints는 사실상 두 linear constraint뿐이야. 
-실제 fingertip에는 nonlinear geometry/thickness constraints가 훨씬 더 많고, invalid candidate는 Ax에서 failed trial이 될 뿐 feasibility model로 적극 학습되는 구조는 아니다.
-현재 box와 linear constraints를 가지고 내가 analytic geometry 조건만 대충 sampling해보면, linear constraints를 통과한 영역 중에서도 상당 부분이 geometry-invalid가 될 수 있는 형태야. 5 mm minimum silicone thickness까지 넣으면 더 빡빡해질 수 있고.
-그래서:
-1 Sobol + 바로 MBM
-은 search efficiency 측면에서 꽤 위험해 보여.
-6 Sobol은 과한 숫자도 아니고, 네 own test runner와도 일치해.
-6. Newton 쪽은 구현보다 “현재 설정의 evidence”가 남아 있음
-여기는 생각보다 좋았어.
-repo에 이미 sweep_newton_sphere_parameters.py가 있고:
-iterations
-load steps
-sphere subdivisions
-를 reference와 비교하도록 되어 있어.
-acceptance도:
-RMS vertex difference <= 0.005 mm
-relative max displacement difference <= 3%
-처럼 명확히 정의되어 있다. 
-이건 아주 좋은 방식이야.
-다만 production은 현재:
-10 VBD iterations
-0.05 mm max increment
-으로 고정이고 runtime residual 자체를 보는 건 아니다. 
-그래서 static code review만으로:
-10 iterations가 현재 넓어진 6D search space 전체에서 충분하다
+그럼 최종:
+\[
+\boxed{
+J
+=
+D_{\mathrm{loc}}
+-
+\lambda_rD_{\mathrm{rad}}
+}
+\]가 된다.
+이게 현재 formulation의 의도도 살리고 수식도 훨씬 예쁘다.
+나는 이 방향으로 코드도 바꾸는 걸 추천.
+왜 depth penalty는 안 넣냐
+일단 안 넣자.
+Depth는 nuisance라기보다 contact progression 자체니까.
+즉:
+location = 우리가 구분하고 싶은 signal
+radius   = nuisance
+depth    = trajectory / preload condition
+으로 두는 게 paper v1에서는 가장 깔끔하다.
+나중에 필요하면 depth invariance를 별도 metric으로 보고.
+12. surface u interpolation이 뭐냐
+OptiX가 triangle을 hit하면:
+triangle 안의 정확히 어디를 맞았는지
 
-고 certify할 수는 없어.
-코드를 다시 설계할 필요는 없고, 이미 만든 sweep을 현재 HEAD에서 돌리는 게 답이야.
-가능하면 nominal뿐 아니라 feasible edge/interior morphology 몇 개에서 확인하면 된다.
-Mesh도 같은 논리로 search mesh 1.5 mm와 reference mesh 1.0 mm 사이 objective sensitivity를 몇 점에서 보는 게 좋고.
-7. config/lumo_execution.yaml은 현재 애매한 상태
-파일 첫 줄은:
-Expert-owned numerical configuration for the production LUMO BO path
+를 barycentric coordinate로 알려줘. 현재 kernel도 그 값을 반환하고 있다. 
+예를 들어 triangle vertex가:
+A: u=0.2
+B: u=0.3
+C: u=0.3
+이고 hit point가:
+\[
+(\lambda_A,\lambda_B,\lambda_C)
+\]라면 material coordinate는 그냥:
+\[
+\boxed{
+u
+=
+\lambda_Au_A+
+\lambda_Bu_B+
+\lambda_Cu_C
+}
+\]면 끝이야.
+그런데 현재는 triangle의 첫 edge를 XY plane에 project해서 hit 위치를 추정한다. 
+extruded triangle은 이런 식일 수 있잖아.
+A (x,y,z0)
+|
+| z-direction
+|
+B (x,y,z1)
+ \
+  \
+   C (x2,y2,z1)
+A와 B는 XY가 동일함.
+그러면 AB를 XY에 projection하면 길이 0이 된다.
+그래서 현재 방식은 좀 이상한 approximation.
+방향
+barycentric interpolation으로 고치면 끝.
+그리고 이건 internal BO objective에는 영향 없고:
+outgoing_surface_field(u,z)
+같은 surface visualization/diagnostic에 주로 영향 준다.
+논문에 surface heatmap 넣을 거면 고치는 게 맞아.
+13. Object contact optics는 무슨 뜻이냐
+지금 sphere는 mechanics에는 존재해.
+sphere presses silicone
+        ↓
+silicone deforms
+        ↓
+ray tracing
+그런데 ray tracing에서 그 sphere 자체는 사실상 안 보인다.
+즉 contact patch에서:
+silicone
+████████
+    ● sphere
+가 실제로 닿아 있어도, optical simulation은 주로:
+silicone → air
+interface처럼 취급한다.
+현재 production에서는 carrier만 explicit absorber로 넣고 있다. 
+실제 물리에서는?
+object가 opaque하면:
+ray → contact object
+        ↓
+       absorbed / reflected
+가 돼야 하지.
+그래서 object contact 자체도 optical signal을 크게 만들 수 있다.
+논문 방향은 두 가지가 있음
+A. deformation-only study
+object optics는 일부러 제거하고 silicone deformation이 optical transport에 미치는 효과만 연구
 
-인데 바로 아래는:
-future load_lumo_execution_config() loader
+장점은 morphology mechanism이 깨끗함.
+하지만 claim은:
+“actual tactile optical sensor response”
 
-라고 적혀 있어. 실제 runner도 YAML을 읽지 않고 Python USER CONFIG를 사용한다.  
-그리고 YAML에는 실제 MechanicsContract가 가지는:
-soft_contact_mu
-rigid_sdf_target_voxel_mm
-가 없다. 
-현재 BO가 YAML을 사용하지 않으므로 당장 scientific result를 잘못 만드는 bug는 아니야.
-하지만 production config가 두 군데 존재하는 것처럼 보이는 건 위험해.
-나는 BO 전에 둘 중 하나를 택할 것 같아:
-현재는 Python USER CONFIG가 authoritative
-→ YAML에 명시적으로 DRAFT / NOT LOADED
-또는 loader까지 완성.
-지금은 반쯤 연결된 상태라 별로야.
-8. provenance는 좋은데 Git SHA도 저장했으면 좋음
-현재 evaluation contract가 numerical/scientific input을 상당히 잘 fingerprint한다.
-그런데 implementation code는:
-LUMO_EXECUTION_CONTRACT =
-    "newton-1.4-vbd+full3d-optix-v4"
-라는 manually maintained semantic version에 의존한다. 
-코드를 바꾼 후 이 string bump를 깜빡하고 외부 registry를 재사용하면 옛 result를 동일 contract로 간주할 여지가 있어.
-따라서 campaign config.json에는 최소:
-git_commit: 32c05c1...
-git_dirty: false
-를 남겼으면 좋겠어.
-cache invalidation key에 Git SHA를 무조건 넣으라는 뜻은 아니야. 그러면 harmless code change마다 cache가 날아가니까.
-provenance에는 반드시 기록, contract invalidation은 지금 semantic execution version 유지해도 충분히 합리적이야.
-9. 성능 측면에서는 OptiX runtime을 candidate 간 공유할 수 있음
-LumoSimulation은 이미 runtime injection을 지원하고 lazy reuse도 한다. 
-그런데 evaluator는 morphology마다 새 LumoSimulation을 만들면서 shared runtime을 전달하지 않아서, candidate마다 OptiX pipeline/runtime을 다시 만든다.
-18 optical states within candidate에서는 재사용하니까 끔찍한 건 아닌데, 100 candidate면 runtime setup도 100번.
-BO correctness 끝난 다음에는:
-Lumo3DTrajectoryEvaluator
-    owns one OptixRuntime
-          ↓
-LumoSimulation.from_fingertip(..., optix_runtime=runtime)
-로 바꾸면 꽤 자연스러울 듯.
-다만 이건 BO 시작 blocker는 아님.
-그래서 실제 GO 조건은?
-내가 지금 이 repo를 가지고 long production BO를 시작한다면, 아래 sequence를 다 통과한 뒤 시작할 거야.
-1. stale registry-schema smoke test 수정하고 full unit/architecture suite green 확인.
-2. candidate-local optical geometry failure 분류 보강.
-3. internal-field clipping diagnostic 추가.
-4. numerical termination, 특히 segment_budget_termination, 이 production objective를 오염시키지 않는다는 convergence 확인.
-5. Newton convergence sweep을 current HEAD + representative morphologies에서 실행.
-6. optics 256 vs higher ray-count objective convergence 확인.
-7. validation.optimization.lumo3d_trajectory_validation 성공.
-8. 6 Sobol + 4 MBM bounded Test BO가 current production evaluator로 정상 완료.
-9. production initialization도 최소 6 정도로 두고 fresh registry에서 첫 campaign 시작
+가 아니라
+“deformation-mediated optical transport proxy”
+
+로 제한해야 해.
+B. 실제 sensor model
+contact patch의 sphere/object를 absorber 또는 dielectric으로 넣는다.
+나는 최종 논문에는 B가 더 좋다고 봐.
+다만 복잡하게 object material을 다 모델링하진 말고:
+standardized opaque/absorbing indenter
+
+로 두자.
+즉 mechanics에서 sphere contact patch가 잡히면 그 부분을:
+OBJECT_CONTACT_INTERFACE
+로 tagging하고
+\[
+w_{\text{object}} \rightarrow 0
+\]absorber boundary를 쓰는 것.
+코드에 이미 ObjectBoundaryOptics("absorber") concept도 있으니까 formulation 자체는 준비돼 있다. 
+그러면 실제 실험도 검은/불투명 indenter를 쓰면 simulation assumption이 매우 명확해져.
+이걸 추천.
