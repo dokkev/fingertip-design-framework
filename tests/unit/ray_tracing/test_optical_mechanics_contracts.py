@@ -138,6 +138,17 @@ def test_attenuation_and_result_validation() -> None:
         replace(result, energy_balance_error=1.0e-6)
     with pytest.raises(Transport3DResultError, match="object interface"):
         replace(result, object_interface_incident_weight=0.1)
+    with pytest.raises(Transport3DResultError, match="zero segment_budget"):
+        replace(
+            result,
+            escaped_weight=0.9,
+            terminated_weight=0.1,
+            segment_budget_termination_count=0,
+            segment_budget_termination_weight=0.1,
+            outgoing_surface_weight=0.9,
+            outgoing_surface_field=np.full((2, 2), 0.225),
+            escape_weights=np.asarray([0.9]),
+        )
 
     envelope_escape = replace(
         result,
@@ -254,6 +265,85 @@ def test_path_field_sampling_cap_preserves_total_weighted_length() -> None:
 
     assert np.sum(accumulator.density_zyx) == pytest.approx(1.5)
     assert accumulator.processed_segment_count == 1
+
+
+def test_path_field_clipping_diagnostics_conserve_active_weighted_length() -> None:
+    accumulator = PathFieldAccumulator(
+        x_edges=np.asarray([0.0, 1.0]),
+        y_edges=np.asarray([0.0, 1.0]),
+        z_edges=np.asarray([0.0, 1.0]),
+        density_zyx=np.zeros((1, 1, 1), dtype=float),
+        maximum_spacing_mm=0.5,
+        maximum_samples_per_segment=16,
+    )
+    accumulator.accumulate(
+        np.asarray([[0.25, 0.5, 0.5], [2.0, 0.5, 0.5]]),
+        np.asarray([[1.75, 0.5, 0.5], [3.0, 0.5, 0.5]]),
+        np.asarray([1.0, 1.0]),
+        np.asarray([1.0, 1.0]),
+    )
+
+    diagnostics = accumulator.diagnostics
+    assert diagnostics.processed_sample_count == 5
+    assert diagnostics.clipped_sample_count == 3
+    assert diagnostics.represented_weighted_path_length_mm == pytest.approx(1.0)
+    assert diagnostics.clipped_weighted_path_length_mm == pytest.approx(1.5)
+    assert diagnostics.processed_weighted_path_length_mm == pytest.approx(2.5)
+    assert np.all(accumulator.density_zyx >= 0.0)
+    assert np.sum(accumulator.density_zyx) == pytest.approx(
+        diagnostics.represented_weighted_path_length_mm
+    )
+
+
+def test_path_field_reports_an_all_clipped_active_segment() -> None:
+    accumulator = PathFieldAccumulator(
+        x_edges=np.asarray([0.0, 1.0]),
+        y_edges=np.asarray([0.0, 1.0]),
+        z_edges=np.asarray([0.0, 1.0]),
+        density_zyx=np.zeros((1, 1, 1), dtype=float),
+        maximum_spacing_mm=0.5,
+        maximum_samples_per_segment=16,
+    )
+    accumulator.accumulate(
+        np.asarray([[2.0, 0.5, 0.5]]),
+        np.asarray([[3.0, 0.5, 0.5]]),
+        np.asarray([1.0]),
+        np.asarray([1.0]),
+    )
+
+    diagnostics = accumulator.diagnostics
+    assert diagnostics.processed_sample_count > 0
+    assert diagnostics.clipped_sample_count == diagnostics.processed_sample_count
+    assert diagnostics.represented_weighted_path_length_mm == pytest.approx(0.0)
+    assert diagnostics.clipped_weighted_path_length_mm == pytest.approx(1.0)
+    assert np.sum(accumulator.density_zyx) == pytest.approx(0.0)
+
+
+def test_path_field_padding_is_inactive_and_nonfinite_batches_fail_closed() -> None:
+    accumulator = PathFieldAccumulator(
+        x_edges=np.asarray([0.0, 2.0]),
+        y_edges=np.asarray([0.0, 2.0]),
+        z_edges=np.asarray([0.0, 2.0]),
+        density_zyx=np.zeros((1, 1, 1), dtype=float),
+        maximum_spacing_mm=0.5,
+        maximum_samples_per_segment=16,
+    )
+    accumulator.accumulate(
+        np.asarray([[1.0, 1.0, 1.0], [1.0, 1.0, 1.0]]),
+        np.asarray([[1.1, 1.0, 1.0], [2.0, 1.0, 1.0]]),
+        np.asarray([1.0, 1.0]),
+        np.asarray([1.0, 1.0]),
+    )
+    assert accumulator.processed_sample_count == 3
+    assert accumulator.clipped_sample_count == 0
+
+    with pytest.raises(ValueError, match="finite"):
+        accumulator.accumulate(
+            np.asarray([[np.nan, 0.0, 0.0]]),
+            np.asarray([[0.0, 0.0, 0.0]]),
+            np.asarray([1.0]),
+            np.asarray([1.0]),
+        )
 
 
 def test_nested_result_metadata_is_immutable() -> None:

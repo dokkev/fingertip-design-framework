@@ -19,7 +19,7 @@ from lumo.contact import (
 )
 from lumo.contact.sphere_alignment import SphereAlignment
 from lumo.mechanics_contract import DEFAULT_MECHANICS_CONTRACT, MechanicsContract
-from lumo.mesh import volume_mesh_settings_for_tier
+from lumo.mesh import VolumeMeshSettings, volume_mesh_settings_for_tier
 from lumo.mesh.rigid.carrier import RigidCarrierMesh, make_distal_phalanx_mesh
 from lumo.mesh.rigid.object import make_sphere_mesh
 from lumo.mesh.volume.contracts import FingertipVolumeMesh
@@ -30,6 +30,7 @@ from lumo.ray_tracing.contracts.objects import CarrierOptics
 from lumo.ray_tracing.optical_mechanics import (
     Transport3DResult,
     Transport3DSettings,
+    Transport3DCandidateGeometryError,
     build_fingertip_volume_state_geometry,
     trace_geometry,
 )
@@ -54,6 +55,23 @@ from lumo.physics import (
 LUMO3D_OPTICAL_X_BOUNDS_MM = (-16.0, 16.0)
 LUMO3D_OPTICAL_Y_BOUNDS_MM = (-31.0, 4.5)
 LUMO3D_OBSERVATION_LEVEL = "FULL_3D native internal transport redistribution proxy"
+
+
+class CandidateOpticsError(RuntimeError):
+    """Raised when one deformed candidate cannot form an optical scene."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        failure_scenario: str = "candidate_optics_geometry",
+        cause_type: str | None = None,
+        cause_message: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.failure_scenario = failure_scenario
+        self.cause_type = cause_type
+        self.cause_message = cause_message
 
 
 def lumo_optical_settings() -> Transport3DSettings:
@@ -202,6 +220,15 @@ class LumoSimulation:
         if not isinstance(selected_optical_settings, Transport3DSettings):
             raise TypeError("optical_settings must be a Transport3DSettings or None")
         solid = tip.solid()
+        if not np.isclose(
+            selected_optical_settings.extrusion_depth_mm,
+            solid.extrusion_depth_mm,
+            rtol=0.0,
+            atol=1.0e-12,
+        ):
+            raise ValueError(
+                "optical extrusion depth must match the meshed representative cell"
+            )
         if volume_mesh.morphology_fingerprint != solid.morphology_fingerprint:
             raise ValueError("volume_mesh morphology does not match tip")
         if not _prepared_mesh_matches_volume_mesh(prepared, volume_mesh):
@@ -250,14 +277,24 @@ class LumoSimulation:
         device: str = "cuda:0",
         optical_settings: Transport3DSettings | None = None,
         optix_runtime: OptixRuntime | None = None,
+        volume_mesh_settings: VolumeMeshSettings = volume_mesh_settings_for_tier(
+            "search"
+        ),
     ) -> "LumoSimulation":
         """Prepare reusable volume/contact/carrier state for one morphology."""
 
         if not isinstance(tip, Fingertip):
             raise TypeError("tip must be a Fingertip")
+        if not isinstance(volume_mesh_settings, VolumeMeshSettings):
+            raise TypeError("volume_mesh_settings must be a VolumeMeshSettings")
+        selected_optical_settings = optical_settings or lumo_optical_settings()
+        if not isinstance(selected_optical_settings, Transport3DSettings):
+            raise TypeError("optical_settings must be a Transport3DSettings or None")
         volume_mesh = generate_volume_mesh(
-            tip.solid(),
-            volume_mesh_settings_for_tier("search"),
+            tip.solid(
+                extrusion_depth_mm=selected_optical_settings.extrusion_depth_mm
+            ),
+            volume_mesh_settings,
         )
         prepared = prepare_fingertip_mesh(volume_mesh)
         return cls(
@@ -269,13 +306,13 @@ class LumoSimulation:
             initial_gap_mm=initial_gap_mm,
             mechanics_contract=mechanics_contract,
             device=device,
-            optical_settings=optical_settings,
+            optical_settings=selected_optical_settings,
             optix_runtime=optix_runtime,
         )
 
     def _runtime(self) -> OptixRuntime:
         if self.optix_runtime is None:
-            self.optix_runtime = create_runtime()
+            self.optix_runtime = create_runtime(self.device)
         return self.optix_runtime
 
     @staticmethod
@@ -411,6 +448,7 @@ class LumoSimulation:
             ),
             carrier_optics=CarrierOptics("absorber"),
             carrier_mapping_tolerance_mm=mapping_tolerance_mm,
+            source_epsilon_mm=self.optical_settings.source_epsilon_mm,
             full3d_surface_provenance="actual_deformed_3d_volume_state",
         )
         return mechanics, geometry
@@ -520,20 +558,29 @@ class LumoSimulation:
         for checkpoint in trajectory.checkpoints:
             self._validate_checkpoint(checkpoint)
             source_ids = self._carrier_contact_source_ids(checkpoint)
-            mechanics, geometry = self._state_geometry(
-                checkpoint,
-                carrier_contact_source_node_ids=source_ids,
-            )
+            try:
+                mechanics, geometry = self._state_geometry(
+                    checkpoint,
+                    carrier_contact_source_node_ids=source_ids,
+                )
+                optics = trace_geometry(
+                    self.tip,
+                    geometry,
+                    settings=self.optical_settings,
+                    runtime=self._runtime(),
+                )
+            except Transport3DCandidateGeometryError as exc:
+                raise CandidateOpticsError(
+                    "candidate-specific optical geometry is invalid: "
+                    f"{exc}",
+                    cause_type=type(exc).__name__,
+                    cause_message=str(exc),
+                ) from exc
             checkpoints.append(
                 ContactOpticalState(
                     checkpoint=checkpoint,
                     mechanics=mechanics,
-                    optics=trace_geometry(
-                        self.tip,
-                        geometry,
-                        settings=self.optical_settings,
-                        runtime=self._runtime(),
-                    ),
+                    optics=optics,
                 )
             )
         optics_seconds = time.perf_counter() - optics_started
@@ -551,6 +598,7 @@ class LumoSimulation:
 
 
 __all__ = [
+    "CandidateOpticsError",
     "ContactOpticalState",
     "ContactSimulationResult",
     "LumoSimulation",

@@ -20,10 +20,14 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
+from lumo.config import LumoExecutionConfig, load_lumo_execution_config
 from lumo.mesh.volume.mesh import VolumeMeshDependencyError
-from lumo.finger import FingertipParameters, silicone_thickness_measures
+from lumo.finger import silicone_thickness_measures
 from lumo.ray_tracing.optical_mechanics import Transport3DDependencyError
-from lumo.optimization.optical_contract import fingerprint_mapping
+from lumo.optimization.optical_contract import (
+    fingerprint_mapping,
+    summarize_optical_failure_diagnostics,
+)
 from scripts.tools.optix_smoke import run as run_optix_smoke
 from lumo.optimization.adapters.ax import (
     AxSettings,
@@ -38,9 +42,7 @@ from lumo.optimization.design_space import (
     DesignSpace,
     DesignVariable,
     OPTIMIZABLE_PARAMETER_NAMES,
-    PRODUCTION_NOMINAL_VOID_HEIGHT_MM,
     PRODUCTION_LINEAR_CONSTRAINTS,
-    PRODUCTION_SEARCH_BOUNDS,
 )
 from lumo.optimization.objectives import ObjectiveIdentifier
 from lumo.physics import PhysicsDependencyError
@@ -51,8 +53,15 @@ from lumo.optimization.evaluator import (
 )
 from lumo.simulation import (
     LUMO3D_OBSERVATION_LEVEL,
-    LUMO3D_OPTICAL_X_BOUNDS_MM,
-    LUMO3D_OPTICAL_Y_BOUNDS_MM,
+)
+from scripts.optimization.run_bo import (
+    USER_LED,
+    USER_OBJECTIVE,
+    USER_PARAMETERS,
+    USER_PROTOCOL,
+    USER_SEARCH_BOUNDS,
+    _enforce_source_policy,
+    _source_provenance,
 )
 
 
@@ -62,19 +71,25 @@ MAX_FEASIBILITY_RESAMPLES = 100
 SEED = 20260819
 SOBOL_TRIALS = 6
 BO_TRIALS = 4
-MAX_ATTEMPTED_TRIALS = SOBOL_TRIALS + BO_TRIALS
+MAX_EVALUATIONS = 1 + SOBOL_TRIALS + BO_TRIALS + 10
+MAX_ATTEMPTED_TRIALS = SOBOL_TRIALS + BO_TRIALS + 20
 MAX_CONSECUTIVE_KNOWN_PROPOSALS = 20
 OUTPUT_DIRECTORY = Path("output/validation/optimization/lumo6d_test_bo")
+DEFAULT_EXECUTION_CONFIG = (
+    Path(__file__).resolve().parents[2] / "config" / "lumo_execution.yaml"
+)
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
 def _production_design_space() -> DesignSpace:
     return DesignSpace(
-        FingertipParameters(void_height=PRODUCTION_NOMINAL_VOID_HEIGHT_MM),
+        USER_PARAMETERS,
         tuple(
             DesignVariable(spec.name, True, spec.lower, spec.upper)
-            for spec in PRODUCTION_SEARCH_BOUNDS
+            for spec in USER_SEARCH_BOUNDS
         ),
         linear_constraints=PRODUCTION_LINEAR_CONSTRAINTS,
     )
@@ -97,10 +112,10 @@ def _parameter_values(parameters: Mapping[str, object]) -> dict[str, float]:
     }
 
 
-def _optical_grid() -> dict[str, Any]:
+def _optical_grid(execution: LumoExecutionConfig) -> dict[str, Any]:
     grid = {
-        "x_bounds_mm": list(LUMO3D_OPTICAL_X_BOUNDS_MM),
-        "y_bounds_mm": list(LUMO3D_OPTICAL_Y_BOUNDS_MM),
+        "x_bounds_mm": list(execution.transport.x_bounds_mm),
+        "y_bounds_mm": list(execution.transport.y_bounds_mm),
         "mode": "FULL_3D",
     }
     return {
@@ -273,6 +288,12 @@ def _trial_payload(
     evaluation_diagnostics = (
         {} if evaluation is None else dict(evaluation.report)
     )
+    failure_diagnostics = evaluation_diagnostics.get(
+        "failure_diagnostics",
+        evaluation_diagnostics if status == "optics_failed" else {},
+    )
+    if not isinstance(failure_diagnostics, Mapping):
+        failure_diagnostics = {}
     return {
         "trial_index": attempt_index,
         "ax_trial_index": (
@@ -355,6 +376,12 @@ def _trial_payload(
         "optics_runtime_s": evaluation_diagnostics.get("optics_runtime_s"),
         "total_runtime_s": record.wall_time_seconds,
         "failure_message": record.failure_message,
+        "failure_scenario": (
+            None
+            if evaluation is None
+            else getattr(evaluation, "failure_scenario", None)
+        ),
+        "failure_diagnostics": dict(failure_diagnostics),
         "registry_key": record.registry_key,
         "artifact_paths": [
             str(item.optical_artifact_path)
@@ -407,7 +434,7 @@ def _pre_run_sanity(
     return {
         "active_variable_count": len(design_space.active_variables),
         "active_variables": list(OPTIMIZABLE_PARAMETER_NAMES),
-        "numerical_envelopes": [spec.to_dict() for spec in PRODUCTION_SEARCH_BOUNDS],
+        "numerical_envelopes": [spec.to_dict() for spec in USER_SEARCH_BOUNDS],
         "linear_constraints": [
             constraint.expression for constraint in PRODUCTION_LINEAR_CONSTRAINTS
         ],
@@ -593,6 +620,14 @@ def _diagnostics(
             and best_carrier is not None
             and float(best_carrier) > float(np.median(carrier_values))
         )
+    objective_range = (
+        None if not objective_values else [min(objective_values), max(objective_values)]
+    )
+    objective_span = (
+        None
+        if objective_range is None
+        else float(objective_range[1] - objective_range[0])
+    )
     return {
         "successful_count": len(successful),
         "geometry_valid_count": sum(
@@ -627,11 +662,22 @@ def _diagnostics(
             best is not None
             and any(
                 abs(float(best[spec.name.value]) - bound) <= 1.0e-8
-                for spec in PRODUCTION_SEARCH_BOUNDS
+                for spec in USER_SEARCH_BOUNDS
                 for bound in (spec.lower, spec.upper)
             )
         ),
-        "objective_range": None if not objective_values else [min(objective_values), max(objective_values)],
+        "objective_range": objective_range,
+        "objective_variation": {
+            "range": objective_range,
+            "span": objective_span,
+            "nonzero": bool(objective_span is not None and objective_span > 0.0),
+            "scientific_threshold": None,
+            "magnitude_assessment": (
+                "INCONCLUSIVE"
+                if objective_span is not None and objective_span > 0.0
+                else "FAIL"
+            ),
+        },
         "objective_vs_d_min_correlation": correlation("minimum_silicone_thickness_mm", "objective"),
         "objective_vs_void_width_correlation": correlation("void_width", "objective"),
         "objective_vs_total_depth_correlation": correlation("total_pad_depth_mm", "objective"),
@@ -646,21 +692,73 @@ def _diagnostics(
         },
         "best_candidate_carrier_absorption": None if best is None else best.get("carrier_absorbed_weight"),
         "objective_extinction_pathology": pathology,
-        "diagnostic_limits": "n=10 bounded Test BO diagnostics only; no strong scientific trend is inferred",
+        "diagnostic_limits": (
+            "bounded successful-observation diagnostics only; attempt caps may "
+            "produce more than ten proposals and no strong scientific trend is inferred"
+        ),
+        "optical_failure_summary": summarize_optical_failure_diagnostics(records),
     }
 
 
-def run_lumo6d_test_bo(output_dir: str | Path = OUTPUT_DIRECTORY) -> dict[str, Any]:
-    """Run the nominal + six-Sobol + four-MBM bounded integration test."""
+def _bounded_gate_status(
+    diagnostics: Mapping[str, Any],
+    *,
+    ax_status: str,
+) -> str:
+    """Apply the bounded gate without inventing a variation magnitude threshold."""
+
+    variation = diagnostics.get("objective_variation")
+    nonzero_variation = bool(
+        isinstance(variation, Mapping) and variation.get("nonzero") is True
+    )
+    if (
+        diagnostics["objective_extinction_pathology"]
+        or ax_status != "COMPLETE"
+        or diagnostics["bo_successful_count"] < 1
+        or not nonzero_variation
+    ):
+        return "FAIL"
+    if (
+        diagnostics["mechanics_failure_count"] > 0
+        or diagnostics["optics_failure_count"] > 0
+        or diagnostics["successful_count"] < 8
+    ):
+        return "PASS_WITH_LIMITATION"
+    return "PASS"
+
+
+def run_lumo6d_test_bo(
+    output_dir: str | Path = OUTPUT_DIRECTORY,
+    *,
+    execution_config: str | Path | LumoExecutionConfig = DEFAULT_EXECUTION_CONFIG,
+) -> dict[str, Any]:
+    """Run nominal plus six Sobol and four MBM successful observations."""
     output = Path(output_dir)
     if output.exists() and any(output.iterdir()):
         raise FileExistsError(f"refusing to overwrite non-empty Test BO directory: {output}")
+    execution = (
+        execution_config
+        if isinstance(execution_config, LumoExecutionConfig)
+        else load_lumo_execution_config(execution_config)
+    )
+    source = _source_provenance()
+    _enforce_source_policy(source, smoke=True, allow_dirty=True)
     output.mkdir(parents=True, exist_ok=True)
     plots = output / "plots"
     plots.mkdir(parents=True, exist_ok=True)
     started = time.perf_counter()
     design_space = _production_design_space()
-    evaluator = Lumo3DTrajectoryEvaluator(output / "artifacts")
+    evaluator = Lumo3DTrajectoryEvaluator(
+        output / "artifacts",
+        protocol=USER_PROTOCOL,
+        objective_config=USER_OBJECTIVE,
+        mechanics_contract=execution.mechanics,
+        device=execution.device,
+        optical_settings=execution.transport,
+        led=USER_LED,
+        fixed_parameters=USER_PARAMETERS,
+        volume_mesh_settings=execution.volume_mesh,
+    )
     objective = evaluator.objective_identifier
     contract_id = evaluator.evaluation_contract_id
     evaluation_contract = {
@@ -672,16 +770,19 @@ def run_lumo6d_test_bo(output_dir: str | Path = OUTPUT_DIRECTORY) -> dict[str, A
     }
     search_mechanics = _search_mechanics(evaluator)
     sanity = _pre_run_sanity(design_space, objective)
-    grid = _optical_grid()
+    grid = _optical_grid(execution)
     configuration = {
         "schema": "lumo6d-test-bo-v1",
         "status": "INITIALIZING",
         "created_at": _now(),
+        "source": source,
+        "execution_config": execution.to_dict(),
         "seed": SEED,
         "ax": {
             "initialization_trials": SOBOL_TRIALS,
             "search_trials": BO_TRIALS,
             "max_attempted_proposals": MAX_ATTEMPTED_TRIALS,
+            "max_evaluations": MAX_EVALUATIONS,
             "max_consecutive_known_proposals": MAX_CONSECUTIVE_KNOWN_PROPOSALS,
             "max_feasibility_resamples": MAX_FEASIBILITY_RESAMPLES,
             "parameterization_version": design_space.parameterization_version,
@@ -691,7 +792,7 @@ def run_lumo6d_test_bo(output_dir: str | Path = OUTPUT_DIRECTORY) -> dict[str, A
             variable.to_dict() for variable in design_space.search_variables
         ],
         "parameterization_version": design_space.parameterization_version,
-        "numerical_envelopes": [spec.to_dict() for spec in PRODUCTION_SEARCH_BOUNDS],
+        "numerical_envelopes": [spec.to_dict() for spec in USER_SEARCH_BOUNDS],
         "linear_constraints": [
             constraint.expression for constraint in PRODUCTION_LINEAR_CONSTRAINTS
         ],
@@ -714,12 +815,19 @@ def run_lumo6d_test_bo(output_dir: str | Path = OUTPUT_DIRECTORY) -> dict[str, A
         "contract_id": contract_id,
         "objective_name": objective.serialized_name,
         "parameterization_version": design_space.parameterization_version,
+        "source": source,
+        "execution_config": execution.to_dict(),
     }
     _write_json(output / "checkpoint.json", state)
 
     try:
-        preflight = run_optix_smoke()
-        state["optix_preflight"] = {"status": "PASS", "evidence": preflight.to_dict()}
+        preflight = run_optix_smoke(int(execution.device.removeprefix("cuda:")))
+        state["optix_preflight"] = {
+            "status": "PASS",
+            "source": source,
+            "execution_config": execution.to_dict(),
+            "evidence": preflight.to_dict(),
+        }
         _write_json(output / "preflight.json", state["optix_preflight"])
         _write_json(output / "checkpoint.json", state)
 
@@ -789,6 +897,7 @@ def run_lumo6d_test_bo(output_dir: str | Path = OUTPUT_DIRECTORY) -> dict[str, A
             failure_message=None,
             failure_scenario=None,
             evaluation_wall_time_seconds=nominal_record.wall_time_seconds,
+            producer_source=source,
         )
         nominal_payload["registry_key"] = nominal_registry.key
         _write_json(output / "nominal.json", nominal_payload)
@@ -832,25 +941,17 @@ def run_lumo6d_test_bo(output_dir: str | Path = OUTPUT_DIRECTORY) -> dict[str, A
             result_artifact_path=str((output / "checkpoint.json").resolve()),
             max_consecutive_known_proposals=MAX_CONSECUTIVE_KNOWN_PROPOSALS,
             max_proposals=MAX_ATTEMPTED_TRIALS,
+            # Nominal was evaluated explicitly above, before the adapter was
+            # bootstrapped from the registry, so reserve one total-call slot.
+            max_evaluations=MAX_EVALUATIONS - 1,
             max_feasibility_resamples=MAX_FEASIBILITY_RESAMPLES,
+            producer_source=source,
         )
         ordered = [records_by_trial[index] for index in sorted(records_by_trial)]
         _write_json(output / "trials.json", ordered)
         _persist_csv(output / "trials.csv", ordered)
         diagnostics = _diagnostics(ordered, nominal_payload)
-        status = "PASS"
-        if (
-            diagnostics["objective_extinction_pathology"]
-            or result.status != "COMPLETE"
-            or diagnostics["bo_successful_count"] < 1
-        ):
-            status = "FAIL"
-        elif (
-            diagnostics["mechanics_failure_count"] > 0
-            or diagnostics["optics_failure_count"] > 0
-            or diagnostics["successful_count"] < 8
-        ):
-            status = "PASS_WITH_LIMITATION"
+        status = _bounded_gate_status(diagnostics, ax_status=result.status)
         state.update({
             "status": status,
             "ax_status": result.status,
@@ -911,6 +1012,8 @@ def run_lumo6d_test_bo(output_dir: str | Path = OUTPUT_DIRECTORY) -> dict[str, A
             "objective_direction": "maximize",
             "contract_id": contract_id,
             "artifact_directory": str(output),
+            "source": source,
+            "execution_config": execution.to_dict(),
             "total_wall_clock_runtime_s": time.perf_counter() - started,
             "plots": sorted(str(path.relative_to(output)) for path in plots.glob("*.png")),
         }
@@ -936,14 +1039,39 @@ def run_lumo6d_test_bo(output_dir: str | Path = OUTPUT_DIRECTORY) -> dict[str, A
         raise
 
 
-__all__ = ["run_lumo6d_test_bo", "OUTPUT_DIRECTORY"]
+__all__ = [
+    "DEFAULT_EXECUTION_CONFIG",
+    "OUTPUT_DIRECTORY",
+    "main",
+    "run_lumo6d_test_bo",
+]
 
 
-if __name__ == "__main__":
+def main(argv: list[str] | None = None) -> int:
+    """Run the bounded gate and expose scientific failure through the CLI."""
+
     import argparse
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, default=OUTPUT_DIRECTORY)
-    args = parser.parse_args()
-    result = run_lumo6d_test_bo(args.output)
+    parser.add_argument(
+        "--execution-config",
+        type=Path,
+        default=DEFAULT_EXECUTION_CONFIG,
+    )
+    args = parser.parse_args(argv)
+    try:
+        result = run_lumo6d_test_bo(
+            args.output,
+            execution_config=args.execution_config,
+        )
+    except CampaignInfrastructureError as exc:
+        parser.exit(2, f"INFRASTRUCTURE_FAILED [{exc.signature}]: {exc}\n")
+    except (OSError, RuntimeError, TypeError, ValueError) as exc:
+        parser.exit(2, f"BO_GATE_ABORTED: {exc}\n")
     print(json.dumps(result, indent=2, sort_keys=True, allow_nan=False))
+    return 0 if result.get("status") == "PASS" else 3
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

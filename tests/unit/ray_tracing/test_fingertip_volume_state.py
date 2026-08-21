@@ -11,7 +11,12 @@ from lumo.mesh import FingertipVolumeState, volume_mesh_settings_for_tier
 from lumo.mesh.rigid.carrier import make_distal_phalanx_mesh
 from lumo.mesh.volume.mesh import generate_volume_mesh
 from lumo.finger import Fingertip
-from lumo.ray_tracing.optical_mechanics import build_fingertip_volume_state_geometry
+from lumo.ray_tracing.optical_mechanics import (
+    Transport3DCandidateGeometryError,
+    Transport3DGeometryError,
+    build_fingertip_volume_state_geometry,
+)
+from lumo.ray_tracing.optical_mechanics.state_adapter import _silicone_surface
 
 
 def _relabel_with_surface_nodes_outside_the_canonical_prefix(volume_mesh):
@@ -70,6 +75,29 @@ def _surface_node_ids(volume_mesh) -> tuple[int, ...]:
             }
         )
     )
+
+
+def _unchecked_deformed_state(volume_mesh, coordinates: np.ndarray) -> FingertipVolumeState:
+    """Create an adapter-boundary state after solver-owned validation is mocked."""
+
+    state = object.__new__(FingertipVolumeState)
+    node_ids = tuple(sorted(volume_mesh.nodes))
+    reference = np.asarray(
+        [
+            (
+                volume_mesh.nodes[node_id].x_mm,
+                volume_mesh.nodes[node_id].y_mm,
+                volume_mesh.nodes[node_id].z_mm,
+            )
+            for node_id in node_ids
+        ],
+        dtype=float,
+    )
+    object.__setattr__(state, "volume_mesh", volume_mesh)
+    object.__setattr__(state, "deformed_coordinates_mm", np.asarray(coordinates))
+    object.__setattr__(state, "_source_node_ids", node_ids)
+    object.__setattr__(state, "_reference_coordinates_mm", reference)
+    return state
 
 
 def _tetra_by_boundary_face(state: FingertipVolumeState) -> dict[tuple[int, int, int], tuple[int, ...]]:
@@ -260,3 +288,48 @@ def test_u_material_coordinates_are_reference_based_and_backend_independent() ->
     )
     assert np.all(np.isfinite(external_u))
     assert float(np.ptp(external_u)) > 0.0
+
+
+def test_deformed_surface_collapse_is_candidate_scoped_but_static_tags_are_fatal() -> None:
+    tip = Fingertip()
+    volume_mesh = generate_volume_mesh(
+        tip.solid(),
+        volume_mesh_settings_for_tier("search"),
+    )
+    reference = FingertipVolumeState.reference(volume_mesh)
+    collapsed = np.array(reference.deformed_coordinates_mm, copy=True)
+    lateral_triangle = next(
+        triangle
+        for tag, triangles in volume_mesh.surface_triangles.items()
+        if not tag.startswith("longitudinal_end_")
+        for triangle in triangles
+    )
+    canonical_index = {
+        node_id: index for index, node_id in enumerate(reference.source_node_ids)
+    }
+    first, second, third = (
+        canonical_index[int(node_id)] for node_id in lateral_triangle.node_ids
+    )
+    collapsed[second] = collapsed[first]
+    collapsed[third] = collapsed[first]
+    candidate = _unchecked_deformed_state(volume_mesh, collapsed)
+
+    with pytest.raises(
+        Transport3DCandidateGeometryError,
+        match="deformed candidate silicone surface",
+    ):
+        _silicone_surface(tip, candidate)
+
+    unknown_tag_mesh = replace(
+        volume_mesh,
+        surface_triangles={
+            **dict(volume_mesh.surface_triangles),
+            "unknown_static_tag": (lateral_triangle,),
+        },
+    )
+    static_invalid = _unchecked_deformed_state(
+        unknown_tag_mesh,
+        reference.deformed_coordinates_mm,
+    )
+    with pytest.raises(Transport3DGeometryError, match="unknown semantic"):
+        _silicone_surface(tip, static_invalid)

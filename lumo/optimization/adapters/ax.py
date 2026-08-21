@@ -38,6 +38,7 @@ AxRunStatus = Literal[
     "nominal_evaluation_failed",
     "optimizer_stalled_on_known_evaluations",
     "proposal_budget_exhausted",
+    "evaluation_budget_exhausted",
     "feasible_generation_exhausted",
 ]
 
@@ -48,6 +49,7 @@ class AxTerminationReason(StrEnum):
     REQUESTED_BUDGET_REACHED = "requested_budget_reached"
     NOMINAL_FAILED = "nominal_failed"
     PROPOSAL_BUDGET_EXHAUSTED = "proposal_budget_exhausted"
+    EVALUATION_BUDGET_EXHAUSTED = "evaluation_budget_exhausted"
     OPTIMIZER_STALLED = "optimizer_stalled"
     FEASIBLE_GENERATION_EXHAUSTED = "feasible_generation_exhausted"
 
@@ -57,6 +59,9 @@ _TERMINATION_REASON_BY_STATUS: Mapping[AxRunStatus, AxTerminationReason] = {
     "nominal_evaluation_failed": AxTerminationReason.NOMINAL_FAILED,
     "optimizer_stalled_on_known_evaluations": AxTerminationReason.OPTIMIZER_STALLED,
     "proposal_budget_exhausted": AxTerminationReason.PROPOSAL_BUDGET_EXHAUSTED,
+    "evaluation_budget_exhausted": (
+        AxTerminationReason.EVALUATION_BUDGET_EXHAUSTED
+    ),
     "feasible_generation_exhausted": (
         AxTerminationReason.FEASIBLE_GENERATION_EXHAUSTED
     ),
@@ -220,6 +225,7 @@ class _RestoredEvaluation:
     failure_message: str | None = None
     result_artifact_path: str | None = None
     failure_scenario: str | None = None
+    report: Mapping[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -243,8 +249,6 @@ def ax_trial_record_from_payload(payload: Mapping[str, Any]) -> AxTrialRecord:
     evaluation: object | None
     if feasibility_rejection or duplicate:
         evaluation = None
-    elif status == "invalid_design" and payload.get("objective") is None:
-        evaluation = None
     else:
         evaluation = _RestoredEvaluation(
             status=status,
@@ -256,6 +260,11 @@ def ax_trial_record_from_payload(payload: Mapping[str, Any]) -> AxTrialRecord:
             failure_message=payload.get("failure_message"),
             result_artifact_path=payload.get("result_artifact_path"),
             failure_scenario=payload.get("failure_scenario"),
+            report=(
+                dict(payload["failure_diagnostics"])
+                if isinstance(payload.get("failure_diagnostics"), Mapping)
+                else {}
+            ),
         )
     duplicate_trial = payload.get("duplicate_of_trial_index")
     return AxTrialRecord(
@@ -427,6 +436,7 @@ class AxRunResult:
     def new_evaluation_count(self) -> int:
         return sum(
             record.status not in ("duplicate_skipped", "feasibility_rejected")
+            and not record.reused_evaluation
             for record in self.records
         )
 
@@ -873,9 +883,11 @@ def run_ax_optimization(
     result_artifact_path: str | None = None,
     max_consecutive_known_proposals: int | None = None,
     max_proposals: int | None = None,
+    max_evaluations: int | None = None,
     max_feasibility_resamples: int = 100,
     on_checkpoint: Callable[[AxCheckpointEvent], None] | None = None,
     resume_state: AxResumeState | None = None,
+    producer_source: Mapping[str, Any] | None = None,
 ) -> AxRunResult:
     """Evaluate nominal, initialization, and search attempts in order.
 
@@ -922,6 +934,12 @@ def run_ax_optimization(
         or max_proposals < 1
     ):
         raise ValueError("max_proposals must be a positive integer or None")
+    if max_evaluations is not None and (
+        not isinstance(max_evaluations, int)
+        or isinstance(max_evaluations, bool)
+        or max_evaluations < 1
+    ):
+        raise ValueError("max_evaluations must be a positive integer or None")
     if (
         not isinstance(max_feasibility_resamples, int)
         or isinstance(max_feasibility_resamples, bool)
@@ -931,6 +949,8 @@ def run_ax_optimization(
 
     if resume_state is not None and not isinstance(resume_state, AxResumeState):
         raise TypeError("resume_state must be an AxResumeState or None")
+    if producer_source is not None and not isinstance(producer_source, Mapping):
+        raise TypeError("producer_source must be an object or None")
     if resume_state is None:
         client = create_ax_client(design_space, settings)
         historical_success_count = 0
@@ -954,6 +974,15 @@ def run_ax_optimization(
         records = list(resume_state.records)
         pending_resume = resume_state.pending_trial
     last_feasibility_rejection: str | None = None
+
+    def evaluation_count() -> int:
+        """Count actual evaluator invocations, including the nominal baseline."""
+
+        return sum(
+            record.status not in ("duplicate_skipped", "feasibility_rejected")
+            and not record.reused_evaluation
+            for record in records
+        )
 
     def emit_checkpoint(
         phase: Literal["pre_evaluation", "post_evaluation"],
@@ -1140,6 +1169,7 @@ def run_ax_optimization(
                 failure_message=record.failure_message,
                 failure_scenario=_failure_scenario(evaluation),
                 evaluation_wall_time_seconds=record.wall_time_seconds,
+                producer_source=producer_source,
             )
             record = replace(record, registry_key=registry_record.key)
             records[-1] = record
@@ -1160,7 +1190,6 @@ def run_ax_optimization(
                     pending.phase,
                     pending.latent_parameters,
                     exc,
-                    mark_abandoned=False,
                 )
                 records.append(record)
                 if on_record is not None:
@@ -1225,6 +1254,12 @@ def run_ax_optimization(
     if not nominal_success:
         return result(status="nominal_evaluation_failed", finalize=True)
 
+    if (
+        sum(record.feasibility_rejection for record in records)
+        > max_feasibility_resamples
+    ):
+        return result(status="feasible_generation_exhausted", finalize=True)
+
     # Nominal is a manually attached baseline, not an Ax proposal. A cached
     # nominal therefore does not contribute to the generated-proposal stall
     # counter or duplicate-proposal budget.
@@ -1234,10 +1269,9 @@ def run_ax_optimization(
         and record.duplicate_of_trial_index is None
         for record in records
     )
-    search_evaluations = sum(
+    successful_search_evaluations = sum(
         record.phase == "search"
-        and not record.feasibility_rejection
-        and record.duplicate_of_trial_index is None
+        and record.status == "success"
         for record in records
     )
     consecutive_known = 0
@@ -1248,14 +1282,39 @@ def run_ax_optimization(
             break
         consecutive_known += 1
 
+    # Resume may start from either PRE_EVALUATION (reconciled above) or a
+    # completed POST_EVALUATION/final checkpoint.  Re-apply the target test
+    # before any hard-cap test or proposal request so an already complete
+    # campaign remains complete and cannot generate an extra trial.
+    if (
+        (
+            settings.search_trials == 0
+            and _ax_ready_for_search(client)
+            and feasible_proposal_count > 0
+        )
+        or (
+            settings.search_trials > 0
+            and successful_search_evaluations >= settings.search_trials
+        )
+    ):
+        return result(
+            consecutive_known_proposals=consecutive_known,
+            finalize=True,
+        )
+
     # Ax owns the Sobol -> MBM transition. Failed/abandoned Sobol trials do
     # not satisfy Ax's initialization criterion, so keep requesting candidates
     # while Ax reports Sobol. Only NEW candidates generated by MBM consume the
     # requested search budget.
     while True:
-        if max_proposals is not None and feasible_proposal_count >= max_proposals:
+        if max_evaluations is not None and evaluation_count() >= max_evaluations:
+            return result(status="evaluation_budget_exhausted", finalize=True)
+        generated_proposal_count = sum(
+            record.phase != "nominal" for record in records
+        )
+        if max_proposals is not None and generated_proposal_count >= max_proposals:
             return result(status="proposal_budget_exhausted", finalize=True)
-        proposal_count = sum(record.phase != "nominal" for record in records) + 1
+        proposal_count = generated_proposal_count + 1
         trial_index, candidate, phase = _next_candidate(
             client,
             proposal_count,
@@ -1312,8 +1371,9 @@ def run_ax_optimization(
         ):
             break
         if phase == "search":
-            search_evaluations += 1
-            if search_evaluations >= settings.search_trials:
+            if records[-1].status == "success":
+                successful_search_evaluations += 1
+            if successful_search_evaluations >= settings.search_trials:
                 break
         # A Sobol evaluation, including a failure, does not consume the MBM
         # search budget. The next Ax request observes the real node transition.

@@ -270,6 +270,32 @@ immutable Ax checkpoints, their atomic current pointer, and the single-writer
 lock. The registry remains a scientific-outcome cache and is never a
 replacement for Ax generation state.
 
+`lumo.config.load_lumo_execution_config()` is the one strict YAML boundary for
+production numerical execution settings. It resolves
+`config/lumo_execution.yaml` into typed mesh, mechanics/first-contact, device,
+and optical transport contracts. Raw YAML mappings do not enter simulation or
+optimization code. Morphology/material/LED, design bounds, protocol, and
+objective identity remain code-owned scientific contracts. The resolved
+values participate in evaluator identity; the YAML path and digest are audit
+provenance rather than semantic cache keys.
+
+`scripts.optimization.run_bo` owns campaign lifecycle, explicit success
+targets, independent evaluation/proposal caps, source policy, registry reuse
+policy, checkpoint orchestration, and process exit status.
+`scripts.optimization.run_bo_ideal` is the canonical human-facing CLI and
+delegates to that single engine. Source revision metadata is not part of the
+scientific registry key, but production defaults to clean source and
+same-source registry reuse; dirty or cross-source reuse requires an audited
+explicit opt-in.
+
+`validation.optimization.lumo3d_scientific_convergence` owns the expensive
+representative-morphology Newton, mesh, and optical evidence workflow. It may
+reuse persisted production mechanics states for optical replay, but it does
+not redefine production thresholds. Newton retains its approved displacement
+limits; mesh and optical sensitivity remain inconclusive until reviewed
+evidence supports an acceptance threshold. A reaction-force metric remains
+unsupported until the mechanics owner defines one.
+
 
 ## Public and data boundaries
 

@@ -170,6 +170,7 @@ def restore_deformed_optical_state(
     carrier_contact_source_node_ids: Iterable[int] | None = None,
     carrier_optics: CarrierOptics | None = None,
     carrier_mapping_tolerance_mm: float | None = None,
+    source_epsilon_mm: float = 1.0e-5,
 ) -> RestoredDeformedOpticalState:
     """Validate one persisted Newton state and build replay geometry."""
 
@@ -205,6 +206,7 @@ def restore_deformed_optical_state(
         carrier_contact_source_node_ids=frozenset(selected_contact_ids),
         carrier_optics=carrier_optics,
         carrier_mapping_tolerance_mm=carrier_mapping_tolerance_mm,
+        source_epsilon_mm=source_epsilon_mm,
         full3d_surface_provenance="actual_deformed_3d_volume_state",
     )
     return RestoredDeformedOpticalState(

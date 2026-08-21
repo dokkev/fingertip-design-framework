@@ -19,6 +19,11 @@ from lumo.optimization.evaluator import Lumo3DTrajectoryEvaluator
 from lumo.optimization.objectives import (
     TrajectoryObjectiveConfig,
 )
+from lumo.optimization.optical_contract import (
+    DEFAULT_OPTICAL_NUMERICAL_ACCEPTANCE,
+    OpticalNumericalAcceptanceContract,
+    OpticalNumericalAcceptanceResult,
+)
 from lumo.optimization.protocol import (
     DEFAULT_TRAJECTORY_PROTOCOL,
     TrajectoryEvaluationProtocol,
@@ -33,8 +38,11 @@ __all__ = [
     "LinearConstraint",
     "LatentVariable",
     "Lumo3DTrajectoryEvaluator",
+    "DEFAULT_OPTICAL_NUMERICAL_ACCEPTANCE",
     "OptimizableParameterName",
     "ParameterSpec",
     "TrajectoryEvaluationProtocol",
     "TrajectoryObjectiveConfig",
+    "OpticalNumericalAcceptanceContract",
+    "OpticalNumericalAcceptanceResult",
 ]

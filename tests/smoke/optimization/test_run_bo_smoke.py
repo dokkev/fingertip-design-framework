@@ -22,7 +22,11 @@ from lumo.optimization.objectives import TRAJECTORY_SEPARATION_OBJECTIVE
 def test_one_trial_uses_the_real_bo_campaign_boundary(tmp_path) -> None:
     output = tmp_path / "bo-smoke"
 
-    summary = run_bo.run_campaign(output, trials=1, smoke=True)
+    summary = run_bo.run_campaign(
+        output,
+        budget=run_bo.CampaignBudget(1, 0, 2, 1),
+        smoke=True,
+    )
 
     preflight = json.loads((output / "preflight.json").read_text())
     config = json.loads((output / "config.json").read_text())
@@ -32,6 +36,11 @@ def test_one_trial_uses_the_real_bo_campaign_boundary(tmp_path) -> None:
     assert config["evaluation_schema"] == run_bo.TRAJECTORY_EVALUATION_SCHEMA
     assert config["campaign_mode"] == "smoke"
     assert config["trajectory_protocol"] == run_bo.SMOKE_PROTOCOL.to_dict()
+    assert config["execution_config"]["source"]["sha256"]
+    assert config["ax"]["initialization_success_target"] == 1
+    assert config["ax"]["search_success_target"] == 0
+    assert config["ax"]["maximum_evaluations"] == 2
+    assert config["ax"]["maximum_proposals"] == 1
     assert summary["ax_proposal_count"] == 1
     assert summary["new_evaluation_count"] >= 2
     assert summary["status"] == "PASS"
@@ -45,6 +54,7 @@ def test_one_trial_uses_the_real_bo_campaign_boundary(tmp_path) -> None:
     assert summary["feasible_proposal_count"] >= 1
     assert registry["schema_version"] == REGISTRY_SCHEMA_VERSION
     assert trials == summary["records"]
+    assert summary["optical_failure_summary"]["optics_failure_candidate_count"] == 0
 
     generated_successes = [
         record

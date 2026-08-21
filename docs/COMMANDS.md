@@ -72,32 +72,36 @@ The bounded test runner is a validation workflow, not a production campaign:
 
 ```bash
 python -m validation.optimization.lumo6d_test_bo \
+  --execution-config config/lumo_execution.yaml \
   --output output/validation/optimization/lumo6d_test_bo
 ```
 
-It performs six Sobol and four model-based proposals only after OptiX
-preflight. Do not use it as a substitute for a reviewed production campaign,
-and do not run it as part of ordinary focused test execution.
+It targets six successful Sobol and four successful model-based observations only after OptiX
+preflight, using the same typed execution YAML as production. Do not use it as
+a substitute for a reviewed production campaign, and do not run it as part of
+ordinary focused test execution.
 
 ## Production BO entry point
 
-The production runner keeps its experiment settings in a visible `USER CONFIG`
-block and requires explicit trial opt-in. Run the cheap gate first:
+Use `run_bo_ideal` as the canonical human-facing entry point. The strict YAML
+owns only device, mesh, Newton, first-contact, and optical transport numerical
+settings. Morphology/material/LED, the protocol, objective, and design bounds
+remain visible code contracts in the campaign engine.
+
+Run the cheap gate first:
 
 ```bash
-conda run -n lit python scripts/optimization/run_bo.py --preflight
+conda run -n lit python -m scripts.optimization.run_bo_ideal \
+  --preflight \
+  --execution-config config/lumo_execution.yaml
 ```
-
-The same block owns the six Ax box bounds, objective configuration, protocol,
-mechanics contract, and optical settings. The selected box bounds are written
-to the campaign `config.json`.
 
 For a minimal production-path smoke only:
 
 ```bash
-conda run -n lit python scripts/optimization/run_bo.py \
+conda run -n lit python -m scripts.optimization.run_bo_ideal \
   --smoke \
-  --trials 1 \
+  --execution-config config/lumo_execution.yaml \
   --output output/optimization/bo_smoke
 ```
 
@@ -106,17 +110,66 @@ protocol. `--smoke` is the only route to the reduced two-state protocol. Both
 use the production evaluator, Ax adapter, and exact-contract evaluation
 registry. Pass `--registry PATH` to reuse exact results across output
 directories; contract IDs prevent reuse across different fixed inputs. A
+Git-tracked registry is rejected, and concurrent campaigns targeting the same
+registry are serialized with an exclusive advisory lock. A
 shared CUDA/OptiX/Gmsh/Newton prerequisite failure aborts before candidate
-registration; a morphology failure is recorded as a candidate result. The
-`--trials` value counts Ax-generated proposals; the nominal baseline is
-evaluated separately.
+registration; a morphology failure is recorded as a candidate result. Smoke
+defaults to one successful Sobol observation, no MBM observation, two total
+evaluator calls including nominal, and one generated proposal.
+
+Production requires an explicit MBM success target and independent evaluator
+and proposal caps. For example:
+
+```bash
+conda run -n lit python -m scripts.optimization.run_bo_ideal \
+  --execution-config config/lumo_execution.yaml \
+  --search-successes 4 \
+  --max-evaluations 20 \
+  --max-proposals 30 \
+  --output output/optimization/bo_production
+```
+
+Production defaults to six successful Sobol observations and rejects a search
+target below one. Candidate failures do not reduce either success target.
+`--max-evaluations` counts actual evaluator calls including nominal;
+`--max-proposals` counts every Ax-generated proposal including feasibility
+rejects and duplicates. Budget exhaustion, optimizer stall, nominal failure,
+or an unmet success target returns exit code `3`. Infrastructure, config, or
+persistence failure returns `2`.
+
+Production requires a clean Git source snapshot by default. If a reviewed
+dirty snapshot is intentional, add `--allow-dirty`; its tracked diff and
+untracked source contents are hashed into provenance. Same-contract registry
+records from another source snapshot are rejected unless
+`--allow-cross-revision-cache` is explicit. These opt-ins are persisted in the
+campaign audit and exact resume contract.
 
 To continue an interrupted campaign, pass `--resume` explicitly with the
-campaign directory, its `checkpoint.json` pointer, or an immutable checkpoint
-directory. The runner restores the public Ax JSON state, reconciles any
+campaign directory or its current `checkpoint.json` pointer. Selecting an
+older immutable checkpoint directory is rejected because rollback also needs
+registry/trial reconciliation. The runner restores the public Ax JSON state, reconciles any
 pending candidate before requesting a new proposal, and fails fast on fixed
 input, budget, source, or Ax-package mismatches. Existing output alone never
-triggers resume.
+triggers resume. Omitted budget and YAML arguments are restored from the
+persisted campaign config; explicit values still have to match exactly.
+
+## Representative scientific convergence harness
+
+After the implementation gates pass and an expensive validation run is
+explicitly authorized, run the representative Newton/mesh/optical workflow:
+
+```bash
+conda run -n lit python -m validation.optimization.lumo3d_scientific_convergence \
+  --execution-config config/lumo_execution.yaml \
+  --output output/validation/optimization/lumo3d_scientific_convergence
+```
+
+The workflow evaluates five deterministic feasible morphologies. Newton uses
+the preserved displacement thresholds; mesh and optical objective sensitivity
+remain `INCONCLUSIVE` until evidence-backed thresholds are reviewed. The
+current mechanics artifacts do not expose an approved reaction-force metric,
+so mesh force is recorded as `unsupported`, never fabricated as zero. This is
+an expensive GPU/Newton/OptiX command and is not part of ordinary unit tests.
 
 ## Newton viewer helpers
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 import json
@@ -9,13 +10,18 @@ import math
 import os
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Mapping
+from typing import Any, Iterator, Mapping
+
+try:  # pragma: no cover - production is POSIX/Linux.
+    import fcntl
+except ImportError:  # pragma: no cover
+    fcntl = None  # type: ignore[assignment]
 
 from lumo.optimization.design_space import OPTIMIZABLE_PARAMETER_NAMES
 from lumo.optimization.objectives import ObjectiveIdentifier
 
 
-REGISTRY_SCHEMA_VERSION = 3
+REGISTRY_SCHEMA_VERSION = 4
 SUPPORTED_EVALUATION_STATUSES = frozenset(
     {
         "success",
@@ -26,6 +32,52 @@ SUPPORTED_EVALUATION_STATUSES = frozenset(
         "optics_failure",
     }
 )
+
+
+class EvaluationRegistryLockError(RuntimeError):
+    """A shared evaluation registry is already owned by another campaign."""
+
+
+def evaluation_registry_lock_path(path: str | Path) -> Path:
+    """Return the stable advisory-lock path for one registry file."""
+
+    registry_path = Path(path)
+    return registry_path.with_name(f".{registry_path.name}.lock")
+
+
+@contextmanager
+def evaluation_registry_writer_lock(path: str | Path) -> Iterator[None]:
+    """Hold a crash-releasing exclusive lock for a whole registry campaign.
+
+    Registry instances intentionally keep an in-memory snapshot while Ax is
+    running. Holding this lock for the campaign prevents two independent
+    snapshots from atomically replacing each other and silently losing data.
+    """
+
+    if fcntl is None:
+        raise EvaluationRegistryLockError(
+            "evaluation registry locking requires a POSIX file-lock API"
+        )
+    lock_path = evaluation_registry_lock_path(path)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    fd: int | None = None
+    try:
+        fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except (BlockingIOError, OSError) as exc:
+        if fd is not None:
+            os.close(fd)
+        raise EvaluationRegistryLockError(
+            f"evaluation registry is already locked: {lock_path}"
+        ) from exc
+    try:
+        os.ftruncate(fd, 0)
+        os.write(fd, f"pid={os.getpid()}\n".encode("ascii"))
+        os.fsync(fd)
+        yield
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
 
 
 def _now() -> str:
@@ -93,6 +145,7 @@ class EvaluationRegistryRecord:
     failure_scenario: str | None
     evaluation_wall_time_seconds: float | None
     created_at: str
+    producer_source: Mapping[str, Any] | None = None
     duplicate_count: int = 0
     last_duplicate_trial_index: int | None = None
     last_duplicate_campaign_id: str | None = None
@@ -135,6 +188,21 @@ class EvaluationRegistryRecord:
             "canonical_morphology",
             MappingProxyType(dict(self.canonical_morphology)),
         )
+        if self.producer_source is not None:
+            if not isinstance(self.producer_source, Mapping):
+                raise TypeError("producer_source must be an object or None")
+            object.__setattr__(
+                self,
+                "producer_source",
+                MappingProxyType(dict(self.producer_source)),
+            )
+
+    @property
+    def producer_source_id(self) -> str | None:
+        if self.producer_source is None:
+            return None
+        value = self.producer_source.get("source_id")
+        return value if isinstance(value, str) and value else None
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -155,6 +223,9 @@ class EvaluationRegistryRecord:
             "failure_scenario": self.failure_scenario,
             "evaluation_wall_time_seconds": self.evaluation_wall_time_seconds,
             "created_at": self.created_at,
+            "producer_source": (
+                None if self.producer_source is None else dict(self.producer_source)
+            ),
             "duplicate_count": self.duplicate_count,
             "last_duplicate_trial_index": self.last_duplicate_trial_index,
             "last_duplicate_campaign_id": self.last_duplicate_campaign_id,
@@ -193,6 +264,7 @@ class EvaluationRegistryRecord:
                 "evaluation_wall_time_seconds"
             ),
             created_at=str(payload["created_at"]),
+            producer_source=payload.get("producer_source"),
             duplicate_count=int(payload.get("duplicate_count", 0)),
             last_duplicate_trial_index=payload.get("last_duplicate_trial_index"),
             last_duplicate_campaign_id=payload.get("last_duplicate_campaign_id"),
@@ -242,6 +314,7 @@ class EvaluationRegistry:
         failure_scenario: str | None,
         evaluation_wall_time_seconds: float | None,
         objective_value: float | None = None,
+        producer_source: Mapping[str, Any] | None = None,
     ) -> EvaluationRegistryRecord:
         """Persist one original result; never overwrite an existing result."""
         key = evaluation_key(contract_id, parameters)
@@ -267,6 +340,7 @@ class EvaluationRegistry:
             failure_scenario=failure_scenario,
             evaluation_wall_time_seconds=evaluation_wall_time_seconds,
             created_at=_now(),
+            producer_source=producer_source,
         )
         self._records[key] = record
         try:
@@ -275,6 +349,26 @@ class EvaluationRegistry:
             del self._records[key]
             raise
         return record
+
+    def source_audit(
+        self,
+        contract_id: str,
+        source_id: str,
+    ) -> dict[str, int]:
+        """Classify same-contract records against the current source snapshot."""
+
+        if not source_id:
+            raise ValueError("source_id must be non-empty")
+        counts = {"same_source": 0, "different_source": 0, "unknown_source": 0}
+        for record in self.records_for_contract(contract_id):
+            producer = record.producer_source_id
+            if producer is None:
+                counts["unknown_source"] += 1
+            elif producer == source_id:
+                counts["same_source"] += 1
+            else:
+                counts["different_source"] += 1
+        return counts
 
     def note_duplicate(
         self,
@@ -370,9 +464,12 @@ class EvaluationRegistry:
 
 __all__ = [
     "EvaluationRegistry",
+    "EvaluationRegistryLockError",
     "EvaluationRegistryRecord",
     "REGISTRY_SCHEMA_VERSION",
     "SUPPORTED_EVALUATION_STATUSES",
     "canonical_morphology",
     "evaluation_key",
+    "evaluation_registry_lock_path",
+    "evaluation_registry_writer_lock",
 ]

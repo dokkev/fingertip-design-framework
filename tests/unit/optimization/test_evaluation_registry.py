@@ -8,8 +8,10 @@ import pytest
 
 from lumo.optimization.evaluation_registry import (
     EvaluationRegistry,
+    EvaluationRegistryLockError,
     canonical_morphology,
     evaluation_key,
+    evaluation_registry_writer_lock,
 )
 from lumo.optimization.objectives import ObjectiveIdentifier
 
@@ -47,6 +49,7 @@ def _register(
         failure_scenario=None,
         evaluation_wall_time_seconds=3.5,
         objective_value=objective_value,
+        producer_source={"source_id": "source-a", "git_commit": "abc"},
     )
 
 
@@ -76,6 +79,7 @@ def test_registry_persists_success_failure_and_duplicate_provenance(tmp_path) ->
     assert reloaded_success.status == "success"
     assert reloaded_success.objective == OBJECTIVE
     assert reloaded_success.objective_value == 0.42
+    assert reloaded_success.producer_source_id == "source-a"
     assert reloaded_success.duplicate_count == 1
     assert reloaded_success.last_duplicate_trial_index == 11
     assert reloaded_failure is not None
@@ -86,7 +90,17 @@ def test_registry_persists_success_failure_and_duplicate_provenance(tmp_path) ->
         failed.key,
     }
     payload = json.loads(path.read_text(encoding="utf-8"))
-    assert payload["schema_version"] == 3
+    assert payload["schema_version"] == 4
+    assert reloaded.source_audit(CONTRACT, "source-a") == {
+        "same_source": 2,
+        "different_source": 0,
+        "unknown_source": 0,
+    }
+    assert reloaded.source_audit(CONTRACT, "source-b") == {
+        "same_source": 0,
+        "different_source": 2,
+        "unknown_source": 0,
+    }
 
 
 def test_exact_key_uses_lossless_float_hex_without_nearby_deduplication(
@@ -167,3 +181,12 @@ def test_registry_validates_scientific_status_payloads(
             trial_index=0,
             objective_value=objective_value,
         )
+
+
+def test_registry_writer_lock_rejects_a_concurrent_campaign(tmp_path) -> None:
+    path = tmp_path / "shared-registry.json"
+
+    with evaluation_registry_writer_lock(path):
+        with pytest.raises(EvaluationRegistryLockError, match="already locked"):
+            with evaluation_registry_writer_lock(path):
+                pytest.fail("a second campaign acquired the shared registry")

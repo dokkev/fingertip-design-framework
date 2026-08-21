@@ -12,6 +12,7 @@ from lumo.ray_tracing.optical_mechanics.geometry import (
     CARRIER_CONTACT_INTERFACE,
     OBJECT_CONTACT_INTERFACE,
     TransportGeometry,
+    Transport3DCandidateGeometryError,
     Transport3DGeometryError,
 )
 from lumo.ray_tracing.optical_mechanics.optix_backend import (
@@ -21,7 +22,10 @@ from lumo.ray_tracing.optical_mechanics.optix_backend import (
     OptixRuntime,
     create_runtime,
 )
-from lumo.ray_tracing.optical_mechanics.path_field import PathFieldAccumulator
+from lumo.ray_tracing.optical_mechanics.path_field import (
+    PathFieldAccumulator,
+    PathFieldDiagnostics,
+)
 from lumo.ray_tracing.optical_mechanics.physics import (
     Transport3DPhysicsError,
     interface_split,
@@ -80,6 +84,7 @@ class _InternalField:
     y_edges: np.ndarray
     z_edges: np.ndarray
     density: np.ndarray
+    diagnostics: PathFieldDiagnostics
 
 
 def _xy_edges(
@@ -214,6 +219,7 @@ def _finalize_internal_path_context(
         y_edges=context.y_edges,
         z_edges=context.z_edges,
         density=density_xyz,
+        diagnostics=context.diagnostics,
     )
 
 
@@ -224,6 +230,15 @@ def _trace_with_runtime(
     runtime: OptixRuntime,
 ) -> Transport3DResult:
     cp = runtime.cp
+    if not np.isclose(
+        settings.extrusion_depth_mm,
+        geometry.depth_mm,
+        rtol=0.0,
+        atol=1.0e-12,
+    ):
+        raise Transport3DGeometryError(
+            "transport extrusion depth does not match geometry depth"
+        )
     if geometry.indenter_optics is not None and geometry.silicone.interface_tags is None:
         raise Transport3DGeometryError(
             "indenter optics require semantic silicone interface tags"
@@ -764,7 +779,7 @@ def _trace_with_runtime(
                         & (outgoing_z <= surface_z_edges[-1])
                     )
                     if bool(cp.any(positive_outgoing & ~inside_observation_grid)):
-                        raise Transport3DGeometryError(
+                        raise Transport3DCandidateGeometryError(
                             "positive silicone-surface escape lies outside the "
                             "declared (u, z) observation grid"
                         )
@@ -913,6 +928,22 @@ def _trace_with_runtime(
         energy_balance_error=float(energy_balance_error),
         energy_balance_tolerance=settings.energy_balance_tolerance,
         processed_segment_count=segment_count,
+        processed_sample_count=(
+            0 if internal is None else internal.diagnostics.processed_sample_count
+        ),
+        clipped_sample_count=(
+            0 if internal is None else internal.diagnostics.clipped_sample_count
+        ),
+        represented_weighted_path_length_mm=(
+            0.0
+            if internal is None
+            else internal.diagnostics.represented_weighted_path_length_mm
+        ),
+        clipped_weighted_path_length_mm=(
+            0.0
+            if internal is None
+            else internal.diagnostics.clipped_weighted_path_length_mm
+        ),
         periodic_wrap_termination_count=periodic_wrap_termination_count,
         periodic_wrap_termination_weight=periodic_wrap_termination_weight,
         no_event_termination_count=no_event_termination_count,
@@ -968,6 +999,7 @@ def trace_geometry(
 
 __all__ = [
     "Transport3DDependencyError",
+    "Transport3DCandidateGeometryError",
     "Transport3DGeometryError",
     "Transport3DPhysicsError",
     "Transport3DResult",

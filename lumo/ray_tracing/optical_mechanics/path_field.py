@@ -7,6 +7,58 @@ from dataclasses import dataclass
 import numpy as np
 
 
+@dataclass(frozen=True)
+class PathFieldDiagnostics:
+    """Measured loss and representation coverage for one path-field build."""
+
+    processed_sample_count: int
+    clipped_sample_count: int
+    represented_weighted_path_length_mm: float
+    clipped_weighted_path_length_mm: float
+
+    def __post_init__(self) -> None:
+        for name in ("processed_sample_count", "clipped_sample_count"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(f"{name} must be a non-negative integer")
+        for name in (
+            "represented_weighted_path_length_mm",
+            "clipped_weighted_path_length_mm",
+        ):
+            value = float(getattr(self, name))
+            if not np.isfinite(value) or value < 0.0:
+                raise ValueError(f"{name} must be finite and non-negative")
+            object.__setattr__(self, name, value)
+        if self.clipped_sample_count > self.processed_sample_count:
+            raise ValueError("clipped_sample_count cannot exceed processed_sample_count")
+
+    @property
+    def processed_weighted_path_length_mm(self) -> float:
+        """Return the active weighted path length before grid representation."""
+
+        return (
+            self.represented_weighted_path_length_mm
+            + self.clipped_weighted_path_length_mm
+        )
+
+    def to_dict(self) -> dict[str, int | float]:
+        """Return the JSON/report representation at a boundary."""
+
+        return {
+            "processed_sample_count": self.processed_sample_count,
+            "clipped_sample_count": self.clipped_sample_count,
+            "represented_weighted_path_length_mm": (
+                self.represented_weighted_path_length_mm
+            ),
+            "clipped_weighted_path_length_mm": (
+                self.clipped_weighted_path_length_mm
+            ),
+            "processed_weighted_path_length_mm": (
+                self.processed_weighted_path_length_mm
+            ),
+        }
+
+
 @dataclass
 class PathFieldAccumulator:
     """Accumulate weighted segment lengths into a bounded Cartesian grid."""
@@ -18,6 +70,10 @@ class PathFieldAccumulator:
     maximum_spacing_mm: float
     maximum_samples_per_segment: int
     processed_segment_count: int = 0
+    processed_sample_count: int = 0
+    clipped_sample_count: int = 0
+    represented_weighted_path_length_mm: float = 0.0
+    clipped_weighted_path_length_mm: float = 0.0
 
     def __post_init__(self) -> None:
         self.x_edges = self._edges("x_edges", self.x_edges)
@@ -45,6 +101,20 @@ class PathFieldAccumulator:
             or self.processed_segment_count < 0
         ):
             raise ValueError("processed_segment_count must be a non-negative integer")
+        for name in ("processed_sample_count", "clipped_sample_count"):
+            value = getattr(self, name)
+            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                raise ValueError(f"{name} must be a non-negative integer")
+        for name in (
+            "represented_weighted_path_length_mm",
+            "clipped_weighted_path_length_mm",
+        ):
+            value = float(getattr(self, name))
+            if not np.isfinite(value) or value < 0.0:
+                raise ValueError(f"{name} must be finite and non-negative")
+            setattr(self, name, value)
+        if self.clipped_sample_count > self.processed_sample_count:
+            raise ValueError("clipped_sample_count cannot exceed processed_sample_count")
         self.density_zyx = density
         self.maximum_spacing_mm = spacing
 
@@ -104,25 +174,74 @@ class PathFieldAccumulator:
         x_indices = np.searchsorted(self.x_edges, samples[:, :, 0], side="right") - 1
         y_indices = np.searchsorted(self.y_edges, samples[:, :, 1], side="right") - 1
         z_indices = np.searchsorted(self.z_edges, samples[:, :, 2], side="right") - 1
-        valid = sample_indices < counts[:, None]
-        valid &= (
+        active = sample_indices < counts[:, None]
+        inside = (
             (x_indices >= 0)
-            & (x_indices < len(self.x_edges) - 1)
+            & (x_indices <= len(self.x_edges) - 1)
             & (y_indices >= 0)
-            & (y_indices < len(self.y_edges) - 1)
+            & (y_indices <= len(self.y_edges) - 1)
             & (z_indices >= 0)
-            & (z_indices < len(self.z_edges) - 1)
+            & (z_indices <= len(self.z_edges) - 1)
         )
+        inside &= (
+            (samples[:, :, 0] >= self.x_edges[0])
+            & (samples[:, :, 0] <= self.x_edges[-1])
+            & (samples[:, :, 1] >= self.y_edges[0])
+            & (samples[:, :, 1] <= self.y_edges[-1])
+            & (samples[:, :, 2] >= self.z_edges[0])
+            & (samples[:, :, 2] <= self.z_edges[-1])
+        )
+        valid = active & inside
+        clipped = active & ~inside
+        representative_weight = 0.5 * (starts_weight + ends_weight)
+        contributions = np.broadcast_to(
+            (representative_weight * lengths / counts)[:, None],
+            active.shape,
+        )
+        active_weighted_path_length = float(np.sum(contributions[active]))
+        represented_weighted_path_length = float(np.sum(contributions[valid]))
+        clipped_weighted_path_length = float(np.sum(contributions[clipped]))
+        self.processed_sample_count += int(np.count_nonzero(active))
+        self.clipped_sample_count += int(np.count_nonzero(clipped))
+        self.represented_weighted_path_length_mm += represented_weighted_path_length
+        self.clipped_weighted_path_length_mm += clipped_weighted_path_length
+        if not np.isclose(
+            represented_weighted_path_length + clipped_weighted_path_length,
+            active_weighted_path_length,
+            rtol=1.0e-12,
+            atol=1.0e-12,
+        ):
+            raise RuntimeError("path-field sample classification does not conserve weighted length")
         if np.any(valid):
+            safe_x_indices = np.clip(x_indices, 0, len(self.x_edges) - 2)
+            safe_y_indices = np.clip(y_indices, 0, len(self.y_edges) - 2)
+            safe_z_indices = np.clip(z_indices, 0, len(self.z_edges) - 2)
             representative_weight = 0.5 * (starts_weight + ends_weight)
             represented = representative_weight * lengths / counts
             contributions = np.broadcast_to(represented[:, None], valid.shape)
             np.add.at(
                 self.density_zyx,
-                (z_indices[valid], y_indices[valid], x_indices[valid]),
+                (
+                    safe_z_indices[valid],
+                    safe_y_indices[valid],
+                    safe_x_indices[valid],
+                ),
                 contributions[valid],
             )
         self.processed_segment_count += len(starts)
+
+    @property
+    def diagnostics(self) -> PathFieldDiagnostics:
+        """Return the current clipping/conservation diagnostics."""
+
+        return PathFieldDiagnostics(
+            processed_sample_count=self.processed_sample_count,
+            clipped_sample_count=self.clipped_sample_count,
+            represented_weighted_path_length_mm=(
+                self.represented_weighted_path_length_mm
+            ),
+            clipped_weighted_path_length_mm=self.clipped_weighted_path_length_mm,
+        )
 
     def density_xyz(self) -> np.ndarray:
         """Return the accumulated field in the public ``(x, y, z)`` order."""
@@ -132,4 +251,4 @@ class PathFieldAccumulator:
         return np.transpose(self.density_zyx, (2, 1, 0))
 
 
-__all__ = ["PathFieldAccumulator"]
+__all__ = ["PathFieldAccumulator", "PathFieldDiagnostics"]

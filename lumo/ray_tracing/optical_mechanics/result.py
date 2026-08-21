@@ -56,6 +56,10 @@ class Transport3DResult:
     energy_balance_error: float
     energy_balance_tolerance: float
     processed_segment_count: int = 0
+    processed_sample_count: int = 0
+    clipped_sample_count: int = 0
+    represented_weighted_path_length_mm: float = 0.0
+    clipped_weighted_path_length_mm: float = 0.0
     periodic_wrap_termination_count: int = 0
     periodic_wrap_termination_weight: float = 0.0
     no_event_termination_count: int = 0
@@ -109,6 +113,8 @@ class Transport3DResult:
             "outgoing_surface_weight",
             "energy_balance_error",
             "energy_balance_tolerance",
+            "represented_weighted_path_length_mm",
+            "clipped_weighted_path_length_mm",
             "object_absorbed_weight",
             "object_transmitted_weight",
             "object_interface_incident_weight",
@@ -145,6 +151,8 @@ class Transport3DResult:
             raise Transport3DResultError("energy balance exceeds its declared tolerance")
         count_names = (
             "processed_segment_count",
+            "processed_sample_count",
+            "clipped_sample_count",
             "periodic_wrap_termination_count",
             "no_event_termination_count",
             "branch_cutoff_termination_count",
@@ -159,6 +167,8 @@ class Transport3DResult:
             if not isinstance(value, int) or isinstance(value, bool) or value < 0:
                 raise Transport3DResultError(f"{name} must be a non-negative integer")
         for name in (
+            "represented_weighted_path_length_mm",
+            "clipped_weighted_path_length_mm",
             "periodic_wrap_termination_weight",
             "no_event_termination_weight",
             "branch_cutoff_termination_weight",
@@ -168,6 +178,18 @@ class Transport3DResult:
         ):
             if scalars[name] < 0.0:
                 raise Transport3DResultError(f"{name} must be non-negative")
+        if self.clipped_sample_count > self.processed_sample_count:
+            raise Transport3DResultError(
+                "clipped_sample_count cannot exceed processed_sample_count"
+            )
+        if (
+            self.segment_budget_termination_count == 0
+            and scalars["segment_budget_termination_weight"] != 0.0
+        ):
+            raise Transport3DResultError(
+                "zero segment_budget_termination_count requires zero "
+                "segment_budget_termination_weight"
+            )
         terminal_weight = sum(
             scalars[name]
             for name in (
@@ -444,6 +466,48 @@ class Transport3DResult:
     def total_transport(self) -> float:
         """Return the escaped transport mass used by optimization metrics."""
         return float(self.escaped_weight)
+
+    @property
+    def processed_weighted_path_length_mm(self) -> float:
+        """Return represented plus clipped active weighted path length."""
+
+        return float(
+            self.represented_weighted_path_length_mm
+            + self.clipped_weighted_path_length_mm
+        )
+
+    @property
+    def terminated_weight_fraction(self) -> float:
+        """Return all explicit termination weight as a launch fraction."""
+
+        return float(self.terminated_weight / max(self.launched_weight, 1.0e-30))
+
+    @property
+    def termination_count(self) -> int:
+        """Return the number of branches in an explicit termination channel."""
+
+        return int(
+            sum(
+                getattr(self, name)
+                for name in (
+                    "periodic_wrap_termination_count",
+                    "no_event_termination_count",
+                    "branch_cutoff_termination_count",
+                    "max_interaction_termination_count",
+                    "segment_budget_termination_count",
+                    "rigid_surface_termination_count",
+                )
+            )
+        )
+
+    @property
+    def segment_budget_termination_fraction(self) -> float:
+        """Return segment-budget termination weight as a launch fraction."""
+
+        return float(
+            self.segment_budget_termination_weight
+            / max(self.launched_weight, 1.0e-30)
+        )
 
     @property
     def field_axes(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:

@@ -562,8 +562,11 @@ def test_candidate_failure_is_registered_in_real_evaluation_registry(monkeypatch
         on_record=lambda _client, _records: registered_counts.append(
             len(registry.records_for_contract("candidate-contact-test-v1"))
         ),
+        max_evaluations=2,
     )
 
+    assert result.status == "evaluation_budget_exhausted"
+    assert result.termination_reason == AxTerminationReason.EVALUATION_BUDGET_EXHAUSTED
     assert [record.status for record in result.records] == [
         "success",
         "mechanics_failure",
@@ -578,6 +581,72 @@ def test_candidate_failure_is_registered_in_real_evaluation_registry(monkeypatch
     assert client.trials[0].status == "COMPLETED"
     assert client.trials[1].status == "FAILED"
     assert all(trial.status != "ABANDONED" for trial in client.trials.values())
+
+
+def test_failed_search_evaluation_does_not_reduce_success_target(monkeypatch) -> None:
+    client = _ClientDouble([_candidate(5.5), _candidate(6.0)])
+
+    class _FailThenSucceed(_Evaluator):
+        def evaluate(self, parameters):
+            self.calls.append(parameters)
+            if len(self.calls) == 2:
+                return _Evaluation(
+                    "mechanics_failure",
+                    None,
+                    {"failure_scenario": "candidate_mechanics_state"},
+                    failure_message="candidate failed",
+                )
+            return _Evaluation("success", float(parameters.flat_pad_height), {})
+
+    evaluator = _FailThenSucceed()
+    monkeypatch.setattr(ax_adapter, "create_ax_client", lambda *_: client)
+
+    result = run_ax_optimization(
+        _space(),
+        evaluator,
+        AxSettings(
+            initialization_trials=1,
+            search_trials=1,
+            seed=7,
+            objective=TEST_OBJECTIVE,
+        ),
+        max_evaluations=3,
+        max_proposals=2,
+    )
+
+    assert result.status == "COMPLETE"
+    assert result.successful_search_count == 1
+    assert [record.status for record in result.records] == [
+        "success",
+        "mechanics_failure",
+        "success",
+    ]
+
+
+def test_proposal_cap_counts_feasibility_rejections(monkeypatch) -> None:
+    invalid = {name: 0.0 for name in LATENT_PARAMETER_NAMES}
+    invalid["latent_cutout_width"] = 1.1
+    client = _ClientDouble([invalid, _candidate(5.5)])
+    evaluator = _Evaluator()
+    monkeypatch.setattr(ax_adapter, "create_ax_client", lambda *_: client)
+
+    result = run_ax_optimization(
+        _space(),
+        evaluator,
+        AxSettings(
+            initialization_trials=1,
+            search_trials=1,
+            seed=7,
+            objective=TEST_OBJECTIVE,
+        ),
+        max_proposals=1,
+        max_feasibility_resamples=10,
+    )
+
+    assert result.status == "proposal_budget_exhausted"
+    assert result.ax_proposal_count == 1
+    assert result.feasibility_rejection_count == 1
+    assert len(evaluator.calls) == 1
 
 
 def test_registry_uses_each_candidate_evaluation_artifact_path(

@@ -16,6 +16,10 @@ class Transport3DGeometryError(ValueError):
     """Raised when a periodic transport scene cannot be built safely."""
 
 
+class Transport3DCandidateGeometryError(Transport3DGeometryError):
+    """Raised for an expected geometry defect caused by one candidate state."""
+
+
 Full3DSurfaceProvenance = Literal[
     "actual_reference_3d_volume_state",
     "actual_deformed_3d_fea_surface",
@@ -311,5 +315,6 @@ __all__ = [
     "OBJECT_CONTACT_INTERFACE",
     "TriangleSurface",
     "Transport3DGeometryError",
+    "Transport3DCandidateGeometryError",
     "build_full3d_transport_geometry",
 ]

@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import hashlib
 import json
+import math
+from numbers import Integral
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -14,7 +16,7 @@ from lumo.ray_tracing.optical_mechanics.result import Transport3DResult
 from lumo.optimization.optical_contract import fingerprint_mapping as _fingerprint_mapping
 
 
-UNIFIED_ARTIFACT_SCHEMA = "unified-optix-transport-case-v6"
+UNIFIED_ARTIFACT_SCHEMA = "unified-optix-transport-case-v7"
 
 
 def _plain(value: Any) -> Any:
@@ -41,10 +43,17 @@ class OpticalFieldArtifact:
     outgoing_surface_weight: float
     absorbed_weight: float
     terminated_weight: float
+    termination_count: int
+    segment_budget_termination_count: int
+    segment_budget_termination_weight: float
     energy_balance_error: float
     ray_count: int
     escape_event_count: int
     escaped_primary_count: int
+    processed_sample_count: int
+    clipped_sample_count: int
+    represented_weighted_path_length_mm: float
+    clipped_weighted_path_length_mm: float
     path_diagnostics: Mapping[str, Any]
     morphology_id: str = ""
     morphology_fingerprint: str = ""
@@ -63,6 +72,40 @@ class OpticalFieldArtifact:
     carrier_contact_triangle_count: int = 0
     optical_mode: str = "FULL_3D"
 
+    def __post_init__(self) -> None:
+        for name in (
+            "processed_sample_count",
+            "clipped_sample_count",
+            "termination_count",
+            "segment_budget_termination_count",
+        ):
+            value = getattr(self, name)
+            if not isinstance(value, Integral) or isinstance(value, bool) or value < 0:
+                raise ValueError(f"{name} must be a non-negative integer")
+            object.__setattr__(self, name, int(value))
+        if self.clipped_sample_count > self.processed_sample_count:
+            raise ValueError("clipped_sample_count cannot exceed processed_sample_count")
+        for name in (
+            "represented_weighted_path_length_mm",
+            "clipped_weighted_path_length_mm",
+            "segment_budget_termination_weight",
+        ):
+            value = float(getattr(self, name))
+            if not math.isfinite(value) or value < 0.0:
+                raise ValueError(f"{name} must be finite and non-negative")
+            object.__setattr__(self, name, value)
+        if not isinstance(self.path_diagnostics, Mapping):
+            raise ValueError("path_diagnostics must be an object")
+
+    @property
+    def processed_weighted_path_length_mm(self) -> float:
+        """Return represented plus clipped path length from the artifact."""
+
+        return float(
+            self.represented_weighted_path_length_mm
+            + self.clipped_weighted_path_length_mm
+        )
+
 
 def energy_record(result: Transport3DResult) -> dict[str, Any]:
     """Serialize scalar transport diagnostics at the optimization boundary."""
@@ -76,34 +119,75 @@ def energy_record(result: Transport3DResult) -> dict[str, Any]:
         "outgoing_surface_weight": float(result.outgoing_surface_weight),
         "absorbed_weight": float(result.absorbed_weight),
         "terminated_weight": float(result.terminated_weight),
+        "termination_count": int(
+            getattr(result, "termination_count", 0)
+        ),
+        "terminated_weight_fraction": float(
+            getattr(
+                result,
+                "terminated_weight_fraction",
+                float(result.terminated_weight) / max(launched, 1.0e-30),
+            )
+        ),
         "processed_segment_count": int(result.processed_segment_count),
+        "processed_sample_count": int(getattr(result, "processed_sample_count", 0)),
+        "clipped_sample_count": int(getattr(result, "clipped_sample_count", 0)),
+        "represented_weighted_path_length_mm": float(
+            getattr(result, "represented_weighted_path_length_mm", 0.0)
+        ),
+        "clipped_weighted_path_length_mm": float(
+            getattr(result, "clipped_weighted_path_length_mm", 0.0)
+        ),
+        "processed_weighted_path_length_mm": float(
+            getattr(result, "processed_weighted_path_length_mm", 0.0)
+        ),
         "periodic_wrap_termination_count": int(
             result.periodic_wrap_termination_count
         ),
         "periodic_wrap_termination_weight": float(
             result.periodic_wrap_termination_weight
         ),
+        "periodic_wrap_termination_fraction": float(
+            result.periodic_wrap_termination_weight
+        ) / max(launched, 1.0e-30),
         "no_event_termination_count": int(result.no_event_termination_count),
         "no_event_termination_weight": float(
             result.no_event_termination_weight
         ),
+        "no_event_termination_fraction": float(
+            result.no_event_termination_weight
+        ) / max(launched, 1.0e-30),
         "branch_cutoff_termination_count": int(
             result.branch_cutoff_termination_count
         ),
         "branch_cutoff_termination_weight": float(
             result.branch_cutoff_termination_weight
         ),
+        "branch_cutoff_termination_fraction": float(
+            result.branch_cutoff_termination_weight
+        ) / max(launched, 1.0e-30),
         "max_interaction_termination_count": int(
             result.max_interaction_termination_count
         ),
         "max_interaction_termination_weight": float(
             result.max_interaction_termination_weight
         ),
+        "max_interaction_termination_fraction": float(
+            result.max_interaction_termination_weight
+        ) / max(launched, 1.0e-30),
         "segment_budget_termination_count": int(
             result.segment_budget_termination_count
         ),
         "segment_budget_termination_weight": float(
             result.segment_budget_termination_weight
+        ),
+        "segment_budget_termination_fraction": float(
+            getattr(
+                result,
+                "segment_budget_termination_fraction",
+                float(result.segment_budget_termination_weight)
+                / max(launched, 1.0e-30),
+            )
         ),
         "rigid_surface_termination_count": int(
             result.rigid_surface_termination_count
@@ -111,6 +195,9 @@ def energy_record(result: Transport3DResult) -> dict[str, Any]:
         "rigid_surface_termination_weight": float(
             result.rigid_surface_termination_weight
         ),
+        "rigid_surface_termination_fraction": float(
+            result.rigid_surface_termination_weight
+        ) / max(launched, 1.0e-30),
         "interface_normal_fallback_count": int(
             result.interface_normal_fallback_count
         ),
@@ -150,6 +237,41 @@ def _path_diagnostics(
             "convention": "cutoff applies to branches with interaction_count > 1",
         },
         "processed_segment_count": int(result.processed_segment_count),
+        "processed_sample_count": int(getattr(result, "processed_sample_count", 0)),
+        "clipped_sample_count": int(getattr(result, "clipped_sample_count", 0)),
+        "represented_weighted_path_length_mm": float(
+            getattr(result, "represented_weighted_path_length_mm", 0.0)
+        ),
+        "clipped_weighted_path_length_mm": float(
+            getattr(result, "clipped_weighted_path_length_mm", 0.0)
+        ),
+        "processed_weighted_path_length_mm": float(
+            getattr(result, "processed_weighted_path_length_mm", 0.0)
+        ),
+        "termination_count": int(getattr(result, "termination_count", 0)),
+        "termination_weight": float(result.terminated_weight),
+        "termination_fraction": float(
+            getattr(
+                result,
+                "terminated_weight_fraction",
+                float(result.terminated_weight)
+                / max(float(result.launched_weight), 1.0e-30),
+            )
+        ),
+        "path_field": {
+            "processed_sample_count": int(
+                getattr(result, "processed_sample_count", 0)
+            ),
+            "clipped_sample_count": int(
+                getattr(result, "clipped_sample_count", 0)
+            ),
+            "represented_weighted_path_length_mm": float(
+                getattr(result, "represented_weighted_path_length_mm", 0.0)
+            ),
+            "clipped_weighted_path_length_mm": float(
+                getattr(result, "clipped_weighted_path_length_mm", 0.0)
+            ),
+        },
         "branch_cutoff_termination": {
             "count": int(result.branch_cutoff_termination_count),
             "weight": float(result.branch_cutoff_termination_weight),
@@ -233,6 +355,14 @@ def _result_record(result: Transport3DResult, contract: Mapping[str, Any]) -> di
         "terminated_weight": result.terminated_weight,
         "escape_event_count": int(result.escape_event_count),
         "escaped_primary_count": int(result.escaped_primary_count),
+        "processed_sample_count": int(getattr(result, "processed_sample_count", 0)),
+        "clipped_sample_count": int(getattr(result, "clipped_sample_count", 0)),
+        "represented_weighted_path_length_mm": float(
+            getattr(result, "represented_weighted_path_length_mm", 0.0)
+        ),
+        "clipped_weighted_path_length_mm": float(
+            getattr(result, "clipped_weighted_path_length_mm", 0.0)
+        ),
         "energy_balance_error": result.energy_balance_error,
         "object_absorbed_weight": result.object_absorbed_weight,
         "object_transmitted_weight": result.object_transmitted_weight,
@@ -330,6 +460,136 @@ def _owned_field(value: Any) -> np.ndarray:
     return field
 
 
+def _required_path_field_diagnostics(record: Mapping[str, Any]) -> dict[str, Any]:
+    """Validate the non-optional v7 path-field diagnostic contract."""
+
+    names = (
+        "processed_sample_count",
+        "clipped_sample_count",
+        "represented_weighted_path_length_mm",
+        "clipped_weighted_path_length_mm",
+    )
+    missing = [name for name in names if name not in record]
+    path_diagnostics = record.get("path_diagnostics")
+    if not isinstance(path_diagnostics, Mapping):
+        raise ValueError("v7 artifact path_diagnostics must be an object")
+    path_field = path_diagnostics.get("path_field")
+    if not isinstance(path_field, Mapping):
+        raise ValueError("v7 artifact path_diagnostics.path_field must be an object")
+    missing.extend(
+        f"path_diagnostics.path_field.{name}"
+        for name in names
+        if name not in path_field
+    )
+    if missing:
+        raise ValueError(
+            "v7 artifact is missing required path-field diagnostics: "
+            + ", ".join(missing)
+        )
+
+    counts: dict[str, int] = {}
+    for name in names[:2]:
+        top = record[name]
+        nested = path_field[name]
+        if (
+            not isinstance(top, Integral)
+            or isinstance(top, bool)
+            or int(top) < 0
+            or not isinstance(nested, Integral)
+            or isinstance(nested, bool)
+            or int(nested) < 0
+        ):
+            raise ValueError(f"v7 artifact {name} must be a non-negative integer")
+        if int(top) != int(nested):
+            raise ValueError(f"v7 artifact {name} disagrees with path_diagnostics")
+        counts[name] = int(top)
+    if counts["clipped_sample_count"] > counts["processed_sample_count"]:
+        raise ValueError("v7 artifact clipped samples exceed processed samples")
+
+    lengths: dict[str, float] = {}
+    for name in names[2:]:
+        try:
+            top = float(record[name])
+            nested = float(path_field[name])
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"v7 artifact {name} must be numeric") from exc
+        if not math.isfinite(top) or top < 0.0 or not math.isfinite(nested) or nested < 0.0:
+            raise ValueError(f"v7 artifact {name} must be finite and non-negative")
+        if top != nested:
+            raise ValueError(f"v7 artifact {name} disagrees with path_diagnostics")
+        lengths[name] = top
+
+    processed_length = path_diagnostics.get("processed_weighted_path_length_mm")
+    if processed_length is None:
+        raise ValueError(
+            "v7 artifact path_diagnostics is missing "
+            "processed_weighted_path_length_mm"
+        )
+    try:
+        processed_length_value = float(processed_length)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "v7 artifact processed_weighted_path_length_mm must be numeric"
+        ) from exc
+    expected_processed_length = (
+        lengths["represented_weighted_path_length_mm"]
+        + lengths["clipped_weighted_path_length_mm"]
+    )
+    if (
+        not math.isfinite(processed_length_value)
+        or processed_length_value < 0.0
+        or not math.isclose(
+            processed_length_value,
+            expected_processed_length,
+            rel_tol=1.0e-12,
+            abs_tol=1.0e-12,
+        )
+    ):
+        raise ValueError(
+            "v7 artifact processed path length does not equal represented plus clipped"
+        )
+    termination_count = path_diagnostics.get("termination_count")
+    segment = path_diagnostics.get("segment_budget_termination")
+    if (
+        not isinstance(termination_count, Integral)
+        or isinstance(termination_count, bool)
+        or int(termination_count) < 0
+    ):
+        raise ValueError("v7 artifact termination_count must be a non-negative integer")
+    if not isinstance(segment, Mapping):
+        raise ValueError(
+            "v7 artifact path_diagnostics.segment_budget_termination must be an object"
+        )
+    segment_count = segment.get("count")
+    segment_weight = segment.get("weight")
+    if (
+        not isinstance(segment_count, Integral)
+        or isinstance(segment_count, bool)
+        or int(segment_count) < 0
+    ):
+        raise ValueError(
+            "v7 artifact segment-budget termination count must be a non-negative integer"
+        )
+    try:
+        segment_weight_value = float(segment_weight)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "v7 artifact segment-budget termination weight must be numeric"
+        ) from exc
+    if not math.isfinite(segment_weight_value) or segment_weight_value < 0.0:
+        raise ValueError(
+            "v7 artifact segment-budget termination weight must be finite and non-negative"
+        )
+    return {
+        **counts,
+        **lengths,
+        "termination_count": int(termination_count),
+        "segment_budget_termination_count": int(segment_count),
+        "segment_budget_termination_weight": segment_weight_value,
+        "path_diagnostics": dict(path_diagnostics),
+    }
+
+
 def load_case_artifact(
     path: Path, *, expected_contract: Mapping[str, Any]
 ) -> OpticalFieldArtifact:
@@ -399,6 +659,7 @@ def load_case_artifact(
         raise ValueError(
             "unified transport result transport-configuration fingerprint mismatch"
         )
+    path_field_diagnostics = _required_path_field_diagnostics(record)
     return OpticalFieldArtifact(
         field=field,
         field_axes=axes,
@@ -408,11 +669,26 @@ def load_case_artifact(
         outgoing_surface_weight=float(record["outgoing_surface_weight"]),
         absorbed_weight=float(record["absorbed_weight"]),
         terminated_weight=float(record["terminated_weight"]),
+        termination_count=path_field_diagnostics["termination_count"],
+        segment_budget_termination_count=path_field_diagnostics[
+            "segment_budget_termination_count"
+        ],
+        segment_budget_termination_weight=path_field_diagnostics[
+            "segment_budget_termination_weight"
+        ],
         energy_balance_error=float(record["energy_balance_error"]),
         ray_count=int(record["ray_count"]),
         escape_event_count=int(record["escape_event_count"]),
         escaped_primary_count=int(record["escaped_primary_count"]),
-        path_diagnostics=record.get("path_diagnostics", {}),
+        processed_sample_count=path_field_diagnostics["processed_sample_count"],
+        clipped_sample_count=path_field_diagnostics["clipped_sample_count"],
+        represented_weighted_path_length_mm=path_field_diagnostics[
+            "represented_weighted_path_length_mm"
+        ],
+        clipped_weighted_path_length_mm=path_field_diagnostics[
+            "clipped_weighted_path_length_mm"
+        ],
+        path_diagnostics=path_field_diagnostics["path_diagnostics"],
         morphology_id=str(record.get("morphology_id", "")),
         morphology_fingerprint=str(record.get("morphology_fingerprint", "")),
         mechanics_source=str(record.get("mechanics_source", "")),

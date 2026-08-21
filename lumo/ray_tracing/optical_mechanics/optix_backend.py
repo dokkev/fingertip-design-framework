@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 import numpy as np
 
 from lumo.ray_tracing.optix.runtime import OptixRuntime, OptixRuntimeError
@@ -34,7 +35,19 @@ _PARAMS_DTYPE = np.dtype(
 )
 
 
-def create_runtime() -> OptixRuntime:
+def _device_id(device: str | int | None) -> int | None:
+    if device is None:
+        return None
+    if isinstance(device, int) and not isinstance(device, bool) and device >= 0:
+        return device
+    if isinstance(device, str):
+        match = re.fullmatch(r"cuda:(\d+)", device.strip())
+        if match is not None:
+            return int(match.group(1))
+    raise ValueError("OptiX device must be a non-negative index or 'cuda:<index>'")
+
+
+def create_runtime(device: str | int | None = None) -> OptixRuntime:
     """Create the configured runtime for the deferred 3D transport kernel."""
     try:
         return OptixRuntime.create(
@@ -46,6 +59,7 @@ def create_runtime() -> OptixRuntime:
             params_dtype=_PARAMS_DTYPE,
             num_payload_values=0,
             num_attribute_values=2,
+            device_id=_device_id(device),
         )
     except OptixRuntimeError as exc:
         raise Transport3DDependencyError(str(exc)) from exc

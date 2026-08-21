@@ -82,21 +82,43 @@ def test_checkpoint_values_are_absolute_depths_with_derived_annotations() -> Non
     assert ratios == (0.1, 0.2, 0.3)
 
 
+def test_from_fingertip_passes_explicit_volume_mesh_settings(monkeypatch) -> None:
+    selected = volume_mesh_settings_for_tier("reference")
+    observed: list[object] = []
+
+    class _Stop(RuntimeError):
+        pass
+
+    def capture(_solid, settings):
+        observed.append(settings)
+        raise _Stop
+
+    monkeypatch.setattr(simulation_module, "generate_volume_mesh", capture)
+
+    with pytest.raises(_Stop):
+        LumoSimulation.from_fingertip(
+            Fingertip(),
+            volume_mesh_settings=selected,
+        )
+    assert observed == [selected]
+
+
 def test_optix_runtime_is_created_once_and_reused(monkeypatch) -> None:
     simulation = object.__new__(LumoSimulation)
     simulation.optix_runtime = None
+    simulation.device = "cuda:2"
     created: list[object] = []
     runtime = object()
 
-    def create_runtime():
-        created.append(runtime)
+    def create_runtime(device):
+        created.append(device)
         return runtime
 
     monkeypatch.setattr(simulation_module, "create_runtime", create_runtime)
 
     assert simulation._runtime() is runtime
     assert simulation._runtime() is runtime
-    assert created == [runtime]
+    assert created == ["cuda:2"]
 
 
 def test_checkpoint_values_reject_non_monotonic_or_non_finite_depths() -> None:

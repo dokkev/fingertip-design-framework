@@ -132,7 +132,7 @@ def _decode_result(result: Any, *, name: str) -> tuple[int, int, float]:
     return decoded
 
 
-def run() -> OptixSmokeResult:
+def run(device_id: int | None = None) -> OptixSmokeResult:
     """Initialize the real runtime, build one GAS, and launch hit/miss rays."""
     try:
         import cupy as cp
@@ -160,6 +160,7 @@ def run() -> OptixSmokeResult:
             params_dtype=_PARAMS_DTYPE,
             num_payload_values=1,
             num_attribute_values=2,
+            device_id=device_id,
         )
     except OptixRuntimeError as exc:  # pragma: no cover - environment dependent
         raise OptixSmokeError(_runtime_stage(exc), f"{type(exc).__name__}: {exc}") from exc

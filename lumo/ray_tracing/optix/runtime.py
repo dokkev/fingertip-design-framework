@@ -69,7 +69,14 @@ class OptixRuntime:
         params_dtype: np.dtype,
         num_payload_values: int,
         num_attribute_values: int,
+        device_id: int | None = None,
     ) -> "OptixRuntime":
+        if device_id is not None and (
+            not isinstance(device_id, int)
+            or isinstance(device_id, bool)
+            or device_id < 0
+        ):
+            raise ValueError("device_id must be a non-negative integer or None")
         started = time.perf_counter()
         stage = "dependency_import"
         try:
@@ -86,7 +93,11 @@ class OptixRuntime:
             stage = "optix_header_resolution"
             paths = _discover_include_paths()
             stage = "cuda_device"
-            device = cp.cuda.Device()
+            device = (
+                cp.cuda.Device()
+                if device_id is None
+                else cp.cuda.Device(device_id)
+            )
             device.use()
             properties = cp.cuda.runtime.getDeviceProperties(device.id)
             compute_capability = f"{properties['major']}{properties['minor']}"
@@ -169,6 +180,7 @@ class OptixRuntime:
             metadata = {
                 "optix_version": ".".join(map(str, optix.version())),
                 "cuda_device": properties["name"].decode(),
+                "cuda_device_id": int(device.id),
                 "compute_capability": compute_capability,
                 "cuda_runtime_version": int(cp.cuda.runtime.runtimeGetVersion()),
                 "nvrtc_version": _require_cuda_result(

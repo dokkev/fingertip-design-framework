@@ -19,6 +19,7 @@ from .geometry import (
     Full3DSurfaceProvenance,
     INTERNAL_INTERFACE,
     TriangleSurface,
+    Transport3DCandidateGeometryError,
     Transport3DGeometryError,
     build_full3d_transport_geometry,
     _surface_normals,
@@ -208,6 +209,17 @@ def _silicone_surface(
         [state.deformed_coordinates_mm[canonical_index[node_id]] for node_id in surface_node_ids],
         dtype=np.float32,
     )
+    deformed_cross = np.cross(
+        vertices[faces[:, 1]] - vertices[faces[:, 0]],
+        vertices[faces[:, 2]] - vertices[faces[:, 0]],
+    )
+    deformed_area_twice = np.linalg.norm(deformed_cross, axis=1)
+    if np.any(~np.isfinite(deformed_area_twice)) or np.any(
+        deformed_area_twice <= 1.0e-12
+    ):
+        raise Transport3DCandidateGeometryError(
+            "deformed candidate silicone surface contains a degenerate triangle"
+        )
     semantic_tags = tuple(str(tag) for tag, _ in rows)
     external = np.asarray(
         [surface_definitions[tag].kind == "outer_compliant" for tag in semantic_tags],
@@ -248,10 +260,13 @@ def _silicone_surface(
         else AIR_INTERFACE if value else INTERNAL_INTERFACE
         for (tag, triangle), value in zip(rows, external)
     )
+    # Deformed face collapse was classified above as candidate-scoped. The
+    # remaining TriangleSurface shape, topology, semantic, and winding errors
+    # are static/fatal invariants and retain the base error type.
     return TriangleSurface(
         vertices=vertices,
         faces=faces,
-        normals=_surface_normals(vertices, faces),
+        normals=deformed_cross / deformed_area_twice[:, None],
         external_surface=external,
         u_start=u_start,
         u_end=u_end,

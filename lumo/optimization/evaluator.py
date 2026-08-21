@@ -6,7 +6,7 @@ physics remain in their neutral backends.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 import json
 from pathlib import Path
 import time
@@ -19,7 +19,7 @@ from lumo.physics import (
     InvalidFingertipMesh,
     MechanicsCheckpointState,
 )
-from lumo.mesh import volume_mesh_settings_for_tier
+from lumo.mesh import VolumeMeshSettings, volume_mesh_settings_for_tier
 from lumo.mesh.volume.mesh import VolumeMeshDependencyError, VolumeMeshingError
 from lumo.finger import (
     Fingertip,
@@ -66,11 +66,14 @@ from lumo.optimization.optical_artifact import (
     save_case_artifact,
 )
 from lumo.optimization.optical_contract import (
+    DEFAULT_OPTICAL_NUMERICAL_ACCEPTANCE,
+    OpticalNumericalAcceptanceContract,
     fingerprint_mapping,
     optical_physics_parameters,
     transport_configuration,
 )
 from lumo.simulation import (
+    CandidateOpticsError,
     ContactOpticalState,
     ContactSimulationResult,
     LumoSimulation,
@@ -79,7 +82,7 @@ from lumo.simulation import (
 )
 
 
-TRAJECTORY_EVALUATION_SCHEMA = "lumo3d-trajectory-evaluation-v2"
+TRAJECTORY_EVALUATION_SCHEMA = "lumo3d-trajectory-evaluation-v3"
 LUMO_EXECUTION_CONTRACT = "newton-1.4-vbd+full3d-optix-v4"
 CURRENT_CELL_HALF_LENGTH_MM = 5.5
 
@@ -238,12 +241,12 @@ def _objective_failure(
     objective: TrajectoryObjectiveResult,
     checkpoint_records: tuple[CheckpointEvaluationRecord, ...] = (),
 ) -> Lumo3DTrajectoryEvaluation | None:
-    """Translate the expected zero-signal objective pathology explicitly."""
-    if objective.objective_value is not None:
+    """Reject objective pathology before any scalar reaches the Ax boundary."""
+    if objective.objective_value is not None and not objective.objective_pathology:
         return None
     return _failure(
         "optics_failure",
-        "objective pathology produced no finite objective value: "
+        "objective pathology is not accepted in production: "
         f"{objective.objective_pathology_reason or 'unspecified reason'}",
         diagnostics={
             "failure_stage": "objective",
@@ -267,8 +270,15 @@ class Lumo3DTrajectoryEvaluator:
         mechanics_contract: MechanicsContract = DEFAULT_MECHANICS_CONTRACT,
         device: str = "cuda:0",
         optical_settings: Transport3DSettings | None = None,
+        optical_numerical_acceptance: OpticalNumericalAcceptanceContract = (
+            DEFAULT_OPTICAL_NUMERICAL_ACCEPTANCE
+        ),
         led: LED = LED(),
         fixed_parameters: FingertipParameters | None = None,
+        volume_mesh_settings: VolumeMeshSettings = volume_mesh_settings_for_tier(
+            "search"
+        ),
+        complete_trajectory_after_optical_failure: bool = False,
     ) -> None:
         if not isinstance(protocol, TrajectoryEvaluationProtocol):
             raise TypeError("protocol must be TrajectoryEvaluationProtocol")
@@ -287,9 +297,28 @@ class Lumo3DTrajectoryEvaluator:
         if not isinstance(led, LED):
             raise TypeError("led must be an LED")
         self.led = led
+        if not isinstance(volume_mesh_settings, VolumeMeshSettings):
+            raise TypeError("volume_mesh_settings must be a VolumeMeshSettings")
+        self.volume_mesh_settings = volume_mesh_settings
+        if not isinstance(complete_trajectory_after_optical_failure, bool):
+            raise TypeError(
+                "complete_trajectory_after_optical_failure must be a bool"
+            )
+        self.complete_trajectory_after_optical_failure = (
+            complete_trajectory_after_optical_failure
+        )
         self.settings = optical_settings or lumo_optical_settings()
         if not isinstance(self.settings, Transport3DSettings):
             raise TypeError("optical_settings must be a Transport3DSettings")
+        if not isinstance(
+            optical_numerical_acceptance,
+            OpticalNumericalAcceptanceContract,
+        ):
+            raise TypeError(
+                "optical_numerical_acceptance must be an "
+                "OpticalNumericalAcceptanceContract"
+            )
+        self.optical_numerical_acceptance = optical_numerical_acceptance
         if not self.settings.retain_internal_path_field:
             raise ValueError(
                 "optimization requires optical_settings.retain_internal_path_field=True"
@@ -302,6 +331,11 @@ class Lumo3DTrajectoryEvaluator:
             led=self.led,
             fixed_parameters=self.fixed_parameters,
             device=self.device,
+            optical_numerical_acceptance=self.optical_numerical_acceptance,
+            volume_mesh_settings=self.volume_mesh_settings,
+            complete_trajectory_after_optical_failure=(
+                self.complete_trajectory_after_optical_failure
+            ),
         )
 
     @property
@@ -331,24 +365,88 @@ class Lumo3DTrajectoryEvaluator:
         started = time.perf_counter()
         stage = "candidate_validation"
         checkpoint_records: list[CheckpointEvaluationRecord] = []
+        volume_mesh_summary: dict[str, Any] | None = None
+        morphology_id = _candidate_id(parameters)
+        candidate_root = (
+            self.artifact_root
+            / f"contract_{self.evaluation_contract_id.replace(':', '_')}"
+            / f"protocol_{self.protocol.fingerprint}"
+            / "candidates"
+            / morphology_id
+        )
+
+        def persist_failure(
+            evaluation: Lumo3DTrajectoryEvaluation,
+        ) -> Lumo3DTrajectoryEvaluation:
+            """Persist candidate-scoped failure evidence before returning it."""
+
+            diagnostics = dict(evaluation.report)
+            if volume_mesh_summary is not None:
+                diagnostics.setdefault("volume_mesh", volume_mesh_summary)
+            report: dict[str, Any] = dict(diagnostics)
+            report.update({
+                "schema": TRAJECTORY_EVALUATION_SCHEMA,
+                "status": evaluation.status,
+                "objective_name": self.objective_identifier.serialized_name,
+                "parameterization_version": FEASIBLE_PARAMETERIZATION_VERSION,
+                "evaluation_contract_id": self.evaluation_contract_id,
+                "morphology_id": morphology_id,
+                "protocol_fingerprint": self.protocol.fingerprint,
+                "complete_trajectory_after_optical_failure": (
+                    self.complete_trajectory_after_optical_failure
+                ),
+                "failure_message": evaluation.failure_message,
+                "failure_scenario": evaluation.failure_scenario,
+                "failure_diagnostics": diagnostics,
+                "completed_checkpoint_count": len(evaluation.checkpoint_records),
+                "checkpoint_records": [
+                    record.to_dict() for record in evaluation.checkpoint_records
+                ],
+                "total_runtime_s": time.perf_counter() - started,
+            })
+            candidate_root.mkdir(parents=True, exist_ok=True)
+            result_path = (candidate_root / "trajectory_evaluation.json").resolve()
+            report["result_artifact_path"] = str(result_path)
+            temporary = result_path.with_name(result_path.name + ".tmp")
+            temporary.write_text(
+                json.dumps(report, indent=2, sort_keys=True, allow_nan=False) + "\n",
+                encoding="utf-8",
+            )
+            temporary.replace(result_path)
+            return replace(
+                evaluation,
+                report=report,
+                result_artifact_path=str(result_path),
+            )
+
+        def fail(
+            status: str,
+            message: str,
+            *,
+            diagnostics: Mapping[str, Any] | None = None,
+            failure_scenario: str | None = None,
+        ) -> Lumo3DTrajectoryEvaluation:
+            resolved_diagnostics = {} if diagnostics is None else dict(diagnostics)
+            return persist_failure(
+                _failure(
+                    status,
+                    message,
+                    diagnostics=resolved_diagnostics,
+                    failure_scenario=failure_scenario,
+                    checkpoint_records=tuple(checkpoint_records),
+                )
+            )
+
         try:
             validate_minimum_silicone_thickness(parameters)
             tip = Fingertip(
                 parameters,
                 led=self.led,
             )
-            morphology_id = _candidate_id(parameters)
-            candidate_root = (
-                self.artifact_root
-                / f"contract_{self.evaluation_contract_id.replace(':', '_')}"
-                / f"protocol_{self.protocol.fingerprint}"
-                / "candidates"
-                / morphology_id
-            )
             for radius in self.protocol.indenter_radii_mm:
                 reason = self._domain_failure(radius)
                 if reason is not None:
-                    return _failure(
+                    return fail(
                         "domain_incompatible",
                         reason,
                         diagnostics={"radius_mm": radius, "failure_stage": "domain_validation"},
@@ -362,8 +460,23 @@ class Lumo3DTrajectoryEvaluator:
                 mechanics_contract=self.mechanics_contract,
                 device=self.device,
                 optical_settings=self.settings,
+                volume_mesh_settings=self.volume_mesh_settings,
             )
             volume_mesh = simulation.volume_mesh
+            if all(
+                hasattr(volume_mesh, name)
+                for name in ("settings", "gmsh_version", "quality", "validation")
+            ):
+                volume_mesh_summary = {
+                    "settings": asdict(volume_mesh.settings),
+                    "gmsh_version": volume_mesh.gmsh_version,
+                    "quality": asdict(volume_mesh.quality),
+                    "validation": {
+                        "passed": volume_mesh.validation.passed,
+                        "checks": dict(volume_mesh.validation.checks),
+                        "errors": list(volume_mesh.validation.errors),
+                    },
+                }
             configuration = transport_configuration(
                 self.settings,
                 material=optical_physics_parameters(tip),
@@ -379,10 +492,14 @@ class Lumo3DTrajectoryEvaluator:
                 "protocol_fingerprint": self.protocol.fingerprint,
                 "mechanics_contract_fingerprint": self.mechanics_contract.fingerprint,
                 "optical_configuration_fingerprint": configuration_fingerprint,
+                "optical_numerical_acceptance": (
+                    self.optical_numerical_acceptance.to_dict()
+                ),
                 "objective_contract_fingerprint": fingerprint_mapping(objective_contract),
                 "evaluation_contract_id": self.evaluation_contract_id,
             }
             observations: list[TrajectoryObservation] = []
+            optical_numerical_failures: list[dict[str, Any]] = []
             mechanics_runtime_s = 0.0
             optics_runtime_s = 0.0
             stage = "trajectory_evaluation"
@@ -461,8 +578,42 @@ class Lumo3DTrajectoryEvaluator:
                             "contact_state": contact_state.to_dict(),
                             "transport_configuration": configuration,
                             "transport_configuration_fingerprint": configuration_fingerprint,
+                            "optical_numerical_acceptance": (
+                                self.optical_numerical_acceptance.to_dict()
+                            ),
                         }
                         save_case_artifact(optical_artifact, state.optics, contract)
+                        numerical_acceptance = self.optical_numerical_acceptance.assess(
+                            state.optics
+                        )
+                        if not numerical_acceptance.accepted:
+                            if not self.complete_trajectory_after_optical_failure:
+                                return fail(
+                                    "optics_failure",
+                                    "optical numerical acceptance failed: "
+                                    + ", ".join(numerical_acceptance.failure_reasons),
+                                    diagnostics={
+                                        "failure_stage": "optics",
+                                        "failure_scenario": "numerical_acceptance",
+                                        "optical_numerical_acceptance": (
+                                            numerical_acceptance.to_dict()
+                                        ),
+                                        "optical_numerical_summary": (
+                                            self.optical_numerical_acceptance.summarize(
+                                                item.optics
+                                                for item in checkpoint_records
+                                            )
+                                        ),
+                                    },
+                                    failure_scenario="numerical_acceptance",
+                                )
+                            optical_numerical_failures.append(
+                                {
+                                    "trajectory_id": record.trajectory_id,
+                                    "checkpoint_index": record.checkpoint_index,
+                                    **numerical_acceptance.to_dict(),
+                                }
+                            )
                         observations.append(
                             TrajectoryObservation(
                                 location_u=contact_result.normalized_location,
@@ -471,17 +622,43 @@ class Lumo3DTrajectoryEvaluator:
                                 field=state.optics.field,
                                 total_transport=state.optics.total_transport,
                                 escaped_weight=state.optics.escaped_weight,
-                                debug_diagnostics=None,
+                                debug_diagnostics=energy_record(state.optics)
+                                | {
+                                    "optical_numerical_acceptance": (
+                                        numerical_acceptance.to_dict()
+                                    )
+                                },
                             )
                         )
 
             objective = compute_trajectory_objective(observations, self.objective_config)
+            if optical_numerical_failures:
+                return fail(
+                    "optics_failure",
+                    "optical numerical acceptance failed in "
+                    f"{len(optical_numerical_failures)} checkpoint state(s)",
+                    diagnostics={
+                        "failure_stage": "optics",
+                        "failure_scenario": "numerical_acceptance",
+                        "evidence_collection_mode": (
+                            "complete_trajectory_after_optical_failure"
+                        ),
+                        "optical_numerical_failures": optical_numerical_failures,
+                        "optical_numerical_summary": (
+                            self.optical_numerical_acceptance.summarize(
+                                record.optics for record in checkpoint_records
+                            )
+                        ),
+                        "objective": objective.to_dict(),
+                    },
+                    failure_scenario="numerical_acceptance",
+                )
             objective_failure = _objective_failure(
                 objective,
                 tuple(checkpoint_records),
             )
             if objective_failure is not None:
-                return objective_failure
+                return persist_failure(objective_failure)
             trajectory_metrics = _trajectory_metrics(observations, checkpoint_records)
             summary = {
                 "schema": TRAJECTORY_EVALUATION_SCHEMA,
@@ -498,11 +675,23 @@ class Lumo3DTrajectoryEvaluator:
                 "actual_newton_trajectory_count": self.protocol.trajectory_count,
                 "checkpoint_count": self.protocol.checkpoint_count,
                 "optical_state_count": len(checkpoint_records),
+                "complete_trajectory_after_optical_failure": (
+                    self.complete_trajectory_after_optical_failure
+                ),
                 "mechanics_runtime_s": mechanics_runtime_s,
                 "optics_runtime_s": optics_runtime_s,
                 "total_runtime_s": time.perf_counter() - started,
                 "morphology_fingerprint": volume_mesh.morphology_fingerprint,
+                "volume_mesh": volume_mesh_summary,
                 "transport_configuration_fingerprint": configuration_fingerprint,
+                "optical_numerical_acceptance": (
+                    self.optical_numerical_acceptance.to_dict()
+                ),
+                "optical_numerical_summary": (
+                    self.optical_numerical_acceptance.summarize(
+                        record.optics for record in checkpoint_records
+                    )
+                ),
                 "checkpoint_records": [record.to_dict() for record in checkpoint_records],
                 "objective": objective.to_dict(),
                 "trajectory_metrics": trajectory_metrics,
@@ -531,21 +720,19 @@ class Lumo3DTrajectoryEvaluator:
         ):
             raise
         except (InvalidFingertip, InvalidFingertipParameters) as exc:
-            return _failure(
+            return fail(
                 "invalid_design",
                 f"{type(exc).__name__}: {exc}",
                 diagnostics={"failure_stage": stage},
-                checkpoint_records=tuple(checkpoint_records),
             )
         except (VolumeMeshingError, InvalidFingertipMesh) as exc:
-            return _failure(
+            return fail(
                 "mesh_failure",
                 f"{type(exc).__name__}: {exc}",
                 diagnostics={"failure_stage": stage},
-                checkpoint_records=tuple(checkpoint_records),
             )
         except CandidateContactError as exc:
-            return _failure(
+            return fail(
                 "mechanics_failure",
                 f"{type(exc).__name__}: {exc}",
                 diagnostics={
@@ -553,10 +740,9 @@ class Lumo3DTrajectoryEvaluator:
                     "failure_scenario": "candidate_contact",
                 },
                 failure_scenario="candidate_contact",
-                checkpoint_records=tuple(checkpoint_records),
             )
         except CandidateMechanicsError as exc:
-            return _failure(
+            return fail(
                 "mechanics_failure",
                 f"{type(exc).__name__}: {exc}",
                 diagnostics={
@@ -564,7 +750,19 @@ class Lumo3DTrajectoryEvaluator:
                     "failure_scenario": "candidate_mechanics_state",
                 },
                 failure_scenario="candidate_mechanics_state",
-                checkpoint_records=tuple(checkpoint_records),
+            )
+        except CandidateOpticsError as exc:
+            return fail(
+                "optics_failure",
+                f"{type(exc).__name__}: {exc}",
+                diagnostics={
+                    "failure_stage": "optics",
+                    "failure_scenario": exc.failure_scenario,
+                    "exception_type": type(exc).__name__,
+                    "cause_type": exc.cause_type,
+                    "cause_message": exc.cause_message,
+                },
+                failure_scenario=exc.failure_scenario,
             )
 def _fixed_fingertip_inputs(
     parameters: FingertipParameters,
@@ -584,8 +782,17 @@ def trajectory_evaluation_contract_id(
     led: LED,
     fixed_parameters: FingertipParameters,
     device: str,
+    optical_numerical_acceptance: OpticalNumericalAcceptanceContract = (
+        DEFAULT_OPTICAL_NUMERICAL_ACCEPTANCE
+    ),
+    volume_mesh_settings: VolumeMeshSettings = volume_mesh_settings_for_tier(
+        "search"
+    ),
+    complete_trajectory_after_optical_failure: bool = False,
 ) -> str:
     """Fingerprint every fixed input that can change a production result."""
+    if not isinstance(complete_trajectory_after_optical_failure, bool):
+        raise TypeError("complete_trajectory_after_optical_failure must be a bool")
     payload = {
         "schema": TRAJECTORY_EVALUATION_SCHEMA,
         "protocol": protocol.to_dict(),
@@ -598,11 +805,15 @@ def trajectory_evaluation_contract_id(
             "schema": LUMO_EXECUTION_CONTRACT,
             "device": device,
             "representative_cell_half_length_mm": CURRENT_CELL_HALF_LENGTH_MM,
-            "volume_mesh": asdict(volume_mesh_settings_for_tier("search")),
+            "volume_mesh": asdict(volume_mesh_settings),
             "fixed_fingertip_inputs": _fixed_fingertip_inputs(fixed_parameters),
             "parameterization_version": FEASIBLE_PARAMETERIZATION_VERSION,
+            "complete_trajectory_after_optical_failure": (
+                complete_trajectory_after_optical_failure
+            ),
         },
         "transport": asdict(optical_settings),
+        "optical_numerical_acceptance": optical_numerical_acceptance.to_dict(),
         "led": {
             "width_mm": float(led.width_mm),
             "height_mm": float(led.height_mm),

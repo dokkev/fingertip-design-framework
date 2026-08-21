@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -336,3 +335,108 @@ def test_resume_replays_registry_hit_without_reevaluating_pending_candidate(
     assert resumed.records[1].reused_evaluation_status == "success"
     assert len(evaluator.calls) == 1
     assert resumed.ax_proposal_count == 2
+    assert resumed.status == "COMPLETE"
+    assert resumed.successful_search_count == 2
+    assert resumed.new_evaluation_count == 2  # nominal plus one non-reused search
+
+
+def test_resume_from_completed_post_checkpoint_does_not_generate_extra_trial(
+    monkeypatch,
+) -> None:
+    space = _space()
+    candidates = [_candidate(space, 5.5), _candidate(space, 6.5)]
+    client = _ClientDouble(candidates.copy())
+    monkeypatch.setattr(ax_adapter, "create_ax_client", lambda *_args: client)
+    settings = AxSettings(
+        initialization_trials=1,
+        search_trials=1,
+        seed=7,
+        objective=TRAJECTORY_SEPARATION_OBJECTIVE,
+    )
+    checkpoints = []
+    completed = run_ax_optimization(
+        space,
+        _Evaluator(),
+        settings,
+        max_proposals=2,
+        on_checkpoint=checkpoints.append,
+    )
+    final = checkpoints[-1]
+    assert final.phase == "post_evaluation"
+    assert final.pending_trial is None
+    assert completed.status == "COMPLETE"
+    assert completed.ax_proposal_count == 1
+
+    evaluator = _Evaluator()
+    resumed = run_ax_optimization(
+        space,
+        evaluator,
+        settings,
+        max_proposals=2,
+        resume_state=AxResumeState(
+            client=final.client,
+            records=final.records,
+            pending_trial=None,
+        ),
+    )
+
+    assert evaluator.calls == []
+    assert resumed.status == "COMPLETE"
+    assert resumed.ax_proposal_count == 1
+    assert [dict(record.parameters) for record in resumed.records] == [
+        dict(record.parameters) for record in completed.records
+    ]
+
+
+def test_resume_abandons_pending_trial_when_decode_is_infeasible(monkeypatch) -> None:
+    space = _space()
+    invalid = {variable.name: 0.5 for variable in space.search_variables}
+    invalid["latent_cutout_width"] = 1.1
+    client = _ClientDouble([invalid])
+    monkeypatch.setattr(ax_adapter, "create_ax_client", lambda *_args: client)
+    settings = AxSettings(
+        initialization_trials=1,
+        search_trials=1,
+        seed=7,
+        objective=TRAJECTORY_SEPARATION_OBJECTIVE,
+    )
+    captured = []
+
+    def interrupt(event) -> None:
+        captured.append(event)
+        if event.pending_trial is not None and event.pending_trial.phase != "nominal":
+            raise RuntimeError("simulated process interruption")
+
+    with pytest.raises(RuntimeError, match="simulated process interruption"):
+        run_ax_optimization(
+            space,
+            _Evaluator(),
+            settings,
+            max_proposals=1,
+            max_feasibility_resamples=0,
+            on_checkpoint=interrupt,
+        )
+    pending_event = next(
+        event
+        for event in captured
+        if event.pending_trial is not None and event.pending_trial.phase != "nominal"
+    )
+    pending = pending_event.pending_trial
+    assert pending is not None
+
+    resumed = run_ax_optimization(
+        space,
+        _Evaluator(),
+        settings,
+        max_proposals=1,
+        max_feasibility_resamples=0,
+        resume_state=AxResumeState(
+            client=pending_event.client,
+            records=pending_event.records,
+            pending_trial=pending,
+        ),
+    )
+
+    assert resumed.status == "feasible_generation_exhausted"
+    assert resumed.records[-1].status == "feasibility_rejected"
+    assert client.trials[pending.trial_index].status == "ABANDONED"
