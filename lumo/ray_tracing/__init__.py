@@ -1,14 +1,2 @@
-"""Public optical boundary contracts."""
+"""Ray-tracing ownership for the new LUMO implementation."""
 
-from lumo.ray_tracing.contracts.objects import (
-    CarrierOptics,
-    IndenterOptics,
-    InvalidIndenterOptics,
-    ObjectBoundaryOptics,
-)
-__all__ = [
-    "IndenterOptics",
-    "CarrierOptics",
-    "ObjectBoundaryOptics",
-    "InvalidIndenterOptics",
-]

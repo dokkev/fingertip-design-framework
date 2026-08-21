@@ -1,19 +1,6 @@
-"""Concrete LUMO simulation orchestration and mechanics contract."""
+"""Clean LUMO implementation under active reconstruction.
 
-from lumo.mechanics_contract import DEFAULT_MECHANICS_CONTRACT, MechanicsContract
+The existing :mod:`lumo` package remains legacy/reference code and is not
+imported here. Functionality will be rebuilt one owning package at a time.
+"""
 
-from lumo.simulation import (
-    CandidateOpticsError,
-    ContactOpticalState,
-    ContactSimulationResult,
-    LumoSimulation,
-)
-
-__all__ = [
-    "CandidateOpticsError",
-    "ContactOpticalState",
-    "ContactSimulationResult",
-    "DEFAULT_MECHANICS_CONTRACT",
-    "LumoSimulation",
-    "MechanicsContract",
-]

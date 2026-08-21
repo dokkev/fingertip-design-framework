@@ -1,2 +1,0 @@
-"""Focused GUI-domain tests."""
-
