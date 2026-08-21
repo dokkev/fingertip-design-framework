@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 import math
 from types import MappingProxyType
-from typing import Any, Literal
+from typing import Literal
 
 from finger.fingertip_parameters import FingertipParameters
 from finger.extrusion import FingertipSolid
@@ -176,29 +176,6 @@ class FingertipVolumeMesh:
             return self.surface_triangles[tag]
         except KeyError as exc:
             raise KeyError(f"unknown semantic surface tag: {tag!r}") from exc
-
-    def to_dict(self) -> dict[str, Any]:
-        """Serialize topology and acceptance diagnostics without solver objects."""
-        return {
-            "gmsh_version": self.gmsh_version,
-            "morphology_fingerprint": self.morphology_fingerprint,
-            "parameters": asdict(self.parameters),
-            "settings": asdict(self.settings),
-            "nodes": {str(k): asdict(v) for k, v in sorted(self.nodes.items())},
-            "tetrahedra": [asdict(value) for value in self.tetrahedra],
-            "surface_triangles": {
-                tag: [asdict(value) for value in triangles]
-                for tag, triangles in sorted(self.surface_triangles.items())
-            },
-            "volume_element_ids": dict(self.volume_element_ids),
-            "quality": asdict(self.quality),
-            "validation": {
-                "passed": self.validation.passed,
-                "checks": dict(self.validation.checks),
-                "errors": self.validation.errors,
-            },
-        }
-
 
 __all__ = [
     "FingertipVolumeMesh",

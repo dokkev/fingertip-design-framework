@@ -29,9 +29,11 @@ from ray_tracing.optical_mechanics import (
 )
 from ray_tracing.optical_mechanics.optix_backend import create_runtime
 from optimization.optical_artifact import (
+    save_case_artifact,
+)
+from optimization.optical_contract import (
     fingerprint_mapping,
     optical_physics_parameters,
-    save_case_artifact,
     transport_configuration,
 )
 from validation.ray_tracing.deformed_state_restore import restore_deformed_optical_state
@@ -176,18 +178,12 @@ def _trace_bundle(
         carrier_mesh=carrier_mesh,
         carrier_optics=CarrierOptics("absorber"),
         carrier_mapping_tolerance_mm=mapping_tolerance_mm,
-        metadata={
-            "contact_state_fingerprint": contact_state["contact_state_fingerprint"],
-        },
     )
     legacy_geometry = build_fingertip_volume_state_geometry(
         tip,
         restored.state,
         carrier_mesh=carrier_mesh,
         full3d_surface_provenance="actual_deformed_3d_volume_state",
-        metadata={
-            "contact_state_fingerprint": contact_state["contact_state_fingerprint"],
-        },
         carrier_mapping_tolerance_mm=mapping_tolerance_mm,
     )
     material = optical_physics_parameters(tip)

@@ -10,9 +10,9 @@ from finger import Fingertip, FingertipParameters, LED, OpticalParameters
 from ray_tracing.optical_mechanics import Transport3DResult
 from optimization.optical_artifact import (
     load_case_artifact,
-    optical_physics_parameters,
     save_case_artifact,
 )
+from optimization.optical_contract import optical_physics_parameters
 
 
 def _result() -> Transport3DResult:

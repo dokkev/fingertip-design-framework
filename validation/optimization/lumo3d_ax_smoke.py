@@ -10,7 +10,6 @@ from dataclasses import replace
 
 from optimization.adapters.ax import (
     AxSettings,
-    CONTACT_STATE_SEPARATION_OBJECTIVE_NAME,
     run_ax_optimization,
 )
 from optimization.evaluation_registry import EvaluationRegistry
@@ -18,9 +17,15 @@ from optimization.design_space import (
     PRODUCTION_NOMINAL_VOID_HEIGHT_MM,
     PRODUCTION_SEARCH_BOUNDS,
 )
+from optimization.objectives import ObjectiveIdentifier
 from finger import Fingertip, FingertipParameters
 from optimization.evaluator import create_lumo3d_trajectory_study
 from lumo.simulation import LUMO3D_OBSERVATION_LEVEL
+
+
+CONTACT_STATE_SEPARATION_OBJECTIVE = ObjectiveIdentifier(
+    "contact_state_separation", 1
+)
 
 
 @dataclass(frozen=True)
@@ -56,7 +61,7 @@ class _SyntheticEvaluator:
             status="success",
             objective_value=score,
             diagnostics={
-                "objective_name": CONTACT_STATE_SEPARATION_OBJECTIVE_NAME,
+                "objective_name": CONTACT_STATE_SEPARATION_OBJECTIVE.serialized_name,
                 "observation_level": LUMO3D_OBSERVATION_LEVEL,
             },
         )
@@ -93,7 +98,7 @@ def run_lumo3d_ax_smoke(output_dir: str | Path) -> dict[str, Any]:
             initialization_trials=1,
             search_trials=1,
             seed=20260819,
-            objective_name=CONTACT_STATE_SEPARATION_OBJECTIVE_NAME,
+            objective=CONTACT_STATE_SEPARATION_OBJECTIVE,
         ),
         evaluation_registry=registry,
         evaluation_contract_id=contract_id,
@@ -106,7 +111,7 @@ def run_lumo3d_ax_smoke(output_dir: str | Path) -> dict[str, Any]:
         raise RuntimeError(f"unexpected Ax generation phases: {phases!r}")
     if statuses != ["success", "success", "success"]:
         raise RuntimeError(f"unexpected Ax smoke statuses: {statuses!r}")
-    if result.objective_name != CONTACT_STATE_SEPARATION_OBJECTIVE_NAME:
+    if result.objective_name != CONTACT_STATE_SEPARATION_OBJECTIVE.serialized_name:
         raise RuntimeError("Ax smoke objective name did not survive orchestration")
     if result.best_record is None or result.best_record.evaluation is None:
         raise RuntimeError("Ax smoke did not retain a successful best record")

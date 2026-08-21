@@ -78,10 +78,7 @@ def _objective_payload(evaluation: Any) -> dict[str, Any]:
 
 
 def _fields(evaluation: Any) -> tuple[np.ndarray, ...]:
-    fields = []
-    for record in evaluation.optical_diagnostics:
-        fields.append(np.asarray(np.load(record["artifact_field"], allow_pickle=False)["field"], dtype=float))
-    return tuple(fields)
+    return tuple(np.asarray(record.optics.field, dtype=float) for record in evaluation.checkpoint_records)
 
 
 def _distance_matrix(fields: tuple[np.ndarray, ...]) -> np.ndarray:
@@ -108,7 +105,7 @@ def _compare_legacy_reduction(
             "pass": False,
         }
     new_records = tuple(
-        sorted(reduced_new.optical_diagnostics, key=lambda item: float(item["normalized_location"]))
+        sorted(reduced_new.checkpoint_records, key=lambda item: item.normalized_location)
     )
     legacy_records = tuple(
         sorted(legacy.optical_diagnostics, key=lambda item: float(item["normalized_location"]))
@@ -129,19 +126,16 @@ def _compare_legacy_reduction(
         }
     field_comparisons: list[dict[str, Any]] = []
     for new_record, legacy_record in zip(new_records, legacy_records, strict=True):
-        if float(new_record["normalized_location"]) != float(legacy_record["normalized_location"]):
+        if float(new_record.normalized_location) != float(legacy_record["normalized_location"]):
             return {
                 "legacy_status": legacy.status,
                 "location_mismatch": {
-                    "new": float(new_record["normalized_location"]),
+                    "new": float(new_record.normalized_location),
                     "legacy": float(legacy_record["normalized_location"]),
                 },
                 "pass": False,
             }
-        new_field = np.asarray(
-            np.load(new_record["artifact_field"], allow_pickle=False)["field"],
-            dtype=float,
-        )
+        new_field = np.asarray(new_record.optics.field, dtype=float)
         legacy_field = np.asarray(
             np.load(legacy_record["artifact_field"], allow_pickle=False)["field"],
             dtype=float,
@@ -157,7 +151,7 @@ def _compare_legacy_reduction(
             }
         field_comparisons.append(
             {
-                "normalized_location": float(new_record["normalized_location"]),
+                "normalized_location": float(new_record.normalized_location),
                 "max_abs_field_error": float(np.max(np.abs(new_field - legacy_field))),
                 "normalized_field_distance": normalized_field_distance(new_field, legacy_field),
             }
@@ -195,16 +189,20 @@ def _plot_outputs(root: Path, evaluations: dict[str, Any]) -> None:
     plots = root / "plots"
     plots.mkdir(parents=True, exist_ok=True)
     for label, evaluation in evaluations.items():
-        records = evaluation.checkpoint_diagnostics
+        records = evaluation.checkpoint_records
         figure, axis = plt.subplots(figsize=(6, 4))
-        grouped: dict[str, list[Mapping[str, Any]]] = {}
+        grouped: dict[str, list[Any]] = {}
         for record in records:
-            grouped.setdefault(str(record["trajectory_id"]), []).append(record)
+            grouped.setdefault(record.trajectory_id, []).append(record)
         for trajectory_id, items in grouped.items():
-            items = sorted(items, key=lambda item: item["checkpoint_index"])
+            items = sorted(items, key=lambda item: item.checkpoint_index)
             axis.plot(
-                [item["post_contact_travel_mm"] for item in items],
-                [item["mechanics_diagnostics"].get("max_displacement_mm", np.nan) for item in items],
+                [item.post_contact_travel_mm for item in items],
+                [
+                    item.debug_diagnostics.get("max_displacement_mm", np.nan)
+                    if item.debug_diagnostics else np.nan
+                    for item in items
+                ],
                 marker="o",
                 label=trajectory_id,
             )
@@ -228,9 +226,9 @@ def _plot_outputs(root: Path, evaluations: dict[str, Any]) -> None:
 
         figure, axis = plt.subplots(figsize=(6, 4))
         axis.scatter(
-            [record["normalized_location"] for record in evaluation.optical_diagnostics],
-            [record["post_contact_travel_mm"] for record in evaluation.optical_diagnostics],
-            c=[record.get("carrier_absorbed_weight", 0.0) for record in evaluation.optical_diagnostics],
+            [record.normalized_location for record in evaluation.checkpoint_records],
+            [record.post_contact_travel_mm for record in evaluation.checkpoint_records],
+            c=[record.carrier_absorbed_weight for record in evaluation.checkpoint_records],
             cmap="plasma",
         )
         axis.set_xlabel("contact location u")
@@ -242,10 +240,10 @@ def _plot_outputs(root: Path, evaluations: dict[str, Any]) -> None:
 
     figure, axis = plt.subplots(figsize=(6, 4))
     for label, evaluation in evaluations.items():
-        records = evaluation.optical_diagnostics
+        records = evaluation.checkpoint_records
         axis.plot(
-            [record["post_contact_travel_mm"] for record in records],
-            [record.get("carrier_absorbed_weight", 0.0) for record in records],
+            [record.post_contact_travel_mm for record in records],
+            [record.carrier_absorbed_weight for record in records],
             "o-",
             label=label,
         )
@@ -259,10 +257,10 @@ def _plot_outputs(root: Path, evaluations: dict[str, Any]) -> None:
 
     figure, axis = plt.subplots(figsize=(6, 4))
     for label, evaluation in evaluations.items():
-        records = evaluation.optical_diagnostics
+        records = evaluation.checkpoint_records
         axis.plot(
-            [record["post_contact_travel_mm"] for record in records],
-            [record.get("total_transport", 0.0) for record in records],
+            [record.post_contact_travel_mm for record in records],
+            [record.total_transport for record in records],
             "o-",
             label=label,
         )
@@ -311,7 +309,8 @@ def run_validation(output: str | Path, *, device: str = "cuda:0") -> dict[str, A
         evaluations[label] = result
 
     all_trajectory_records = {
-        label: list(result.checkpoint_diagnostics) for label, result in evaluations.items()
+        label: [record.to_dict() for record in result.checkpoint_records]
+        for label, result in evaluations.items()
     }
     _write_json(root / "trajectories.json", all_trajectory_records)
     with (root / "checkpoints.csv").open("w", newline="", encoding="utf-8") as handle:
@@ -323,13 +322,19 @@ def run_validation(output: str | Path, *, device: str = "cuda:0") -> dict[str, A
 
     _write_json(
         root / "trajectory_metrics.json",
-        {label: result.diagnostics.get("trajectory_metrics", {}) for label, result in evaluations.items()},
+        {label: result.report.get("trajectory_metrics", {}) for label, result in evaluations.items()},
     )
     _write_json(
         root / "trajectory_objective.json",
         {label: _objective_payload(result) for label, result in evaluations.items()},
     )
-    _write_json(root / "optics_diagnostics.json", {label: result.optical_diagnostics for label, result in evaluations.items()})
+    _write_json(
+        root / "optics_diagnostics.json",
+        {
+            label: [record.to_dict() for record in result.checkpoint_records]
+            for label, result in evaluations.items()
+        },
+    )
     _plot_outputs(root, evaluations)
 
     reduced_protocol = TrajectoryEvaluationProtocol(
@@ -349,8 +354,10 @@ def run_validation(output: str | Path, *, device: str = "cuda:0") -> dict[str, A
     _write_json(root / "legacy_reduction_check.json", legacy_comparison)
 
     new_final = next(
-        record for record in evaluations["nominal"].checkpoint_diagnostics
-        if record["normalized_location"] == 0.5 and record["radius_mm"] == 5.0 and record["checkpoint_depth_mm"] == 1.5
+        record for record in evaluations["nominal"].checkpoint_records
+        if record.normalized_location == 0.5
+        and record.radius_mm == 5.0
+        and record.checkpoint_depth_mm == 1.5
     )
     old_root = root / "mechanics_final_state_old"
     old = run_multi_location_sphere_contact(
@@ -367,10 +374,12 @@ def run_validation(output: str | Path, *, device: str = "cuda:0") -> dict[str, A
     )
     old_case = old.locations[0]
     old_vertices = old_case.indentation.mechanics_result.deformed_vertices
-    new_archive = np.load(new_final["mechanics_artifact_path"], allow_pickle=False)
+    new_archive = np.load(new_final.mechanics_artifact_path, allow_pickle=False)
     new_vertices = np.asarray(new_archive["deformed_vertices_mm"], dtype=float)
     mechanics_error = float(np.max(np.abs(old_vertices - new_vertices)))
-    new_mechanics = dict(new_final["mechanics_diagnostics"])
+    new_mechanics = (
+        {} if new_final.debug_diagnostics is None else dict(new_final.debug_diagnostics)
+    )
     old_mechanics = dict(old_case.indentation.diagnostics)
     old_inversions = int(np.count_nonzero(
         _six_volumes(old_vertices, old_case.indentation.mechanics_result.tetrahedra) <= 0.0
@@ -378,7 +387,7 @@ def run_validation(output: str | Path, *, device: str = "cuda:0") -> dict[str, A
     _write_json(root / "mechanics_final_state_regression.json", {
         "max_abs_deformed_vertex_error_mm": mechanics_error,
         "old_steps": old_case.indentation.mechanics_result.steps,
-        "new_steps": new_final["cumulative_step_index"],
+        "new_steps": new_final.cumulative_step_index,
         "old_final_pose_mm": list(old_case.indentation.final_indenter_pose.translation_mm),
         "new_final_body_translation_mm": [
             float(new_mechanics.get("final_body_x_mm", 0.0)),
@@ -386,15 +395,15 @@ def run_validation(output: str | Path, *, device: str = "cuda:0") -> dict[str, A
             float(new_mechanics.get("final_body_z_mm", 0.0)),
         ],
         "old_carrier_contact_active": bool(old_mechanics.get("carrier_contact_active", False)),
-        "new_carrier_contact_active": bool(new_mechanics.get("carrier_contact_active", False)),
+        "new_carrier_contact_active": new_final.mechanics_state.carrier_contact_active,
         "old_carrier_contact_vertex_indices": list(old_mechanics.get("carrier_contact_vertex_indices", ())),
-        "new_carrier_contact_vertex_indices": list(new_mechanics.get("carrier_contact_vertex_indices", ())),
+        "new_carrier_contact_vertex_indices": list(new_final.mechanics_state.active_carrier_contact_vertex_indices),
         "old_inverted_tetrahedra": old_inversions,
-        "new_inverted_tetrahedra": int(new_mechanics.get("inverted_tetrahedra", 0)),
+        "new_inverted_tetrahedra": new_final.mechanics_state.inverted_tetrahedra,
         "old_max_soft_contact_overflow": int(old_mechanics.get("max_soft_contact_overflow", 0)),
-        "new_max_soft_contact_overflow": int(new_mechanics.get("max_soft_contact_overflow", 0)),
+        "new_max_soft_contact_overflow": new_final.mechanics_state.max_soft_contact_overflow,
         "old_max_rigid_contact_overflow": int(old_mechanics.get("max_rigid_contact_overflow", 0)),
-        "new_max_rigid_contact_overflow": int(new_mechanics.get("max_rigid_contact_overflow", 0)),
+        "new_max_rigid_contact_overflow": new_final.mechanics_state.max_rigid_contact_overflow,
         "pass": mechanics_error <= 2.0e-2,
     })
 
@@ -437,16 +446,16 @@ def run_validation(output: str | Path, *, device: str = "cuda:0") -> dict[str, A
             label: {
                 "status": result.status,
                 "objective": _objective_payload(result),
-                "trajectory_count": len({record["trajectory_id"] for record in result.checkpoint_diagnostics}),
-                "checkpoint_count": len(result.checkpoint_diagnostics),
-                "optical_state_count": len(result.optical_diagnostics),
-                "minimum_transport": min(record["total_transport"] for record in result.optical_diagnostics),
-                "maximum_carrier_absorption": max(record["carrier_absorbed_weight"] for record in result.optical_diagnostics),
+                "trajectory_count": len({record.trajectory_id for record in result.checkpoint_records}),
+                "checkpoint_count": len(result.checkpoint_records),
+                "optical_state_count": len(result.checkpoint_records),
+                "minimum_transport": min(record.total_transport for record in result.checkpoint_records),
+                "maximum_carrier_absorption": max(record.carrier_absorbed_weight for record in result.checkpoint_records),
             }
             for label, result in evaluations.items()
         },
-        "total_newton_trajectory_count": sum(len({record["trajectory_id"] for record in result.checkpoint_diagnostics}) for result in evaluations.values()),
-        "total_full3d_optical_state_count": sum(len(result.optical_diagnostics) for result in evaluations.values()),
+        "total_newton_trajectory_count": sum(len({record.trajectory_id for record in result.checkpoint_records}) for result in evaluations.values()),
+        "total_full3d_optical_state_count": sum(len(result.checkpoint_records) for result in evaluations.values()),
         "legacy_reduction": legacy_comparison,
         "legacy_reduction_absolute_error": legacy_comparison.get("objective_abs_error"),
         "mechanics_final_state_max_abs_error_mm": mechanics_error,

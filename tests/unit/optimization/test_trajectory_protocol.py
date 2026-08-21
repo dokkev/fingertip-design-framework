@@ -69,8 +69,8 @@ def test_trajectory_observation_rejects_nonphysical_labels(
     depth,
     message,
 ) -> None:
-    with pytest.raises(ValueError, match=message):
-        TrajectoryObservation(location, radius, depth, np.ones(2))
+        with pytest.raises(ValueError, match=message):
+            TrajectoryObservation(location, radius, depth, np.ones(2), 1.0, 1.0)
 
 
 def test_objective_compares_all_cross_location_states_and_radius_nuisance() -> None:
@@ -81,7 +81,7 @@ def test_objective_compares_all_cross_location_states_and_radius_nuisance() -> N
                 field = np.zeros((2, 2), dtype=float)
                 field[int(location == 0.5), int(depth == 1.0)] = radius
                 observations.append(
-                    TrajectoryObservation(location, radius, depth, field)
+                    TrajectoryObservation(location, radius, depth, field, 1.0, 1.0)
                 )
     result = compute_trajectory_objective(observations)
     assert result.d_inter is not None and result.d_inter >= 0.0
@@ -91,8 +91,8 @@ def test_objective_compares_all_cross_location_states_and_radius_nuisance() -> N
 
 def test_one_radius_has_zero_radius_nuisance_term() -> None:
     observations = [
-        TrajectoryObservation(0.25, 5.0, 1.0, np.array([1.0, 0.0])),
-        TrajectoryObservation(0.50, 5.0, 1.0, np.array([0.0, 1.0])),
+        TrajectoryObservation(0.25, 5.0, 1.0, np.array([1.0, 0.0]), 1.0, 1.0),
+        TrajectoryObservation(0.50, 5.0, 1.0, np.array([0.0, 1.0]), 1.0, 1.0),
     ]
     result = compute_trajectory_objective(observations)
     assert result.d_radius == 0.0

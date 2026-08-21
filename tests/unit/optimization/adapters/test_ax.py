@@ -18,8 +18,12 @@ from optimization.adapters.ax import (
 )
 from optimization.design_space import DesignSpace, DesignVariable, PRODUCTION_SEARCH_BOUNDS
 from optimization.evaluation_registry import EvaluationRegistry
+from optimization.objectives import ObjectiveIdentifier
 from ray_tracing.optical_mechanics import Transport3DDependencyError
 from physics import PhysicsDependencyError
+
+
+TEST_OBJECTIVE = ObjectiveIdentifier("contact_state_separation", 1)
 
 
 def _space() -> DesignSpace:
@@ -141,7 +145,7 @@ def test_run_ax_optimization_evaluates_morphology_without_mechanics_or_optics(
             initialization_trials=1,
             search_trials=1,
             seed=7,
-            objective_name="contact_state_separation",
+            objective=TEST_OBJECTIVE,
         ),
     )
 
@@ -180,7 +184,7 @@ def test_shared_physics_dependency_abandons_ax_trial_and_aborts_campaign(monkeyp
                 initialization_trials=1,
                 search_trials=1,
                 seed=7,
-                objective_name="contact_state_separation",
+                objective=TEST_OBJECTIVE,
             ),
         )
 
@@ -203,7 +207,7 @@ def test_candidate_failure_is_registered_in_real_evaluation_registry(monkeypatch
             initialization_trials=1,
             search_trials=1,
             seed=7,
-            objective_name="contact_state_separation",
+            objective=TEST_OBJECTIVE,
         ),
         evaluation_registry=registry,
         evaluation_contract_id="candidate-contact-test-v1",
@@ -251,7 +255,7 @@ def test_registry_uses_each_candidate_evaluation_artifact_path(
             initialization_trials=1,
             search_trials=1,
             seed=7,
-            objective_name="contact_state_separation",
+            objective=TEST_OBJECTIVE,
         ),
         evaluation_registry=registry,
         evaluation_contract_id="candidate-artifact-test-v1",
@@ -301,7 +305,7 @@ def test_infrastructure_failure_is_not_registered_in_real_evaluation_registry(
                 initialization_trials=1,
                 search_trials=1,
                 seed=7,
-                objective_name="contact_state_separation",
+                objective=TEST_OBJECTIVE,
             ),
             evaluation_registry=registry,
             evaluation_contract_id="infrastructure-test-v1",

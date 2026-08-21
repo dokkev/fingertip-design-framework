@@ -13,7 +13,7 @@ from lumo.simulation import LumoSimulation
 from mesh import generate_volume_mesh, volume_mesh_settings_for_tier
 from mesh.rigid.carrier import make_distal_phalanx_mesh
 from finger import Fingertip
-from physics import CandidateMechanicsError
+from physics import CandidateMechanicsError, MechanicsCheckpointState
 from physics import prepare_fingertip_mesh
 
 
@@ -111,6 +111,10 @@ def test_mechanics_contract_rejects_non_finite_or_non_integer_settings() -> None
         MechanicsContract(dt_s=float("nan"))
     with np.testing.assert_raises(ValueError):
         MechanicsContract(soft_contact_ke=float("inf"))
+    with np.testing.assert_raises(ValueError):
+        MechanicsContract(soft_contact_mu=-1.0)
+    with np.testing.assert_raises(ValueError):
+        MechanicsContract(rigid_sdf_target_voxel_mm=0.0)
     with np.testing.assert_raises(TypeError):
         MechanicsContract(vbd_iterations=10.0)  # type: ignore[arg-type]
     with np.testing.assert_raises(TypeError):
@@ -126,11 +130,19 @@ def _acceptance_subject(
     simulation.mechanics_contract = MechanicsContract()
     diagnostics = {
         "final_pose_error_mm": final_pose_error_mm,
+        "active_carrier_contact_vertex_indices": (),
+        "carrier_contact_active": False,
+        "carrier_contact_occurred": False,
+        "first_carrier_contact_step": None,
+        "carrier_collision_enabled": False,
+        "max_carrier_penetration_mm": 0.0,
+        "carrier_interface_contact_count": 0,
         **diagnostics,
     }
     checkpoint = SimpleNamespace(
         diagnostics=diagnostics,
         post_contact_travel_mm=1.0,
+        state=MechanicsCheckpointState.from_diagnostics(diagnostics),
     )
     return simulation, checkpoint
 
@@ -198,8 +210,9 @@ def test_checkpoint_acceptance_rejects_prescribed_pose_error() -> None:
         simulation._validate_checkpoint(checkpoint)
 
 
-def test_checkpoint_acceptance_does_not_classify_invalid_static_settings_as_candidate_failure() -> None:
-    simulation, checkpoint = _acceptance_subject(
+def test_mechanics_state_rejects_invalid_static_settings_before_lumo() -> None:
+    with pytest.raises(ValueError, match="finite"):
+        _acceptance_subject(
         {
             "inverted_tetrahedra": 0,
             "max_soft_contact_overflow": 0,
@@ -208,40 +221,57 @@ def test_checkpoint_acceptance_does_not_classify_invalid_static_settings_as_cand
             "carrier_collision_enabled": False,
             "rigid_sdf_target_voxel_mm": float("nan"),
         }
-    )
-
-    with pytest.raises(RuntimeError, match="voxel size"):
-        simulation._validate_checkpoint(checkpoint)
+        )
 
 
 def test_checkpoint_acceptance_fails_closed_when_evidence_is_missing() -> None:
     simulation = object.__new__(LumoSimulation)
     simulation.mechanics_contract = MechanicsContract()
-    checkpoint = SimpleNamespace(diagnostics={}, post_contact_travel_mm=1.0)
+    checkpoint = SimpleNamespace(
+        diagnostics={},
+        post_contact_travel_mm=1.0,
+        state=None,
+    )
 
-    with pytest.raises(RuntimeError, match="required diagnostic"):
+    with pytest.raises(RuntimeError, match="validated state"):
         simulation._validate_checkpoint(checkpoint)
 
 
 @pytest.mark.parametrize(
     ("indices", "message"),
-    (
-        ((0, 0), "duplicate"),
-        ((1,), "out-of-range"),
-        ((0.5,), "1D integer"),
-    ),
+    (((0, 0), "unique"), ((0.5,), "1D integer")),
 )
-def test_carrier_contact_provenance_rejects_malformed_local_indices(
+def test_mechanics_checkpoint_rejects_malformed_contact_indices(
     indices: tuple[object, ...],
     message: str,
 ) -> None:
+    diagnostics = {
+        "active_carrier_contact_vertex_indices": indices,
+        "rigid_sdf_target_voxel_mm": 0.125,
+        "final_pose_error_mm": 0.0,
+        "carrier_contact_active": False,
+        "carrier_contact_occurred": False,
+        "first_carrier_contact_step": None,
+        "carrier_collision_enabled": False,
+        "inverted_tetrahedra": 0,
+        "max_soft_contact_overflow": 0,
+        "max_rigid_contact_overflow": 0,
+        "max_support_displacement_mm": 0.0,
+        "max_carrier_penetration_mm": 0.0,
+        "carrier_interface_contact_count": 0,
+    }
+    with pytest.raises(ValueError, match=message):
+        MechanicsCheckpointState.from_diagnostics(diagnostics)
+
+
+def test_carrier_contact_provenance_rejects_out_of_range_local_index() -> None:
     simulation = object.__new__(LumoSimulation)
     simulation.prepared = SimpleNamespace(
         source_node_ids=np.asarray([100], dtype=np.int64)
     )
     checkpoint = SimpleNamespace(
-        diagnostics={"active_carrier_contact_vertex_indices": indices}
+        state=SimpleNamespace(active_carrier_contact_vertex_indices=(1,))
     )
 
-    with pytest.raises(RuntimeError, match=message):
+    with pytest.raises(RuntimeError, match="out-of-range"):
         simulation._carrier_contact_source_ids(checkpoint)

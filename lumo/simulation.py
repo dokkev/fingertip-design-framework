@@ -41,6 +41,7 @@ from physics import (
     IndentationCheckpoint,
     IndentationSettings,
     IndentationTrajectoryResult,
+    MechanicsCheckpointState,
     NewtonSettings,
     PreparedFingertipMesh,
     RigidIndenter3D,
@@ -297,26 +298,8 @@ class LumoSimulation:
         )
 
     def _carrier_contact_source_ids(self, checkpoint: IndentationCheckpoint) -> tuple[int, ...]:
-        if "active_carrier_contact_vertex_indices" not in checkpoint.diagnostics:
-            raise RuntimeError(
-                "mechanics checkpoint is missing "
-                "active_carrier_contact_vertex_indices"
-            )
-        raw_indices = np.asarray(
-            checkpoint.diagnostics["active_carrier_contact_vertex_indices"]
-        )
-        if raw_indices.ndim != 1 or (
-            raw_indices.size
-            and not np.issubdtype(raw_indices.dtype, np.integer)
-        ):
-            raise RuntimeError(
-                "active carrier-contact vertex indices must be a 1D integer sequence"
-            )
-        local_indices = tuple(int(index) for index in raw_indices)
-        if len(set(local_indices)) != len(local_indices):
-            raise RuntimeError(
-                "mechanics checkpoint contains duplicate carrier-contact vertex indices"
-            )
+        state = checkpoint.state
+        local_indices = state.active_carrier_contact_vertex_indices
         invalid = tuple(
             index
             for index in local_indices
@@ -332,37 +315,20 @@ class LumoSimulation:
             for index in local_indices
         )
 
-    @staticmethod
-    def _required_diagnostic(
-        checkpoint: IndentationCheckpoint,
-        name: str,
-    ) -> object:
-        if name not in checkpoint.diagnostics:
-            raise RuntimeError(
-                f"mechanics checkpoint is missing required diagnostic {name!r}"
-            )
-        return checkpoint.diagnostics[name]
-
     def _validate_checkpoint(
         self,
         checkpoint: IndentationCheckpoint,
     ) -> None:
         """Reject candidate-specific mechanics states before optical tracing."""
-        if int(self._required_diagnostic(checkpoint, "inverted_tetrahedra")) != 0:
+        state = checkpoint.state
+        if not isinstance(state, MechanicsCheckpointState):
+            raise RuntimeError("mechanics checkpoint has no validated state")
+        if state.inverted_tetrahedra != 0:
             raise CandidateMechanicsError("mechanics produced inverted tetrahedra")
-        if (
-            int(self._required_diagnostic(checkpoint, "max_soft_contact_overflow"))
-            != 0
-            or int(
-                self._required_diagnostic(checkpoint, "max_rigid_contact_overflow")
-            )
-            != 0
-        ):
+        if state.max_soft_contact_overflow != 0 or state.max_rigid_contact_overflow != 0:
             raise CandidateMechanicsError("mechanics contact buffer overflow")
 
-        support_displacement = float(
-            self._required_diagnostic(checkpoint, "max_support_displacement_mm")
-        )
+        support_displacement = state.max_support_displacement_mm
         if support_displacement < 0.0:
             raise RuntimeError(
                 "mechanics checkpoint reports a negative support displacement"
@@ -378,9 +344,7 @@ class LumoSimulation:
                 f"{self.mechanics_contract.max_support_displacement_mm:g} mm"
             )
 
-        pose_error_mm = float(
-            self._required_diagnostic(checkpoint, "final_pose_error_mm")
-        )
+        pose_error_mm = state.final_pose_error_mm
         if pose_error_mm < 0.0:
             raise RuntimeError(
                 "mechanics checkpoint reports a negative prescribed-pose error"
@@ -395,18 +359,14 @@ class LumoSimulation:
                 f"{self.mechanics_contract.max_final_pose_error_mm:g} mm"
             )
 
-        voxel_mm = float(
-            self._required_diagnostic(checkpoint, "rigid_sdf_target_voxel_mm")
-        )
+        voxel_mm = state.rigid_sdf_target_voxel_mm
         if not np.isfinite(voxel_mm) or voxel_mm <= 0.0:
             raise RuntimeError(
                 "mechanics checkpoint reports an invalid rigid-SDF voxel size: "
                 f"{voxel_mm:g} mm"
             )
-        if bool(self._required_diagnostic(checkpoint, "carrier_collision_enabled")):
-            penetration_mm = float(
-                self._required_diagnostic(checkpoint, "max_carrier_penetration_mm")
-            )
+        if state.carrier_collision_enabled:
+            penetration_mm = state.max_carrier_penetration_mm
             if penetration_mm < 0.0:
                 raise RuntimeError(
                     "mechanics checkpoint reports negative carrier penetration"
@@ -428,7 +388,6 @@ class LumoSimulation:
         self,
         checkpoint: IndentationCheckpoint,
         *,
-        location_u: float,
         carrier_contact_source_node_ids: tuple[int, ...],
     ) -> tuple[FingertipVolumeState, TransportGeometry]:
         try:
@@ -441,9 +400,8 @@ class LumoSimulation:
             raise CandidateMechanicsError(
                 f"mechanics produced an invalid deformed state: {exc}"
             ) from exc
-        mapping_tolerance_mm = 0.5 * float(
-            self._required_diagnostic(checkpoint, "rigid_sdf_target_voxel_mm")
-        )
+        state_contract = checkpoint.state
+        mapping_tolerance_mm = 0.5 * state_contract.rigid_sdf_target_voxel_mm
         geometry = build_fingertip_volume_state_geometry(
             self.tip,
             mechanics,
@@ -454,10 +412,6 @@ class LumoSimulation:
             carrier_optics=CarrierOptics("absorber"),
             carrier_mapping_tolerance_mm=mapping_tolerance_mm,
             full3d_surface_provenance="actual_deformed_3d_volume_state",
-            metadata={
-                "contact_location_u": float(location_u),
-                "checkpoint_depth_mm": checkpoint.post_contact_travel_mm,
-            },
         )
         return mechanics, geometry
 
@@ -536,8 +490,12 @@ class LumoSimulation:
                 ),
             ),
             soft_contact_margin_mm=self.mechanics_contract.soft_contact_margin_mm,
+            rigid_sdf_target_voxel_mm=(
+                self.mechanics_contract.rigid_sdf_target_voxel_mm
+            ),
             soft_contact_ke=self.mechanics_contract.soft_contact_ke,
             soft_contact_kd=self.mechanics_contract.soft_contact_kd,
+            soft_contact_mu=self.mechanics_contract.soft_contact_mu,
         )
         trajectory = solve_fingertip_indentation_trajectory(
             self.prepared,
@@ -564,7 +522,6 @@ class LumoSimulation:
             source_ids = self._carrier_contact_source_ids(checkpoint)
             mechanics, geometry = self._state_geometry(
                 checkpoint,
-                location_u=location_u,
                 carrier_contact_source_node_ids=source_ids,
             )
             checkpoints.append(

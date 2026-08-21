@@ -38,16 +38,18 @@ from ray_tracing.optical_mechanics.settings import Transport3DSettings
 from optimization.adapters.ax import (
     AxSettings,
     CampaignInfrastructureError,
-    PRODUCTION_LINEAR_PARAMETER_CONSTRAINTS,
     run_ax_optimization,
 )
 from optimization.evaluation_registry import EvaluationRegistry
-from optimization.design_space import ParameterSpec
+from optimization.design_space import ParameterSpec, PRODUCTION_LINEAR_CONSTRAINTS
 from optimization.evaluator import (
     TRAJECTORY_EVALUATION_SCHEMA,
     create_lumo3d_trajectory_study,
 )
-from optimization.objectives import OBJECTIVE_NAME, TrajectoryObjectiveConfig
+from optimization.objectives import (
+    TRAJECTORY_SEPARATION_OBJECTIVE,
+    TrajectoryObjectiveConfig,
+)
 from optimization.protocol import (
     DEFAULT_TRAJECTORY_PROTOCOL,
     TrajectoryEvaluationProtocol,
@@ -58,6 +60,7 @@ from optimization.protocol import (
 DEVICE = "cuda:0"
 SEED = 20260820
 INITIALIZATION_TRIALS = 1
+MAX_CONSECUTIVE_KNOWN_PROPOSALS = 20
 DEFAULT_OUTPUT = Path("output/optimization/bo")
 
 USER_VISCOELASTIC = ViscoelasticParameters(
@@ -223,7 +226,7 @@ def _user_config_payload(
         "mechanics_contract": USER_MECHANICS_CONTRACT.to_dict(),
         "transport_3d_settings": asdict(USER_OPTICAL_SETTINGS),
         "objective": {
-            "name": OBJECTIVE_NAME,
+            "name": TRAJECTORY_SEPARATION_OBJECTIVE.serialized_name,
             "direction": "maximize",
             "config": asdict(objective_config),
         },
@@ -234,11 +237,15 @@ def _user_config_payload(
                 (trials or INITIALIZATION_TRIALS) - INITIALIZATION_TRIALS,
             ),
             "max_proposals": trials,
+            "max_consecutive_known_proposals": MAX_CONSECUTIVE_KNOWN_PROPOSALS,
             "trials_semantics": (
                 "number of Ax-generated proposals; the nominal baseline is "
                 "evaluated separately"
             ),
-            "linear_constraints": list(PRODUCTION_LINEAR_PARAMETER_CONSTRAINTS),
+            "linear_constraints": [
+                constraint.to_ax_expression()
+                for constraint in PRODUCTION_LINEAR_CONSTRAINTS
+            ],
         },
         "tip_validation": {
             "led_source_mm": list(tip.led_source),
@@ -426,7 +433,8 @@ def run_campaign(
         initialization_trials=INITIALIZATION_TRIALS,
         search_trials=max(0, trials - INITIALIZATION_TRIALS),
         seed=SEED,
-        objective_name=OBJECTIVE_NAME,
+        objective=TRAJECTORY_SEPARATION_OBJECTIVE,
+        max_consecutive_known_proposals=MAX_CONSECUTIVE_KNOWN_PROPOSALS,
     )
     try:
         result = run_ax_optimization(

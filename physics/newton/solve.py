@@ -49,17 +49,26 @@ class NewtonSettings:
     def __post_init__(self) -> None:
         if not isinstance(self.device, str) or not self.device:
             raise ValueError("device must be a non-empty device string")
+        for name in ("steps", "iterations"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise TypeError(f"{name} must be an integer")
+            if value < 1:
+                raise ValueError(f"{name} must be a positive integer")
         for name in ("dt", "gravity", "density", "k_mu", "k_lambda", "k_damp"):
             value = float(getattr(self, name))
             if not np.isfinite(value):
                 raise ValueError(f"{name} must be finite")
-        if self.dt <= 0.0 or self.steps < 1 or self.iterations < 1:
-            raise ValueError("dt, steps, and iterations must be positive")
+        if self.dt <= 0.0:
+            raise ValueError("dt must be positive")
         if self.density <= 0.0 or self.k_mu <= 0.0 or self.k_lambda <= 0.0:
             raise ValueError("density and elastic parameters must be positive")
         if self.k_damp < 0.0:
             raise ValueError("k_damp must be non-negative")
-        fixed = tuple(int(index) for index in self.fixed_vertex_indices)
+        for index in self.fixed_vertex_indices:
+            if isinstance(index, bool) or not isinstance(index, int):
+                raise TypeError("fixed_vertex_indices must contain integers")
+        fixed = tuple(self.fixed_vertex_indices)
         if any(index < 0 for index in fixed) or len(set(fixed)) != len(fixed):
             raise ValueError("fixed_vertex_indices must be unique and non-negative")
         object.__setattr__(self, "fixed_vertex_indices", fixed)

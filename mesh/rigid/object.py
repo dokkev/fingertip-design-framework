@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from types import MappingProxyType
-from typing import Any, Mapping
+from dataclasses import dataclass
 
 import numpy as np
 
@@ -142,7 +140,6 @@ class RigidObjectMesh:
     vertices_mm: np.ndarray
     faces: np.ndarray
     name: str = "rigid_object"
-    metadata: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         raw_vertices = np.asarray(self.vertices_mm)
@@ -159,15 +156,9 @@ class RigidObjectMesh:
             raise ValueError("vertices_mm must contain only finite values")
         if not isinstance(self.name, str) or not self.name:
             raise ValueError("name must be a non-empty string")
-        if not isinstance(self.metadata, Mapping):
-            raise TypeError("metadata must be a mapping")
-        metadata = dict(self.metadata)
-        if any(not isinstance(key, str) or not key for key in metadata):
-            raise ValueError("metadata keys must be non-empty strings")
         _validate_closed_triangle_mesh(vertices, faces)
         object.__setattr__(self, "vertices_mm", _readonly_array(vertices, dtype=np.float64))
         object.__setattr__(self, "faces", _readonly_array(faces, dtype=np.int64))
-        object.__setattr__(self, "metadata", MappingProxyType(metadata))
 
     @property
     def bounds_mm(self) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
@@ -285,7 +276,6 @@ def make_sphere_mesh(radius_mm: float, subdivisions: int = 2) -> RigidObjectMesh
         vertices_mm=vertices,
         faces=faces,
         name=f"sphere_r{radius:g}_sub{subdivisions}",
-        metadata={"source": "parametric_sphere", "subdivisions": subdivisions},
     )
 
 
@@ -342,12 +332,6 @@ def make_cylinder_mesh(
         vertices_mm=np.asarray(vertices, dtype=np.float64),
         faces=np.asarray(faces, dtype=np.int64),
         name=f"cylinder_r{radius:g}_h{height:g}_n{radial_segments}",
-        metadata={
-            "primitive": "cylinder",
-            "radius_mm": radius,
-            "height_mm": height,
-            "radial_segments": radial_segments,
-        },
     )
 
 
@@ -392,7 +376,6 @@ def make_box_mesh(size_x_mm: float, size_y_mm: float, size_z_mm: float) -> Rigid
         vertices_mm=vertices,
         faces=faces,
         name=f"box_{sizes[0]:g}x{sizes[1]:g}x{sizes[2]:g}",
-        metadata={"primitive": "box", "size_mm": tuple(float(value) for value in sizes)},
     )
 
 

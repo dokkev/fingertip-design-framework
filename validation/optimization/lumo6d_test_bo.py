@@ -23,23 +23,21 @@ import numpy as np
 from mesh.volume.mesh import VolumeMeshDependencyError
 from finger import silicone_thickness_measures
 from ray_tracing.optical_mechanics import Transport3DDependencyError
-from optimization.optical_artifact import fingerprint_mapping
+from optimization.optical_contract import fingerprint_mapping
 from scripts.tools.optix_smoke import run as run_optix_smoke
 from optimization.adapters.ax import (
     AxSettings,
-    CONTACT_STATE_SEPARATION_OBJECTIVE_NAME,
     CampaignInfrastructureError,
-    GMSH_RUNTIME_FAILURE_SIGNATURE,
-    OPTIX_RUNTIME_FAILURE_SIGNATURE,
-    PHYSICS_RUNTIME_FAILURE_SIGNATURE,
-    PRODUCTION_LINEAR_PARAMETER_CONSTRAINTS,
+    InfrastructureFailureKind,
     create_ax_client,
     run_ax_optimization,
 )
 from optimization.design_space import (
     OPTIMIZABLE_PARAMETER_NAMES,
+    PRODUCTION_LINEAR_CONSTRAINTS,
     PRODUCTION_SEARCH_BOUNDS,
 )
+from optimization.objectives import ObjectiveIdentifier
 from physics import PhysicsDependencyError
 from optimization.evaluation_registry import EvaluationRegistry, REGISTRY_SCHEMA_VERSION
 from optimization.evaluator import (
@@ -54,14 +52,20 @@ from lumo.simulation import (
 )
 
 
+CONTACT_STATE_SEPARATION_OBJECTIVE = ObjectiveIdentifier(
+    "contact_state_separation", 1
+)
+
+
 SEED = 20260819
 SOBOL_TRIALS = 6
 BO_TRIALS = 4
 MAX_ATTEMPTED_TRIALS = SOBOL_TRIALS + BO_TRIALS
+MAX_CONSECUTIVE_KNOWN_PROPOSALS = 20
 OUTPUT_DIRECTORY = Path("output/validation/optimization/lumo6d_test_bo")
 TRAJECTORY_EVALUATION_CONTRACT = {
     "schema": TRAJECTORY_EVALUATION_SCHEMA,
-    "objective": CONTACT_STATE_SEPARATION_OBJECTIVE_NAME,
+    "objective": CONTACT_STATE_SEPARATION_OBJECTIVE.serialized_name,
     "observation_level": LUMO3D_OBSERVATION_LEVEL,
     "optical_mode": "FULL_3D",
 }
@@ -119,76 +123,71 @@ def _rms_displacement_from_artifact(path: object) -> float | None:
 
 
 def _aggregate_mechanics(evaluation: object) -> dict[str, Any]:
-    records = tuple(getattr(evaluation, "checkpoint_diagnostics", ()))
+    records = tuple(getattr(evaluation, "checkpoint_records", ()))
     displacements = [
-        float(item["max_displacement_mm"])
-        for item in records
-        if item.get("max_displacement_mm") is not None
+        float(record.debug_diagnostics["max_displacement_mm"])
+        for record in records
+        if record.debug_diagnostics is not None
+        and record.debug_diagnostics.get("max_displacement_mm") is not None
     ]
     rms_values = [
-        _rms_displacement_from_artifact(item.get("mechanics_artifact_path"))
-        for item in records
+        _rms_displacement_from_artifact(record.mechanics_artifact_path)
+        for record in records
     ]
     rms_values = [value for value in rms_values if value is not None]
     return {
         "max_displacement_mm": max(displacements) if displacements else None,
         "rms_displacement_mm": max(rms_values) if rms_values else None,
         "inverted_tetrahedra": max(
-            (int(item.get("inverted_tetrahedra", 0)) for item in records),
+            (record.mechanics_state.inverted_tetrahedra for record in records),
             default=0,
         ),
         "contact_overflow": max(
             (
-                int(item.get("max_soft_contact_overflow", 0))
-                + int(item.get("max_rigid_contact_overflow", 0))
-                for item in records
+                record.mechanics_state.max_soft_contact_overflow
+                + record.mechanics_state.max_rigid_contact_overflow
+                for record in records
             ),
             default=0,
         ),
         "first_contact": [
             {
-                "normalized_location": item.get("normalized_location"),
-                "first_contact_travel_mm": item.get("first_contact_travel_mm"),
-                "bracket_width_mm": item.get("first_contact_bracket_width_mm"),
-                "spawn_clearance_mm": item.get("spawn_clearance_mm"),
-                "contact_pose_mm": item.get("contact_pose_mm"),
-                "spawn_pose_mm": item.get("spawn_pose_mm"),
+                "normalized_location": record.normalized_location,
+                "first_contact_travel_mm": record.first_contact_travel_mm,
+                "bracket_width_mm": record.debug_diagnostics.get(
+                    "first_contact_bracket_width_mm"
+                ) if record.debug_diagnostics else None,
+                "spawn_clearance_mm": record.contact_state.spawn_clearance_mm,
+                "contact_pose_mm": record.debug_diagnostics.get("contact_pose_mm")
+                if record.debug_diagnostics else None,
+                "spawn_pose_mm": record.debug_diagnostics.get("spawn_pose_mm")
+                if record.debug_diagnostics else None,
             }
-            for item in records
+            for record in records
         ],
     }
 
 
 def _aggregate_optics(evaluation: object) -> dict[str, Any]:
-    records = tuple(getattr(evaluation, "optical_diagnostics", ()))
-    escaped = [float(item["escaped_weight"]) for item in records]
-    carrier_absorbed = [
-        item.get("carrier_absorbed_weight") for item in records
-    ]
+    records = tuple(getattr(evaluation, "checkpoint_records", ()))
+    escaped = [float(record.optics.escaped_weight) for record in records]
     carrier_absorbed_values = [
-        float(value) for value in carrier_absorbed if value is not None
+        float(record.optics.carrier_absorbed_weight) for record in records
     ]
-    total_transport = [
-        float(item["total_transport"])
-        for item in records
-        if item.get("total_transport") is not None
+    total_transport = [float(record.total_transport) for record in records]
+    silicone_absorbed = [
+        float(record.optics.absorbed_weight - record.optics.carrier_absorbed_weight)
+        for record in records
     ]
-    silicone_absorbed: list[float] = []
-    for item in records:
-        if item.get("absorbed_weight") is None or item.get("carrier_absorbed_weight") is None:
-            continue
-        silicone_absorbed.append(
-            float(item["absorbed_weight"]) - float(item["carrier_absorbed_weight"])
-        )
     return {
         "carrier_contact_active": any(
-            bool(item.get("carrier_optical_contact_triangle_count", 0))
-            for item in records
+            bool(record.optics.carrier_contact_triangle_count)
+            for record in records
         ),
         "carrier_contact_triangle_count": max(
             (
-                int(item.get("carrier_optical_contact_triangle_count", 0))
-                for item in records
+                int(record.optics.carrier_contact_triangle_count)
+                for record in records
             ),
             default=0,
         ),
@@ -198,11 +197,11 @@ def _aggregate_optics(evaluation: object) -> dict[str, Any]:
         if carrier_absorbed_values
         else None,
         "energy_balance_error": max(
-            (abs(float(item.get("energy_balance_error", 0.0))) for item in records),
+            (abs(float(record.optics.energy_balance_error)) for record in records),
             default=0.0,
         ),
         "total_surviving_transport": sum(total_transport) if total_transport else None,
-        "states": [dict(item) for item in records],
+        "states": [record.to_dict() for record in records],
     }
 
 
@@ -259,7 +258,7 @@ def _trial_payload(
         }
     )
     evaluation_diagnostics = (
-        {} if evaluation is None else dict(evaluation.diagnostics)
+        {} if evaluation is None else dict(evaluation.report)
     )
     return {
         "trial_index": attempt_index,
@@ -323,11 +322,11 @@ def _trial_payload(
         **mechanics,
         **optics,
         "first_contact_fingerprint": [
-            item.get("contact_state_fingerprint")
+            item.contact_state.contact_state_fingerprint
             for item in (
-                () if evaluation is None else getattr(evaluation, "optical_diagnostics", ())
+                () if evaluation is None else getattr(evaluation, "checkpoint_records", ())
             )
-            if isinstance(item, Mapping)
+            if item is not None
         ],
         "optical_grid_fingerprint": _optical_grid()["fingerprint"],
         "transport_configuration_fingerprint": evaluation_diagnostics.get(
@@ -339,11 +338,11 @@ def _trial_payload(
         "failure_message": record.failure_message,
         "registry_key": record.registry_key,
         "artifact_paths": [
-            item.get("artifact")
+            str(item.optical_artifact_path)
             for item in (
-                () if evaluation is None else getattr(evaluation, "optical_diagnostics", ())
+                () if evaluation is None else getattr(evaluation, "checkpoint_records", ())
             )
-            if isinstance(item, Mapping)
+            if item is not None
         ],
         "evaluation_diagnostics": evaluation_diagnostics,
     }
@@ -363,7 +362,7 @@ def _pre_run_sanity(study: Lumo3DTrajectoryStudy) -> dict[str, Any]:
             initialization_trials=SOBOL_TRIALS,
             search_trials=BO_TRIALS,
             seed=SEED,
-            objective_name=CONTACT_STATE_SEPARATION_OBJECTIVE_NAME,
+            objective=CONTACT_STATE_SEPARATION_OBJECTIVE,
         ),
     )
     suggestions = client.get_next_trials(max_trials=SOBOL_TRIALS)
@@ -384,7 +383,9 @@ def _pre_run_sanity(study: Lumo3DTrajectoryStudy) -> dict[str, Any]:
         "active_variable_count": len(study.design_space.active_variables),
         "active_variables": list(OPTIMIZABLE_PARAMETER_NAMES),
         "numerical_envelopes": [spec.to_dict() for spec in PRODUCTION_SEARCH_BOUNDS],
-        "linear_constraints": list(PRODUCTION_LINEAR_PARAMETER_CONSTRAINTS),
+        "linear_constraints": [
+            constraint.to_ax_expression() for constraint in PRODUCTION_LINEAR_CONSTRAINTS
+        ],
         "suggestions": values,
         "flat_pad_height_unique_count": len(flat_values),
         "semielliptical_pad_height_unique_count": len(ellipse_values),
@@ -647,15 +648,18 @@ def run_lumo6d_test_bo(output_dir: str | Path = OUTPUT_DIRECTORY) -> dict[str, A
             "initialization_trials": SOBOL_TRIALS,
             "search_trials": BO_TRIALS,
             "max_attempted_proposals": MAX_ATTEMPTED_TRIALS,
+            "max_consecutive_known_proposals": MAX_CONSECUTIVE_KNOWN_PROPOSALS,
         },
         "active_variables": list(OPTIMIZABLE_PARAMETER_NAMES),
         "numerical_envelopes": [spec.to_dict() for spec in PRODUCTION_SEARCH_BOUNDS],
-        "linear_constraints": list(PRODUCTION_LINEAR_PARAMETER_CONSTRAINTS),
+        "linear_constraints": [
+            constraint.to_ax_expression() for constraint in PRODUCTION_LINEAR_CONSTRAINTS
+        ],
         "contract_id": contract_id,
         "registry_schema_version": REGISTRY_SCHEMA_VERSION,
         "evaluation_contract": TRAJECTORY_EVALUATION_CONTRACT,
         "observation_level": LUMO3D_OBSERVATION_LEVEL,
-        "objective_name": CONTACT_STATE_SEPARATION_OBJECTIVE_NAME,
+        "objective_name": CONTACT_STATE_SEPARATION_OBJECTIVE.serialized_name,
         "objective_direction": "maximize",
         "common_optical_grid": grid,
         "search_mechanics": search_mechanics,
@@ -685,17 +689,17 @@ def run_lumo6d_test_bo(output_dir: str | Path = OUTPUT_DIRECTORY) -> dict[str, A
         except Transport3DDependencyError as exc:
             raise CampaignInfrastructureError(
                 f"{type(exc).__name__}: {exc}",
-                signature=OPTIX_RUNTIME_FAILURE_SIGNATURE,
+                kind=InfrastructureFailureKind.OPTIX_RUNTIME_INITIALIZATION,
             ) from exc
         except VolumeMeshDependencyError as exc:
             raise CampaignInfrastructureError(
                 f"{type(exc).__name__}: {exc}",
-                signature=GMSH_RUNTIME_FAILURE_SIGNATURE,
+                kind=InfrastructureFailureKind.GMSH_RUNTIME_INITIALIZATION,
             ) from exc
         except PhysicsDependencyError as exc:
             raise CampaignInfrastructureError(
                 f"{type(exc).__name__}: {exc}",
-                signature=PHYSICS_RUNTIME_FAILURE_SIGNATURE,
+                kind=InfrastructureFailureKind.PHYSICS_RUNTIME_INITIALIZATION,
             ) from exc
         nominal_record = type("NominalRecord", (), {
             "parameters": nominal_parameters,
@@ -725,7 +729,7 @@ def run_lumo6d_test_bo(output_dir: str | Path = OUTPUT_DIRECTORY) -> dict[str, A
             first_trial_index=0,
             first_campaign_id=output.name,
             result_artifact_path=str((output / "nominal.json").resolve()),
-            minimum_auc=None,
+            objective=CONTACT_STATE_SEPARATION_OBJECTIVE,
             objective_value=float(nominal_evaluation.objective_value),
             failure_category=None,
             failure_message=None,
@@ -757,7 +761,8 @@ def run_lumo6d_test_bo(output_dir: str | Path = OUTPUT_DIRECTORY) -> dict[str, A
             initialization_trials=SOBOL_TRIALS,
             search_trials=BO_TRIALS,
             seed=SEED,
-            objective_name=CONTACT_STATE_SEPARATION_OBJECTIVE_NAME,
+            objective=CONTACT_STATE_SEPARATION_OBJECTIVE,
+            max_consecutive_known_proposals=MAX_CONSECUTIVE_KNOWN_PROPOSALS,
         )
         result = run_ax_optimization(
             study,
@@ -767,7 +772,7 @@ def run_lumo6d_test_bo(output_dir: str | Path = OUTPUT_DIRECTORY) -> dict[str, A
             evaluation_contract_id=contract_id,
             campaign_id=output.name,
             result_artifact_path=str((output / "checkpoint.json").resolve()),
-            max_consecutive_known_proposals=20,
+            max_consecutive_known_proposals=MAX_CONSECUTIVE_KNOWN_PROPOSALS,
             max_proposals=MAX_ATTEMPTED_TRIALS,
         )
         ordered = [records_by_trial[index] for index in sorted(records_by_trial)]
@@ -815,7 +820,7 @@ def run_lumo6d_test_bo(output_dir: str | Path = OUTPUT_DIRECTORY) -> dict[str, A
             "nominal": nominal_payload,
             "attempted_trials": len(ordered),
             "diagnostics": diagnostics,
-            "objective_name": CONTACT_STATE_SEPARATION_OBJECTIVE_NAME,
+            "objective_name": CONTACT_STATE_SEPARATION_OBJECTIVE.serialized_name,
             "objective_direction": "maximize",
             "contract_id": contract_id,
             "artifact_directory": str(output),

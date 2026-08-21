@@ -93,6 +93,23 @@ class ParameterSpec:
     def to_dict(self) -> dict[str, object]:
         return {"name": self.name.value, "lower": self.lower, "upper": self.upper}
 
+
+@dataclass(frozen=True)
+class LinearConstraint:
+    """One named feasibility constraint shared by search backends."""
+
+    expression: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.expression, str) or not self.expression.strip():
+            raise ValueError("linear constraint expression must be non-empty")
+        object.__setattr__(self, "expression", self.expression.strip())
+
+    def to_ax_expression(self) -> str:
+        """Return the framework expression at the Ax adapter boundary."""
+
+        return self.expression
+
 PRODUCTION_SEARCH_BOUNDS: tuple[ParameterSpec, ...] = (
     ParameterSpec(OptimizableParameterName.FLAT_PAD_HEIGHT, 0.5, 29.5),
     ParameterSpec(OptimizableParameterName.SEMIELLIPTICAL_PAD_HEIGHT, 0.5, 29.5),
@@ -100,6 +117,11 @@ PRODUCTION_SEARCH_BOUNDS: tuple[ParameterSpec, ...] = (
     ParameterSpec(OptimizableParameterName.STEM_HEIGHT, 1.0, 25.0),
     ParameterSpec(OptimizableParameterName.VOID_WIDTH, 0.0, 10.0),
     ParameterSpec(OptimizableParameterName.VOID_HEIGHT, 0.0, 25.0),
+)
+
+PRODUCTION_LINEAR_CONSTRAINTS: tuple[LinearConstraint, ...] = (
+    LinearConstraint("flat_pad_height + semielliptical_pad_height <= 30.0"),
+    LinearConstraint("stem_width + 2*void_width <= 20.0"),
 )
 
 
@@ -115,6 +137,7 @@ class DesignSpace:
 
     nominal_parameters: FingertipParameters
     variables: tuple[DesignVariable, ...]
+    linear_constraints: tuple[LinearConstraint, ...] = PRODUCTION_LINEAR_CONSTRAINTS
 
     def __post_init__(self) -> None:
         if not isinstance(self.nominal_parameters, FingertipParameters):
@@ -148,6 +171,11 @@ class DesignSpace:
                 "production DesignSpace requires all six morphology variables "
                 "to be active"
             )
+
+        constraints = tuple(self.linear_constraints)
+        if any(not isinstance(item, LinearConstraint) for item in constraints):
+            raise TypeError("linear_constraints must contain LinearConstraint values")
+        object.__setattr__(self, "linear_constraints", constraints)
 
         object.__setattr__(
             self,
@@ -218,9 +246,11 @@ class DesignSpace:
 __all__ = [
     "DesignSpace",
     "DesignVariable",
+    "LinearConstraint",
     "ParameterSpec",
     "OPTIMIZABLE_PARAMETER_NAMES",
     "PRODUCTION_SEARCH_BOUNDS",
+    "PRODUCTION_LINEAR_CONSTRAINTS",
     "PRODUCTION_MAX_TOTAL_PAD_DEPTH_MM",
     "PRODUCTION_NOMINAL_VOID_HEIGHT_MM",
     "OptimizableParameterName",

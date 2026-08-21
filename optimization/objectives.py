@@ -1,4 +1,4 @@
-"""Pure trajectory observations and objective calculations."""
+"""Typed trajectory observations and objective calculations."""
 
 from __future__ import annotations
 
@@ -9,13 +9,37 @@ from typing import Any, Iterable, Mapping
 import numpy as np
 
 
-OBJECTIVE_NAME = "trajectory_separation_margin_fixed_depth_v1"
+@dataclass(frozen=True)
+class ObjectiveIdentifier:
+    """Stable identity for one objective definition and its interpretation."""
+
+    name: str
+    version: int
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.name, str) or not self.name.strip():
+            raise ValueError("objective name must be a non-empty string")
+        if isinstance(self.version, bool) or not isinstance(self.version, int):
+            raise TypeError("objective version must be an integer")
+        if self.version < 1:
+            raise ValueError("objective version must be positive")
+
+    @property
+    def serialized_name(self) -> str:
+        return f"{self.name}_v{self.version}"
+
+
+TRAJECTORY_SEPARATION_OBJECTIVE = ObjectiveIdentifier(
+    name="trajectory_separation_margin_fixed_depth",
+    version=1,
+)
 
 
 @dataclass(frozen=True)
 class TrajectoryObjectiveConfig:
+    """Configuration for the canonical trajectory-separation objective."""
+
     radius_penalty_weight: float = 1.0
-    version: str = "trajectory-separation-margin-v1"
 
     def __post_init__(self) -> None:
         value = float(self.radius_penalty_weight)
@@ -25,21 +49,14 @@ class TrajectoryObjectiveConfig:
 
 
 @dataclass(frozen=True)
-class TrajectoryObservation:
-    """One normalized optical field with physical trajectory labels."""
+class TrajectoryObservationKey:
+    """Physical labels identifying one trajectory observation."""
 
     location_u: float
     radius_mm: float
     checkpoint_depth_mm: float
-    field: np.ndarray
-    diagnostics: Mapping[str, Any] | None = None
 
     def __post_init__(self) -> None:
-        field = np.array(self.field, dtype=float, copy=True)
-        if field.ndim < 1 or not np.all(np.isfinite(field)) or np.any(field < 0.0):
-            raise ValueError("observation field must be finite and non-negative")
-        field.setflags(write=False)
-        object.__setattr__(self, "field", field)
         for name in ("location_u", "radius_mm", "checkpoint_depth_mm"):
             value = float(getattr(self, name))
             if not math.isfinite(value):
@@ -51,6 +68,66 @@ class TrajectoryObservation:
             raise ValueError("radius_mm must be positive")
         if self.checkpoint_depth_mm <= 0.0:
             raise ValueError("checkpoint_depth_mm must be positive")
+
+
+@dataclass(frozen=True)
+class TrajectoryObservation:
+    """One optical field and required transport values for the objective."""
+
+    location_u: float
+    radius_mm: float
+    checkpoint_depth_mm: float
+    field: np.ndarray
+    total_transport: float
+    escaped_weight: float
+    debug_diagnostics: Mapping[str, Any] | None = None
+
+    def __post_init__(self) -> None:
+        field = np.array(self.field, dtype=float, copy=True)
+        if field.ndim < 1 or not np.all(np.isfinite(field)) or np.any(field < 0.0):
+            raise ValueError("observation field must be finite and non-negative")
+        field.setflags(write=False)
+        object.__setattr__(self, "field", field)
+        key = TrajectoryObservationKey(
+            self.location_u,
+            self.radius_mm,
+            self.checkpoint_depth_mm,
+        )
+        object.__setattr__(self, "location_u", key.location_u)
+        object.__setattr__(self, "radius_mm", key.radius_mm)
+        object.__setattr__(self, "checkpoint_depth_mm", key.checkpoint_depth_mm)
+        for name in ("total_transport", "escaped_weight"):
+            value = float(getattr(self, name))
+            if not math.isfinite(value) or value < 0.0:
+                raise ValueError(f"{name} must be finite and non-negative")
+            object.__setattr__(self, name, value)
+        if self.debug_diagnostics is not None:
+            if not isinstance(self.debug_diagnostics, Mapping):
+                raise TypeError("debug_diagnostics must be a mapping or None")
+            object.__setattr__(self, "debug_diagnostics", dict(self.debug_diagnostics))
+
+    @property
+    def key(self) -> TrajectoryObservationKey:
+        return TrajectoryObservationKey(
+            self.location_u,
+            self.radius_mm,
+            self.checkpoint_depth_mm,
+        )
+
+
+@dataclass(frozen=True)
+class TrajectoryPairDistance:
+    """Distance and labels for one compared observation pair."""
+
+    first: TrajectoryObservationKey
+    second: TrajectoryObservationKey
+    distance: float
+
+    def __post_init__(self) -> None:
+        value = float(self.distance)
+        if not math.isfinite(value) or value < 0.0:
+            raise ValueError("pair distance must be finite and non-negative")
+        object.__setattr__(self, "distance", value)
 
 
 def normalized_field_distance(first: np.ndarray, second: np.ndarray) -> float:
@@ -69,14 +146,14 @@ def normalized_field_distance(first: np.ndarray, second: np.ndarray) -> float:
 
 @dataclass(frozen=True)
 class TrajectoryObjectiveResult:
-    """Immutable objective value and diagnostics for one trajectory set."""
+    """Immutable objective value and typed diagnostics for one trajectory set."""
 
-    objective_name: str
+    objective: ObjectiveIdentifier
     objective_value: float | None
     d_inter: float | None
     d_radius: float | None
-    worst_inter_location_pair: Mapping[str, Any] | None
-    worst_radius_pair: Mapping[str, Any] | None
+    worst_inter_location_pair: TrajectoryPairDistance | None
+    worst_radius_pair: TrajectoryPairDistance | None
     all_pairwise_distances: tuple[float, ...]
     objective_pathology: bool
     objective_pathology_reason: str | None
@@ -87,16 +164,39 @@ class TrajectoryObjectiveResult:
     observation_diagnostics: tuple[Mapping[str, Any], ...]
     radius_penalty_weight: float
 
+    @property
+    def objective_name(self) -> str:
+        """Return the boundary name derived from the typed identifier."""
+
+        return self.objective.serialized_name
+
     def to_dict(self) -> dict[str, Any]:
         """Return the JSON/report representation at the persistence boundary."""
+
+        def pair_record(pair: TrajectoryPairDistance | None) -> dict[str, Any] | None:
+            if pair is None:
+                return None
+            return {
+                "first": {
+                    "location_u": pair.first.location_u,
+                    "radius_mm": pair.first.radius_mm,
+                    "checkpoint_depth_mm": pair.first.checkpoint_depth_mm,
+                },
+                "second": {
+                    "location_u": pair.second.location_u,
+                    "radius_mm": pair.second.radius_mm,
+                    "checkpoint_depth_mm": pair.second.checkpoint_depth_mm,
+                },
+                "distance": pair.distance,
+            }
 
         return {
             "objective_name": self.objective_name,
             "objective_value": self.objective_value,
             "D_inter": self.d_inter,
             "D_radius": self.d_radius,
-            "worst_inter_location_pair": self.worst_inter_location_pair,
-            "worst_radius_pair": self.worst_radius_pair,
+            "worst_inter_location_pair": pair_record(self.worst_inter_location_pair),
+            "worst_radius_pair": pair_record(self.worst_radius_pair),
             "all_pairwise_distances": list(self.all_pairwise_distances),
             "objective_pathology": self.objective_pathology,
             "objective_pathology_reason": self.objective_pathology_reason,
@@ -111,40 +211,47 @@ class TrajectoryObjectiveResult:
         }
 
 
-def _pair_record(first: TrajectoryObservation, second: TrajectoryObservation, distance: float) -> dict[str, Any]:
-    return {
-        "first": {
-            "location_u": first.location_u,
-            "radius_mm": first.radius_mm,
-            "checkpoint_depth_mm": first.checkpoint_depth_mm,
-        },
-        "second": {
-            "location_u": second.location_u,
-            "radius_mm": second.radius_mm,
-            "checkpoint_depth_mm": second.checkpoint_depth_mm,
-        },
-        "distance": float(distance),
-    }
+class TrajectorySeparationObjective:
+    """Concrete canonical objective used by the production evaluator."""
+
+    identifier = TRAJECTORY_SEPARATION_OBJECTIVE
+
+    def __init__(self, config: TrajectoryObjectiveConfig | None = None) -> None:
+        self.config = config or TrajectoryObjectiveConfig()
+
+    def evaluate(
+        self,
+        observations: Iterable[TrajectoryObservation],
+    ) -> TrajectoryObjectiveResult:
+        return _compute_trajectory_objective(observations, self.config, self.identifier)
 
 
-def compute_trajectory_objective(
+def _pair_record(
+    first: TrajectoryObservation,
+    second: TrajectoryObservation,
+    distance: float,
+) -> TrajectoryPairDistance:
+    return TrajectoryPairDistance(first.key, second.key, distance)
+
+
+def _compute_trajectory_objective(
     observations: Iterable[TrajectoryObservation],
-    config: TrajectoryObjectiveConfig | None = None,
+    config: TrajectoryObjectiveConfig,
+    objective: ObjectiveIdentifier,
 ) -> TrajectoryObjectiveResult:
-    """Compute inter-location separation minus radius nuisance variation."""
-
-    selected_config = config or TrajectoryObjectiveConfig()
     items = tuple(observations)
     if not items:
         raise ValueError("at least one trajectory observation is required")
     if any(not isinstance(item, TrajectoryObservation) for item in items):
         raise TypeError("observations must contain TrajectoryObservation values")
     field_masses = tuple(float(np.sum(item.field)) for item in items)
-    diagnostics = tuple(item.diagnostics or {} for item in items)
-    zero_mass_indices = [index for index, mass in enumerate(field_masses) if mass <= 1.0e-12]
+    diagnostics = tuple(item.debug_diagnostics or {} for item in items)
+    zero_mass_indices = [
+        index for index, mass in enumerate(field_masses) if mass <= 1.0e-12
+    ]
     if zero_mass_indices:
         return TrajectoryObjectiveResult(
-            objective_name=OBJECTIVE_NAME,
+            objective=objective,
             objective_value=None,
             d_inter=None,
             d_radius=None,
@@ -158,13 +265,13 @@ def compute_trajectory_objective(
             maximum_field_mass=float(max(field_masses)),
             observation_count=len(items),
             observation_diagnostics=diagnostics,
-            radius_penalty_weight=selected_config.radius_penalty_weight,
+            radius_penalty_weight=config.radius_penalty_weight,
         )
     inter: list[tuple[float, TrajectoryObservation, TrajectoryObservation]] = []
     radius: list[tuple[float, TrajectoryObservation, TrajectoryObservation]] = []
     all_distances: list[float] = []
     for index, first in enumerate(items):
-        for second in items[index + 1:]:
+        for second in items[index + 1 :]:
             distance = normalized_field_distance(first.field, second.field)
             all_distances.append(distance)
             if first.location_u != second.location_u:
@@ -182,16 +289,16 @@ def compute_trajectory_objective(
     radius_pair = max(radius, key=lambda item: item[0]) if radius else None
     extinct_states = [
         index
-        for index, diagnostic in enumerate(diagnostics)
-        if float(diagnostic.get("total_transport", float("inf"))) <= 1.0e-6
-        or float(diagnostic.get("escaped_weight", float("inf"))) <= 1.0e-6
+        for index, item in enumerate(items)
+        if item.total_transport <= 1.0e-6
+        or item.escaped_weight <= 1.0e-6
         or field_masses[index] <= 1.0e-3
     ]
     pathology = bool(extinct_states) or all(mass <= 1.0e-12 for mass in field_masses)
-    objective = d_inter - selected_config.radius_penalty_weight * d_radius
+    objective_value = d_inter - config.radius_penalty_weight * d_radius
     return TrajectoryObjectiveResult(
-        objective_name=OBJECTIVE_NAME,
-        objective_value=float(objective),
+        objective=objective,
+        objective_value=float(objective_value),
         d_inter=float(d_inter),
         d_radius=float(d_radius),
         worst_inter_location_pair=_pair_record(inter_first, inter_second, d_inter),
@@ -210,15 +317,28 @@ def compute_trajectory_objective(
         maximum_field_mass=float(max(field_masses)),
         observation_count=len(items),
         observation_diagnostics=diagnostics,
-        radius_penalty_weight=selected_config.radius_penalty_weight,
+        radius_penalty_weight=config.radius_penalty_weight,
     )
 
 
+def compute_trajectory_objective(
+    observations: Iterable[TrajectoryObservation],
+    config: TrajectoryObjectiveConfig | None = None,
+) -> TrajectoryObjectiveResult:
+    """Evaluate the canonical trajectory-separation objective."""
+
+    return TrajectorySeparationObjective(config).evaluate(observations)
+
+
 __all__ = [
-    "OBJECTIVE_NAME",
+    "ObjectiveIdentifier",
+    "TRAJECTORY_SEPARATION_OBJECTIVE",
     "TrajectoryObjectiveConfig",
+    "TrajectoryObservationKey",
     "TrajectoryObservation",
+    "TrajectoryPairDistance",
     "TrajectoryObjectiveResult",
+    "TrajectorySeparationObjective",
     "compute_trajectory_objective",
     "normalized_field_distance",
 ]

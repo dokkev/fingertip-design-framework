@@ -55,29 +55,15 @@ def test_persisted_state_restores_exact_deformed_optical_geometry(tmp_path) -> N
         artifact,
         digest,
         carrier_mesh=make_distal_phalanx_mesh(volume_mesh.solid),
-        metadata={"contact_location_u": 0.5},
     )
 
-    assert restored.geometry.metadata["geometry_mode"] == "full3d_surface"
-    assert restored.geometry.metadata["contact_location_u"] == 0.5
-    assert restored.geometry.metadata["mechanics_artifact_sha256"] == digest
+    assert restored.geometry.full3d_surface_provenance == "actual_deformed_3d_volume_state"
+    assert not hasattr(restored.geometry, "metadata")
     assert restored.state_id
     assert np.all(np.isfinite(restored.geometry.silicone.vertices))
     assert float(np.max(np.abs(restored.state.displacement_mm))) == pytest.approx(
         0.05, abs=1.0e-6
     )
-
-    with pytest.raises(ValueError, match="cannot override restored-state provenance"):
-        restore_deformed_optical_state(
-            tip,
-            volume_mesh,
-            prepared,
-            artifact,
-            digest,
-            carrier_mesh=make_distal_phalanx_mesh(volume_mesh.solid),
-            metadata={"mechanics_source": "spoofed"},
-        )
-
 
 def test_persisted_state_hash_is_verified(tmp_path) -> None:
     tip = Fingertip()

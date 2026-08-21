@@ -20,7 +20,7 @@ def test_save_and_load_obj_round_trip_preserves_rigid_mesh(tmp_path: Path) -> No
     assert loaded.name == "sphere"
     np.testing.assert_allclose(loaded.vertices_mm, source.vertices_mm)
     np.testing.assert_array_equal(loaded.faces, source.faces)
-    assert loaded.metadata["source_format"] == "obj"
+    assert loaded.name == "sphere"
 
 
 def test_load_obj_applies_explicit_scale_and_triangulates_polygon(tmp_path: Path) -> None:

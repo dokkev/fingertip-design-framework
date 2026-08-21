@@ -5,7 +5,8 @@ from validation.physics.vbd_fea_optical_trend import (
     rank_statistics,
     selection_summary,
 )
-from optimization.optical_artifact import UNIFIED_ARTIFACT_SCHEMA, fingerprint_mapping
+from optimization.optical_artifact import UNIFIED_ARTIFACT_SCHEMA
+from optimization.optical_contract import fingerprint_mapping
 
 
 def _rows() -> list[dict[str, object]]:

@@ -144,11 +144,6 @@ def load_obj(
             vertices_mm=np.asarray(vertices, dtype=np.float64),
             faces=np.asarray(faces, dtype=np.int64),
             name=resolved_name,
-            metadata={
-                "source_format": "obj",
-                "source_path": str(source),
-                "scale_mm_per_unit": scale,
-            },
         )
     except (TypeError, ValueError) as exception:
         raise RigidMeshAssetError(

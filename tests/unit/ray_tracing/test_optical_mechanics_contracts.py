@@ -149,6 +149,13 @@ def test_attenuation_and_result_validation() -> None:
     assert envelope_escape.outgoing_surface_weight == 0.5
 
 
+def test_optical_xy_bounds_must_be_provided_as_a_pair() -> None:
+    with pytest.raises(ValueError, match="x_bounds_mm and y_bounds_mm"):
+        Transport3DSettings(x_bounds_mm=(-1.0, 1.0))
+    with pytest.raises(ValueError, match="x_bounds_mm and y_bounds_mm"):
+        Transport3DSettings(y_bounds_mm=(-1.0, 1.0))
+
+
 def test_simple_internal_path_accumulation_and_z_integration() -> None:
     density = np.zeros((2, 2, 2), dtype=float)
     repeated_density = np.zeros((2, 2, 2), dtype=float)
@@ -275,11 +282,9 @@ def test_nested_result_metadata_is_immutable() -> None:
         escape_interaction_counts=np.asarray([0]),
         energy_balance_error=0.0,
         energy_balance_tolerance=1.0e-5,
-        geometry_metadata={"nested": {"values": [1, 2]}},
     )
-
-    with pytest.raises(TypeError):
-        result.geometry_metadata["nested"]["values"] = (3,)  # type: ignore[index]
+    assert result.escape_event_count == 1
+    assert result.escaped_primary_count == 1
 
 
 def test_normal_optics_import_does_not_load_optional_optix() -> None:

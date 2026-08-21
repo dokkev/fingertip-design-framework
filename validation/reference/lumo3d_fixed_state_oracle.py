@@ -46,13 +46,16 @@ from ray_tracing.optical_mechanics.optix_backend import create_runtime
 from optimization.design_space import (
     PRODUCTION_SEARCH_BOUNDS,
 )
+from optimization.objectives import ObjectiveIdentifier
 from validation.ray_tracing.deformed_state_restore import restore_deformed_optical_state
 from optimization.optical_artifact import (
     energy_record,
-    fingerprint_mapping,
     native_field_separability,
-    optical_physics_parameters,
     save_case_artifact,
+)
+from optimization.optical_contract import (
+    fingerprint_mapping,
+    optical_physics_parameters,
     transport_configuration,
 )
 from validation.physics.multi_location_sphere_contact import (
@@ -69,7 +72,9 @@ from validation.physics.multi_location_sphere_contact import (
 
 
 LUMO3D_OBSERVATION_LEVEL = "FULL_3D native internal transport redistribution proxy"
-CONTACT_STATE_SEPARATION_OBJECTIVE_NAME = "contact_state_separation"
+CONTACT_STATE_SEPARATION_OBJECTIVE = ObjectiveIdentifier(
+    "contact_state_separation", 1
+)
 LUMO3D_OPTICAL_X_BOUNDS_MM = (-16.0, 16.0)
 LUMO3D_OPTICAL_Y_BOUNDS_MM = (-31.0, 4.5)
 
@@ -137,7 +142,7 @@ LUMO3D_EVALUATION_CONTRACT: dict[str, Any] = {
         "common_domain_covers_max_total_pad_depth_mm": True,
     },
     "objective": {
-        "name": CONTACT_STATE_SEPARATION_OBJECTIVE_NAME,
+        "name": CONTACT_STATE_SEPARATION_OBJECTIVE.serialized_name,
         "direction": "maximize",
         "metric": "min-pairwise-native-field-normalized-l1-v1",
     },
@@ -259,7 +264,7 @@ def _failure(
 class FixedStateLumo3DOracle:
     """Evaluate one morphology using the frozen fixed-state comparison path."""
 
-    objective_name = CONTACT_STATE_SEPARATION_OBJECTIVE_NAME
+    objective_name = CONTACT_STATE_SEPARATION_OBJECTIVE.serialized_name
 
     def __init__(
         self,
@@ -353,12 +358,6 @@ class FixedStateLumo3DOracle:
                     carrier_mapping_tolerance_mm=contact_state[
                         "carrier_mapping_tolerance_mm"
                     ],
-                    metadata={
-                        "contact_state_fingerprint": contact_state["contact_state_fingerprint"],
-                        "contact_location_u": case.normalized_location,
-                        "observation_level": LUMO3D_OBSERVATION_LEVEL,
-                        "carrier_optical_boundary_model": "absorber",
-                    },
                 )
                 result = trace_geometry(
                     tip,

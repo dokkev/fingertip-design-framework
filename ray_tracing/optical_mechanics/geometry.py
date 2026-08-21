@@ -4,8 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
-from types import MappingProxyType
-from typing import Any, Literal, Mapping
+from typing import Literal
 
 import numpy as np
 
@@ -15,20 +14,6 @@ from ray_tracing.contracts.objects import ObjectBoundaryOptics
 
 class Transport3DGeometryError(ValueError):
     """Raised when a periodic transport scene cannot be built safely."""
-
-
-def _freeze_metadata(value: Any) -> Any:
-    if isinstance(value, Mapping):
-        return MappingProxyType(
-            {str(key): _freeze_metadata(item) for key, item in value.items()}
-        )
-    if isinstance(value, (list, tuple)):
-        return tuple(_freeze_metadata(item) for item in value)
-    if isinstance(value, np.ndarray):
-        array = np.array(value, copy=True)
-        array.setflags(write=False)
-        return array
-    return value
 
 
 Full3DSurfaceProvenance = Literal[
@@ -157,7 +142,7 @@ class TriangleSurface:
 
 @dataclass(frozen=True)
 class TransportGeometry:
-    """All neutral surfaces and metadata for one direct FULL_3D state."""
+    """All neutral surfaces and explicit state facts for one FULL_3D scene."""
 
     silicone: TriangleSurface
     rigid: TriangleSurface
@@ -167,7 +152,11 @@ class TransportGeometry:
     z_max_mm: float
     source_position_mm: tuple[float, float, float]
     source_medium: int
-    metadata: Mapping[str, Any]
+    full3d_surface_provenance: Full3DSurfaceProvenance
+    reference_periodic_z_planes_mm: tuple[float, float]
+    deformed_surface_z_extent_mm: tuple[float, float]
+    deformed_surface_exceeds_reference_z_planes: bool
+    carrier_contact_active: bool
     carrier_mapping_tolerance_mm: float | None = None
     indenter_optics: ObjectBoundaryOptics | None = None
     carrier_optics: ObjectBoundaryOptics | None = None
@@ -182,6 +171,23 @@ class TransportGeometry:
             raise Transport3DGeometryError("the single source must be at z=0")
         if self.source_medium not in (0, 1):
             raise Transport3DGeometryError("source_medium must be air=0 or silicone=1")
+        if self.full3d_surface_provenance not in {
+            "actual_reference_3d_volume_state",
+            "actual_deformed_3d_fea_surface",
+            "actual_deformed_3d_vbd_surface",
+            "actual_deformed_3d_volume_state",
+        }:
+            raise Transport3DGeometryError("invalid full 3D surface provenance")
+        planes = tuple(float(value) for value in self.reference_periodic_z_planes_mm)
+        extent = tuple(float(value) for value in self.deformed_surface_z_extent_mm)
+        if len(planes) != 2 or len(extent) != 2:
+            raise Transport3DGeometryError("z planes and extent must contain two values")
+        if not np.all(np.isfinite(planes + extent)):
+            raise Transport3DGeometryError("z planes and extent must be finite")
+        if planes[0] >= planes[1] or extent[0] > extent[1]:
+            raise Transport3DGeometryError("z planes and extent must be ordered")
+        object.__setattr__(self, "reference_periodic_z_planes_mm", planes)
+        object.__setattr__(self, "deformed_surface_z_extent_mm", extent)
         if self.carrier_mapping_tolerance_mm is not None:
             tolerance = float(self.carrier_mapping_tolerance_mm)
             if not math.isfinite(tolerance) or tolerance < 0.0:
@@ -190,7 +196,6 @@ class TransportGeometry:
                 )
             object.__setattr__(self, "carrier_mapping_tolerance_mm", tolerance)
         object.__setattr__(self, "source_position_mm", source)
-        object.__setattr__(self, "metadata", _freeze_metadata(self.metadata))
 
 
 def _surface_normals(vertices: np.ndarray, faces: np.ndarray) -> np.ndarray:
@@ -212,7 +217,6 @@ def build_full3d_transport_geometry(
     envelope: TriangleSurface,
     source_position_mm: tuple[float, float, float],
     source_medium: int,
-    metadata: Mapping[str, Any],
     full3d_surface_provenance: Full3DSurfaceProvenance,
     carrier_optics: ObjectBoundaryOptics | None = None,
     carrier_mapping_tolerance_mm: float | None = None,
@@ -229,30 +233,6 @@ def build_full3d_transport_geometry(
     """
     if not isinstance(tip, Fingertip):
         raise TypeError("tip must be a Fingertip")
-    if not isinstance(metadata, Mapping):
-        raise TypeError("metadata must be a mapping")
-    if "carrier_mapping_tolerance_mm" in metadata:
-        raise Transport3DGeometryError(
-            "carrier_mapping_tolerance_mm must be supplied as an explicit argument"
-        )
-    if "full3d_surface_provenance" in metadata:
-        raise Transport3DGeometryError(
-            "full3d_surface_provenance must be supplied as an explicit argument"
-        )
-    reserved_metadata = {
-        "carrier_contact_active",
-        "carrier_boundary_model",
-        "deformed_surface_exceeds_reference_z_planes",
-        "deformed_surface_z_extent_mm",
-        "geometry_mode",
-        "reference_periodic_z_planes_mm",
-    }
-    conflicts = sorted(set(metadata) & reserved_metadata)
-    if conflicts:
-        raise Transport3DGeometryError(
-            "metadata cannot override geometry-owned fields: "
-            f"{conflicts!r}"
-        )
     if full3d_surface_provenance not in {
         "actual_reference_3d_volume_state",
         "actual_deformed_3d_fea_surface",
@@ -283,15 +263,11 @@ def build_full3d_transport_geometry(
             )
         if not np.all(np.isfinite(surface.vertices[:, 2])):
             raise Transport3DGeometryError(f"{name} surface has a non-finite longitudinal coordinate")
-    enriched_metadata = dict(metadata)
-    enriched_metadata["geometry_mode"] = "full3d_surface"
-    provenance = full3d_surface_provenance
-    enriched_metadata["reference_periodic_z_planes_mm"] = [-depth_mm / 2.0, depth_mm / 2.0]
-    enriched_metadata["deformed_surface_z_extent_mm"] = [
+    surface_extent = (
         float(np.min(silicone.vertices[:, 2])),
         float(np.max(silicone.vertices[:, 2])),
-    ]
-    enriched_metadata["deformed_surface_exceeds_reference_z_planes"] = bool(
+    )
+    exceeds_reference_planes = bool(
         np.min(silicone.vertices[:, 2]) < -depth_mm / 2.0 - 1.0e-9
         or np.max(silicone.vertices[:, 2]) > depth_mm / 2.0 + 1.0e-9
     )
@@ -307,11 +283,6 @@ def build_full3d_transport_geometry(
         raise Transport3DGeometryError(
             "carrier contact triangles require an explicit mapping tolerance"
         )
-    enriched_metadata["full3d_surface_provenance"] = provenance
-    enriched_metadata["carrier_contact_active"] = has_carrier_contact
-    enriched_metadata["carrier_boundary_model"] = (
-        None if carrier_optics is None else carrier_optics.boundary_model
-    )
     return TransportGeometry(
         silicone=silicone,
         rigid=rigid,
@@ -321,7 +292,11 @@ def build_full3d_transport_geometry(
         z_max_mm=depth_mm / 2.0,
         source_position_mm=source,
         source_medium=source_medium,
-        metadata=enriched_metadata,
+        full3d_surface_provenance=full3d_surface_provenance,
+        reference_periodic_z_planes_mm=(-depth_mm / 2.0, depth_mm / 2.0),
+        deformed_surface_z_extent_mm=surface_extent,
+        deformed_surface_exceeds_reference_z_planes=exceeds_reference_planes,
+        carrier_contact_active=has_carrier_contact,
         carrier_mapping_tolerance_mm=carrier_mapping_tolerance_mm,
         carrier_optics=carrier_optics,
     )

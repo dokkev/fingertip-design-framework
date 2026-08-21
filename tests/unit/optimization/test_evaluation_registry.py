@@ -11,6 +11,7 @@ from optimization.evaluation_registry import (
     canonical_morphology,
     evaluation_key,
 )
+from optimization.objectives import ObjectiveIdentifier
 
 
 CONTRACT = "production-contract-a"
@@ -22,6 +23,7 @@ MORPHOLOGY = {
     "void_width": 1.0,
     "void_height": 0.25,
 }
+OBJECTIVE = ObjectiveIdentifier("trajectory_separation", 1)
 
 
 def _register(
@@ -30,7 +32,6 @@ def _register(
     *,
     status: str,
     trial_index: int,
-    minimum_auc: float | None,
     objective_value: float | None = None,
 ):
     return registry.register(
@@ -40,7 +41,7 @@ def _register(
         first_trial_index=trial_index,
         first_campaign_id="campaign-a",
         result_artifact_path="output/campaign-a/checkpoint.json",
-        minimum_auc=minimum_auc,
+        objective=OBJECTIVE,
         failure_category=None if status == "success" else status,
         failure_message=None if status == "success" else "synthetic failure",
         failure_scenario=None,
@@ -57,7 +58,7 @@ def test_registry_persists_success_failure_and_duplicate_provenance(tmp_path) ->
         MORPHOLOGY,
         status="success",
         trial_index=2,
-        minimum_auc=0.42,
+        objective_value=0.42,
     )
     failed_morphology = {**MORPHOLOGY, "stem_height": 6.25}
     failed = _register(
@@ -65,7 +66,6 @@ def test_registry_persists_success_failure_and_duplicate_provenance(tmp_path) ->
         failed_morphology,
         status="optics_failure",
         trial_index=7,
-        minimum_auc=None,
     )
     registry.note_duplicate(success, trial_index=11, campaign_id="campaign-b")
 
@@ -74,18 +74,19 @@ def test_registry_persists_success_failure_and_duplicate_provenance(tmp_path) ->
     reloaded_failure = reloaded.lookup(CONTRACT, failed_morphology)
     assert reloaded_success is not None
     assert reloaded_success.status == "success"
-    assert reloaded_success.minimum_auc == 0.42
+    assert reloaded_success.objective == OBJECTIVE
+    assert reloaded_success.objective_value == 0.42
     assert reloaded_success.duplicate_count == 1
     assert reloaded_success.last_duplicate_trial_index == 11
     assert reloaded_failure is not None
     assert reloaded_failure.status == "optics_failure"
-    assert reloaded_failure.minimum_auc is None
+    assert reloaded_failure.objective_value is None
     assert {record.key for record in reloaded.records_for_contract(CONTRACT)} == {
         success.key,
         failed.key,
     }
     payload = json.loads(path.read_text(encoding="utf-8"))
-    assert payload["schema_version"] == 2
+    assert payload["schema_version"] == 3
 
 
 def test_exact_key_uses_lossless_float_hex_without_nearby_deduplication(
@@ -99,7 +100,6 @@ def test_exact_key_uses_lossless_float_hex_without_nearby_deduplication(
         first,
         status="mechanics_failure",
         trial_index=0,
-        minimum_auc=None,
     )
 
     assert canonical_morphology(first)["void_width"] == first["void_width"].hex()
@@ -116,7 +116,7 @@ def test_registry_never_overwrites_an_existing_exact_result(tmp_path) -> None:
         MORPHOLOGY,
         status="success",
         trial_index=1,
-        minimum_auc=0.5,
+        objective_value=0.5,
     )
     with pytest.raises(KeyError, match="already registered"):
         _register(
@@ -124,7 +124,6 @@ def test_registry_never_overwrites_an_existing_exact_result(tmp_path) -> None:
             MORPHOLOGY,
             status="mechanics_failure",
             trial_index=2,
-            minimum_auc=None,
         )
 
 
@@ -136,7 +135,6 @@ def test_registry_persists_negative_objective_value(tmp_path) -> None:
         MORPHOLOGY,
         status="success",
         trial_index=3,
-        minimum_auc=None,
         objective_value=-0.1,
     )
 
@@ -147,17 +145,17 @@ def test_registry_persists_negative_objective_value(tmp_path) -> None:
 
 
 @pytest.mark.parametrize(
-    ("status", "minimum_auc", "message"),
+    ("status", "objective_value", "message"),
     [
-        ("success", None, "requires minimum_auc"),
-        ("mechanics_failure", 0.2, "must not carry minimum_auc"),
+        ("success", None, "requires objective_value"),
+        ("mechanics_failure", 0.2, "must not carry objective_value"),
         ("unknown", None, "unsupported registry status"),
     ],
 )
 def test_registry_validates_scientific_status_payloads(
     tmp_path,
     status,
-    minimum_auc,
+    objective_value,
     message,
 ) -> None:
     registry = EvaluationRegistry(tmp_path / "registry.json")
@@ -167,5 +165,5 @@ def test_registry_validates_scientific_status_payloads(
             MORPHOLOGY,
             status=status,
             trial_index=0,
-            minimum_auc=minimum_auc,
+            objective_value=objective_value,
         )

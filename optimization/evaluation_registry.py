@@ -12,9 +12,10 @@ from types import MappingProxyType
 from typing import Any, Mapping
 
 from optimization.design_space import OPTIMIZABLE_PARAMETER_NAMES
+from optimization.objectives import ObjectiveIdentifier
 
 
-REGISTRY_SCHEMA_VERSION = 2
+REGISTRY_SCHEMA_VERSION = 3
 SUPPORTED_EVALUATION_STATUSES = frozenset(
     {
         "success",
@@ -85,7 +86,7 @@ class EvaluationRegistryRecord:
     first_trial_index: int
     first_campaign_id: str
     result_artifact_path: str | None
-    minimum_auc: float | None
+    objective: ObjectiveIdentifier
     objective_value: float | None
     failure_category: str | None
     failure_message: str | None
@@ -107,25 +108,16 @@ class EvaluationRegistryRecord:
             raise ValueError("first_trial_index must be nonnegative")
         if not self.first_campaign_id:
             raise ValueError("first_campaign_id must be non-empty")
-        if self.minimum_auc is not None:
-            minimum_auc = _finite_float("minimum_auc", self.minimum_auc)
-            if minimum_auc < 0.0:
-                raise ValueError("minimum_auc must be nonnegative")
-            object.__setattr__(self, "minimum_auc", minimum_auc)
+        if not isinstance(self.objective, ObjectiveIdentifier):
+            raise TypeError("objective must be an ObjectiveIdentifier")
         if self.objective_value is not None:
             objective_value = _finite_float("objective_value", self.objective_value)
             object.__setattr__(self, "objective_value", objective_value)
-        if self.status == "success" and (
-            self.minimum_auc is None and self.objective_value is None
-        ):
+        if self.status == "success" and self.objective_value is None:
+            raise ValueError("successful registry record requires objective_value")
+        if self.status != "success" and self.objective_value is not None:
             raise ValueError(
-                "successful registry record requires minimum_auc or objective_value"
-            )
-        if self.status != "success" and (
-            self.minimum_auc is not None or self.objective_value is not None
-        ):
-            raise ValueError(
-                "failed registry record must not carry minimum_auc or objective_value"
+                "failed registry record must not carry objective_value"
             )
         if self.evaluation_wall_time_seconds is not None:
             wall = _finite_float(
@@ -153,7 +145,10 @@ class EvaluationRegistryRecord:
             "first_trial_index": self.first_trial_index,
             "first_campaign_id": self.first_campaign_id,
             "result_artifact_path": self.result_artifact_path,
-            "minimum_auc": self.minimum_auc,
+            "objective": {
+                "name": self.objective.name,
+                "version": self.objective.version,
+            },
             "objective_value": self.objective_value,
             "failure_category": self.failure_category,
             "failure_message": self.failure_message,
@@ -186,8 +181,11 @@ class EvaluationRegistryRecord:
             first_trial_index=int(payload["first_trial_index"]),
             first_campaign_id=str(payload["first_campaign_id"]),
             result_artifact_path=payload.get("result_artifact_path"),
-            minimum_auc=payload.get("minimum_auc"),
-            objective_value=payload.get("objective_value", payload.get("minimum_auc")),
+            objective=ObjectiveIdentifier(
+                name=str(payload["objective"]["name"]),
+                version=int(payload["objective"]["version"]),
+            ),
+            objective_value=payload.get("objective_value"),
             failure_category=payload.get("failure_category"),
             failure_message=payload.get("failure_message"),
             failure_scenario=payload.get("failure_scenario"),
@@ -238,7 +236,7 @@ class EvaluationRegistry:
         first_trial_index: int,
         first_campaign_id: str,
         result_artifact_path: str | None,
-        minimum_auc: float | None,
+        objective: ObjectiveIdentifier,
         failure_category: str | None,
         failure_message: str | None,
         failure_scenario: str | None,
@@ -262,7 +260,7 @@ class EvaluationRegistry:
             first_trial_index=first_trial_index,
             first_campaign_id=first_campaign_id,
             result_artifact_path=result_artifact_path,
-            minimum_auc=minimum_auc,
+            objective=objective,
             objective_value=objective_value,
             failure_category=failure_category,
             failure_message=failure_message,

@@ -77,3 +77,7 @@ class Transport3DSettings:
                 raise ValueError(f"{name} must contain two finite values")
             if not float(bounds[1]) > float(bounds[0]):
                 raise ValueError(f"{name} must be strictly increasing")
+        if (self.x_bounds_mm is None) != (self.y_bounds_mm is None):
+            raise ValueError(
+                "x_bounds_mm and y_bounds_mm must either both be omitted or both be provided"
+            )

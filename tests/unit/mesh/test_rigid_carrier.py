@@ -64,7 +64,7 @@ def test_distal_phalanx_mesh_is_closed_deterministic_and_outward() -> None:
         atol=1.0e-12,
         rtol=0.0,
     )
-    assert first_surface.metadata["source_geometry"] == "FingertipSolid.rigid_geometry"
+    assert first_surface.name == "distal_phalanx_carrier"
     assert first.z_min_mm == -5.5
     assert first.z_max_mm == 5.5
     assert first.morphology_fingerprint == _solid().morphology_fingerprint

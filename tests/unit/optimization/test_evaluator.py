@@ -25,7 +25,7 @@ from optimization.evaluator import (
     _objective_failure,
     create_lumo3d_trajectory_study,
 )
-from ray_tracing.optical_mechanics import Transport3DResultError
+from ray_tracing.optical_mechanics import Transport3DResultError, Transport3DSettings
 import optimization.evaluator as evaluator_module
 
 
@@ -46,6 +46,14 @@ def test_custom_protocol_is_consumed_by_study_without_evaluator_changes(tmp_path
     assert evaluator.protocol is protocol
     assert evaluator.protocol.optical_state_count == 36
     assert evaluator.mechanics_contract.max_load_increment_mm == 0.05
+
+
+def test_evaluator_requires_the_native_field_for_its_objective(tmp_path) -> None:
+    with pytest.raises(ValueError, match="retain_internal_path_field=True"):
+        Lumo3DTrajectoryEvaluator(
+            tmp_path,
+            optical_settings=Transport3DSettings(retain_internal_path_field=False),
+        )
 
 
 def test_study_accepts_explicit_search_bounds(tmp_path) -> None:
@@ -141,8 +149,8 @@ def test_radius_six_is_rejected_as_domain_incompatible_before_mesh_or_newton(tmp
     protocol = TrajectoryEvaluationProtocol((0.5,), (6.0,), (1.5,))
     result = Lumo3DTrajectoryEvaluator(tmp_path, protocol=protocol).evaluate(FingertipParameters())
     assert result.status == "domain_incompatible"
-    assert result.diagnostics["failure_stage"] == "domain_validation"
-    assert result.checkpoint_diagnostics == ()
+    assert result.report["failure_stage"] == "domain_validation"
+    assert result.checkpoint_records == ()
 
 
 def test_candidate_fixed_inputs_must_match_the_evaluation_contract(tmp_path) -> None:
@@ -196,8 +204,14 @@ def test_unexpected_evaluator_runtime_error_is_not_reclassified(
 
 def test_objective_pathology_flags_extinct_transport_without_changing_formula() -> None:
     observations = [
-        TrajectoryObservation(0.25, 5.0, 1.0, np.array([1.0, 0.0]), {"total_transport": 0.0}),
-        TrajectoryObservation(0.50, 5.0, 1.0, np.array([0.0, 1.0]), {"total_transport": 1.0}),
+        TrajectoryObservation(
+            0.25, 5.0, 1.0, np.array([1.0, 0.0]), 0.0, 0.0,
+            {"total_transport": 0.0},
+        ),
+        TrajectoryObservation(
+            0.50, 5.0, 1.0, np.array([0.0, 1.0]), 1.0, 1.0,
+            {"total_transport": 1.0},
+        ),
     ]
     result = compute_trajectory_objective(observations)
     assert result.objective_pathology is True
@@ -206,16 +220,16 @@ def test_objective_pathology_flags_extinct_transport_without_changing_formula() 
 
 def test_zero_signal_objective_is_explicit_candidate_failure_before_float_conversion() -> None:
     observations = [
-        TrajectoryObservation(0.25, 5.0, 1.0, np.zeros(2)),
-        TrajectoryObservation(0.50, 5.0, 1.0, np.zeros(2)),
+        TrajectoryObservation(0.25, 5.0, 1.0, np.zeros(2), 0.0, 0.0),
+        TrajectoryObservation(0.50, 5.0, 1.0, np.zeros(2), 0.0, 0.0),
     ]
     objective = compute_trajectory_objective(observations)
     failure = _objective_failure(objective)
     assert failure is not None
     assert failure.status == "optics_failure"
-    assert failure.diagnostics["failure_scenario"] == "objective_pathology"
+    assert failure.report["failure_scenario"] == "objective_pathology"
     assert failure.objective_value is None
-    assert isinstance(failure.diagnostics["objective"], dict)
+    assert isinstance(failure.report["objective"], dict)
     encoded = json.dumps(objective.to_dict(), allow_nan=False)
     decoded = json.loads(encoded)
     assert isinstance(decoded, dict)
@@ -246,7 +260,7 @@ def test_candidate_contact_error_is_translated_to_candidate_failure(
 
     result = evaluator.evaluate(FingertipParameters())
     assert result.status == "mechanics_failure"
-    assert result.diagnostics["failure_scenario"] == "candidate_contact"
+    assert result.report["failure_scenario"] == "candidate_contact"
     assert "candidate contact is impossible" in (result.failure_message or "")
 
 
@@ -273,7 +287,7 @@ def test_candidate_mechanics_error_is_translated_to_candidate_failure(
 
     result = evaluator.evaluate(FingertipParameters())
     assert result.status == "mechanics_failure"
-    assert result.diagnostics["failure_scenario"] == "candidate_mechanics_state"
+    assert result.report["failure_scenario"] == "candidate_mechanics_state"
     assert "candidate state is inverted" in (result.failure_message or "")
 
 
@@ -315,14 +329,22 @@ def test_unexpected_objective_error_propagates(
         "write_mechanics_artifact",
         lambda *_args, **_kwargs: "artifact",
     )
+    class _ContactState:
+        contact_state_fingerprint = "contact"
+        carrier_contact_active = False
+        carrier_contact_occurred = False
+
+        def to_dict(self):
+            return {
+                "contact_state_fingerprint": self.contact_state_fingerprint,
+                "carrier_contact_active": self.carrier_contact_active,
+                "carrier_contact_occurred": self.carrier_contact_occurred,
+            }
+
     monkeypatch.setattr(
         evaluator_module,
         "build_contact_state_record",
-        lambda **_kwargs: {
-            "contact_state_fingerprint": "contact",
-            "carrier_contact_active": False,
-            "carrier_contact_occurred": False,
-        },
+        lambda **_kwargs: _ContactState(),
     )
     monkeypatch.setattr(evaluator_module, "_final_pose_error_mm", lambda *_args: 0.0)
 
@@ -367,6 +389,21 @@ def test_unexpected_objective_error_propagates(
             post_contact_travel_mm=1.5,
             cumulative_step_index=1,
             diagnostics={},
+            state=SimpleNamespace(
+                active_carrier_contact_vertex_indices=(),
+                rigid_sdf_target_voxel_mm=0.125,
+                final_pose_error_mm=0.0,
+                carrier_contact_active=False,
+                carrier_contact_occurred=False,
+                first_carrier_contact_step=None,
+                carrier_collision_enabled=False,
+                inverted_tetrahedra=0,
+                max_soft_contact_overflow=0,
+                max_rigid_contact_overflow=0,
+                max_support_displacement_mm=0.0,
+                max_carrier_penetration_mm=0.0,
+                carrier_interface_contact_count=0,
+            ),
         )
         state = SimpleNamespace(
             checkpoint=checkpoint,

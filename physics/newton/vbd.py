@@ -22,6 +22,7 @@ from physics.trajectory.indentation import (
     IndentationResult,
     IndentationSettings,
     IndentationTrajectoryResult,
+    MechanicsCheckpointState,
     RigidIndenter3D,
     checkpoint_step_schedule,
 )
@@ -1035,6 +1036,7 @@ def _solve_newton_vbd_indentation_path_with_schedule(
                     cumulative_step_index=cumulative_step,
                     indenter_pose=target_pose,
                     mechanics_result=snapshot_result,
+                    state=MechanicsCheckpointState.from_diagnostics(snapshot_diagnostics),
                     diagnostics=snapshot_diagnostics,
                 )
             )
@@ -1076,6 +1078,7 @@ def solve_newton_vbd_indentation(
     return IndentationResult(
         mechanics_result=final.mechanics_result,
         final_indenter_pose=final.indenter_pose,
+        checkpoint_state=final.state,
         diagnostics=final.diagnostics,
     )
 

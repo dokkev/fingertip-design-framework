@@ -25,6 +25,8 @@ class MechanicsContract:
     soft_contact_margin_mm: float = 0.02
     soft_contact_ke: float = 1.0e3
     soft_contact_kd: float = 10.0
+    soft_contact_mu: float = 0.0
+    rigid_sdf_target_voxel_mm: float = 0.125
     max_support_displacement_mm: float = 1.0e-9
     max_final_pose_error_mm: float = 1.0e-6
     max_carrier_penetration_voxel_fraction: float = 0.5
@@ -49,6 +51,8 @@ class MechanicsContract:
             "soft_contact_margin_mm",
             "soft_contact_ke",
             "soft_contact_kd",
+            "soft_contact_mu",
+            "rigid_sdf_target_voxel_mm",
             "max_support_displacement_mm",
             "max_final_pose_error_mm",
             "max_carrier_penetration_voxel_fraction",
@@ -63,6 +67,8 @@ class MechanicsContract:
             self.soft_contact_margin_mm < 0.0
             or self.soft_contact_ke < 0.0
             or self.soft_contact_kd < 0.0
+            or self.soft_contact_mu < 0.0
+            or self.rigid_sdf_target_voxel_mm <= 0.0
             or self.max_support_displacement_mm < 0.0
             or self.max_final_pose_error_mm < 0.0
             or self.max_carrier_penetration_voxel_fraction < 0.0

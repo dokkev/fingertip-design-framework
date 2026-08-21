@@ -83,7 +83,7 @@ class RigidIndenter3D:
             "approach_direction",
             _normalize(
                 direction,
-                tolerance=_DIRECTION_NORM_TOLERANCE,
+                tolerance=DIRECTION_NORM_TOLERANCE,
                 name="approach_direction",
             ),
         )
@@ -150,6 +150,7 @@ class IndentationResult:
 
     mechanics_result: NewtonResult
     final_indenter_pose: RigidPose3D
+    checkpoint_state: "MechanicsCheckpointState | None" = None
     diagnostics: Mapping[str, float | int | str | bool | tuple[int, ...]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -157,9 +158,129 @@ class IndentationResult:
             raise TypeError("mechanics_result must be a NewtonResult")
         if not isinstance(self.final_indenter_pose, RigidPose3D):
             raise TypeError("final_indenter_pose must be a RigidPose3D")
+        if self.checkpoint_state is not None and not isinstance(
+            self.checkpoint_state, MechanicsCheckpointState
+        ):
+            raise TypeError("checkpoint_state must be MechanicsCheckpointState or None")
         if not isinstance(self.diagnostics, Mapping):
             raise TypeError("diagnostics must be a mapping")
         object.__setattr__(self, "diagnostics", MappingProxyType(dict(self.diagnostics)))
+
+
+@dataclass(frozen=True)
+class MechanicsCheckpointState:
+    """Validated mechanics state required by downstream simulation stages."""
+
+    active_carrier_contact_vertex_indices: tuple[int, ...]
+    rigid_sdf_target_voxel_mm: float
+    final_pose_error_mm: float
+    carrier_contact_active: bool
+    carrier_contact_occurred: bool
+    first_carrier_contact_step: int | None
+    carrier_collision_enabled: bool
+    inverted_tetrahedra: int
+    max_soft_contact_overflow: int
+    max_rigid_contact_overflow: int
+    max_support_displacement_mm: float
+    max_carrier_penetration_mm: float
+    carrier_interface_contact_count: int
+    first_contact_travel_mm: float | None = None
+    spawn_clearance_mm: float | None = None
+
+    @classmethod
+    def from_diagnostics(
+        cls,
+        diagnostics: Mapping[str, object],
+    ) -> "MechanicsCheckpointState":
+        """Extract and validate the fixed downstream contract inside physics."""
+
+        required = (
+            "active_carrier_contact_vertex_indices",
+            "rigid_sdf_target_voxel_mm",
+            "final_pose_error_mm",
+            "carrier_contact_active",
+            "carrier_contact_occurred",
+            "first_carrier_contact_step",
+            "carrier_collision_enabled",
+            "inverted_tetrahedra",
+            "max_soft_contact_overflow",
+            "max_rigid_contact_overflow",
+            "max_support_displacement_mm",
+            "max_carrier_penetration_mm",
+            "carrier_interface_contact_count",
+        )
+        missing = tuple(name for name in required if name not in diagnostics)
+        if missing:
+            raise ValueError(
+                "mechanics checkpoint is missing required state: " f"{missing!r}"
+            )
+        raw_indices = np.asarray(diagnostics["active_carrier_contact_vertex_indices"])
+        if raw_indices.ndim != 1 or (
+            raw_indices.size and not np.issubdtype(raw_indices.dtype, np.integer)
+        ):
+            raise ValueError(
+                "active_carrier_contact_vertex_indices must be a 1D integer sequence"
+            )
+        indices = tuple(int(index) for index in raw_indices)
+        if len(set(indices)) != len(indices) or any(index < 0 for index in indices):
+            raise ValueError(
+                "active_carrier_contact_vertex_indices must be unique and nonnegative"
+            )
+
+        def finite_nonnegative(name: str) -> float:
+            value = float(diagnostics[name])
+            if not np.isfinite(value) or value < 0.0:
+                raise ValueError(f"{name} must be finite and non-negative")
+            return value
+
+        def nonnegative_int(name: str) -> int:
+            value = diagnostics[name]
+            if isinstance(value, bool) or int(value) != value or int(value) < 0:
+                raise ValueError(f"{name} must be a non-negative integer")
+            return int(value)
+
+        def strict_bool(name: str) -> bool:
+            value = diagnostics[name]
+            if not isinstance(value, bool):
+                raise ValueError(f"{name} must be a bool")
+            return value
+
+        first_step = diagnostics["first_carrier_contact_step"]
+        if first_step is not None:
+            if (
+                isinstance(first_step, bool)
+                or int(first_step) != first_step
+                or int(first_step) < 1
+            ):
+                raise ValueError("first_carrier_contact_step must be None or positive")
+            first_step = int(first_step)
+        return cls(
+            active_carrier_contact_vertex_indices=indices,
+            rigid_sdf_target_voxel_mm=finite_nonnegative("rigid_sdf_target_voxel_mm"),
+            final_pose_error_mm=finite_nonnegative("final_pose_error_mm"),
+            carrier_contact_active=strict_bool("carrier_contact_active"),
+            carrier_contact_occurred=strict_bool("carrier_contact_occurred"),
+            first_carrier_contact_step=first_step,
+            carrier_collision_enabled=strict_bool("carrier_collision_enabled"),
+            inverted_tetrahedra=nonnegative_int("inverted_tetrahedra"),
+            max_soft_contact_overflow=nonnegative_int("max_soft_contact_overflow"),
+            max_rigid_contact_overflow=nonnegative_int("max_rigid_contact_overflow"),
+            max_support_displacement_mm=finite_nonnegative("max_support_displacement_mm"),
+            max_carrier_penetration_mm=finite_nonnegative("max_carrier_penetration_mm"),
+            carrier_interface_contact_count=nonnegative_int(
+                "carrier_interface_contact_count"
+            ),
+            first_contact_travel_mm=(
+                None
+                if diagnostics.get("first_contact_travel_mm") is None
+                else finite_nonnegative("first_contact_travel_mm")
+            ),
+            spawn_clearance_mm=(
+                None
+                if diagnostics.get("spawn_clearance_mm") is None
+                else finite_nonnegative("spawn_clearance_mm")
+            ),
+        )
 
 
 @dataclass(frozen=True)
@@ -173,6 +294,7 @@ class IndentationCheckpoint:
     cumulative_step_index: int
     indenter_pose: RigidPose3D
     mechanics_result: NewtonResult
+    state: MechanicsCheckpointState
     diagnostics: Mapping[str, object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -180,6 +302,8 @@ class IndentationCheckpoint:
             raise TypeError("indenter_pose must be RigidPose3D")
         if not isinstance(self.mechanics_result, NewtonResult):
             raise TypeError("mechanics_result must be NewtonResult")
+        if not isinstance(self.state, MechanicsCheckpointState):
+            raise TypeError("state must be MechanicsCheckpointState")
         for name in (
             "checkpoint_fraction",
             "normalized_indentation_ratio",
@@ -394,6 +518,7 @@ __all__ = [
     "CandidateMechanicsError",
     "CheckpointStep",
     "IndentationResult",
+    "MechanicsCheckpointState",
     "IndentationCheckpoint",
     "IndentationTrajectoryResult",
     "IndentationSettings",

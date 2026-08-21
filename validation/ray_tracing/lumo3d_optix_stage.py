@@ -23,10 +23,12 @@ from ray_tracing.optical_mechanics.optix_backend import create_runtime
 from scripts.tools.optix_smoke import run as run_optix_smoke
 from validation.ray_tracing.deformed_state_restore import restore_deformed_optical_state
 from optimization.optical_artifact import (
-    optical_physics_parameters,
-    fingerprint_mapping,
     native_field_separability,
     save_case_artifact,
+)
+from optimization.optical_contract import (
+    fingerprint_mapping,
+    optical_physics_parameters,
     transport_configuration,
 )
 
@@ -159,13 +161,8 @@ def run_lumo3d_optix_stage(
         reference_state,
         carrier_mesh=carrier_mesh,
         full3d_surface_provenance="actual_reference_3d_volume_state",
-        metadata={
-            "contact_state_fingerprint": reference_fingerprint,
-            "optical_state_id": "reference-unloaded",
-            "mechanics_contract": stage2_payload["search_contract"],
-        },
     )
-    if reference_geometry.metadata.get("geometry_mode") != "full3d_surface":
+    if reference_geometry.full3d_surface_provenance != "actual_reference_3d_volume_state":
         raise RuntimeError("reference geometry is not FULL_3D")
     configuration = transport_configuration(
         settings,
@@ -216,13 +213,8 @@ def run_lumo3d_optix_stage(
             stage3_case["artifact_path"],
             stage3_case["artifact_sha256"],
             carrier_mesh=carrier_mesh,
-            metadata={
-                "contact_state_fingerprint": contact_fingerprint,
-                "contact_location_u": location,
-                "mechanics_contract": stage2_payload["search_contract"],
-            },
         )
-        if restored.geometry.metadata.get("geometry_mode") != "full3d_surface":
+        if restored.geometry.full3d_surface_provenance != "actual_deformed_3d_volume_state":
             raise RuntimeError(f"u={location:g} geometry is not FULL_3D")
         contract = {
             "schema": "lumo3d-optix-stage-v1",

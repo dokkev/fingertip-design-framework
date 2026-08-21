@@ -7,10 +7,9 @@ def test_lumo3d_ax_smoke_uses_real_ax_and_named_objective(tmp_path) -> None:
     summary = run_lumo3d_ax_smoke(tmp_path)
 
     assert summary["status"] == "PASS"
-    assert summary["objective_name"] == "contact_state_separation"
+    assert summary["objective_name"] == "contact_state_separation_v1"
     assert summary["phases"] == ["nominal", "initialization", "search"]
     assert summary["statuses"] == ["success", "success", "success"]
     assert summary["fe_backend_invoked"] is False
     assert summary["optix_backend_invoked"] is False
     assert summary["evaluator_call_count"] == 3
-

@@ -201,7 +201,8 @@ change solver state or become a general visualization framework.
 
 `lumo.mechanics_contract.DEFAULT_MECHANICS_CONTRACT` owns the frozen solver
 execution settings and checkpoint-acceptance thresholds: timestep, contact
-coefficients, iteration count, and admissibility limits. The fingertip's
+coefficients (including friction and rigid-SDF voxel size), iteration count,
+and admissibility limits. The fingertip's
 `density`, `k_mu`, `k_lambda`, and damping are owned by
 `FingertipParameters.viscoelastic` and passed to Newton at the LUMO simulation
 boundary. These are backend coefficients, not a calibrated `E, nu` material
@@ -216,7 +217,9 @@ results. It consumes neutral mesh contracts and does not remesh the fingertip.
 The actual runtime boundary is
 `ray_tracing.optix.runtime.OptixRuntime.create()` and the production trace path
 is `trace_geometry()`. Artifact persistence and contract fingerprints belong
-to `optimization/optical_artifact.py`.
+to the optimization boundary: `optimization/optical_contract.py` owns the
+transport inputs and fingerprints, while `optimization/optical_artifact.py`
+owns field persistence, checksums, and artifact loading.
 
 `ray_tracing.optix.runtime` owns only the optional CUDA/OptiX setup and execution
 machinery. `scripts.tools.optix_smoke` performs the real setup, GAS build,
@@ -259,11 +262,11 @@ infrastructure failure.
 | morphology parameters | `finger` | `mesh`, `optimization`, `validation`, `gui` | immutable six-variable design plus explicit constraints; public geometry units are mm |
 | neutral volume mesh | `mesh` | `physics`, `ray_tracing`, `validation` | one canonical tetra topology plus semantic surface triangles; no solver or OptiX object |
 | first-contact result | `contact` | `physics`, `validation` | geometry-derived poses and post-contact travel; `T_spawn` is clear-side initialization only |
-| mechanics result/checkpoint | `physics` | `validation`, `ray_tracing` | NumPy arrays and immutable diagnostics; Newton state does not cross into ray tracing |
+| mechanics result/checkpoint | `physics` | `lumo`, `optimization`, `validation` | NumPy arrays plus an explicit immutable checkpoint-state contract; debug diagnostics are not a required handoff |
 | in-memory deformed state | `mesh.FingertipVolumeState` via `lumo` | `ray_tracing.optical_mechanics` | exact Newton-compatible node order, deformed coordinates, and semantic triangles; authoritative production handoff |
 | rigid carrier mesh | `mesh.RigidCarrierMesh` | `physics`, `ray_tracing` | one closed neutral mesh with explicit lateral/end face groups; OptiX excludes periodic z-caps |
 | persisted mechanics artifact | `optimization/deformed_state_artifact` | evaluator writers | exact checkpoint mesh plus digest and source-node provenance; validation-only restoration belongs to `validation/ray_tracing/deformed_state_restore` |
-| optical result | `ray_tracing.optical_mechanics` | `optimization`, `validation` | raw transport fields/weights, energy bookkeeping, and configuration fingerprints |
+| optical result | `ray_tracing.optical_mechanics` | `optimization`, `validation` | raw transport fields/weights and explicit transport diagnostics; configuration contracts/fingerprints are owned by `optimization/optical_contract.py` |
 | objective observation | `optimization.objectives` | `validation`, `optimization.adapters.ax` | trajectory observations preserve location, radius, depth, raw field, and diagnostics |
 | registry record | `optimization.evaluation_registry` | Ax adapter/campaign reports | exact contract + morphology identity; failed records carry no successful objective |
 

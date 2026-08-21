@@ -867,7 +867,6 @@ def _trace_with_runtime(
     internal: _InternalField | None = None
     if internal_context is not None:
         internal = _finalize_internal_path_context(internal_context)
-    geometry_metadata = dict(geometry.metadata)
     carrier_contact_triangle_count = int(
         sum(
             tag == CARRIER_CONTACT_INTERFACE
@@ -940,7 +939,6 @@ def _trace_with_runtime(
         field_y_edges_mm=None if internal is None else internal.y_edges,
         field_z_edges_mm=None if internal is None else internal.z_edges,
         field_density_3d=None if internal is None else internal.density,
-        geometry_metadata=geometry_metadata,
         timings_seconds={
             "gas_build": scene.gas_build_seconds,
             "transport": postprocessing_started - transport_started,

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Mapping
+from typing import Any
 
 import numpy as np
 from shapely.geometry import LineString, Point
@@ -384,7 +384,6 @@ def build_fingertip_volume_state_geometry(
     carrier_optics: CarrierOptics | None = None,
     carrier_mapping_tolerance_mm: float | None = None,
     full3d_surface_provenance: Full3DSurfaceProvenance,
-    metadata: Mapping[str, Any] | None = None,
 ) -> TransportGeometry:
     """Adapt one Newton-compatible volume state directly into OptiX surfaces.
 
@@ -435,43 +434,6 @@ def build_fingertip_volume_state_geometry(
         state,
         carrier_contact_source_node_ids=contact_node_ids,
     )
-    metadata_values = {} if metadata is None else dict(metadata)
-    if "carrier_mapping_tolerance_mm" in metadata_values:
-        raise Transport3DGeometryError(
-            "carrier_mapping_tolerance_mm must be supplied as an explicit argument"
-        )
-    if "full3d_surface_provenance" in metadata_values:
-        raise Transport3DGeometryError(
-            "full3d_surface_provenance is owned by the geometry builder"
-        )
-    geometry_metadata = {
-        "morphology_fingerprint": state.morphology_fingerprint,
-        "geometry_state_type": "solver_neutral.FingertipVolumeState",
-        "volume_mesh_tier": state.settings.tier,
-        "volume_state_source_node_count": len(state.source_node_ids),
-        "rigid_geometry_source": "mesh.RigidCarrierMesh.lateral_face_indices",
-        "escape_boundary_source": (
-            "FingertipVolumeState.reference_outer_support_triangles"
-            "+FingertipSolid.closure"
-        ),
-        "carrier_contact_source_node_ids": sorted(contact_node_ids),
-        "carrier_optics_enabled": carrier_optics is not None,
-        "carrier_mapping_method": "exact_void_bottom_triangle_any_contact_vertex",
-    }
-    conflicts = sorted(set(metadata_values) & set(geometry_metadata))
-    mismatches = [
-        key
-        for key in conflicts
-        if metadata_values[key] != geometry_metadata[key]
-    ]
-    if mismatches:
-        raise Transport3DGeometryError(
-            "metadata cannot override fingertip-geometry provenance: "
-            f"{mismatches!r}"
-        )
-    for key in conflicts:
-        metadata_values.pop(key)
-    geometry_metadata.update(metadata_values)
     return build_full3d_transport_geometry(
         tip,
         silicone=silicone,
@@ -479,7 +441,6 @@ def build_fingertip_volume_state_geometry(
         envelope=envelope,
         source_position_mm=source_position,
         source_medium=source_medium,
-        metadata=geometry_metadata,
         full3d_surface_provenance=full3d_surface_provenance,
         carrier_optics=carrier_optics,
         carrier_mapping_tolerance_mm=carrier_mapping_tolerance_mm,

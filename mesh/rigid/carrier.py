@@ -224,10 +224,6 @@ def make_distal_phalanx_mesh(solid: FingertipSolid) -> RigidCarrierMesh:
         vertices_mm=np.asarray(vertices, dtype=np.float64),
         faces=np.asarray(faces, dtype=np.int64),
         name="distal_phalanx_carrier",
-        metadata={
-            "source_geometry": "FingertipSolid.rigid_geometry",
-            "extrusion_depth_mm": _CARRIER_Z_MAX_MM - _CARRIER_Z_MIN_MM,
-        },
     )
     return RigidCarrierMesh(
         surface_mesh=surface_mesh,

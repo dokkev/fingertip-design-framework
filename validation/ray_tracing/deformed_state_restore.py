@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 from pathlib import Path
-from typing import Iterable, Mapping
+from typing import Iterable
 
 import numpy as np
 
@@ -170,7 +170,6 @@ def restore_deformed_optical_state(
     carrier_contact_source_node_ids: Iterable[int] | None = None,
     carrier_optics: CarrierOptics | None = None,
     carrier_mapping_tolerance_mm: float | None = None,
-    metadata: Mapping[str, object] | None = None,
 ) -> RestoredDeformedOpticalState:
     """Validate one persisted Newton state and build replay geometry."""
 
@@ -199,23 +198,6 @@ def restore_deformed_optical_state(
                 "requested carrier contact provenance does not match the "
                 "persisted mechanics artifact"
             )
-    geometry_metadata = {
-        "optical_state_id": state_id,
-        "mechanics_artifact_path": str(path),
-        "mechanics_artifact_sha256": str(expected_sha256),
-        "mechanics_source": "persisted_newton_vbd_deformed_volume_state",
-        "morphology_fingerprint": volume_mesh.morphology_fingerprint,
-        "carrier_contact_source_node_ids": list(selected_contact_ids),
-    }
-    if metadata is not None:
-        metadata_values = dict(metadata)
-        conflicts = sorted(set(metadata_values) & set(geometry_metadata))
-        if conflicts:
-            raise ValueError(
-                "metadata cannot override restored-state provenance: "
-                f"{conflicts!r}"
-            )
-        geometry_metadata.update(metadata_values)
     geometry = build_fingertip_volume_state_geometry(
         tip,
         state,
@@ -224,7 +206,6 @@ def restore_deformed_optical_state(
         carrier_optics=carrier_optics,
         carrier_mapping_tolerance_mm=carrier_mapping_tolerance_mm,
         full3d_surface_provenance="actual_deformed_3d_volume_state",
-        metadata=geometry_metadata,
     )
     return RestoredDeformedOpticalState(
         artifact_path=path,

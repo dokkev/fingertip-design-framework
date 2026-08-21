@@ -47,7 +47,11 @@ def test_indentation_settings_and_result_are_neutral() -> None:
         tetrahedra=np.array([[0, 1, 2, 3]], dtype=np.int32),
         steps=4,
     )
-    indentation = IndentationResult(result, RigidPose3D((0.0, 0.0, 0.5), (0.0, 0.0, 0.0, 1.0)), {"full_surface_contact": True})
+    indentation = IndentationResult(
+        result,
+        RigidPose3D((0.0, 0.0, 0.5), (0.0, 0.0, 0.0, 1.0)),
+        diagnostics={"full_surface_contact": True},
+    )
     assert indentation.diagnostics["full_surface_contact"] is True
     with pytest.raises(ValueError):
         IndentationSettings(travel_mm=-0.1)
@@ -77,6 +81,19 @@ def test_indentation_accepts_exact_authoritative_fixed_vertices() -> None:
         _prepared_with_support((0, 1)),
         NewtonSettings(fixed_vertex_indices=(1, 0)),
     )
+
+
+@pytest.mark.parametrize("value", (1.5, True))
+def test_newton_settings_reject_non_integer_step_counts(value) -> None:
+    with pytest.raises(TypeError, match="steps"):
+        NewtonSettings(steps=value)
+    with pytest.raises(TypeError, match="iterations"):
+        NewtonSettings(iterations=value)
+
+
+def test_newton_settings_reject_non_integer_fixed_vertices() -> None:
+    with pytest.raises(TypeError, match="fixed_vertex_indices"):
+        NewtonSettings(fixed_vertex_indices=(1.5,))
 
 
 @pytest.mark.parametrize("fixed", ((), (0, 2)))

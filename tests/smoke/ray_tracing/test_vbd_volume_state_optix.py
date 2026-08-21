@@ -81,7 +81,7 @@ def test_vbd_volume_state_reaches_full3d_optix_without_fea_artifact() -> None:
         runtime=runtime,
     )
 
-    assert geometry.metadata["geometry_mode"] == "full3d_surface"
+    assert geometry.full3d_surface_provenance == "actual_deformed_3d_volume_state"
     assert result.launched_ray_count == 16
     assert np.isfinite(result.energy_balance_error)
     assert result.energy_balance_error >= 0.0

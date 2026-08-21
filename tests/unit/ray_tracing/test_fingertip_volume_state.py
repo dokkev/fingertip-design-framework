@@ -106,11 +106,10 @@ def test_volume_state_direct_adapter_builds_full3d_geometry_without_fea_artifact
         full3d_surface_provenance="actual_reference_3d_volume_state",
     )
 
-    assert geometry.metadata["geometry_mode"] == "full3d_surface"
+    assert geometry.full3d_surface_provenance == "actual_reference_3d_volume_state"
     assert geometry.depth_mm == pytest.approx(11.0)
     assert geometry.z_min_mm == pytest.approx(-5.5)
     assert geometry.z_max_mm == pytest.approx(5.5)
-    assert geometry.metadata["full3d_surface_provenance"] == "actual_reference_3d_volume_state"
     np.testing.assert_array_equal(
         geometry.rigid.vertices,
         np.asarray(carrier_mesh.surface_mesh.vertices_mm, dtype=np.float32),
@@ -132,8 +131,9 @@ def test_volume_state_direct_adapter_builds_full3d_geometry_without_fea_artifact
         )
     )
     assert len(geometry.envelope.faces) == expected_envelope_faces
-    assert geometry.metadata["rigid_geometry_source"] == (
-        "mesh.RigidCarrierMesh.lateral_face_indices"
+    np.testing.assert_array_equal(
+        geometry.rigid.vertices,
+        np.asarray(carrier_mesh.surface_mesh.vertices_mm, dtype=np.float32),
     )
     assert set(geometry.silicone.semantic_tags or ()) == set(volume_mesh.surface_triangles) - {
         "longitudinal_end_minus",

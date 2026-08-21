@@ -47,11 +47,13 @@ from validation.common.io import atomic_write_json, strict_read_json
 from validation.common.provenance import sha256_file
 from optimization.optical_artifact import (
     UNIFIED_ARTIFACT_SCHEMA,
-    fingerprint_mapping,
     load_case_artifact,
     native_field_separability,
-    optical_physics_parameters,
     save_case_artifact,
+)
+from optimization.optical_contract import (
+    fingerprint_mapping,
+    optical_physics_parameters,
     transport_configuration,
 )
 from validation.ray_tracing.fea_surface_artifact import load_full3d_surface_artifact
@@ -709,25 +711,12 @@ def run_comparison(
                     side_state["fea_state"],
                     carrier_mesh=state["carrier_mesh"],
                     full3d_surface_provenance="actual_deformed_3d_volume_state",
-                    metadata={
-                        "morphology_id": state["morphology_id"],
-                        "contact_state_fingerprint": side_state["artifact"].contact_state_fingerprint,
-                        "mechanics_source": str(side_state["artifact"].artifact_path),
-                    },
                 )
                 geometry = build_fingertip_volume_state_geometry(
                     state["tip"],
                     vbd_state,
                     carrier_mesh=state["carrier_mesh"],
                     full3d_surface_provenance="actual_deformed_3d_vbd_surface",
-                    metadata={
-                        "morphology_id": state["morphology_id"],
-                        "contact_state_fingerprint": vbd_fp,
-                        "mechanics_source": "physics.NewtonSession",
-                        "vbd_side": side,
-                        "vbd_surface_source": "direct NewtonResult deformed coordinates",
-                        "vbd_state_fingerprint": vbd_fp,
-                    },
                 )
                 side_state.update({
                     "vbd_result": result,

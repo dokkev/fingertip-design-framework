@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 import hashlib
 import json
 from pathlib import Path
@@ -10,21 +10,11 @@ from typing import Any, Mapping
 
 import numpy as np
 
-from finger.fingertip import Fingertip
 from ray_tracing.optical_mechanics.result import Transport3DResult
-from ray_tracing.optical_mechanics.settings import Transport3DSettings
+from optimization.optical_contract import fingerprint_mapping as _fingerprint_mapping
 
 
 UNIFIED_ARTIFACT_SCHEMA = "unified-optix-transport-case-v6"
-
-
-def _canonical_json(value: Any) -> str:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
-
-
-def fingerprint_mapping(value: Mapping[str, Any]) -> str:
-    """Return the stable fingerprint used by optimization contracts."""
-    return hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()
 
 
 def _plain(value: Any) -> Any:
@@ -37,36 +27,6 @@ def _plain(value: Any) -> Any:
     if isinstance(value, np.generic):
         return value.item()
     return value
-
-
-def optical_physics_parameters(tip: Fingertip) -> dict[str, float]:
-    """Return exactly the optical values used by FULL_3D transport."""
-    if not isinstance(tip, Fingertip):
-        raise TypeError("tip must be a Fingertip")
-    return {
-        "refractive_index_air": float(tip.optical.refractive_index_air),
-        "refractive_index_silicone": float(tip.optical.refractive_index_silicone),
-        "absorption_per_mm": float(tip.optical.absorption_per_mm),
-        "relative_radiant_power": float(tip.led.relative_radiant_power),
-        "emission_half_angle_deg": float(tip.led.emission_half_angle_deg),
-    }
-
-
-def transport_configuration(
-    settings: Transport3DSettings,
-    *,
-    material: Mapping[str, Any],
-    source: Mapping[str, Any] | None = None,
-) -> dict[str, Any]:
-    """Serialize only inputs that can change FULL_3D transport."""
-    configuration: dict[str, Any] = {
-        "schema": "full3d-transport-configuration-v1",
-        "settings": asdict(settings),
-        "material": dict(material),
-    }
-    if source is not None:
-        configuration["source"] = dict(source)
-    return configuration
 
 
 @dataclass(frozen=True)
@@ -344,7 +304,7 @@ def save_case_artifact(
         "schema": UNIFIED_ARTIFACT_SCHEMA,
         "field_axis_order": "x,y,z",
         "contract": _plain(contract),
-        "contract_fingerprint": fingerprint_mapping(dict(contract)),
+        "contract_fingerprint": _fingerprint_mapping(dict(contract)),
         "field_artifact": str(field_path),
         "field_sha256": hashlib.sha256(field_tmp.read_bytes()).hexdigest(),
         "result": record,
@@ -384,7 +344,7 @@ def load_case_artifact(
         raise ValueError("unified transport artifact must contain x,y,z axes")
     if metadata.get("contract") != _plain(expected_contract):
         raise ValueError("unified transport artifact contract mismatch")
-    if metadata.get("contract_fingerprint") != fingerprint_mapping(dict(expected_contract)):
+    if metadata.get("contract_fingerprint") != _fingerprint_mapping(dict(expected_contract)):
         raise ValueError("unified transport artifact contract fingerprint mismatch")
     field_path = Path(str(metadata.get("field_artifact", "")))
     if not field_path.is_absolute():
@@ -482,11 +442,8 @@ def load_case_artifact(
 __all__ = [
     "OpticalFieldArtifact",
     "UNIFIED_ARTIFACT_SCHEMA",
-    "fingerprint_mapping",
     "load_case_artifact",
     "native_field_separability",
     "energy_record",
-    "optical_physics_parameters",
     "save_case_artifact",
-    "transport_configuration",
 ]

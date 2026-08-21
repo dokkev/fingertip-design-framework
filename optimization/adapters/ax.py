@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from enum import StrEnum
 import math
 import time
 from types import MappingProxyType
@@ -22,26 +23,36 @@ from optimization.evaluation_registry import (
     EvaluationRegistry,
     EvaluationRegistryRecord,
 )
-
-AX_OBJECTIVE_NAME = "minimum_auc"
-CONTACT_STATE_SEPARATION_OBJECTIVE_NAME = "contact_state_separation"
-MAX_CONSECUTIVE_KNOWN_PROPOSALS = 20
-OPTIX_RUNTIME_FAILURE_SIGNATURE = "optix-runtime-initialization"
-GMSH_RUNTIME_FAILURE_SIGNATURE = "gmsh-runtime-initialization"
-PHYSICS_RUNTIME_FAILURE_SIGNATURE = "newton-warp-runtime-initialization"
-PRODUCTION_LINEAR_PARAMETER_CONSTRAINTS: tuple[str, ...] = (
-    "flat_pad_height + semielliptical_pad_height <= 30.0",
-    "stem_width + 2*void_width <= 20.0",
+from optimization.objectives import (
+    ObjectiveIdentifier,
+    TRAJECTORY_SEPARATION_OBJECTIVE,
 )
+
 AxTrialPhase = Literal["nominal", "initialization", "search"]
+
+
+class InfrastructureFailureKind(StrEnum):
+    """Typed campaign-level failures that must not become candidate failures."""
+
+    OPTIX_RUNTIME_INITIALIZATION = "optix-runtime-initialization"
+    GMSH_RUNTIME_INITIALIZATION = "gmsh-runtime-initialization"
+    PHYSICS_RUNTIME_INITIALIZATION = "newton-warp-runtime-initialization"
 
 
 class CampaignInfrastructureError(RuntimeError):
     """Abort a campaign without attributing an environment failure to a design."""
 
-    def __init__(self, message: str, *, signature: str) -> None:
+    def __init__(self, message: str, *, kind: InfrastructureFailureKind) -> None:
         super().__init__(message)
-        self.signature = signature
+        if not isinstance(kind, InfrastructureFailureKind):
+            raise TypeError("kind must be an InfrastructureFailureKind")
+        self.kind = kind
+
+    @property
+    def signature(self) -> str:
+        """Return the stable string only at reporting/framework boundaries."""
+
+        return self.kind.value
 
 
 @dataclass(frozen=True)
@@ -51,7 +62,8 @@ class AxSettings:
     initialization_trials: int
     search_trials: int
     seed: int
-    objective_name: str = AX_OBJECTIVE_NAME
+    objective: ObjectiveIdentifier = TRAJECTORY_SEPARATION_OBJECTIVE
+    max_consecutive_known_proposals: int = 20
 
     def __post_init__(self) -> None:
         for name, value in (
@@ -67,8 +79,20 @@ class AxSettings:
             raise ValueError("search_trials must be nonnegative")
         if self.seed < 0:
             raise ValueError("seed must be nonnegative")
-        if not isinstance(self.objective_name, str) or not self.objective_name:
-            raise ValueError("objective_name must be a non-empty string")
+        if not isinstance(self.objective, ObjectiveIdentifier):
+            raise TypeError("objective must be an ObjectiveIdentifier")
+        if (
+            not isinstance(self.max_consecutive_known_proposals, int)
+            or isinstance(self.max_consecutive_known_proposals, bool)
+            or self.max_consecutive_known_proposals < 1
+        ):
+            raise ValueError("max_consecutive_known_proposals must be positive")
+
+    @property
+    def objective_name(self) -> str:
+        """Return the Ax string derived at the framework boundary."""
+
+        return self.objective.serialized_name
 
 
 @dataclass(frozen=True)
@@ -116,10 +140,16 @@ class AxRunResult:
     consecutive_known_proposals: int = 0
     historical_success_count: int = 0
     historical_failure_count: int = 0
-    objective_name: str = AX_OBJECTIVE_NAME
+    objective: ObjectiveIdentifier = TRAJECTORY_SEPARATION_OBJECTIVE
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "records", tuple(self.records))
+        if not isinstance(self.objective, ObjectiveIdentifier):
+            raise TypeError("objective must be an ObjectiveIdentifier")
+
+    @property
+    def objective_name(self) -> str:
+        return self.objective.serialized_name
 
     @property
     def ax_proposal_count(self) -> int:
@@ -184,7 +214,10 @@ def create_ax_client(study: object, settings: AxSettings) -> Client:
     client = Client(random_seed=settings.seed)
     client.configure_experiment(
         parameters=parameters,
-        parameter_constraints=PRODUCTION_LINEAR_PARAMETER_CONSTRAINTS,
+        parameter_constraints=tuple(
+            constraint.to_ax_expression()
+            for constraint in study.design_space.linear_constraints
+        ),
     )
     client.configure_optimization(objective=settings.objective_name)
     client.configure_generation_strategy(
@@ -207,13 +240,10 @@ def _evaluation_objective_value(
     evaluation: object,
     objective_name: str,
 ) -> float | None:
-    """Read the named maximize-oriented scalar without 3D/minimum_auc aliases."""
-    if objective_name == AX_OBJECTIVE_NAME:
-        value = getattr(evaluation, "minimum_auc", None)
-    else:
-        value = getattr(evaluation, "objective_value", None)
-        if value is None:
-            value = getattr(evaluation, "score", None)
+    """Read the canonical maximize-oriented scalar at the Ax boundary."""
+    value = getattr(evaluation, "objective_value", None)
+    if value is None:
+        value = getattr(evaluation, "score", None)
     if value is None:
         return None
     resolved = float(value)
@@ -267,7 +297,7 @@ def _duplicate_record(
 def _failure_scenario(evaluation: object | None) -> str | None:
     if evaluation is None:
         return None
-    candidate = evaluation.diagnostics.get("failure_scenario")
+    candidate = getattr(evaluation, "failure_scenario", None)
     return candidate if isinstance(candidate, str) else None
 
 
@@ -286,11 +316,7 @@ def _bootstrap_historical_registry(
             arm_name=f"historical-registry-{position}",
         )
         if record.status == "success":
-            value = (
-                record.minimum_auc
-                if objective_name == AX_OBJECTIVE_NAME
-                else record.objective_value
-            )
+            value = record.objective_value
             if value is None:
                 raise ValueError(
                     f"historical success has no {objective_name}: {record.key}"
@@ -366,19 +392,19 @@ def _evaluate_trial(
             client.mark_trial_abandoned(trial_index=trial_index)
             raise CampaignInfrastructureError(
                 f"{type(exc).__name__}: {exc}",
-                signature=OPTIX_RUNTIME_FAILURE_SIGNATURE,
+                kind=InfrastructureFailureKind.OPTIX_RUNTIME_INITIALIZATION,
             ) from exc
         if isinstance(exc, VolumeMeshDependencyError):
             client.mark_trial_abandoned(trial_index=trial_index)
             raise CampaignInfrastructureError(
                 f"{type(exc).__name__}: {exc}",
-                signature=GMSH_RUNTIME_FAILURE_SIGNATURE,
+                kind=InfrastructureFailureKind.GMSH_RUNTIME_INITIALIZATION,
             ) from exc
         if isinstance(exc, PhysicsDependencyError):
             client.mark_trial_abandoned(trial_index=trial_index)
             raise CampaignInfrastructureError(
                 f"{type(exc).__name__}: {exc}",
-                signature=PHYSICS_RUNTIME_FAILURE_SIGNATURE,
+                kind=InfrastructureFailureKind.PHYSICS_RUNTIME_INITIALIZATION,
             ) from exc
         client.mark_trial_abandoned(trial_index=trial_index)
         raise
@@ -443,7 +469,7 @@ def run_ax_optimization(
     evaluation_contract_id: str | None = None,
     campaign_id: str | None = None,
     result_artifact_path: str | None = None,
-    max_consecutive_known_proposals: int = MAX_CONSECUTIVE_KNOWN_PROPOSALS,
+    max_consecutive_known_proposals: int | None = None,
     max_proposals: int | None = None,
 ) -> AxRunResult:
     """Evaluate nominal, initialization, and search attempts in order.
@@ -456,6 +482,8 @@ def run_ax_optimization(
         raise TypeError("study must provide design_space and create_evaluator()")
     if not isinstance(settings, AxSettings):
         raise TypeError("settings must be AxSettings")
+    if max_consecutive_known_proposals is None:
+        max_consecutive_known_proposals = settings.max_consecutive_known_proposals
     if evaluation_registry is not None:
         if not evaluation_contract_id:
             raise ValueError(
@@ -506,7 +534,7 @@ def run_ax_optimization(
             consecutive_known_proposals=consecutive_known_proposals,
             historical_success_count=historical_success_count,
             historical_failure_count=historical_failure_count,
-            objective_name=settings.objective_name,
+            objective=settings.objective,
         )
 
     def evaluate_and_record(
@@ -570,14 +598,10 @@ def run_ax_optimization(
                         result_artifact_path,
                     )
                 ),
-                minimum_auc=(
-                    None
-                    if evaluation is None or settings.objective_name != AX_OBJECTIVE_NAME
-                    else getattr(evaluation, "minimum_auc", None)
-                ),
+                objective=settings.objective,
                 objective_value=(
                     None
-                    if evaluation is None or settings.objective_name == AX_OBJECTIVE_NAME
+                    if evaluation is None
                     else _evaluation_objective_value(
                         evaluation,
                         settings.objective_name,
@@ -670,13 +694,8 @@ def run_ax_optimization(
 
 
 __all__ = [
-    "AX_OBJECTIVE_NAME",
-    "CONTACT_STATE_SEPARATION_OBJECTIVE_NAME",
     "CampaignInfrastructureError",
-    "GMSH_RUNTIME_FAILURE_SIGNATURE",
-    "MAX_CONSECUTIVE_KNOWN_PROPOSALS",
-    "OPTIX_RUNTIME_FAILURE_SIGNATURE",
-    "PHYSICS_RUNTIME_FAILURE_SIGNATURE",
+    "InfrastructureFailureKind",
     "AxRunResult",
     "AxSettings",
     "AxTrialPhase",

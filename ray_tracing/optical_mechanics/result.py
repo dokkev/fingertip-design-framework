@@ -21,20 +21,6 @@ def _owned_array(value: Any, *, dtype: Any, name: str) -> np.ndarray:
     return array
 
 
-def _freeze_metadata(value: Any) -> Any:
-    if isinstance(value, Mapping):
-        return MappingProxyType(
-            {key: _freeze_metadata(item) for key, item in value.items()}
-        )
-    if isinstance(value, (list, tuple)):
-        return tuple(_freeze_metadata(item) for item in value)
-    if isinstance(value, np.ndarray):
-        array = np.array(value, copy=True)
-        array.setflags(write=False)
-        return array
-    return value
-
-
 @dataclass(frozen=True)
 class Transport3DResult:
     """Camera-free outgoing field and complete FULL_3D energy bookkeeping.
@@ -98,7 +84,6 @@ class Transport3DResult:
     field_y_edges_mm: np.ndarray | None = None
     field_z_edges_mm: np.ndarray | None = None
     field_density_3d: np.ndarray | None = None
-    geometry_metadata: Mapping[str, Any] = field(default_factory=dict)
     timings_seconds: Mapping[str, float] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -438,7 +423,6 @@ class Transport3DResult:
             object.__setattr__(self, "field_y_edges_mm", field_arrays[1])
             object.__setattr__(self, "field_z_edges_mm", field_arrays[2])
             object.__setattr__(self, "field_density_3d", field_arrays[3])
-        object.__setattr__(self, "geometry_metadata", _freeze_metadata(self.geometry_metadata))
         timings = {str(key): float(value) for key, value in self.timings_seconds.items()}
         if any(
             not key or not np.isfinite(value) or value < 0.0
