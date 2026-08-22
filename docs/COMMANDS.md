@@ -12,8 +12,8 @@ conda activate lit
 python -m pip install -e ".[mesh,physics,ax,test]"
 ```
 
-`mesh` supplies Gmsh, `physics` supplies Newton/Warp, and `ax` supplies Ax
-1.3.1. CUDA, OptiX, and GPU drivers are externally managed.
+`mesh` supplies Gmsh, `physics` supplies Newton/Warp and rigid asset loading,
+and `ax` supplies Ax 1.3.1. CUDA, OptiX, and GPU drivers are externally managed.
 The editable install exposes the sole framework namespace from `lumo/`;
 repository scripts do not insert the checkout into `sys.path`.
 
@@ -31,6 +31,14 @@ The Newton smoke tests require the CUDA-capable `lit` environment:
 ```bash
 ./scripts/tools/pytest_lit tests/smoke/physics -q -m "smoke and physics"
 ```
+
+Run the procedural flat-plate contact smoke explicitly:
+
+```bash
+conda run -n lit python validation/contact-physics/flat_plate_contact.py --force-threshold-n 0.1
+```
+
+`0.1 N` is an example caller-selected stopping threshold, not a solver setting.
 
 ## OptiX gate before production BO
 
@@ -206,10 +214,9 @@ python scripts/assets/prepare_object_mesh.py \
   --subdivisions 2
 ```
 
-The default output is under `assets/objects/`. Runtime code can load one
-asset with `lumo.mesh.load_obj()` or load all top-level OBJ files in a directory
-with `lumo.mesh.load_obj_directory()`. The loader requires an explicit
-`scale_mm_per_unit` and validates the neutral closed rigid-mesh contract.
+The default output is under `assets/objects/`. Runtime code loads an OBJ or STL
+with `lumo.util.mesh_io.load_mesh()`. The loader requires an explicit
+`scale_m_per_unit` and returns a `newton.Mesh` whose vertices are in metres.
 
 ## Generated artifacts
 

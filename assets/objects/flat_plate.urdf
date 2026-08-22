@@ -1,0 +1,20 @@
+<?xml version="1.0"?>
+<robot name="flat_plate">
+  <!-- Dimensions are in metres: 40 mm x 10 mm x 2 mm. -->
+  <link name="plate">
+    <visual>
+      <geometry>
+        <box size="0.040 0.010 0.002"/>
+      </geometry>
+      <material name="plate_gray">
+        <color rgba="0.6 0.6 0.6 1.0"/>
+      </material>
+    </visual>
+
+    <collision>
+      <geometry>
+        <box size="0.040 0.010 0.002"/>
+      </geometry>
+    </collision>
+  </link>
+</robot>

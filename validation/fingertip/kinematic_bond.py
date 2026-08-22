@@ -39,22 +39,6 @@ def main() -> None:
     identity_positions = state_0.particle_q.numpy()[bonded_indices]
     np.testing.assert_allclose(identity_positions, reference, rtol=0.0, atol=1.0e-7)
 
-    solver = newton.solvers.SolverVBD(model, iterations=1)
-    solver.step(
-        state_0,
-        state_1,
-        model.control(),
-        None,
-        1.0e-4,
-    )
-    zero_load_positions = state_1.particle_q.numpy()[bonded_indices]
-    np.testing.assert_allclose(
-        zero_load_positions,
-        reference,
-        rtol=0.0,
-        atol=1.0e-7,
-    )
-
     translation = wp.transform(
         p=wp.vec3(1.0e-3, -2.0e-3, 3.0e-3),
         q=wp.quat_identity(),

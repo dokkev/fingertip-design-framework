@@ -125,6 +125,7 @@ def _bonded_local_positions(
 def build_fingertip_newton_model(
     fingertip_mesh: FingertipMesh,
     *,
+    builder: newton.ModelBuilder | None = None,
     gravity: float = 0.0,
     carrier_color: wp.vec3 | None = None,
     device: str | None = None,
@@ -133,7 +134,9 @@ def build_fingertip_newton_model(
 
     The carrier is a kinematic rigid body at the identity pose.  Its shape is
     visible but collision-disabled until the cavity-facing collision surface
-    is separated from the bonded interface.
+    is separated from the bonded interface.  A caller may supply a builder
+    already containing external scene bodies; this function adds the fingertip
+    and finalizes that builder.
     """
     if not isinstance(fingertip_mesh, FingertipMesh):
         raise TypeError("fingertip_mesh must be a FingertipMesh")
@@ -150,7 +153,13 @@ def build_fingertip_newton_model(
     parameters = fingertip_mesh.fingertip.parameters
     material = parameters.viscoelastic
 
-    builder = newton.ModelBuilder(gravity=gravity)
+    if builder is None:
+        builder = newton.ModelBuilder(gravity=gravity)
+    elif gravity != 0.0:
+        raise ValueError(
+            "gravity must be configured on a caller-supplied builder"
+        )
+
     particle_start = builder.particle_count
     builder.add_soft_mesh(
         pos=wp.vec3(0.0, 0.0, 0.0),
@@ -200,7 +209,7 @@ def build_fingertip_newton_model(
     model = builder.finalize(device=device, requires_grad=False)
     local_positions = _bonded_local_positions(
         builder.particle_q,
-        local_indices,
+        global_indices,
     )
 
     return FingertipNewtonModel(

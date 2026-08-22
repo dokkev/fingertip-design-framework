@@ -1,114 +1,129 @@
 # Repository guide
 
-Use the applicable installed skills for reusable engineering workflow.
 For any code-related task, use `$code-engineer` and follow its requested mode
-(Implement, Review, Test, or Validate) and applicable references.
+(Implement, Review, Test, or Validate).
 
-Do not duplicate general coding or Python-design guidance here.
+Before editing:
 
-Read:
+- read `docs/ARCHITECTURE.md`;
+- read `docs/COMMANDS.md`;
+- read `INSTRUCTION.md` if it exists and is non-empty;
+- inspect the current repository state.
 
-- `docs/ARCHITECTURE.md` for package ownership, dependency direction,
-  production boundaries, and accepted architecture;
-- `docs/COMMANDS.md` for the `lit` environment, supported commands,
-  external runtime dependencies, and generated-output locations.
+Instruction precedence:
 
-## Current iteration
-
-If `INSTRUCTION.md` exists and is non-empty, read it before making changes.
-
-Instruction precedence is:
-
-1. the user's current explicit request;
+1. user's current explicit request;
 2. `INSTRUCTION.md`;
 3. this `AGENTS.md`;
-4. applicable reusable skill defaults.
+4. reusable skill defaults.
 
-`INSTRUCTION.md` defines the current iteration only. Do not edit, clear, or
-delete it unless explicitly requested.
+Do not recreate older architecture from stale tests, documentation, legacy code,
+previous iterations, or memory.
 
-Inspect the current repository state before editing. Do not recreate older
-architecture from stale tests, documentation, previous iterations, or memory.
+## Implementation philosophy
 
-Prefer migrating repository-owned callers and deleting obsolete internal APIs
-over preserving legacy compatibility unless compatibility is explicitly
+Simple is the Best.
+
+Implement one concrete capability at a time.
+
+Prefer the smallest direct implementation that satisfies the current task.
+Do not design for hypothetical future requirements.
+
+Do not introduce a reusable abstraction until a real second use case justifies
+it.
+
+A new file, class, configuration object, wrapper, or public API must have a
+concrete responsibility required by the current task.
+
+Avoid unnecessary:
+
+- managers, contexts, factories, registries, adapters, and framework layers;
+- generic solver, physics, constraint, attachment, simulation, or ray-tracing
+  abstractions;
+- compatibility layers for repository-internal APIs;
+- wrappers around functionality already provided by upstream libraries.
+
+When a clear implementation fits in an existing file, prefer that over creating
+another module.
+
+If an additional abstraction or production file appears necessary but was not
+implied by the requested architecture, stop and explain why before adding it.
+
+Future work being predictable does not make it part of the current task.
+
+## External libraries
+
+Newton and OptiX are primary implementation dependencies.
+
+Before implementing nontrivial functionality with them:
+
+1. inspect the installed or targeted version;
+2. inspect the current public API;
+3. read the corresponding official documentation;
+4. inspect upstream examples or source when needed.
+
+Prefer upstream functionality over repository-owned reimplementations.
+
+Do not infer current behavior from legacy LUMO code, stale examples, memory, or
+a different upstream development branch.
+
+The installed or targeted API is the execution authority.
+
+## Validation
+
+`validation/` is for answering specific engineering or scientific questions.
+It is not a reusable library layer.
+
+Keep validation scripts procedural and local by default.
+
+Small local helper functions are fine. Do not create validation classes,
+configuration objects, runners, result APIs, or frameworks unless explicitly
 required.
 
-## Scientific integrity
+Production code must not depend on `validation/`.
 
-Do not change scientific assumptions, solver settings, objective definitions,
-design bounds, acceptance thresholds, or physical models merely to make a
-validation result pass.
+A validation should normally:
 
-A failed benchmark, rejected approximation, solver failure, lack of
-correlation, or worse-performing candidate may be the correct scientific
-result.
+1. construct the production objects;
+2. execute the behavior;
+3. measure or assert the relevant property;
+4. report the result;
+5. stop.
 
-Keep implementation correctness, scientific validity, reference fidelity, and
-preserved execution evidence separate.
+Do not change scientific assumptions, solver settings, objectives, design
+bounds, physical models, or acceptance thresholds merely to make validation
+pass.
 
-Do not repeat expensive scientific computation unless the result itself was
-invalidated by a defect affecting the measured quantity. Reporting,
-documentation, metadata, formatting, or missing reviewer evidence alone do not
-invalidate an otherwise valid computation.
+A failed simulation or negative scientific result may be the correct result.
 
-When rerunning is necessary, rerun only the affected stage when practical.
+## Scope
 
-## Existing changes and scope
+Treat unrelated user modifications as outside the current task.
 
-Treat unrelated user-owned modifications as outside the current task.
+Do not revert, format, clean up, or absorb unrelated changes.
 
-Do not revert, overwrite, absorb, format, or clean up unrelated changes merely
-to obtain a clean working tree.
+Do not automatically continue into adjacent refactoring, optimization,
+validation, benchmarking, or feature work.
 
-Keep work within the requested scope. Do not automatically continue into
-adjacent cleanup, refactoring, optimization, validation, or benchmark work.
+Do not run expensive scientific computation unless explicitly authorized.
 
-Stop when the requested implementation or decision question has been answered,
-or when a concrete in-scope blocker remains.
+Prefer migrating repository-owned callers and deleting obsolete internal APIs
+over preserving compatibility unless compatibility is explicitly required.
 
-## LUMO review workflow
+For substantial architecture or scientific-pipeline changes, use an independent
+read-only Reviewer when requested or when required by the current instruction.
 
-For substantial architecture, scientific-pipeline, evaluation, or optimization
-changes, prefer an independent Reviewer before and after implementation.
-
-Before implementation, the Reviewer is read-only and provides:
-
-- MUST DO
-- SHOULD DO
-- DO NOT DO
-- EXIT CRITERIA
-
-The implementation agent then performs the requested work and only the
-authorized verification.
-
-After implementation, the Reviewer inspects the current repository state and
-diff directly and reports:
-
-- BLOCKER
-- IMPORTANT
-- NON-BLOCKING
-
-The Reviewer may guide implementation direction but remains read-only unless
-the user explicitly requests otherwise.
-
-Do not treat implementation-agent self-review as independent review.
-
-When follow-up review is required after fixes, reuse the same Reviewer when
-practical. Do not create repeated fresh reviewers merely to obtain an all-PASS
-result.
-
-Subagent use does not expand task scope or authorize tests, validation, or
-expensive computation beyond the current request.
+Stop when the requested task is complete or a concrete in-scope blocker remains.
 
 ## Reporting
 
-Report what was changed, what was actually verified, what was measured or
-observed, and what remains failed, blocked, or unverified.
+Report:
 
-Do not hide negative scientific results or known evidence gaps.
+- what changed;
+- what was actually verified;
+- what was measured or observed;
+- what remains failed, blocked, or unverified.
 
-## Core Library Reference
-- [otk-pyoptix](https://github.com/NVIDIA/otk-pyoptix)
-- [optix-dev](https://github.com/NVIDIA/optix-dev) 
-- [Newton](https://github.com/newton-physics/newton)
+Do not hide negative results or evidence gaps.
+
+Update the ARCHITECTURE.md accordinly with changes of the codebase
