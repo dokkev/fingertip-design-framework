@@ -34,11 +34,8 @@ FingertipParameters
         ↓
     Fingertip
         ↓
-   FingertipMesh
-        ↓
-   Newton model
-        ↓
  LumoSimulation
+        └── internally: FingertipMesh → Newton model
 ```
 
 Later validated mechanics results may be consumed by:
@@ -69,6 +66,12 @@ FingertipParameters
 
 `FingertipParameters` contains physical input values.
 
+The default `ViscoelasticParameters` use the current Dragon Skin 10 NV
+baseline: `1070 kg/m³`, `k_mu=1.06e5 Pa`, and `k_lambda=1.0494e7 Pa`. The
+Lamé values correspond to a Poisson ratio of `0.495`. The default Newton
+damping value remains an uncalibrated `10 Pa·s`, not a datasheet-derived
+material measurement.
+
 `Fingertip` constructs the analytic fingertip assembly.
 
 `Silicone` and `Carrier` are constructed geometry objects, not separate
@@ -93,12 +96,17 @@ FingertipMesh
 ├── fingertip
 ├── silicone
 ├── carrier
+├── carrier_collision
 └── bonded_vertex_indices
 ```
 
 The silicone is discretized as a Newton-compatible tetrahedral mesh.
 
-The carrier is discretized as a rigid surface mesh.
+`carrier` is the complete rigid surface mesh used for visualization.
+`carrier_collision` is a closed Newton collision proxy on the same carrier
+body. Its silicone-reachable boundary contains only the cavity-facing lips,
+stem sides, and stem bottom; the remaining faces close through the carrier
+interior so Newton's signed particle-mesh query remains well-defined.
 
 `bonded_vertex_indices` identifies silicone vertices belonging to the
 silicone-to-carrier perfect-bond interface.
@@ -122,11 +130,22 @@ needed:
 
 - Newton model construction;
 - the kinematic rigid carrier;
+- the carrier's visualization-only full shape and invisible particle-contact
+  proxy shape;
 - the silicone-to-carrier perfect bond;
 - kinematic rigid indenters created from URDF or prepared `newton.Mesh` assets;
 - Newton-specific model and object identities consumed by the runtime.
 
 Use Newton's public API directly whenever practical.
+
+The full carrier shape has collision disabled. The collision proxy is attached
+to the same kinematic body with rigid-shape collision disabled and silicone
+particle collision enabled. Bonded particles remain inactive, so the bond
+interface is controlled only by the prescribed kinematic bond. Silicone
+particle radius is explicitly zero at model construction; contact detection
+distance is supplied separately through the collision pipeline. The rigid
+carrier proxy uses a stiff shape-contact material while VBD still permits a
+small, measured penalty penetration.
 
 Do not introduce a generic physics-backend layer while Newton is the only
 mechanics implementation.
@@ -139,30 +158,51 @@ frameworks without a concrete second use case.
 `LumoSimulation` is the one concrete runtime owner for a complete LUMO
 simulation. It owns:
 
-- the fixed global `time_step_s` and accumulated `time_s`;
+- the analytic `Fingertip`, its generated `FingertipMesh`, and the resulting
+  `FingertipNewtonModel`;
+- the fixed global `sim_frequency` in hertz, its derived Newton
+  `time_step_s`, completed `step_count`, and accumulated `time_s`;
 - the current and next Newton states;
 - Newton control;
 - SolverVBD;
 - the collision pipeline and contacts;
 - one global simulation step.
 
+`LumoSimulation(fingertip, builder=...)` is the high-level construction entry
+point. It meshes the fingertip, adds it to an optional caller-populated Newton
+builder, and finalizes the one shared Newton model. A caller adds external
+objects such as an `Indenter` to that builder before constructing the
+simulation. Lower-level mesh and Newton-model construction functions remain
+available to validations that inspect those stages directly.
+
 The current step order is:
 
 ```text
-caller updates carrier and indenter poses
+caller optionally updates held fingertip and indenter poses
+    ↓
+reapply held fingertip pose through the carrier and kinematic bond
     ↓
 collision
     ↓
 SolverVBD step
     ↓
+harvest current body wrenches
+    ↓
 state swap
     ↓
-advance global time
+advance global step count and time
 ```
 
 `LumoSimulation.step()` does not own approach trajectories, force thresholds,
-validation policy, or result reporting. It may later orchestrate optical work,
-but no ray-tracing behavior is part of the current runtime.
+validation policy, or result reporting. It is the only production API that
+advances Newton state, the global step count, or simulation time.
+`set_fingertip_pose()` replaces a held fingertip pose that defaults to the
+identity pose, and `step()` reapplies it through the rigid carrier and bonded
+silicone vertices before every Newton tick.
+Callers update other kinematic objects as needed before one tick and may query
+the resulting indenter reaction force afterward. The runtime may later
+orchestrate optical work, but no ray-tracing behavior is part of the current
+runtime.
 
 ### `lumo/ray_tracing/`
 
@@ -199,10 +239,14 @@ shapes.
 Rigid indenter asset flow is:
 
 ```text
-URDF path ───────────────────────→ Indenter.add_urdf()
+packaged URDF resource → filesystem path → Indenter.add_urdf()
 
 OBJ/STL path → mesh_io.load_mesh() → newton.Mesh → Indenter.add_mesh()
 ```
+
+LUMO-owned URDF assets live under `lumo/assets/objects/`, are installed as
+package data, and are resolved with `importlib.resources`. Validation callers
+do not derive repository roots from their own `__file__` paths.
 
 An external rigid body is composed with the fingertip before Newton model
 finalization:
@@ -210,20 +254,20 @@ finalization:
 ```text
 caller-owned ModelBuilder
 ├── Indenter.add_urdf(...) or Indenter.add_mesh(...)
-└── build_fingertip_newton_model(..., builder=builder)
+└── LumoSimulation(fingertip, builder=builder)
         └── finalize one shared Newton model
 ```
 
-`build_fingertip_newton_model()` does not choose or place an indenter. It only
-accepts a caller-populated builder so all scene bodies can be finalized into
-the same Newton model.
+Neither `LumoSimulation` nor `build_fingertip_newton_model()` chooses or places
+an indenter. Both accept a caller-populated builder so all scene bodies can be
+finalized into the same Newton model.
 
 `Indenter.add_urdf()` stores its supplied world `tf` as the initial kinematic
 body pose as well as passing it to Newton's URDF importer.
 
 `Indenter` owns only construction and the Newton body index identifying one
 kinematic rigid indenter. `LumoSimulation` owns mutations of Newton state,
-including carrier and indenter pose updates.
+including fingertip and indenter pose updates.
 
 Do not turn this package into a general service or utility layer.
 
@@ -237,9 +281,19 @@ Validation scripts are top-level consumers of production APIs.
 SolverVBD preserves the unloaded fingertip reference state.
 
 `validation/contact-physics/flat_plate_contact.py` loads the flat-plate URDF,
-moves its kinematic body toward the fingertip in bounded positive-Z increments,
-and stops its local experiment loop when the transient negative-Z reaction
-force reaches the caller-provided threshold.
+moves its kinematic body toward the fingertip in positive-Z increments for a
+bounded simulation duration, calls the one global simulation step per counter
+increment, and stops its local loop when the transient negative-Z reaction
+force reaches the script-local threshold. It separately counts flat-plate and
+carrier contacts, checks the bonded-vertex drift, and measures nonbonded
+vertex, surface-vertex, and tetrahedron-center penetration into the analytic
+carrier. Its optional ViewerGL path only observes simulation state and
+contacts; it does not advance or mutate the simulation.
+
+`validation/contact-physics/poisson_ratio_sweep.py` repeats that prescribed
+contact protocol for explicit near-incompressible Poisson ratios. It derives
+the Lamé `k_lambda` from a fixed `k_mu`, reports force and tetrahedral volume
+change, and keeps all sweep policy local to the validation script.
 
 They should normally:
 

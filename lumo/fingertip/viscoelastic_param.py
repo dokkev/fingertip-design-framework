@@ -11,9 +11,9 @@ from .geometric_param import InvalidFingertipParameters
 class ViscoelasticParameters:
     """Mechanical material parameters for the compliant silicone pad."""
 
-    density_kg_m3: float = 1.0e3
-    k_mu_pa: float = 1.0e5
-    k_lambda_pa: float = 1.0e5
+    density_kg_m3: float = 1070.0
+    k_mu_pa: float = 1.06e5
+    k_lambda_pa: float = 1.0494e7
     damping: float = 10.0
 
     def __post_init__(self) -> None:

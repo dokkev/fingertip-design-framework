@@ -40,6 +40,7 @@ where = ["."]
 include = ["lumo*"]
 
 [tool.setuptools.package-data]
+"lumo" = ["assets/objects/*.urdf"]
 "lumo.ray_tracing.optical_mechanics" = ["kernels/*.cu"]
 
 [tool.pytest.ini_options]

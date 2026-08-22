@@ -35,10 +35,27 @@ The Newton smoke tests require the CUDA-capable `lit` environment:
 Run the procedural flat-plate contact smoke explicitly:
 
 ```bash
-conda run -n lit python validation/contact-physics/flat_plate_contact.py --force-threshold-n 0.1
+conda run -n lit python validation/contact-physics/flat_plate_contact.py
 ```
 
-`0.1 N` is an example caller-selected stopping threshold, not a solver setting.
+The script owns its transient-force stopping threshold and maximum simulation
+time locally.
+
+To render every step and keep the final state open until the window closes:
+
+```bash
+conda run -n lit python validation/contact-physics/flat_plate_contact.py --viewer
+```
+
+Run the Dragon Skin 10 NV Poisson-ratio contact sweep explicitly:
+
+```bash
+conda run -n lit python validation/contact-physics/poisson_ratio_sweep.py
+```
+
+The sweep compares `0.48`, `0.49`, and `0.495` using one fixed shear modulus
+and reports force-target timing and tetrahedral volume change. It performs
+multiple Newton simulations and is not part of ordinary focused tests.
 
 ## OptiX gate before production BO
 

@@ -10,7 +10,7 @@ import numpy as np
 from lumo.fingertip.fingertip import Fingertip
 from lumo.util.scalar_validation import require_positive
 
-from .carrier_mesh import _make_carrier_mesh
+from .carrier_mesh import _make_carrier_collision_mesh, _make_carrier_mesh
 from .silicone_mesh import _make_silicone_mesh
 
 if TYPE_CHECKING:
@@ -24,6 +24,7 @@ class FingertipMesh:
     fingertip: Fingertip
     silicone: "newton.TetMesh"
     carrier: "newton.Mesh"
+    carrier_collision: "newton.Mesh"
     bonded_vertex_indices: np.ndarray
 
     def __post_init__(self) -> None:
@@ -63,11 +64,17 @@ def make_fingertip_mesh(
         fingertip.carrier,
         extrusion_depth_mm=extrusion_depth_mm,
     )
+    carrier_collision = _make_carrier_collision_mesh(
+        fingertip.carrier,
+        fingertip.silicone,
+        extrusion_depth_mm=extrusion_depth_mm,
+    )
 
     return FingertipMesh(
         fingertip=fingertip,
         silicone=silicone,
         carrier=carrier,
+        carrier_collision=carrier_collision,
         bonded_vertex_indices=bonded_vertex_indices,
     )
 

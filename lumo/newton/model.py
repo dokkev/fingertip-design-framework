@@ -15,6 +15,9 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
 
+_CARRIER_CONTACT_STIFFNESS_N_M = 1.0e6
+
+
 @wp.kernel
 def _set_body_pose(
     pose: wp.transform,
@@ -54,6 +57,7 @@ class FingertipNewtonModel:
     model: newton.Model
     carrier_body: int
     carrier_shape: int
+    carrier_collision_shape: int
     bonded_particle_indices: wp.array
     bonded_local_positions: wp.array
 
@@ -131,11 +135,11 @@ def build_fingertip_newton_model(
 ) -> FingertipNewtonModel:
     """Build the first concrete Newton model for one fingertip mesh.
 
-    The carrier is a kinematic rigid body at the identity pose.  Its shape is
-    visible but collision-disabled until the cavity-facing collision surface
-    is separated from the bonded interface.  A caller may supply a builder
-    already containing external scene bodies; this function adds the fingertip
-    and finalizes that builder.
+    The carrier is a kinematic rigid body at the identity pose. Its full mesh
+    is visualization-only, while a second mesh exposes only the cavity-facing
+    particle-contact surface and closes through the carrier interior. A caller
+    may supply a builder already containing external scene bodies; this
+    function adds the fingertip and finalizes that builder.
     """
     if not isinstance(fingertip_mesh, FingertipMesh):
         raise TypeError("fingertip_mesh must be a FingertipMesh")
@@ -170,6 +174,7 @@ def build_fingertip_newton_model(
         k_mu=material.k_mu_pa,
         k_lambda=material.k_lambda_pa,
         k_damp=material.damping,
+        particle_radius=0.0,
         label="fingertip_silicone",
     )
 
@@ -203,6 +208,22 @@ def build_fingertip_newton_model(
         color=carrier_color,
         label="fingertip_carrier_surface",
     )
+    carrier_collision_cfg = newton.ModelBuilder.ShapeConfig(
+        density=0.0,
+        ke=_CARRIER_CONTACT_STIFFNESS_N_M,
+        margin=0.0,
+        is_solid=True,
+        collision_group=1,
+        has_shape_collision=False,
+        has_particle_collision=True,
+        is_visible=False,
+    )
+    carrier_collision_shape = builder.add_shape_mesh(
+        body=carrier_body,
+        mesh=fingertip_mesh.carrier_collision,
+        cfg=carrier_collision_cfg,
+        label="fingertip_carrier_collision_surface",
+    )
 
     builder.color()
     model = builder.finalize(device=device, requires_grad=False)
@@ -216,6 +237,7 @@ def build_fingertip_newton_model(
         model=model,
         carrier_body=carrier_body,
         carrier_shape=carrier_shape,
+        carrier_collision_shape=carrier_collision_shape,
         bonded_particle_indices=wp.array(
             global_indices,
             dtype=wp.int32,

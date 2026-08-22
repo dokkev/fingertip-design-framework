@@ -37,7 +37,7 @@ class FingertipGeometry:
     stem_width_mm: float = 7.6
     stem_height_mm: float = 6.0
 
-    void_width_mm: float = 1.0
+    void_width_mm: float = 2.0
     void_height_mm: float = 0.0
 
     def __post_init__(self) -> None:

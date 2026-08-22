@@ -2,53 +2,99 @@
 
 from __future__ import annotations
 
-import argparse
-from pathlib import Path
+import sys
+from importlib.resources import as_file, files
 
 import newton
+import newton.viewer
 import numpy as np
 import warp as wp
+from shapely import contains_xy, distance, points
+from shapely.geometry import Polygon
 
 from lumo.fingertip import Fingertip, FingertipParameters
-from lumo.mesh import make_fingertip_mesh
-from lumo.newton import (
-    Indenter,
-    build_fingertip_newton_model,
-)
+from lumo.newton import Indenter
 from lumo.simulation import LumoSimulation
+from lumo.util.viewer_util import configure_fingertip_camera
 
 
-_TIME_STEP_S = 1.0e-3
+_SIM_FREQUENCY_HZ = 1.0e3
 _PLATE_STEP_M = 2.5e-5
 _INITIAL_CLEARANCE_M = 1.0e-3
 _PLATE_HALF_THICKNESS_M = 1.0e-3
-_MAX_STEPS = 80
-_SOFT_CONTACT_MARGIN_M = 0.0
+_MAX_SIM_TIME_S = 30.0
+_SOFT_CONTACT_MARGIN_M = 1.0e-4
+_FORCE_THRESHOLD_N = 15.0
+# One percent of the default 1 mm silicone mesh spacing. This rejects the
+# millimetre-scale regression while allowing the VBD contact penalty to settle.
+_MAX_CARRIER_PENETRATION_M = 1.0e-5
+_MAX_BONDED_DRIFT_M = 1.0e-8
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(
-        description=(
-            "Move a kinematic flat plate into the fingertip until its "
-            "transient -Z reaction force reaches a prescribed threshold."
+def _soft_contact_count_for_body(
+    simulation: LumoSimulation,
+    body_index: int,
+) -> int:
+    contact_count = int(
+        simulation.contacts.soft_contact_count.numpy()[0]
+    )
+    shape_indices = simulation.contacts.soft_contact_shape.numpy()[
+        :contact_count
+    ]
+    valid = shape_indices >= 0
+    shape_bodies = simulation.fingertip_model.model.shape_body.numpy()
+    return int(
+        np.count_nonzero(
+            shape_bodies[shape_indices[valid]] == body_index
         )
     )
-    parser.add_argument(
-        "--force-threshold-n",
-        type=float,
-        required=True,
-        help="positive transient -Z reaction-force threshold in newtons",
+
+
+def _carrier_interior_depths_m(
+    positions_m: np.ndarray,
+    *,
+    carrier_cross_section: Polygon,
+    carrier_y_limits_m: tuple[float, float],
+) -> np.ndarray:
+    """Return cross-section penetration depth for points inside the carrier."""
+    y_min_m, y_max_m = carrier_y_limits_m
+    inside = (
+        (positions_m[:, 1] > y_min_m)
+        & (positions_m[:, 1] < y_max_m)
+        & contains_xy(
+            carrier_cross_section,
+            1.0e3 * positions_m[:, 0],
+            1.0e3 * positions_m[:, 2],
+        )
     )
-    args = parser.parse_args()
-    force_threshold_n = args.force_threshold_n
-    if not np.isfinite(force_threshold_n) or force_threshold_n <= 0.0:
-        parser.error("--force-threshold-n must be finite and positive")
+    depths_m = np.zeros(positions_m.shape[0], dtype=np.float64)
+    if np.any(inside):
+        depths_m[inside] = 1.0e-3 * distance(
+            carrier_cross_section.boundary,
+            points(
+                1.0e3 * positions_m[inside, 0],
+                1.0e3 * positions_m[inside, 2],
+            ),
+        )
+    return depths_m
 
+
+def _render(
+    viewer: newton.viewer.ViewerGL,
+    simulation: LumoSimulation,
+) -> None:
+    viewer.begin_frame(simulation.time_s)
+    viewer.log_state(simulation.state)
+    viewer.log_contacts(simulation.contacts, simulation.state)
+    viewer.end_frame()
+
+
+def main(*, show_viewer: bool = False) -> None:
     fingertip = Fingertip(FingertipParameters())
-    mesh = make_fingertip_mesh(fingertip)
-
-    reference_positions = np.asarray(mesh.silicone.vertices, dtype=np.float64)
-    fingertip_tip_z_m = float(reference_positions[:, 2].min())
+    fingertip_tip_z_m = 1.0e-3 * (
+        fingertip.silicone.ellipse_center_z_mm
+        - fingertip.silicone.ellipse_radius_z_mm
+    )
     initial_plate_z_m = (
         fingertip_tip_z_m
         - _INITIAL_CLEARANCE_M
@@ -60,133 +106,255 @@ def main() -> None:
     )
 
     builder = newton.ModelBuilder(gravity=0.0)
-    # Use the silicone surface itself as the contact boundary. Newton's
-    # generic 0.1 m particle-radius default is not meaningful at this scale.
-    builder.default_particle_radius = 0.0
 
-    urdf_path = (
-        Path(__file__).resolve().parents[2]
-        / "assets"
-        / "objects"
-        / "flat_plate.urdf"
+    flat_plate_resource = files("lumo").joinpath(
+        "assets",
+        "objects",
+        "flat_plate.urdf",
     )
-    indenter = Indenter.add_urdf(
-        builder,
-        urdf_path,
-        tf=initial_plate_pose,
-    )
-    model = build_fingertip_newton_model(mesh, builder=builder)
+    with as_file(flat_plate_resource) as urdf_path:
+        indenter = Indenter.add_urdf(
+            builder,
+            urdf_path,
+            tf=initial_plate_pose,
+        )
     simulation = LumoSimulation(
-        model,
-        time_step_s=_TIME_STEP_S,
+        fingertip,
+        builder=builder,
+        sim_frequency=_SIM_FREQUENCY_HZ,
         soft_contact_margin_m=_SOFT_CONTACT_MARGIN_M,
     )
+    reference_positions = simulation.state.particle_q.numpy().copy()
+    bonded_indices = (
+        simulation.fingertip_model.bonded_particle_indices.numpy()
+    )
+    nonbonded = np.ones(reference_positions.shape[0], dtype=bool)
+    nonbonded[bonded_indices] = False
+    surface_indices = np.unique(
+        np.asarray(
+            simulation.fingertip_mesh.silicone.surface_tri_indices,
+            dtype=np.int32,
+        ).reshape(-1)
+    )
+    surface_indices = surface_indices[nonbonded[surface_indices]]
+    tet_indices = np.asarray(
+        simulation.fingertip_mesh.silicone.tet_indices,
+        dtype=np.int32,
+    ).reshape(-1, 4)
+    carrier_cross_section = Polygon(fingertip.carrier.cross_section)
+    carrier_vertices = np.asarray(
+        simulation.fingertip_mesh.carrier.vertices,
+        dtype=np.float64,
+    )
+    carrier_y_limits_m = (
+        float(carrier_vertices[:, 1].min()),
+        float(carrier_vertices[:, 1].max()),
+    )
 
-    simulation.collision_pipeline.collide(
-        simulation.state,
-        simulation.contacts,
-    )
-    initial_contact_count = int(
-        simulation.contacts.soft_contact_count.numpy()[0]
-    )
-    if initial_contact_count != 0:
-        raise RuntimeError(
-            "flat plate has soft contacts before prescribed motion"
+    viewer = None
+    if show_viewer:
+        viewer = newton.viewer.ViewerGL(vsync=True)
+        viewer.set_model(simulation.fingertip_model.model)
+        configure_fingertip_camera(viewer)
+
+    try:
+        simulation.collision_pipeline.collide(
+            simulation.state,
+            simulation.contacts,
         )
-
-    body_to_wrench = np.full(model.model.body_count, -1, dtype=np.int32)
-    body_to_wrench[indenter.body_index] = 0
-    body_to_wrench_device = wp.array(
-        body_to_wrench,
-        dtype=wp.int32,
-        device=model.model.device,
-    )
-    indenter_wrench = wp.zeros(
-        1,
-        dtype=wp.spatial_vector,
-        device=model.model.device,
-    )
-
-    carrier_pose = wp.transform_identity()
-    contact_step = None
-    threshold_step = None
-    contact_count = 0
-    plate_z_m = initial_plate_z_m
-    transient_reaction_force_n = 0.0
-    peak_transient_reaction_force_n = 0.0
-
-    for step in range(1, _MAX_STEPS + 1):
-        plate_z_m = initial_plate_z_m + step * _PLATE_STEP_M
-        plate_pose = wp.transform(
-            wp.vec3(0.0, 0.0, plate_z_m),
-            wp.quat_identity(),
+        initial_plate_contact_count = _soft_contact_count_for_body(
+            simulation,
+            indenter.body_index,
         )
-        simulation.apply_carrier_pose(carrier_pose)
-        simulation.apply_indenter_pose(indenter, plate_pose)
+        initial_carrier_contact_count = _soft_contact_count_for_body(
+            simulation,
+            simulation.fingertip_model.carrier_body,
+        )
+        if initial_plate_contact_count != 0:
+            raise RuntimeError(
+                "flat plate has soft contacts before prescribed motion"
+            )
+        reference_carrier_depths_m = _carrier_interior_depths_m(
+            reference_positions,
+            carrier_cross_section=carrier_cross_section,
+            carrier_y_limits_m=carrier_y_limits_m,
+        )
+        reference_carrier_depths_m[~nonbonded] = 0.0
+        if np.any(reference_carrier_depths_m > 0.0):
+            raise RuntimeError(
+                "nonbonded silicone starts inside the carrier"
+            )
 
-        if simulation.state.body_qd is None:
-            raise RuntimeError("simulation state has no rigid-body velocities")
-        body_qd_before = wp.clone(simulation.state.body_qd)
-        state_before = simulation.state
-        simulation.step()
+        if viewer is not None and viewer.is_running():
+            _render(viewer, simulation)
+
+        max_sim_steps = int(_MAX_SIM_TIME_S * simulation.sim_frequency)
+        if max_sim_steps < 1:
+            raise ValueError(
+                "maximum simulation time must include at least one tick"
+            )
+        for approach_step in range(1, max_sim_steps + 1):
+            plate_z_m = initial_plate_z_m + approach_step * _PLATE_STEP_M
+            simulation.apply_indenter_pose(
+                indenter,
+                wp.transform(
+                    wp.vec3(0.0, 0.0, plate_z_m),
+                    wp.quat_identity(),
+                ),
+            )
+            simulation.step()
+
+            reaction_force_n = simulation.indenter_reaction_force(
+                indenter,
+                motion_direction_W=wp.vec3(0.0, 0.0, _PLATE_STEP_M),
+            )
+            if viewer is not None and viewer.is_running():
+                _render(viewer, simulation)
+            if reaction_force_n >= _FORCE_THRESHOLD_N:
+                break
+        else:
+            raise RuntimeError(
+                "flat plate reached its maximum simulation time "
+                f"({_MAX_SIM_TIME_S:.9e} s) without reaching the transient "
+                "force threshold; last force was "
+                f"{reaction_force_n:.9e} N"
+            )
 
         contact_count = int(
             simulation.contacts.soft_contact_count.numpy()[0]
         )
-        if contact_count > 0 and contact_step is None:
-            contact_step = step
-
-        simulation.solver.coupling_harvest_proxy_wrenches(
-            body_to_wrench_device,
-            indenter_wrench,
-            body_qd_before=body_qd_before,
-            state=state_before,
-            state_out=simulation.state,
-            contacts=simulation.contacts,
-            dt=simulation.time_step_s,
+        plate_contact_count = _soft_contact_count_for_body(
+            simulation,
+            indenter.body_index,
         )
-        wrench = indenter_wrench.numpy()[0]
-        if not np.all(np.isfinite(wrench)):
-            raise RuntimeError("contact step produced a non-finite wrench")
-
-        transient_reaction_force_n = max(0.0, -float(wrench[2]))
-        peak_transient_reaction_force_n = max(
-            peak_transient_reaction_force_n,
-            transient_reaction_force_n,
+        carrier_contact_count = _soft_contact_count_for_body(
+            simulation,
+            simulation.fingertip_model.carrier_body,
         )
-        if transient_reaction_force_n >= force_threshold_n:
-            threshold_step = step
-            break
+        if plate_contact_count == 0:
+            raise RuntimeError(
+                "force target was reached without flat-plate contact"
+            )
+        if carrier_contact_count == 0:
+            raise RuntimeError(
+                "force target was reached without carrier contact"
+            )
 
-    if contact_step is None:
-        raise RuntimeError(
-            "flat plate reached its maximum travel without soft contact"
+        particle_q = simulation.state.particle_q.numpy()
+        particle_qd = simulation.state.particle_qd.numpy()
+        if not np.all(np.isfinite(particle_q)) or not np.all(
+            np.isfinite(particle_qd)
+        ):
+            raise RuntimeError(
+                "contact step produced a non-finite silicone state"
+            )
+
+        carrier_depths_m = _carrier_interior_depths_m(
+            particle_q,
+            carrier_cross_section=carrier_cross_section,
+            carrier_y_limits_m=carrier_y_limits_m,
         )
-    if threshold_step is None:
-        raise RuntimeError(
-            "flat plate reached its maximum travel without reaching the "
-            f"transient force threshold; peak force was "
-            f"{peak_transient_reaction_force_n:.9e} N"
+        carrier_depths_m[~nonbonded] = 0.0
+        surface_carrier_depths_m = carrier_depths_m[surface_indices]
+        tet_centers_m = particle_q[tet_indices].mean(axis=1)
+        tet_carrier_depths_m = _carrier_interior_depths_m(
+            tet_centers_m,
+            carrier_cross_section=carrier_cross_section,
+            carrier_y_limits_m=carrier_y_limits_m,
         )
+        max_carrier_penetration_m = float(carrier_depths_m.max())
+        deep_nonbonded_count = int(
+            np.count_nonzero(
+                carrier_depths_m > _MAX_CARRIER_PENETRATION_M
+            )
+        )
+        deep_surface_count = int(
+            np.count_nonzero(
+                surface_carrier_depths_m
+                > _MAX_CARRIER_PENETRATION_M
+            )
+        )
+        deep_tet_count = int(
+            np.count_nonzero(
+                tet_carrier_depths_m > _MAX_CARRIER_PENETRATION_M
+            )
+        )
+        if deep_nonbonded_count or deep_surface_count or deep_tet_count:
+            raise RuntimeError(
+                "silicone penetrated the carrier beyond the allowed "
+                f"{_MAX_CARRIER_PENETRATION_M:.9e} m contact tolerance"
+            )
 
-    particle_q = simulation.state.particle_q.numpy()
-    particle_qd = simulation.state.particle_qd.numpy()
-    if not np.all(np.isfinite(particle_q)) or not np.all(
-        np.isfinite(particle_qd)
-    ):
-        raise RuntimeError("contact step produced a non-finite silicone state")
+        bonded_drift_m = np.linalg.norm(
+            particle_q[bonded_indices]
+            - reference_positions[bonded_indices],
+            axis=1,
+        )
+        max_bonded_drift_m = float(bonded_drift_m.max())
+        if max_bonded_drift_m > _MAX_BONDED_DRIFT_M:
+            raise RuntimeError("bonded silicone vertices drifted")
 
-    travel_m = threshold_step * _PLATE_STEP_M
-    print(f"initial soft contacts: {initial_contact_count}")
-    print(f"first contact step:    {contact_step}")
-    print(f"force threshold:       {force_threshold_n:.9e} N")
-    print(f"threshold step:        {threshold_step}")
-    print(f"plate travel:          {travel_m:.9e} m")
-    print(f"plate center z:        {plate_z_m:.9e} m")
-    print(f"soft contacts:         {contact_count}")
-    print(f"transient reaction:    {transient_reaction_force_n:.9e} N")
-    print("flat-plate transient-force contact: PASS")
+        applied_steps = simulation.step_count
+        travel_m = applied_steps * _PLATE_STEP_M
+        plate_z_m = initial_plate_z_m + travel_m
+        print(
+            "initial plate contacts:  "
+            f"{initial_plate_contact_count}"
+        )
+        print(
+            "initial carrier candidates: "
+            f"{initial_carrier_contact_count}"
+        )
+        print(f"force threshold:       {_FORCE_THRESHOLD_N:.9e} N")
+        print(f"applied steps:         {applied_steps}")
+        print(f"simulation time:       {simulation.time_s:.9e} s")
+        print(f"plate travel:          {travel_m:.9e} m")
+        print(f"plate center z:        {plate_z_m:.9e} m")
+        print(f"soft contacts:         {contact_count}")
+        print(f"plate contacts:        {plate_contact_count}")
+        print(f"carrier contacts:      {carrier_contact_count}")
+        print(f"transient reaction:    {reaction_force_n:.9e} N")
+        print(
+            "nonbonded vertices inside carrier: "
+            f"{int(np.count_nonzero(carrier_depths_m > 0.0))}"
+        )
+        print(
+            "surface vertices inside carrier:   "
+            f"{int(np.count_nonzero(surface_carrier_depths_m > 0.0))}"
+        )
+        print(
+            "tet centers inside carrier:        "
+            f"{int(np.count_nonzero(tet_carrier_depths_m > 0.0))}"
+        )
+        print(
+            "maximum carrier penetration:       "
+            f"{max_carrier_penetration_m:.9e} m"
+        )
+        print(
+            "penetrations beyond tolerance:     "
+            f"vertices={deep_nonbonded_count}, "
+            f"surface={deep_surface_count}, tets={deep_tet_count}"
+        )
+        print(
+            "maximum bonded drift:               "
+            f"{max_bonded_drift_m:.9e} m"
+        )
+        print("flat-plate transient-force contact: PASS")
+
+        if viewer is not None and viewer.is_running():
+            print("ViewerGL is active; close the window to finish.")
+            while viewer.is_running():
+                _render(viewer, simulation)
+    finally:
+        if viewer is not None:
+            viewer.close()
 
 
 if __name__ == "__main__":
-    main()
+    arguments = sys.argv[1:]
+    if arguments not in ([], ["--viewer"]):
+        raise SystemExit(
+            "usage: python validation/contact-physics/"
+            "flat_plate_contact.py [--viewer]"
+        )
+    main(show_viewer=arguments == ["--viewer"])

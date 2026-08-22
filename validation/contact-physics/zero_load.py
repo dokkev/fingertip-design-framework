@@ -3,30 +3,26 @@
 from __future__ import annotations
 
 import numpy as np
-import warp as wp
 
 from lumo.fingertip import Fingertip, FingertipParameters
-from lumo.mesh import make_fingertip_mesh
-from lumo.newton import build_fingertip_newton_model
 from lumo.simulation import LumoSimulation
 
 
 _BONDED_DISPLACEMENT_TOLERANCE_M = 1.0e-7
 _ZERO_LOAD_DRIFT_TOLERANCE_M = 1.0e-6
-_TIME_STEP_S = 1.0e-3
+_SIM_FREQUENCY_HZ = 1.0e3
 
 
 def main() -> None:
     fingertip = Fingertip(FingertipParameters())
-    mesh = make_fingertip_mesh(fingertip)
-    model = build_fingertip_newton_model(mesh)
-    simulation = LumoSimulation(model, time_step_s=_TIME_STEP_S)
+    simulation = LumoSimulation(
+        fingertip,
+        sim_frequency=_SIM_FREQUENCY_HZ,
+    )
 
     q0 = simulation.state.particle_q.numpy().copy()
-    pose = wp.transform_identity()
 
     for _ in range(100):
-        simulation.apply_carrier_pose(pose)
         simulation.step()
 
     q1 = simulation.state.particle_q.numpy()
@@ -38,7 +34,9 @@ def main() -> None:
         raise RuntimeError("zero-load SolverVBD state is not finite")
 
     displacement = np.linalg.norm(q1 - q0, axis=1)
-    bonded_indices = model.bonded_particle_indices.numpy()
+    bonded_indices = (
+        simulation.fingertip_model.bonded_particle_indices.numpy()
+    )
     bonded_displacement = displacement[bonded_indices]
 
     max_displacement = float(displacement.max())
