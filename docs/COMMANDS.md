@@ -53,6 +53,16 @@ To render every step and keep the final state open until the window closes:
 conda run -n lit python validation/contact-physics/flat_plate_contact.py --viewer
 ```
 
+Run the three-location spherical indentation validation explicitly:
+
+```bash
+conda run -n lit python validation/contact-physics/sphere_indentation.py
+```
+
+The 5, 10, and 20 mm diameter URDF spheres run in independent simulations at
+`X=-7.5`, `0`, and `+7.5 mm`, respectively. Each prescribed positive-Z motion
+stops at a transient reaction-force target of `20 N`.
+
 Run the Dragon Skin 10 NV Poisson-ratio contact sweep explicitly:
 
 ```bash

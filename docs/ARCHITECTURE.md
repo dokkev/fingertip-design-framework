@@ -218,6 +218,26 @@ the resulting indenter reaction force afterward. The runtime may later
 orchestrate optical work, but no ray-tracing behavior is part of the current
 runtime.
 
+### `lumo/indentation.py`
+
+`IndentationCase` owns the prescribed translation, transient force target,
+time limit, and case-local progress for one already-constructed kinematic
+indenter. It does not load assets, construct a morphology, or advance global
+simulation time. The caller keeps the global tick visible:
+
+```text
+IndentationCase.apply_next_pose()
+        ↓
+LumoSimulation.step()
+        ↓
+IndentationCase.observe_step()
+```
+
+Exactly one simulation tick must occur between pose application and force
+observation. A caller may construct multiple independent cases from the same
+`FingertipParameters`; each case remains attached to its own concrete
+`LumoSimulation` and `Indenter`.
+
 ### `lumo/ray_tracing/`
 
 Owns LUMO-specific optical transport behavior.
@@ -310,6 +330,12 @@ carrier contacts, checks the bonded-vertex drift, and measures nonbonded
 vertex, surface-vertex, and tetrahedron-center penetration into the analytic
 carrier. Its optional ViewerGL path only observes simulation state and
 contacts; it does not advance or mutate the simulation.
+
+`validation/contact-physics/sphere_indentation.py` runs the packaged 5, 10,
+and 20 mm diameter sphere URDFs in three independent simulations at distinct
+fingertip X locations. Each procedural approach stops on the first transient
+reaction-force sample at or above `20 N`, then checks contact, finite silicone
+state, and perfect-bond drift.
 
 `validation/contact-physics/poisson_ratio_sweep.py` repeats that prescribed
 contact protocol for explicit near-incompressible Poisson ratios. It derives
