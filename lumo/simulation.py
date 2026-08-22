@@ -1,4 +1,4 @@
-"""SolverVBD execution for the current fingertip Newton model."""
+"""Concrete runtime for one LUMO simulation."""
 
 from __future__ import annotations
 
@@ -10,15 +10,23 @@ from lumo.newton.model import FingertipNewtonModel
 from lumo.util.scalar_validation import require_nonnegative, require_positive
 
 
-class FingertipNewtonSolver:
-    """Own fixed-step SolverVBD execution for one fingertip model."""
+@wp.kernel
+def _set_body_pose(
+    pose: wp.transform,
+    body_index: int,
+    body_q: wp.array(dtype=wp.transform),
+):
+    body_q[body_index] = pose
+
+
+class LumoSimulation:
+    """Own the Newton runtime and global clock for one LUMO simulation."""
 
     def __init__(
         self,
         fingertip_model: FingertipNewtonModel,
         *,
         time_step_s: float,
-        indenter: Indenter | None = None,
         iterations: int = 10,
         soft_contact_margin_m: float = 0.0,
     ) -> None:
@@ -30,8 +38,6 @@ class FingertipNewtonSolver:
             or iterations <= 0
         ):
             raise ValueError("iterations must be a positive integer")
-        if indenter is not None and not isinstance(indenter, Indenter):
-            raise TypeError("indenter must be an Indenter or None")
         require_positive("time_step_s", time_step_s)
         require_nonnegative(
             "soft_contact_margin_m",
@@ -39,8 +45,8 @@ class FingertipNewtonSolver:
         )
 
         self.fingertip_model = fingertip_model
-        self.indenter = indenter
         self.time_step_s = time_step_s
+        self.time_s = 0.0
         self.solver = newton.solvers.SolverVBD(
             fingertip_model.model,
             iterations=iterations,
@@ -54,27 +60,50 @@ class FingertipNewtonSolver:
         self.state = fingertip_model.model.state()
         self._next_state = fingertip_model.model.state()
         self.control = fingertip_model.model.control()
+        self._body_poses_updated = False
 
-    def step(
-        self,
-        *,
-        carrier_pose: wp.transform,
-        indenter_pose: wp.transform | None = None,
-    ) -> None:
-        """Advance VBD by the solver's fixed timestep."""
-        if indenter_pose is not None:
-            if self.indenter is None:
-                raise ValueError(
-                    "indenter_pose requires an indenter in the solver"
-                )
-            self.indenter.apply_pose(self.state, indenter_pose)
-            self.indenter.apply_pose(self._next_state, indenter_pose)
-
+    def apply_carrier_pose(self, pose: wp.transform) -> None:
+        """Apply the prescribed carrier pose to both state buffers."""
         self.fingertip_model.prepare_step(
             self.state,
             self._next_state,
-            carrier_pose,
+            pose,
         )
+        self._body_poses_updated = True
+
+    def apply_indenter_pose(
+        self,
+        indenter: Indenter,
+        pose: wp.transform,
+    ) -> None:
+        """Apply one prescribed indenter pose to both state buffers."""
+        if not isinstance(indenter, Indenter):
+            raise TypeError("indenter must be an Indenter")
+        body_count = self.fingertip_model.model.body_count
+        if indenter.body_index < 0 or indenter.body_index >= body_count:
+            raise ValueError("indenter body index is outside this simulation")
+
+        for state in (self.state, self._next_state):
+            if state.body_q is None:
+                raise ValueError("simulation state has no rigid-body poses")
+            wp.launch(
+                _set_body_pose,
+                dim=1,
+                inputs=[pose, indenter.body_index],
+                outputs=[state.body_q],
+                device=state.body_q.device,
+            )
+        self._body_poses_updated = True
+
+    def step(self) -> None:
+        """Advance the complete Newton world by one fixed timestep."""
+        if self._body_poses_updated:
+            self.solver.coupling_notify_input_state_update(
+                self.state,
+                newton.StateFlags.BODY_Q,
+                dt=self.time_step_s,
+            )
+
         self.state.clear_forces()
         self.collision_pipeline.collide(self.state, self.contacts)
         self.solver.step(
@@ -85,6 +114,8 @@ class FingertipNewtonSolver:
             self.time_step_s,
         )
         self.state, self._next_state = self._next_state, self.state
+        self._body_poses_updated = False
+        self.time_s += self.time_step_s
 
 
-__all__ = ["FingertipNewtonSolver"]
+__all__ = ["LumoSimulation"]

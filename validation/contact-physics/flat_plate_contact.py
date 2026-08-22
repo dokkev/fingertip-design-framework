@@ -12,10 +12,10 @@ import warp as wp
 from lumo.fingertip import Fingertip, FingertipParameters
 from lumo.mesh import make_fingertip_mesh
 from lumo.newton import (
-    FingertipNewtonSolver,
     Indenter,
     build_fingertip_newton_model,
 )
+from lumo.simulation import LumoSimulation
 
 
 _TIME_STEP_S = 1.0e-3
@@ -76,51 +76,111 @@ def main() -> None:
         tf=initial_plate_pose,
     )
     model = build_fingertip_newton_model(mesh, builder=builder)
-    solver = FingertipNewtonSolver(
+    simulation = LumoSimulation(
         model,
         time_step_s=_TIME_STEP_S,
-        indenter=indenter,
         soft_contact_margin_m=_SOFT_CONTACT_MARGIN_M,
     )
 
-    solver.collision_pipeline.collide(solver.state, solver.contacts)
+    simulation.collision_pipeline.collide(
+        simulation.state,
+        simulation.contacts,
+    )
     initial_contact_count = int(
-        solver.contacts.soft_contact_count.numpy()[0]
+        simulation.contacts.soft_contact_count.numpy()[0]
     )
     if initial_contact_count != 0:
         raise RuntimeError(
             "flat plate has soft contacts before prescribed motion"
         )
 
-    carrier_pose = wp.transform_identity()
-    transient_reaction_force_n = indenter.move_until_force(
-        solver,
-        dx_m=0.0,
-        dy_m=0.0,
-        dz_m=_PLATE_STEP_M,
-        f_des_n=force_threshold_n,
-        carrier_pose=carrier_pose,
-        max_steps=_MAX_STEPS,
+    body_to_wrench = np.full(model.model.body_count, -1, dtype=np.int32)
+    body_to_wrench[indenter.body_index] = 0
+    body_to_wrench_device = wp.array(
+        body_to_wrench,
+        dtype=wp.int32,
+        device=model.model.device,
+    )
+    indenter_wrench = wp.zeros(
+        1,
+        dtype=wp.spatial_vector,
+        device=model.model.device,
     )
 
-    contact_count = int(solver.contacts.soft_contact_count.numpy()[0])
-    if contact_count <= 0:
-        raise RuntimeError("force threshold was reached without soft contact")
+    carrier_pose = wp.transform_identity()
+    contact_step = None
+    threshold_step = None
+    contact_count = 0
+    plate_z_m = initial_plate_z_m
+    transient_reaction_force_n = 0.0
+    peak_transient_reaction_force_n = 0.0
 
-    particle_q = solver.state.particle_q.numpy()
-    particle_qd = solver.state.particle_qd.numpy()
+    for step in range(1, _MAX_STEPS + 1):
+        plate_z_m = initial_plate_z_m + step * _PLATE_STEP_M
+        plate_pose = wp.transform(
+            wp.vec3(0.0, 0.0, plate_z_m),
+            wp.quat_identity(),
+        )
+        simulation.apply_carrier_pose(carrier_pose)
+        simulation.apply_indenter_pose(indenter, plate_pose)
+
+        if simulation.state.body_qd is None:
+            raise RuntimeError("simulation state has no rigid-body velocities")
+        body_qd_before = wp.clone(simulation.state.body_qd)
+        state_before = simulation.state
+        simulation.step()
+
+        contact_count = int(
+            simulation.contacts.soft_contact_count.numpy()[0]
+        )
+        if contact_count > 0 and contact_step is None:
+            contact_step = step
+
+        simulation.solver.coupling_harvest_proxy_wrenches(
+            body_to_wrench_device,
+            indenter_wrench,
+            body_qd_before=body_qd_before,
+            state=state_before,
+            state_out=simulation.state,
+            contacts=simulation.contacts,
+            dt=simulation.time_step_s,
+        )
+        wrench = indenter_wrench.numpy()[0]
+        if not np.all(np.isfinite(wrench)):
+            raise RuntimeError("contact step produced a non-finite wrench")
+
+        transient_reaction_force_n = max(0.0, -float(wrench[2]))
+        peak_transient_reaction_force_n = max(
+            peak_transient_reaction_force_n,
+            transient_reaction_force_n,
+        )
+        if transient_reaction_force_n >= force_threshold_n:
+            threshold_step = step
+            break
+
+    if contact_step is None:
+        raise RuntimeError(
+            "flat plate reached its maximum travel without soft contact"
+        )
+    if threshold_step is None:
+        raise RuntimeError(
+            "flat plate reached its maximum travel without reaching the "
+            f"transient force threshold; peak force was "
+            f"{peak_transient_reaction_force_n:.9e} N"
+        )
+
+    particle_q = simulation.state.particle_q.numpy()
+    particle_qd = simulation.state.particle_qd.numpy()
     if not np.all(np.isfinite(particle_q)) or not np.all(
         np.isfinite(particle_qd)
     ):
         raise RuntimeError("contact step produced a non-finite silicone state")
 
-    plate_pose = indenter.get_current_pose(solver.state)
-    plate_z_m = float(plate_pose[2])
-    travel_m = plate_z_m - initial_plate_z_m
-    applied_steps = int(round(travel_m / _PLATE_STEP_M))
+    travel_m = threshold_step * _PLATE_STEP_M
     print(f"initial soft contacts: {initial_contact_count}")
+    print(f"first contact step:    {contact_step}")
     print(f"force threshold:       {force_threshold_n:.9e} N")
-    print(f"applied steps:         {applied_steps}")
+    print(f"threshold step:        {threshold_step}")
     print(f"plate travel:          {travel_m:.9e} m")
     print(f"plate center z:        {plate_z_m:.9e} m")
     print(f"soft contacts:         {contact_count}")

@@ -7,7 +7,8 @@ import warp as wp
 
 from lumo.fingertip import Fingertip, FingertipParameters
 from lumo.mesh import make_fingertip_mesh
-from lumo.newton import FingertipNewtonSolver, build_fingertip_newton_model
+from lumo.newton import build_fingertip_newton_model
+from lumo.simulation import LumoSimulation
 
 
 _BONDED_DISPLACEMENT_TOLERANCE_M = 1.0e-7
@@ -19,18 +20,17 @@ def main() -> None:
     fingertip = Fingertip(FingertipParameters())
     mesh = make_fingertip_mesh(fingertip)
     model = build_fingertip_newton_model(mesh)
-    solver = FingertipNewtonSolver(model, time_step_s=_TIME_STEP_S)
+    simulation = LumoSimulation(model, time_step_s=_TIME_STEP_S)
 
-    q0 = solver.state.particle_q.numpy().copy()
+    q0 = simulation.state.particle_q.numpy().copy()
     pose = wp.transform_identity()
 
     for _ in range(100):
-        solver.step(
-            carrier_pose=pose,
-        )
+        simulation.apply_carrier_pose(pose)
+        simulation.step()
 
-    q1 = solver.state.particle_q.numpy()
-    qd1 = solver.state.particle_qd.numpy()
+    q1 = simulation.state.particle_q.numpy()
+    qd1 = simulation.state.particle_qd.numpy()
 
     if not np.all(np.isfinite(q0)):
         raise RuntimeError("reference particle positions are not finite")

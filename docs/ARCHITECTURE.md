@@ -36,7 +36,9 @@ FingertipParameters
         ↓
    FingertipMesh
         ↓
-      Newton
+   Newton model
+        ↓
+ LumoSimulation
 ```
 
 Later validated mechanics results may be consumed by:
@@ -122,10 +124,7 @@ needed:
 - the kinematic rigid carrier;
 - the silicone-to-carrier perfect bond;
 - kinematic rigid indenters created from URDF or prepared `newton.Mesh` assets;
-- SolverVBD execution;
-- collision/contact execution;
-- Newton simulation state;
-- mechanics-specific diagnostics and results.
+- Newton-specific model and object identities consumed by the runtime.
 
 Use Newton's public API directly whenever practical.
 
@@ -134,6 +133,36 @@ mechanics implementation.
 
 Do not create generic attachment, constraint, simulation, runtime, or solver
 frameworks without a concrete second use case.
+
+### `lumo/simulation.py`
+
+`LumoSimulation` is the one concrete runtime owner for a complete LUMO
+simulation. It owns:
+
+- the fixed global `time_step_s` and accumulated `time_s`;
+- the current and next Newton states;
+- Newton control;
+- SolverVBD;
+- the collision pipeline and contacts;
+- one global simulation step.
+
+The current step order is:
+
+```text
+caller updates carrier and indenter poses
+    ↓
+collision
+    ↓
+SolverVBD step
+    ↓
+state swap
+    ↓
+advance global time
+```
+
+`LumoSimulation.step()` does not own approach trajectories, force thresholds,
+validation policy, or result reporting. It may later orchestrate optical work,
+but no ray-tracing behavior is part of the current runtime.
 
 ### `lumo/ray_tracing/`
 
@@ -192,13 +221,9 @@ the same Newton model.
 `Indenter.add_urdf()` stores its supplied world `tf` as the initial kinematic
 body pose as well as passing it to Newton's URDF importer.
 
-`FingertipNewtonSolver` owns one fixed `time_step_s` configured at construction
-and uses it for every VBD step and transient contact-force evaluation.
-
-`Indenter.move_until_force()` applies a caller-supplied world-frame translation
-increment per Newton step. It stops when the transient reaction force opposing
-that motion reaches the caller's inclusive threshold, or fails after the
-explicit bounded step count is exhausted.
+`Indenter` owns only construction and the Newton body index identifying one
+kinematic rigid indenter. `LumoSimulation` owns mutations of Newton state,
+including carrier and indenter pose updates.
 
 Do not turn this package into a general service or utility layer.
 
@@ -212,9 +237,9 @@ Validation scripts are top-level consumers of production APIs.
 SolverVBD preserves the unloaded fingertip reference state.
 
 `validation/contact-physics/flat_plate_contact.py` loads the flat-plate URDF,
-moves its kinematic body toward the fingertip in small positive-Z increments,
-and delegates the force-limited prescribed motion to
-`Indenter.move_until_force()`.
+moves its kinematic body toward the fingertip in bounded positive-Z increments,
+and stops its local experiment loop when the transient negative-Z reaction
+force reaches the caller-provided threshold.
 
 They should normally:
 
@@ -240,6 +265,8 @@ lumo.fingertip
 lumo.mesh
       ↓
 lumo.newton
+      ↓
+lumo.simulation
 
 lumo.fingertip / lumo.mesh
       ↓
@@ -256,6 +283,8 @@ Important constraints:
 - `lumo.mesh` must not import solver, ray-tracing, optimization, or validation
   code.
 - `lumo.newton` must not import ray-tracing, optimization, or validation code.
+- `lumo.simulation` may compose the concrete Newton runtime but must not import
+  validation or optimization policy.
 - `lumo.ray_tracing` must not import Newton solver implementation.
 - production packages must not import `validation/` or `tests/`.
 - optional heavy dependencies should enter only at their owning execution
@@ -307,7 +336,9 @@ mesh
     ↓
 kinematic silicone-carrier bond
     ↓
-Newton solver execution
+Newton model construction
+    ↓
+LumoSimulation execution
     ↓
 zero-load validation
     ↓

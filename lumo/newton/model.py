@@ -95,10 +95,9 @@ class FingertipNewtonModel:
     ) -> None:
         """Update both state buffers before one solver step.
 
-        The caller should invoke this immediately before
-        ``solver.step(state_in, state_out, ...)`` and then swap the state
-        references.  Updating both buffers keeps the prescribed bond valid
-        after that swap.
+        The caller should invoke this before one global Newton step. Updating
+        both buffers keeps the prescribed bond valid after the runtime swaps
+        its state references.
         """
         self.apply_carrier_pose(state_in, pose)
         if state_out is not state_in:
