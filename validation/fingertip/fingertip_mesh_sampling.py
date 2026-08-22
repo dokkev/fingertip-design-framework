@@ -153,6 +153,22 @@ def validate_carrier_surface(mesh) -> int:
     return 1
 
 
+def validate_bonded_vertices(mesh) -> int:
+    """Require a nonempty, unique index set inside the silicone mesh."""
+    indices = np.asarray(mesh.bonded_vertex_indices)
+
+    if indices.ndim != 1 or indices.size == 0:
+        raise RuntimeError("fingertip mesh contains no bonded vertices")
+
+    if np.unique(indices).size != indices.size:
+        raise RuntimeError("fingertip mesh contains duplicate bonded vertices")
+
+    if np.any(indices < 0) or np.any(indices >= mesh.silicone.vertex_count):
+        raise RuntimeError("fingertip mesh contains an invalid bonded index")
+
+    return int(indices.size)
+
+
 def main() -> None:
     rng = np.random.default_rng(0)
     space = make_design_space()
@@ -169,6 +185,7 @@ def main() -> None:
     tet_orientation_signs: list[int] = []
     carrier_triangle_counts: list[int] = []
     carrier_orientation_signs: list[int] = []
+    bonded_vertex_counts: list[int] = []
 
     feasible_count = 0
     mesh_failures = 0
@@ -208,6 +225,7 @@ def main() -> None:
             carrier_orientation_signs.append(
                 validate_carrier_surface(mesh.carrier)
             )
+            bonded_vertex_counts.append(validate_bonded_vertices(mesh))
         except Exception as exc:
             mesh_failures += 1
 
@@ -276,6 +294,10 @@ def main() -> None:
     _print_statistics(
         "carrier triangles",
         carrier_triangle_counts,
+    )
+    _print_statistics(
+        "bonded vertices",
+        bonded_vertex_counts,
     )
 
 

@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+import numpy as np
+
 from lumo.fingertip.fingertip import Fingertip
 from lumo.util.scalar_validation import require_positive
 
@@ -22,6 +24,21 @@ class FingertipMesh:
     fingertip: Fingertip
     silicone: "newton.TetMesh"
     carrier: "newton.Mesh"
+    bonded_vertex_indices: np.ndarray
+
+    def __post_init__(self) -> None:
+        indices = np.asarray(
+            self.bonded_vertex_indices,
+            dtype=np.int32,
+        )
+        if indices.ndim != 1:
+            raise ValueError("bonded_vertex_indices must be one-dimensional")
+        if np.any(indices < 0):
+            raise ValueError("bonded_vertex_indices must be non-negative")
+
+        indices = np.unique(indices)
+        indices.setflags(write=False)
+        object.__setattr__(self, "bonded_vertex_indices", indices)
 
 
 def make_fingertip_mesh(
@@ -37,7 +54,7 @@ def make_fingertip_mesh(
     require_positive("extrusion_depth_mm", extrusion_depth_mm)
     require_positive("element_size_mm", element_size_mm)
 
-    silicone = _make_silicone_mesh(
+    silicone, bonded_vertex_indices = _make_silicone_mesh(
         fingertip.silicone,
         extrusion_depth_mm=extrusion_depth_mm,
         element_size_mm=element_size_mm,
@@ -51,6 +68,7 @@ def make_fingertip_mesh(
         fingertip=fingertip,
         silicone=silicone,
         carrier=carrier,
+        bonded_vertex_indices=bonded_vertex_indices,
     )
 
 

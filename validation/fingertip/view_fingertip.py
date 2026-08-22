@@ -8,6 +8,7 @@ import warp as wp
 
 from lumo.fingertip.fingertip import Fingertip
 from lumo.fingertip.fingertip_param import FingertipParameters
+from lumo.mechanics import build_fingertip_newton_model
 from lumo.mesh.fingertip_mesh import make_fingertip_mesh
 from lumo.util.viewer_util import (
     configure_fingertip_camera,
@@ -29,43 +30,21 @@ def main() -> None:
         element_size_mm=1.0,
     )
 
-    material = mesh.fingertip.parameters.viscoelastic
-
-    builder = newton.ModelBuilder(
-        gravity=0.0
+    mechanics = build_fingertip_newton_model(
+        mesh,
+        gravity=0.0,
+        carrier_color=_ALUMINUM_COLOR,
     )
-
-    builder.add_soft_mesh(
-        pos=wp.vec3(0.0, 0.0, 0.0),
-        rot=wp.quat_identity(),
-        scale=1.0,
-        vel=wp.vec3(0.0, 0.0, 0.0),
-        mesh=mesh.silicone,
-        density=material.density_kg_m3,
-        k_mu=material.k_mu_pa,
-        k_lambda=material.k_lambda_pa,
-        k_damp=material.damping,
-    )
-
-    # The carrier is a rigid world-attached shape.  It comes from the same
-    # FingertipMesh as the silicone volume, so both geometries share one
-    # canonical LUMO coordinate frame.
-    builder.add_shape_mesh(
-        body=-1,
-        mesh=mesh.carrier,
-        color=_ALUMINUM_COLOR,
-        label="fingertip_carrier",
-    )
-
-    model = builder.finalize(
-        requires_grad=False,
-    )
+    model = mechanics.model
     state = model.state()
 
     print("Newton fingertip")
     print("-----------------")
     print(f"mesh vertices:     {mesh.silicone.vertex_count}")
     print(f"mesh tetrahedra:   {mesh.silicone.tet_count}")
+    print(
+        f"bonded vertices:   {mechanics.bonded_particle_indices.shape[0]}"
+    )
     print(f"model particles:   {model.particle_count}")
     print(f"model tetrahedra:  {model.tet_count}")
 

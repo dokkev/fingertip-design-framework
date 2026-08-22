@@ -23,6 +23,7 @@ if TYPE_CHECKING:
 
 
 _MM_TO_M = 1.0e-3
+_BOND_VERTEX_TOLERANCE_MM = 1.0e-5
 
 
 def _to_lumo_frame(vertices: np.ndarray) -> np.ndarray:
@@ -39,13 +40,66 @@ def _to_lumo_frame(vertices: np.ndarray) -> np.ndarray:
     return rotated
 
 
+def _find_bonded_vertex_indices(
+    silicone: Silicone,
+    vertices_mm: np.ndarray,
+) -> np.ndarray:
+    """Find silicone vertices on the analytic carrier-bond interfaces."""
+    if vertices_mm.ndim != 2 or vertices_mm.shape[1] != 3:
+        raise ValueError("silicone vertices must have shape (N, 3)")
+
+    points = vertices_mm[:, (0, 2)]
+    bonded_indices: list[np.ndarray] = []
+
+    for boundary in (silicone.bond_left, silicone.bond_right):
+        distances_squared = np.full(points.shape[0], np.inf)
+
+        for start, end in zip(
+            boundary[:-1],
+            boundary[1:],
+            strict=True,
+        ):
+            delta = np.asarray(end, dtype=np.float64) - start
+            relative = points - np.asarray(start, dtype=np.float64)
+            length_squared = float(np.dot(delta, delta))
+
+            if length_squared == 0.0:
+                segment_distances_squared = np.sum(relative * relative, axis=1)
+            else:
+                parameters = np.sum(relative * delta, axis=1) / length_squared
+                parameters = np.clip(parameters, 0.0, 1.0)
+                closest = np.asarray(start) + parameters[:, None] * delta
+                difference = points - closest
+                segment_distances_squared = np.sum(
+                    difference * difference,
+                    axis=1,
+                )
+
+            distances_squared = np.minimum(
+                distances_squared,
+                segment_distances_squared,
+            )
+
+        matches = np.flatnonzero(
+            distances_squared <= _BOND_VERTEX_TOLERANCE_MM**2
+        )
+        if matches.size == 0:
+            raise RuntimeError(
+                "silicone mesh contains no vertices on a carrier-bond "
+                "interface"
+            )
+        bonded_indices.append(matches)
+
+    return np.unique(np.concatenate(bonded_indices)).astype(np.int32)
+
+
 def _make_silicone_mesh(
     silicone: Silicone,
     *,
     extrusion_depth_mm: float = 11.0,
     element_size_mm: float = 1.0,
-) -> "newton.TetMesh":
-    """Extrude analytic silicone geometry into a Newton TetMesh."""
+) -> tuple["newton.TetMesh", np.ndarray]:
+    """Extrude silicone geometry and preserve its bonded vertex indices."""
     if not isinstance(silicone, Silicone):
         raise TypeError("silicone must be a Silicone geometry")
 
@@ -111,6 +165,10 @@ def _make_silicone_mesh(
             node_index,
         )
         vertices_mm = _to_lumo_frame(vertices_mm)
+        bonded_vertex_indices = _find_bonded_vertex_indices(
+            silicone,
+            vertices_mm,
+        )
 
     finally:
         gmsh.finalize()
@@ -119,9 +177,12 @@ def _make_silicone_mesh(
     # Newton TetMesh uses SI units.
     vertices_m = vertices_mm * _MM_TO_M
 
-    return newton.TetMesh(
-        vertices=vertices_m,
-        tet_indices=tetrahedra.reshape(-1),
+    return (
+        newton.TetMesh(
+            vertices=vertices_m,
+            tet_indices=tetrahedra.reshape(-1),
+        ),
+        bonded_vertex_indices,
     )
 
 
