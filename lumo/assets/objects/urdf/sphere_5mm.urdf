@@ -1,0 +1,20 @@
+<?xml version="1.0"?>
+<robot name="sphere_5mm">
+  <!-- Dimensions are in metres: 5 mm diameter, 2.5 mm radius. -->
+  <link name="sphere">
+    <visual>
+      <geometry>
+        <sphere radius="0.0025"/>
+      </geometry>
+      <material name="sphere_gray">
+        <color rgba="0.6 0.6 0.6 1.0"/>
+      </material>
+    </visual>
+
+    <collision>
+      <geometry>
+        <sphere radius="0.0025"/>
+      </geometry>
+    </collision>
+  </link>
+</robot>

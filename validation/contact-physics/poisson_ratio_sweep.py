@@ -27,7 +27,6 @@ _PLATE_STEP_M = 2.5e-5
 _INITIAL_CLEARANCE_M = 1.0e-3
 _PLATE_HALF_THICKNESS_M = 1.0e-3
 _MAX_SIM_TIME_S = 30.0
-_SOFT_CONTACT_MARGIN_M = 1.0e-4
 _FORCE_THRESHOLD_N = 15.0
 
 
@@ -94,7 +93,6 @@ def _run_case(poisson_ratio: float) -> None:
         fingertip,
         builder=builder,
         sim_frequency=_SIM_FREQUENCY_HZ,
-        soft_contact_margin_m=_SOFT_CONTACT_MARGIN_M,
     )
     reference_positions = simulation.state.particle_q.numpy().copy()
     tet_indices = simulation.fingertip_mesh.silicone.tet_indices

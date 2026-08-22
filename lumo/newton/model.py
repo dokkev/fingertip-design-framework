@@ -15,6 +15,8 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
 
+# VBD body-particle contact is penalty-based. This keeps the nominally rigid
+# carrier below the validation's 10 micrometre penetration tolerance at 15 N.
 _CARRIER_CONTACT_STIFFNESS_N_M = 1.0e6
 
 

@@ -13,6 +13,9 @@ from lumo.newton.model import build_fingertip_newton_model
 from lumo.util.scalar_validation import require_nonnegative, require_positive
 
 
+_DEFAULT_SOFT_CONTACT_MARGIN_M = 1.0e-4
+
+
 @wp.kernel
 def _set_body_pose(
     pose: wp.transform,
@@ -32,7 +35,7 @@ class LumoSimulation:
         builder: newton.ModelBuilder | None = None,
         sim_frequency: float,
         iterations: int = 10,
-        soft_contact_margin_m: float = 0.0,
+        soft_contact_margin_m: float = _DEFAULT_SOFT_CONTACT_MARGIN_M,
     ) -> None:
         if not isinstance(fingertip, Fingertip):
             raise TypeError("fingertip must be a Fingertip")

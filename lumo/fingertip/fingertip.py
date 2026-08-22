@@ -6,10 +6,10 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from math import cos, isfinite, pi, sin, sqrt
 
+from .bonding_interface import BondingInterface, Point2D
 from .fingertip_param import FingertipParameters
 
 
-Point2D = tuple[float, float]
 LineSegment2D = tuple[Point2D, Point2D]
 
 
@@ -82,26 +82,6 @@ class Silicone:
         )
 
     @property
-    def bond_left(self) -> tuple[Point2D, ...]:
-        """Return the left silicone-to-carrier interface boundary."""
-        return (
-            (self.cavity_left_x_mm, 0.0),
-            (self.bond_left_inner_x_mm, 0.0),
-            (self.bond_left_inner_x_mm, self.bond_top_z_mm),
-            (-self.half_width_mm, self.bond_top_z_mm),
-        )
-
-    @property
-    def bond_right(self) -> tuple[Point2D, ...]:
-        """Return the right silicone-to-carrier interface boundary."""
-        return (
-            (self.half_width_mm, self.bond_top_z_mm),
-            (self.bond_right_inner_x_mm, self.bond_top_z_mm),
-            (self.bond_right_inner_x_mm, 0.0),
-            (self.cavity_right_x_mm, 0.0),
-        )
-
-    @property
     def bond_extension_left(self) -> tuple[Point2D, ...]:
         """Return the left axis-aligned silicone bond extension."""
         return (
@@ -166,12 +146,13 @@ class Carrier:
 class Fingertip:
     """Constructed analytic 2D fingertip assembly.
 
-    ``parameters`` owns the physical inputs. ``silicone`` and ``carrier``
-    are the derived analytic component geometries consumed by downstream mesh
-    and physics packages.
+    ``parameters`` owns the physical inputs. ``silicone``, ``carrier``, and
+    ``bonding_interface`` are derived analytic data consumed by downstream
+    mesh and physics packages.
     """
 
     parameters: FingertipParameters = field(default_factory=FingertipParameters)
+    bonding_interface: BondingInterface | None = None
     silicone: Silicone = field(init=False)
     carrier: Carrier = field(init=False)
 
@@ -228,8 +209,39 @@ class Fingertip:
             )
         )
 
+        geometry_boundary = BondingInterface(
+            left=(
+                (silicone.cavity_left_x_mm, 0.0),
+                (silicone.bond_left_inner_x_mm, 0.0),
+                (
+                    silicone.bond_left_inner_x_mm,
+                    silicone.bond_top_z_mm,
+                ),
+                (-silicone.half_width_mm, silicone.bond_top_z_mm),
+            ),
+            right=(
+                (silicone.half_width_mm, silicone.bond_top_z_mm),
+                (
+                    silicone.bond_right_inner_x_mm,
+                    silicone.bond_top_z_mm,
+                ),
+                (silicone.bond_right_inner_x_mm, 0.0),
+                (silicone.cavity_right_x_mm, 0.0),
+            ),
+        )
+        bonding_interface = self.bonding_interface
+        if bonding_interface is None:
+            bonding_interface = geometry_boundary
+        elif not isinstance(bonding_interface, BondingInterface):
+            raise TypeError("bonding_interface must be a BondingInterface")
+        else:
+            bonding_interface = bonding_interface.clipped_to(
+                geometry_boundary
+            )
+
         object.__setattr__(self, "silicone", silicone)
         object.__setattr__(self, "carrier", carrier)
+        object.__setattr__(self, "bonding_interface", bonding_interface)
 
 
 def _closest_point_on_segment(

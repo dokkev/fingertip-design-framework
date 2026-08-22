@@ -61,7 +61,8 @@ FingertipParameters
         ↓
     Fingertip
     ├── Silicone
-    └── Carrier
+    ├── Carrier
+    └── BondingInterface
 ```
 
 `FingertipParameters` contains physical input values.
@@ -75,7 +76,12 @@ material measurement.
 `Fingertip` constructs the analytic fingertip assembly.
 
 `Silicone` and `Carrier` are constructed geometry objects, not separate
-parameter systems.
+parameter systems. `BondingInterface` is the derived pair of left and right
+carrier-silicone polylines that receive the perfect kinematic bond. It does not
+own independent physical parameters. A caller may supply a bonding interface
+to select a smaller portion of that shared boundary. `Fingertip` clips any
+overhang to the actual carrier-silicone boundary and prints a `[WARNING]` when
+clipping occurs; an empty or disconnected result is rejected.
 
 This package does not own:
 
@@ -105,11 +111,14 @@ The silicone is discretized as a Newton-compatible tetrahedral mesh.
 `carrier` is the complete rigid surface mesh used for visualization.
 `carrier_collision` is a closed Newton collision proxy on the same carrier
 body. Its silicone-reachable boundary contains only the cavity-facing lips,
-stem sides, and stem bottom; the remaining faces close through the carrier
-interior so Newton's signed particle-mesh query remains well-defined.
+stem sides, and stem bottom. Its cross-section closes through the carrier
+interior, and its end caps lie outside the silicone extrusion, so Newton's
+signed particle-mesh query remains well-defined without exposing closure faces
+to silicone particles.
 
-`bonded_vertex_indices` identifies silicone vertices belonging to the
-silicone-to-carrier perfect-bond interface.
+`bonded_vertex_indices` identifies silicone vertices lying on
+`Fingertip.bonding_interface`. The mesh layer consumes its left and right
+polylines directly rather than deriving bond ownership from `Silicone`.
 
 Mesh code may use Gmsh and geometry libraries internally.
 
@@ -143,9 +152,9 @@ to the same kinematic body with rigid-shape collision disabled and silicone
 particle collision enabled. Bonded particles remain inactive, so the bond
 interface is controlled only by the prescribed kinematic bond. Silicone
 particle radius is explicitly zero at model construction; contact detection
-distance is supplied separately through the collision pipeline. The rigid
-carrier proxy uses a stiff shape-contact material while VBD still permits a
-small, measured penalty penetration.
+distance is supplied separately by `LumoSimulation` through the collision
+pipeline. The rigid carrier proxy uses a stiff shape-contact material while
+VBD still permits a small, measured penalty penetration.
 
 Do not introduce a generic physics-backend layer while Newton is the only
 mechanics implementation.
@@ -167,6 +176,11 @@ simulation. It owns:
 - SolverVBD;
 - the collision pipeline and contacts;
 - one global simulation step.
+
+The runtime's default soft-contact detection margin is `1e-4 m`. This keeps
+the zero-radius silicone particles discoverable by Newton's mesh query without
+adding physical particle or shape thickness. Callers may override the margin
+when a different scene scale requires it.
 
 `LumoSimulation(fingertip, builder=...)` is the high-level construction entry
 point. It meshes the fingertip, adds it to an optional caller-populated Newton
@@ -244,9 +258,11 @@ packaged URDF resource → filesystem path → Indenter.add_urdf()
 OBJ/STL path → mesh_io.load_mesh() → newton.Mesh → Indenter.add_mesh()
 ```
 
-LUMO-owned URDF assets live under `lumo/assets/objects/`, are installed as
-package data, and are resolved with `importlib.resources`. Validation callers
-do not derive repository roots from their own `__file__` paths.
+LUMO-owned URDF assets live under `lumo/assets/objects/`, with primitive sphere
+indenters grouped under `lumo/assets/objects/urdf/`. They are installed as
+package data and resolved with `importlib.resources`. Validation callers do not
+derive repository roots from their own `__file__` paths. Sphere size names
+refer to diameter in millimetres.
 
 An external rigid body is composed with the fingertip before Newton model
 finalization:
@@ -279,6 +295,11 @@ Validation scripts are top-level consumers of production APIs.
 
 `validation/contact-physics/zero_load.py` is the current procedural check that
 SolverVBD preserves the unloaded fingertip reference state.
+
+`validation/fingertip/view_bond_geometry.py` renders the analytic XZ
+cross-section and highlights the exact `BondingInterface.left` and
+`BondingInterface.right` polylines whose silicone vertices receive the perfect
+kinematic bond.
 
 `validation/contact-physics/flat_plate_contact.py` loads the flat-plate URDF,
 moves its kinematic body toward the fingertip in positive-Z increments for a

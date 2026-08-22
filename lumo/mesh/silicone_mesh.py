@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+from lumo.fingertip.bonding_interface import BondingInterface
 from lumo.fingertip.fingertip import Silicone
 
 if TYPE_CHECKING:
@@ -41,7 +42,7 @@ def _to_lumo_frame(vertices: np.ndarray) -> np.ndarray:
 
 
 def _find_bonded_vertex_indices(
-    silicone: Silicone,
+    bonding_interface: BondingInterface,
     vertices_mm: np.ndarray,
 ) -> np.ndarray:
     """Find silicone vertices on the analytic carrier-bond interfaces."""
@@ -51,7 +52,7 @@ def _find_bonded_vertex_indices(
     points = vertices_mm[:, (0, 2)]
     bonded_indices: list[np.ndarray] = []
 
-    for boundary in (silicone.bond_left, silicone.bond_right):
+    for boundary in (bonding_interface.left, bonding_interface.right):
         distances_squared = np.full(points.shape[0], np.inf)
 
         for start, end in zip(
@@ -95,6 +96,7 @@ def _find_bonded_vertex_indices(
 
 def _make_silicone_mesh(
     silicone: Silicone,
+    bonding_interface: BondingInterface,
     *,
     extrusion_depth_mm: float = 11.0,
     element_size_mm: float = 1.0,
@@ -102,6 +104,8 @@ def _make_silicone_mesh(
     """Extrude silicone geometry and preserve its bonded vertex indices."""
     if not isinstance(silicone, Silicone):
         raise TypeError("silicone must be a Silicone geometry")
+    if not isinstance(bonding_interface, BondingInterface):
+        raise TypeError("bonding_interface must be a BondingInterface")
 
     try:
         import gmsh
@@ -166,7 +170,7 @@ def _make_silicone_mesh(
         )
         vertices_mm = _to_lumo_frame(vertices_mm)
         bonded_vertex_indices = _find_bonded_vertex_indices(
-            silicone,
+            bonding_interface,
             vertices_mm,
         )
 

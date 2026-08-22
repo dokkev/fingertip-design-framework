@@ -57,6 +57,7 @@ def make_fingertip_mesh(
 
     silicone, bonded_vertex_indices = _make_silicone_mesh(
         fingertip.silicone,
+        fingertip.bonding_interface,
         extrusion_depth_mm=extrusion_depth_mm,
         element_size_mm=element_size_mm,
     )

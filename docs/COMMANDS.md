@@ -32,6 +32,12 @@ The Newton smoke tests require the CUDA-capable `lit` environment:
 ./scripts/tools/pytest_lit tests/smoke/physics -q -m "smoke and physics"
 ```
 
+Visualize the analytic carrier-silicone bond in the XZ cross-section:
+
+```bash
+conda run -n lit python validation/fingertip/view_bond_geometry.py
+```
+
 Run the procedural flat-plate contact smoke explicitly:
 
 ```bash
