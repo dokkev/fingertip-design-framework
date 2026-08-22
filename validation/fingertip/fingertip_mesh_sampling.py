@@ -145,7 +145,9 @@ def main() -> None:
             continue
 
         try:
-            tet_orientation_signs.append(validate_tet_orientation(mesh))
+            tet_orientation_signs.append(
+                validate_tet_orientation(mesh.silicone)
+            )
         except Exception as exc:
             mesh_failures += 1
 
@@ -156,10 +158,10 @@ def main() -> None:
             print(f"  error: {type(exc).__name__}: {exc}")
             continue
 
-        vertex_counts.append(mesh.vertex_count)
-        tet_counts.append(mesh.tet_count)
+        vertex_counts.append(mesh.silicone.vertex_count)
+        tet_counts.append(mesh.silicone.tet_count)
         surface_triangle_counts.append(
-            len(mesh.surface_tri_indices) // 3
+            len(mesh.silicone.surface_tri_indices) // 3
         )
 
         if len(tet_counts) >= target_meshes:

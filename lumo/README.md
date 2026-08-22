@@ -1,19 +1,20 @@
-# lumo2
+# lumo
 
-`lumo2` is the clean implementation being rebuilt from the ground up.
+`lumo` is the clean implementation being rebuilt from the ground up.
 
-The existing `lumo/` package is legacy/reference code and remains untouched by
-this implementation. Functionality will be rebuilt directory by directory,
-with dependencies kept explicit and minimal.
+The previous implementation is kept in a separate legacy/reference tree and
+is not imported here. Functionality is rebuilt directory by directory, with
+dependencies kept explicit and minimal.
 
 Current ownership is intentionally limited to:
 
 - `util/` — dependency-free shared scalar helpers
-- `finger/` — fingertip domain objects
-- `mesh/` — mesh data and construction
+- `fingertip/` — fingertip parameters and constructed geometry
+- `mesh/` — `FingertipMesh` and its silicone/carrier discretization
 - `mechanics/` — mechanics behavior
 - `ray_tracing/` — ray-tracing behavior
 
 The packages are still intentionally small. The initial fingertip parameter
-value objects are implemented in `finger/`; no production solver, meshing, or
-transport behavior has been migrated yet.
+value objects and analytic `Fingertip -> Silicone/Carrier` assembly are
+implemented in `fingertip/`; no production solver or transport behavior has
+been migrated yet.

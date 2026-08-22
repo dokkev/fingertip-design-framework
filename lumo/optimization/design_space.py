@@ -302,7 +302,7 @@ class DesignSpace:
             fingertip = Fingertip(parameters)
 
             if (
-                fingertip.minimum_silicone_thickness_mm
+                fingertip.silicone.minimum_silicone_thickness_mm
                 < self.minimum_silicone_thickness_mm
             ):
                 return False

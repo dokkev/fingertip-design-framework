@@ -1,2 +1,1 @@
-"""Small dependency-free utilities for lumo2."""
-
+"""Small dependency-free utilities for lumo."""

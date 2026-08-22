@@ -19,7 +19,7 @@ Route a change to the smallest owning area:
 
 | Change concerns | Start with | Keep out of that package |
 | --- | --- | --- |
-| morphology fields, geometry invariants | `lumo/finger/` | solver settings, OptiX, GUI |
+| morphology fields, geometry invariants | `lumo/fingertip/` | solver settings, OptiX, GUI |
 | Gmsh or neutral mesh records | `lumo/mesh/` | mechanics stepping, objective policy |
 | first-contact pose and approach geometry | `lumo/contact/` | Newton stepping, optical scoring |
 | Newton/Warp mechanics | `lumo/physics/` | Ax policy, validation reports |
@@ -45,8 +45,9 @@ orchestration for one prepared morphology; `lumo/optimization/evaluator.py` owns
 protocol/objective policy and persistence boundaries.
 
 ```text
-lumo.finger.FingertipParameters
-    -> lumo.finger / lumo.mesh geometry
+lumo.fingertip.FingertipParameters
+    -> lumo.fingertip Silicone/Carrier geometry
+    -> lumo.mesh FingertipMesh (silicone/carrier discretization)
     -> lumo.contact.find_first_contact
     -> lumo.physics.trajectory.indentation.solve_fingertip_indentation_trajectory
     -> lumo.LumoSimulation in-memory state handoff
@@ -61,7 +62,7 @@ lumo.finger.FingertipParameters
 | Path | Role | Canonical status |
 | --- | --- | --- |
 | `lumo/util/` | dependency-free scalar validation helpers | narrow shared utility boundary |
-| `lumo/finger/` | raw morphology parameters, solids, material/LED descriptors | production domain source |
+| `lumo/fingertip/` | raw morphology parameters and constructed Silicone/Carrier geometry | production domain source |
 | `lumo/mesh/` | 3D neutral volume-mesh records, Gmsh meshing, rigid geometry | production discretization boundary |
 | `lumo/contact/` | geometry-derived first-contact and sphere alignment | production contact initialization |
 | `lumo/physics/` | Newton 1.4 / Warp mechanics and trajectory state | one production mechanics path |
@@ -88,7 +89,8 @@ production Python package.
 
 | If you need to understand... | Start here | Then inspect |
 | --- | --- | --- |
-| morphology, material, and optical inputs | `lumo/finger/fingertip_parameters.py::FingertipParameters` | `lumo/finger/fingertip_geometry.py`, `lumo/finger/fingertip.py`, `lumo/finger/extrusion.py` |
+| morphology, material, optical inputs, and analytic assembly | `lumo/fingertip/fingertip_param.py::FingertipParameters` | `lumo/fingertip/fingertip.py`, `lumo/fingertip/geometric_param.py` |
+| discretized fingertip assembly | `lumo/mesh/fingertip_mesh.py::FingertipMesh` | `lumo/mesh/fingertip_mesh.py::make_fingertip_mesh` |
 | neutral volume mesh | `lumo/mesh/volume/contracts.py` | `lumo/mesh/volume/mesh.py`, `lumo/mesh/volume/state.py` |
 | rigid object/carrier mesh | `lumo/mesh/rigid/object.py` | `lumo/mesh/rigid/carrier.py` |
 | neutral rigid pose | `lumo/mesh/rigid/object.py::RigidPose3D` | `lumo/contact/`, `lumo/physics/` |
@@ -113,8 +115,8 @@ production Python package.
 | Package | Owns | Does not own |
 | --- | --- | --- |
 | `lumo.util` | small typed helpers with no domain or runtime dependencies | morphology policy, solver settings, persistence, or cross-layer orchestration |
-| `lumo.finger` | kinematic, viscoelastic, and bulk optical fingertip parameters, morphology constraints, 2D solid boundaries, LED source descriptor | mesh construction, mechanics, ray-tracing execution, UI |
-| `lumo.mesh` | neutral mesh dataclasses, Gmsh-backed volume meshing, fingertip state conversion, sphere/carrier meshes | Newton stepping, OptiX calls, optimization policy |
+| `lumo.fingertip` | physical parameter groups and the constructed 2D `Fingertip` assembly containing `Silicone` and `Carrier` | mesh construction, mechanics, ray-tracing execution, UI |
+| `lumo.mesh` | `Fingertip` -> `FingertipMesh`, with `Silicone` -> Gmsh -> `newton.TetMesh` and `Carrier` -> rigid triangle mesh discretization | Newton stepping, OptiX calls, optimization policy |
 | `lumo.contact` | Shapely-based collision predicate, coarse bracket/bisection, canonical sphere alignment, clear/spawn/contact poses | deformation solve and optical transport |
 | `lumo.physics` | NumPy-facing Newton/Warp settings/results, prescribed indentation, continuous trajectory checkpoints, contact diagnostics | Ax generation, objective calculation, validation orchestration |
 | `lumo.ray_tracing` | optical boundary/result contracts, FULL_3D surface geometry, CUDA/OptiX runtime and launches | mechanics state evolution and BO decisions |
@@ -123,7 +125,7 @@ production Python package.
 | `validation` | reports, smoke/regression/reference workflows, and bounded campaign runners | domain/solver/transport ownership; production packages must not import it |
 | `gui` | optional controls and diagnostics presentation | domain rules, solver settings, transport, campaign orchestration |
 
-The current package exports in `lumo/finger/__init__.py`, `lumo/mesh/__init__.py`,
+The current package exports in `lumo/fingertip/__init__.py`, `lumo/mesh/__init__.py`,
 `lumo/contact/__init__.py`, `lumo/physics/__init__.py`, `lumo/ray_tracing/__init__.py`, and
 `lumo/optimization/__init__.py` are the primary lightweight API surfaces. Prefer
 those exports or the canonical module named above over new wrapper layers.
@@ -137,7 +139,7 @@ inputs. `ViscoelasticParameters` stores the fingertip's Newton constitutive and
 inertial inputs, and `OpticalParameters` stores its bulk optical inputs.
 `FingertipParameters` combines all three groups while preserving the direct
 geometry field access used by mesh and contact callers. The LED remains a
-separate source/package descriptor in `lumo.finger.led`; its values are fixed
+separate source/package descriptor in the fingertip parameter groups; its values are fixed
 evaluation inputs alongside `FingertipParameters`. Coordinates and dimensions
 derived from parameter fields are computed explicitly by the owning geometry,
 thickness, or reporting consumer; they are not duplicated as public parameter
@@ -301,7 +303,7 @@ unsupported until the mechanics owner defines one.
 
 | Boundary | Owner | Consumer | Contract |
 | --- | --- | --- | --- |
-| morphology parameters | `lumo.finger` | `lumo.mesh`, `lumo.optimization`, `validation`, `gui` | immutable six-variable design plus explicit constraints; public geometry units are mm |
+| morphology parameters and analytic assembly | `lumo.fingertip` | `lumo.mesh`, `lumo.optimization`, `validation`, `gui` | immutable physical inputs plus `Fingertip.silicone` and `Fingertip.carrier`; public geometry units are mm |
 | neutral volume mesh | `lumo.mesh` | `lumo.physics`, `lumo.ray_tracing`, `validation` | one canonical tetra topology plus semantic surface triangles; no solver or OptiX object |
 | first-contact result | `lumo.contact` | `lumo.physics`, `validation` | geometry-derived poses and post-contact travel; `T_spawn` is clear-side initialization only |
 | mechanics result/checkpoint | `lumo.physics` | `lumo`, `lumo.optimization`, `validation` | NumPy arrays plus an explicit immutable checkpoint-state contract; debug diagnostics are not a required handoff |
@@ -346,8 +348,8 @@ Installation and exact commands belong in `docs/COMMANDS.md`.
 The allowed high-level direction is:
 
 ```text
-lumo.finger -> lumo.mesh -> lumo.contact -> lumo.physics
-lumo.finger / lumo.mesh -> lumo.ray_tracing
+lumo.fingertip -> lumo.mesh -> lumo.contact -> lumo.physics
+lumo.fingertip / lumo.mesh -> lumo.ray_tracing
 lumo.contact / lumo.physics / lumo.ray_tracing -> lumo orchestration
 lumo -> lumo.optimization / validation consumers
 ```
@@ -361,7 +363,7 @@ compose all production packages.
 Important guards:
 
 - production packages do not import `validation` or `tests`;
-- `lumo.finger` remains geometry/model-only and does not import `lumo.mesh`, `lumo.physics`,
+- `lumo.fingertip` remains geometry/model-only and does not import `lumo.mesh`, `lumo.physics`,
   `lumo.ray_tracing`, plotting, Gmsh, or Kratos;
 - `lumo.mesh` does not import mechanics, ray tracing, validation, plotting, or Kratos;
 - `lumo.physics` does not import ray tracing, validation, or tests;
