@@ -162,7 +162,11 @@ mechanics implementation.
 Do not create generic attachment, constraint, simulation, runtime, or solver
 frameworks without a concrete second use case.
 
-### `lumo/simulation.py`
+### `lumo/simulation/`
+
+Owns the concrete physical runtime and prescribed indentation workflows.
+
+#### `runtime.py`
 
 `LumoSimulation` is the one concrete runtime owner for a complete LUMO
 simulation. It owns:
@@ -218,25 +222,28 @@ the resulting indenter reaction force afterward. The runtime may later
 orchestrate optical work, but no ray-tracing behavior is part of the current
 runtime.
 
-### `lumo/indentation.py`
+#### `indentation.py`
 
-`IndentationCase` owns the prescribed translation, transient force target,
-time limit, and case-local progress for one already-constructed kinematic
-indenter. It does not load assets, construct a morphology, or advance global
-simulation time. The caller keeps the global tick visible:
+`IndentationCase` is a plain case definition plus its final runtime fields; it
+does not wrap those fields in forwarding properties or split one tick across
+case methods. `IndentationStudy` owns one immutable analytic `Fingertip` and an
+ordered tuple of cases. It constructs a fresh builder, indenter,
+`LumoSimulation`, and Newton state for each case, so every case uses the exact
+same fingertip object but starts from an independent reference state.
+
+The study keeps the per-case loop direct:
 
 ```text
-IndentationCase.apply_next_pose()
+apply indenter pose
         ↓
 LumoSimulation.step()
         ↓
-IndentationCase.observe_step()
+measure transient reaction force
 ```
 
-Exactly one simulation tick must occur between pose application and force
-observation. A caller may construct multiple independent cases from the same
-`FingertipParameters`; each case remains attached to its own concrete
-`LumoSimulation` and `Indenter`.
+Only `LumoSimulation.step()` mutates Newton state or simulation time. The study
+does not share mutable Newton state between cases, run cases in parallel, or
+introduce a generic simulation manager.
 
 ### `lumo/ray_tracing/`
 
@@ -331,11 +338,12 @@ vertex, surface-vertex, and tetrahedron-center penetration into the analytic
 carrier. Its optional ViewerGL path only observes simulation state and
 contacts; it does not advance or mutate the simulation.
 
-`validation/contact-physics/sphere_indentation.py` runs the packaged 5, 10,
-and 20 mm diameter sphere URDFs in three independent simulations at distinct
-fingertip X locations. Each procedural approach stops on the first transient
-reaction-force sample at or above `20 N`, then checks contact, finite silicone
-state, and perfect-bond drift.
+`validation/contact-physics/sphere_indentation.py` creates one analytic
+fingertip and uses an `IndentationStudy` to run the packaged 5, 10, and 20 mm
+diameter sphere URDFs in three independent simulations at distinct fingertip X
+locations. Each approach stops on the first transient reaction-force sample at
+or above `20 N`, then checks contact, finite silicone state, and perfect-bond
+drift.
 
 `validation/contact-physics/poisson_ratio_sweep.py` repeats that prescribed
 contact protocol for explicit near-incompressible Poisson ratios. It derives

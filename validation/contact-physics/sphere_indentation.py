@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
+from contextlib import ExitStack
 from importlib.resources import as_file, files
+from pathlib import Path
 
-import newton
 import numpy as np
 import warp as wp
 
 from lumo.fingertip import Fingertip, FingertipParameters
-from lumo.indentation import IndentationCase
-from lumo.newton import Indenter
 from lumo.simulation import LumoSimulation
+from lumo.simulation.indentation import IndentationCase, IndentationStudy
 
 
 _SIM_FREQUENCY_HZ = 1.0e3
@@ -20,13 +20,6 @@ _INITIAL_CLEARANCE_M = 1.0e-3
 _MAX_SIM_TIME_S = 30.0
 _TARGET_FORCE_N = 20.0
 _MAX_BONDED_DRIFT_M = 1.0e-8
-
-# Sphere size is diameter. Each independent case uses a different X location.
-_CASES = (
-    ("sphere_5mm.urdf", 5.0, -7.5),
-    ("sphere_10mm.urdf", 10.0, 0.0),
-    ("sphere_20mm.urdf", 20.0, 7.5),
-)
 
 
 def _soft_contact_count_for_body(
@@ -48,14 +41,14 @@ def _soft_contact_count_for_body(
     )
 
 
-def _run_indentation(
-    parameters: FingertipParameters,
+def _make_case(
+    fingertip: Fingertip,
+    urdf_path: Path,
     urdf_filename: str,
     *,
     sphere_diameter_mm: float,
     contact_x_mm: float,
-) -> None:
-    fingertip = Fingertip(parameters)
+) -> IndentationCase:
     fingertip_tip_z_m = 1.0e-3 * (
         fingertip.silicone.ellipse_center_z_mm
         - fingertip.silicone.ellipse_radius_z_mm
@@ -72,47 +65,9 @@ def _run_indentation(
         wp.quat_identity(),
     )
 
-    builder = newton.ModelBuilder(gravity=0.0)
-    sphere_resource = files("lumo").joinpath(
-        "assets",
-        "objects",
-        "urdf",
-        urdf_filename,
-    )
-    with as_file(sphere_resource) as urdf_path:
-        indenter = Indenter.add_urdf(
-            builder,
-            urdf_path,
-            tf=initial_pose,
-        )
-
-    simulation = LumoSimulation(
-        fingertip,
-        builder=builder,
-        sim_frequency=_SIM_FREQUENCY_HZ,
-    )
-    reference_positions = simulation.state.particle_q.numpy().copy()
-    bonded_indices = (
-        simulation.fingertip_model.bonded_particle_indices.numpy()
-    )
-
-    simulation.collision_pipeline.collide(
-        simulation.state,
-        simulation.contacts,
-    )
-    initial_contact_count = _soft_contact_count_for_body(
-        simulation,
-        indenter.body_index,
-    )
-    if initial_contact_count != 0:
-        raise RuntimeError(
-            f"{urdf_filename} has soft contacts before prescribed motion"
-        )
-
-    case = IndentationCase(
-        simulation,
-        indenter,
+    return IndentationCase(
         name=urdf_filename,
+        urdf_path=urdf_path,
         initial_tf=initial_pose,
         translation_step_W_m=wp.vec3(
             0.0,
@@ -122,10 +77,19 @@ def _run_indentation(
         target_force_n=_TARGET_FORCE_N,
         max_sim_time_s=_MAX_SIM_TIME_S,
     )
-    while not case.target_reached:
-        case.apply_next_pose()
-        simulation.step()
-        case.observe_step()
+
+
+def _validate_and_report(case: IndentationCase) -> None:
+    simulation = case.simulation
+    indenter = case.indenter
+    reaction_force_n = case.reaction_force_n
+    if simulation is None or indenter is None or reaction_force_n is None:
+        raise RuntimeError(f"{case.name} has not completed")
+
+    contact_x_mm = 1.0e3 * float(np.asarray(case.initial_tf)[0])
+    bonded_indices = (
+        simulation.fingertip_model.bonded_particle_indices.numpy()
+    )
 
     sphere_contact_count = _soft_contact_count_for_body(
         simulation,
@@ -133,7 +97,7 @@ def _run_indentation(
     )
     if sphere_contact_count == 0:
         raise RuntimeError(
-            f"{urdf_filename} reached the force target without contact"
+            f"{case.name} reached the force target without contact"
         )
 
     particle_q = simulation.state.particle_q.numpy()
@@ -142,39 +106,81 @@ def _run_indentation(
         np.isfinite(particle_qd)
     ):
         raise RuntimeError(
-            f"{urdf_filename} produced a non-finite silicone state"
+            f"{case.name} produced a non-finite silicone state"
         )
 
     bonded_drift_m = np.linalg.norm(
-        particle_q[bonded_indices] - reference_positions[bonded_indices],
+        particle_q[bonded_indices]
+        - simulation.fingertip_model.bonded_local_positions.numpy(),
         axis=1,
     )
     max_bonded_drift_m = float(bonded_drift_m.max())
     if max_bonded_drift_m > _MAX_BONDED_DRIFT_M:
         raise RuntimeError(
-            f"{urdf_filename} caused bonded silicone vertices to drift"
+            f"{case.name} caused bonded silicone vertices to drift"
         )
 
-    print(f"sphere diameter:       {sphere_diameter_mm:.1f} mm")
+    print(f"case:                  {case.name}")
     print(f"contact location X:    {contact_x_mm:.1f} mm")
-    print(f"target force:          {_TARGET_FORCE_N:.9e} N")
-    print(f"transient reaction:    {case.reaction_force_n:.9e} N")
-    print(f"simulation time:       {case.elapsed_time_s:.9e} s")
-    print(f"sphere travel:         {case.travel_m:.9e} m")
+    print(f"target force:          {case.target_force_n:.9e} N")
+    elapsed_time_s = case.step_count / simulation.sim_frequency
+    travel_m = case.step_count * float(
+        np.linalg.norm(case.translation_step_W_m)
+    )
+    print(f"transient reaction:    {reaction_force_n:.9e} N")
+    print(f"simulation time:       {elapsed_time_s:.9e} s")
+    print(f"sphere travel:         {travel_m:.9e} m")
     print(f"sphere contacts:       {sphere_contact_count}")
     print(f"maximum bonded drift:  {max_bonded_drift_m:.9e} m")
     print()
 
 
 def main() -> None:
-    morphology = FingertipParameters()
-    for urdf_filename, diameter_mm, contact_x_mm in _CASES:
-        _run_indentation(
-            morphology,
-            urdf_filename,
-            sphere_diameter_mm=diameter_mm,
-            contact_x_mm=contact_x_mm,
+    fingertip = Fingertip(FingertipParameters())
+    resource_root = files("lumo").joinpath(
+        "assets",
+        "objects",
+        "urdf",
+    )
+
+    with ExitStack() as resources:
+        sphere_5mm = _make_case(
+            fingertip,
+            resources.enter_context(
+                as_file(resource_root.joinpath("sphere_5mm.urdf"))
+            ),
+            "sphere_5mm.urdf",
+            sphere_diameter_mm=5.0,
+            contact_x_mm=-7.5,
         )
+        sphere_10mm = _make_case(
+            fingertip,
+            resources.enter_context(
+                as_file(resource_root.joinpath("sphere_10mm.urdf"))
+            ),
+            "sphere_10mm.urdf",
+            sphere_diameter_mm=10.0,
+            contact_x_mm=0.0,
+        )
+        sphere_20mm = _make_case(
+            fingertip,
+            resources.enter_context(
+                as_file(resource_root.joinpath("sphere_20mm.urdf"))
+            ),
+            "sphere_20mm.urdf",
+            sphere_diameter_mm=20.0,
+            contact_x_mm=7.5,
+        )
+        study = IndentationStudy(
+            fingertip,
+            (sphere_5mm, sphere_10mm, sphere_20mm),
+            sim_frequency=_SIM_FREQUENCY_HZ,
+        )
+        study.run()
+
+        _validate_and_report(sphere_5mm)
+        _validate_and_report(sphere_10mm)
+        _validate_and_report(sphere_20mm)
 
     print("three-location spherical indentation: PASS")
 
