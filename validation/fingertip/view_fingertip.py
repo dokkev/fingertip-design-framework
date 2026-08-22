@@ -9,67 +9,14 @@ import warp as wp
 from lumo.fingertip.fingertip import Fingertip
 from lumo.fingertip.fingertip_param import FingertipParameters
 from lumo.mesh.fingertip_mesh import make_fingertip_mesh
+from lumo.util.viewer_util import (
+    configure_fingertip_camera,
+    make_reference_lines,
+)
 
 
-def _make_reference_lines() -> tuple[wp.array, wp.array, wp.array]:
-    """Return an X-Y floor grid and colored LUMO-coordinate axes."""
-    grid_extent_m = 0.04
-    grid_step_m = 0.005
-    floor_z_m = -0.02
-
-    starts: list[wp.vec3] = []
-    ends: list[wp.vec3] = []
-    colors: list[wp.vec3] = []
-    grid_color = wp.vec3(0.25, 0.25, 0.28)
-
-    grid_count = int(grid_extent_m / grid_step_m)
-    for index in range(-grid_count, grid_count + 1):
-        coordinate_m = index * grid_step_m
-
-        starts.append(
-            wp.vec3(-grid_extent_m, coordinate_m, floor_z_m)
-        )
-        ends.append(
-            wp.vec3(grid_extent_m, coordinate_m, floor_z_m)
-        )
-        colors.append(grid_color)
-
-        starts.append(
-            wp.vec3(coordinate_m, -grid_extent_m, floor_z_m)
-        )
-        ends.append(
-            wp.vec3(coordinate_m, grid_extent_m, floor_z_m)
-        )
-        colors.append(grid_color)
-
-    axis_length_m = 0.025
-    starts.extend(
-        (
-            wp.vec3(0.0, 0.0, 0.0),
-            wp.vec3(0.0, 0.0, 0.0),
-            wp.vec3(0.0, 0.0, 0.0),
-        )
-    )
-    ends.extend(
-        (
-            wp.vec3(axis_length_m, 0.0, 0.0),
-            wp.vec3(0.0, axis_length_m, 0.0),
-            wp.vec3(0.0, 0.0, axis_length_m),
-        )
-    )
-    colors.extend(
-        (
-            wp.vec3(1.0, 0.0, 0.0),
-            wp.vec3(0.0, 1.0, 0.0),
-            wp.vec3(0.0, 0.0, 1.0),
-        )
-    )
-
-    return (
-        wp.array(starts, dtype=wp.vec3),
-        wp.array(ends, dtype=wp.vec3),
-        wp.array(colors, dtype=wp.vec3),
-    )
+_SILICONE_COLOR = (0.72, 0.92, 0.68)
+_ALUMINUM_COLOR = wp.vec3(0.36, 0.39, 0.43)
 
 
 def main() -> None:
@@ -106,7 +53,7 @@ def main() -> None:
     builder.add_shape_mesh(
         body=-1,
         mesh=mesh.carrier,
-        color=wp.vec3(0.85, 0.45, 0.10),
+        color=_ALUMINUM_COLOR,
         label="fingertip_carrier",
     )
 
@@ -136,8 +83,17 @@ def main() -> None:
 
     try:
         viewer.set_model(model)
+        # ViewerGL's public mesh API has no alpha channel. Render the
+        # deforming silicone surface as a pale white overlay instead of the
+        # default soft-body triangle pass so the carrier remains easy to see.
+        viewer.show_triangles = False
+        silicone_surface_indices = wp.array(
+            mesh.silicone.surface_tri_indices,
+            dtype=wp.int32,
+        )
+
         reference_starts, reference_ends, reference_colors = (
-            _make_reference_lines()
+            make_reference_lines()
         )
         viewer.log_lines(
             "/reference/grid_and_axes",
@@ -146,25 +102,20 @@ def main() -> None:
             reference_colors,
         )
 
-        # The fingertip is only a few centimeters across.
-        viewer.set_camera(
-            wp.vec3(0.08, -0.08, 0.05),
-            -25.0,
-            135.0,
-        )
-        viewer.camera.fov = 25.0
-        viewer.camera_speed = 0.03
-
-        # ViewerGL does not expose mouse sensitivities as public settings.
-        # This script is a validation-only viewer, so keep the local tuning
-        # explicit while leaving production code independent of private API.
-        viewer.gui._camera_orbit_sensitivity = 0.03
-        viewer.gui._camera_dolly_scroll_sensitivity = 0.03
-        viewer.gui._camera_dolly_drag_sensitivity = 0.003
+        configure_fingertip_camera(viewer)
 
         while viewer.is_running():
             viewer.begin_frame(0.0)
             viewer.log_state(state)
+            viewer.log_mesh(
+                "/fingertip/silicone_surface",
+                state.particle_q,
+                silicone_surface_indices,
+                color=_SILICONE_COLOR,
+                roughness=0.85,
+                metallic=0.0,
+                backface_culling=False,
+            )
             viewer.end_frame()
 
     finally:

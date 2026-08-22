@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from math import isclose, isfinite
+from math import isclose
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -34,9 +34,6 @@ def _make_carrier_mesh(
     """Extrude analytic carrier geometry into a Newton surface mesh."""
     if not isinstance(carrier, Carrier):
         raise TypeError("carrier must be a Carrier geometry")
-
-    if not isfinite(extrusion_depth_mm) or extrusion_depth_mm <= 0.0:
-        raise ValueError("extrusion_depth_mm must be finite and positive")
 
     boundary = tuple(
         (float(x_mm), float(z_mm))

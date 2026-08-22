@@ -3,7 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import isfinite, sqrt
+from math import sqrt
+
+from lumo.util.scalar_validation import (
+    require_finite,
+    require_nonnegative,
+    require_positive,
+)
 
 
 class InvalidFingertipParameters(ValueError):
@@ -66,19 +72,19 @@ class FingertipGeometry:
             "stem_width_mm",
             "stem_height_mm",
         ):
-            value = getattr(self, name)
-            if not isfinite(value) or value <= 0.0:
-                raise InvalidFingertipParameters(
-                    f"{name} must be finite and positive, got {value!r}"
-                )
+            require_positive(
+                name,
+                getattr(self, name),
+                error_type=InvalidFingertipParameters,
+            )
 
     def _validate_clearance(self) -> None:
         for name in ("void_width_mm", "void_height_mm"):
-            value = getattr(self, name)
-            if not isfinite(value) or value < 0.0:
-                raise InvalidFingertipParameters(
-                    f"{name} must be finite and non-negative, got {value!r}"
-                )
+            require_nonnegative(
+                name,
+                getattr(self, name),
+                error_type=InvalidFingertipParameters,
+            )
 
     def _validate_link_geometry(self) -> None:
         if self.bond_extension_height_mm >= self.link_thickness_mm:
@@ -153,14 +159,10 @@ def semiellipse_depth_at_x_mm(
         ("height_mm", height_mm),
         ("x_mm", x_mm),
     ):
-        if not isfinite(value):
-            raise ValueError(f"{name} must be finite, got {value!r}")
+        require_finite(name, value)
 
-    if half_width_mm <= 0.0:
-        raise ValueError("half_width_mm must be positive")
-
-    if height_mm <= 0.0:
-        raise ValueError("height_mm must be positive")
+    require_positive("half_width_mm", half_width_mm)
+    require_positive("height_mm", height_mm)
 
     if not 0.0 <= abs(x_mm) < half_width_mm:
         raise ValueError(

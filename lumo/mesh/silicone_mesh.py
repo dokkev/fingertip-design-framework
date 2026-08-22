@@ -49,12 +49,6 @@ def _make_silicone_mesh(
     if not isinstance(silicone, Silicone):
         raise TypeError("silicone must be a Silicone geometry")
 
-    if extrusion_depth_mm <= 0.0:
-        raise ValueError("extrusion_depth_mm must be positive")
-
-    if element_size_mm <= 0.0:
-        raise ValueError("element_size_mm must be positive")
-
     try:
         import gmsh
         import newton

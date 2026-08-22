@@ -71,7 +71,6 @@ lumo.fingertip.FingertipParameters
 | `lumo/optimization/` | fixed protocol, objective, registry, Ax boundary, evaluator, artifact and atomic checkpoint persistence | production evaluation and search boundary |
 | `validation/` | reports, smoke tests, regression/reference workflows, bounded campaign runners | domain/solver/transport ownership; production evaluation is in `lumo/optimization/` |
 | `validation/reference/` | preserved fixed-state and Kratos reference implementations | validation-only |
-| `visualization/config/` | plot and persisted-field display configuration | repository-only, not installed core |
 | `gui/` | NiceGUI design-space shell and diagnostics | repository-only optional consumer, not installed core |
 | `scripts/` | user workflows and developer tools | repository-only entry points, not installed core |
 | `tests/` | unit and dependency/runtime smoke contracts | never a production dependency |
@@ -80,9 +79,9 @@ lumo.fingertip.FingertipParameters
 
 Only the paths above are current architecture landmarks. Empty local
 directories named `case/`, `examples/`, `fem/`, or `mechanics3d/` are not
-production packages and must not be recreated. `visualization/` is reserved
-for repository-only configuration and presentation support; it is not a
-production Python package.
+production packages and must not be recreated. There is no installed
+visualization package in the current implementation; presentation support
+remains a repository-level concern.
 
 
 ## Code map

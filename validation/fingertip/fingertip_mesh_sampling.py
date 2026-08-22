@@ -1,19 +1,18 @@
-"""Sample feasible fingertips and validate tetrahedral mesh generation."""
+"""Sample feasible fingertips and validate both generated mesh components."""
 
 from __future__ import annotations
 
+from collections import Counter
+
 import numpy as np
 
-from lumo.fingertip.fingertip import Fingertip
-from lumo.fingertip.fingertip_param import FingertipParameters
-from lumo.mesh.fingertip_mesh import make_fingertip_mesh
-from lumo.optimization.design_param_bound import (
+from lumo.fingertip import Fingertip, FingertipParameters
+from lumo.mesh import make_fingertip_mesh
+from lumo.optimization import (
     DesignParameterBounds,
-    ParameterBound,
-)
-from lumo.optimization.design_space import (
     DesignSpace,
     LinearConstraint,
+    ParameterBound,
 )
 
 
@@ -99,6 +98,61 @@ def validate_tet_orientation(mesh) -> int:
     return int(signs[0])
 
 
+def validate_carrier_surface(mesh) -> int:
+    """Require a closed, nondegenerate, outward-oriented carrier surface."""
+    vertices = np.asarray(mesh.vertices)
+    triangles = np.asarray(mesh.indices).reshape(-1, 3)
+
+    if vertices.ndim != 2 or vertices.shape[1] != 3:
+        raise RuntimeError("carrier vertices must have shape (N, 3)")
+
+    if not triangles.size:
+        raise RuntimeError("carrier mesh contains no triangles")
+
+    points = vertices[triangles]
+    cross_products = np.cross(
+        points[:, 1] - points[:, 0],
+        points[:, 2] - points[:, 0],
+    )
+    twice_areas = np.linalg.norm(cross_products, axis=1)
+
+    if np.any(~np.isfinite(twice_areas)) or np.any(twice_areas <= 0.0):
+        raise RuntimeError("carrier mesh contains degenerate triangles")
+
+    undirected_edges: Counter[tuple[int, int]] = Counter()
+    directed_edges: Counter[tuple[int, int]] = Counter()
+
+    for triangle in triangles:
+        for start, end in (
+            (int(triangle[0]), int(triangle[1])),
+            (int(triangle[1]), int(triangle[2])),
+            (int(triangle[2]), int(triangle[0])),
+        ):
+            undirected_edges[tuple(sorted((start, end)))] += 1
+            directed_edges[(start, end)] += 1
+
+    if any(count != 2 for count in undirected_edges.values()):
+        raise RuntimeError("carrier mesh is not a closed surface")
+
+    if any(
+        directed_edges[(start, end)] != 1
+        or directed_edges[(end, start)] != 1
+        for start, end in undirected_edges
+    ):
+        raise RuntimeError("carrier mesh has inconsistent triangle winding")
+
+    signed_volume = np.einsum(
+        "ij,ij->i",
+        points[:, 0],
+        np.cross(points[:, 1], points[:, 2]),
+    ).sum() / 6.0
+
+    if not np.isfinite(signed_volume) or signed_volume <= 0.0:
+        raise RuntimeError("carrier mesh does not have outward winding")
+
+    return 1
+
+
 def main() -> None:
     rng = np.random.default_rng(0)
     space = make_design_space()
@@ -113,11 +167,14 @@ def main() -> None:
     tet_counts: list[int] = []
     surface_triangle_counts: list[int] = []
     tet_orientation_signs: list[int] = []
+    carrier_triangle_counts: list[int] = []
+    carrier_orientation_signs: list[int] = []
 
     feasible_count = 0
     mesh_failures = 0
 
     for attempt in range(1, max_attempts + 1):
+        print(f"\rSampling fingertip mesh {attempt}/{target_meshes}...", end="")
         candidate = sample_candidate(space, rng)
 
         if not space.is_feasible(candidate):
@@ -148,6 +205,9 @@ def main() -> None:
             tet_orientation_signs.append(
                 validate_tet_orientation(mesh.silicone)
             )
+            carrier_orientation_signs.append(
+                validate_carrier_surface(mesh.carrier)
+            )
         except Exception as exc:
             mesh_failures += 1
 
@@ -162,6 +222,9 @@ def main() -> None:
         tet_counts.append(mesh.silicone.tet_count)
         surface_triangle_counts.append(
             len(mesh.silicone.surface_tri_indices) // 3
+        )
+        carrier_triangle_counts.append(
+            len(np.asarray(mesh.carrier.indices)) // 3
         )
 
         if len(tet_counts) >= target_meshes:
@@ -191,8 +254,14 @@ def main() -> None:
             "successful meshes use inconsistent tetrahedron orientations"
         )
 
+    if len(set(carrier_orientation_signs)) != 1:
+        raise RuntimeError(
+            "successful meshes use inconsistent carrier orientations"
+        )
+
     orientation = "positive" if tet_orientation_signs[0] > 0 else "negative"
     print(f"Tet volume orientation: {orientation}")
+    print("Carrier surface orientation: outward")
 
     print()
     print("Mesh size")
@@ -203,6 +272,10 @@ def main() -> None:
     _print_statistics(
         "surface triangles",
         surface_triangle_counts,
+    )
+    _print_statistics(
+        "carrier triangles",
+        carrier_triangle_counts,
     )
 
 

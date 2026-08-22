@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from lumo.fingertip.fingertip import Fingertip
+from lumo.util.scalar_validation import require_positive
 
 from .carrier_mesh import _make_carrier_mesh
 from .silicone_mesh import _make_silicone_mesh
@@ -32,6 +33,9 @@ def make_fingertip_mesh(
     """Discretize the silicone and carrier of one fingertip assembly."""
     if not isinstance(fingertip, Fingertip):
         raise TypeError("fingertip must be a Fingertip")
+
+    require_positive("extrusion_depth_mm", extrusion_depth_mm)
+    require_positive("element_size_mm", element_size_mm)
 
     silicone = _make_silicone_mesh(
         fingertip.silicone,

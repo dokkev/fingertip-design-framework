@@ -5,10 +5,12 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from math import isfinite
+from types import MappingProxyType
 
 from lumo.fingertip.fingertip import Fingertip
 from lumo.fingertip.fingertip_param import FingertipParameters
 from lumo.fingertip.geometric_param import InvalidFingertipParameters
+from lumo.util.scalar_validation import require_finite
 
 from .design_param_bound import DesignParameterBounds
 
@@ -32,11 +34,15 @@ class LinearConstraint:
     upper: float | None = None
 
     def __post_init__(self) -> None:
-        coefficients = {
-            name: float(value)
-            for name, value in self.coefficients.items()
-            if float(value) != 0.0
-        }
+        coefficients = {}
+        for name, raw_value in self.coefficients.items():
+            require_finite(
+                f"coefficient for {name!r}",
+                raw_value,
+            )
+            value = float(raw_value)
+            if value != 0.0:
+                coefficients[name] = value
 
         if not coefficients:
             raise ValueError(
@@ -49,24 +55,22 @@ class LinearConstraint:
                     "constraint parameter names must use '<group>.<parameter>'"
                 )
 
-            if not isfinite(coefficient):
-                raise ValueError(
-                    f"coefficient for {name!r} must be finite"
-                )
+        if self.lower is None:
+            lower = None
+        else:
+            require_finite("constraint lower bound", self.lower)
+            lower = float(self.lower)
 
-        lower = None if self.lower is None else float(self.lower)
-        upper = None if self.upper is None else float(self.upper)
+        if self.upper is None:
+            upper = None
+        else:
+            require_finite("constraint upper bound", self.upper)
+            upper = float(self.upper)
 
         if lower is None and upper is None:
             raise ValueError(
                 "linear constraint requires lower or upper"
             )
-
-        if lower is not None and not isfinite(lower):
-            raise ValueError("constraint lower bound must be finite")
-
-        if upper is not None and not isfinite(upper):
-            raise ValueError("constraint upper bound must be finite")
 
         if (
             lower is not None
@@ -77,7 +81,11 @@ class LinearConstraint:
                 "constraint must satisfy lower <= upper"
             )
 
-        object.__setattr__(self, "coefficients", coefficients)
+        object.__setattr__(
+            self,
+            "coefficients",
+            MappingProxyType(coefficients),
+        )
         object.__setattr__(self, "lower", lower)
         object.__setattr__(self, "upper", upper)
 

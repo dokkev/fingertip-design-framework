@@ -20,11 +20,11 @@ class ParameterBound:
     upper: float
 
     def __post_init__(self) -> None:
+        require_finite("lower", self.lower)
+        require_finite("upper", self.upper)
+
         lower = float(self.lower)
         upper = float(self.upper)
-
-        require_finite("lower", lower)
-        require_finite("upper", upper)
 
         if lower >= upper:
             raise ValueError(

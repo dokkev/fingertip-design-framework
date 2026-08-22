@@ -11,6 +11,7 @@ Current ownership is intentionally limited to:
 - `util/` — dependency-free shared scalar helpers
 - `fingertip/` — fingertip parameters and constructed geometry
 - `mesh/` — `FingertipMesh` and its silicone/carrier discretization
+- `optimization/` — design-space bounds and feasibility constraints
 - `mechanics/` — mechanics behavior
 - `ray_tracing/` — ray-tracing behavior
 
