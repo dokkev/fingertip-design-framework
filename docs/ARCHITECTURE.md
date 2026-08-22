@@ -218,32 +218,40 @@ advances Newton state, the global step count, or simulation time.
 identity pose, and `step()` reapplies it through the rigid carrier and bonded
 silicone vertices before every Newton tick.
 Callers update other kinematic objects as needed before one tick and may query
-the resulting indenter reaction force afterward. The runtime may later
-orchestrate optical work, but no ray-tracing behavior is part of the current
-runtime.
+the resulting indenter reaction force or maximum active silicone-particle
+speed afterward. These observations reduce into preallocated scalar device
+buffers rather than cloning full velocity or wrench arrays on every tick. The
+runtime may later orchestrate optical work, but no ray-tracing behavior is part
+of the current runtime.
 
 #### `indentation.py`
 
-`IndentationCase` is a plain case definition plus its final runtime fields; it
-does not wrap those fields in forwarding properties or split one tick across
-case methods. `IndentationStudy` owns one immutable analytic `Fingertip` and an
-ordered tuple of cases. It constructs a fresh builder, indenter,
-`LumoSimulation`, and Newton state for each case, so every case uses the exact
-same fingertip object but starts from an independent reference state.
+`IndentationCase` is a plain case definition plus lightweight scalar and pose
+results. It never retains its `LumoSimulation` or `Indenter`.
+`IndentationStudy` owns one immutable analytic `Fingertip` and an ordered tuple
+of cases. It constructs a fresh builder, indenter, `LumoSimulation`, and Newton
+state for each case, so every case uses the exact same fingertip object but
+starts from an independent reference state.
 
-The study keeps the per-case loop direct:
+The study keeps the per-case quasi-static search direct:
 
 ```text
 apply indenter pose
         ↓
-LumoSimulation.step()
+hold pose and call LumoSimulation.step()
         ↓
-measure transient reaction force
+require low active-particle speed and low force change for consecutive ticks
+        ↓
+measure settled reaction force
+        ↓
+correct the one-dimensional pose step until the force is within tolerance
 ```
 
 Only `LumoSimulation.step()` mutates Newton state or simulation time. The study
 does not share mutable Newton state between cases, run cases in parallel, or
-introduce a generic simulation manager.
+introduce a generic simulation manager. A synchronous case-inspection callback
+may validate the live final state; after it returns, the case runtime is
+released before the next case is constructed.
 
 ### `lumo/ray_tracing/`
 
@@ -340,10 +348,11 @@ contacts; it does not advance or mutate the simulation.
 
 `validation/contact-physics/sphere_indentation.py` creates one analytic
 fingertip and uses an `IndentationStudy` to run the packaged 5, 10, and 20 mm
-diameter sphere URDFs in three independent simulations at distinct fingertip X
-locations. Each approach stops on the first transient reaction-force sample at
-or above `20 N`, then checks contact, finite silicone state, and perfect-bond
-drift.
+diameter sphere URDFs at `X=-7.5`, `0`, and `+7.5 mm`. It places each sphere
+from the local analytic semiellipse height at that X location. Each of the nine
+independent simulations settles at held poses and searches for a reaction force
+within `0.1 N` of `20 N`, then checks contact, finite silicone state,
+perfect-bond drift, and carrier penetration before releasing that runtime.
 
 `validation/contact-physics/poisson_ratio_sweep.py` repeats that prescribed
 contact protocol for explicit near-incompressible Poisson ratios. It derives

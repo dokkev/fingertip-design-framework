@@ -25,6 +25,44 @@ def _set_body_pose(
     body_q[body_index] = pose
 
 
+@wp.kernel
+def _project_body_reaction_force(
+    body_wrenches: wp.array(dtype=wp.spatial_vector),
+    body_index: int,
+    motion_direction_W: wp.vec3,
+    reaction_force_n: wp.array(dtype=float),
+):
+    force_on_body_W = wp.spatial_top(body_wrenches[body_index])
+    reaction_force_n[0] = wp.max(
+        0.0,
+        -wp.dot(force_on_body_W, motion_direction_W),
+    )
+
+
+@wp.kernel
+def _measure_active_particle_speed(
+    particle_qd: wp.array(dtype=wp.vec3),
+    particle_flags: wp.array(dtype=wp.int32),
+    active_flag: int,
+    maximum_speed_m_s: wp.array(dtype=float),
+    nonfinite_velocity_count: wp.array(dtype=wp.int32),
+):
+    particle_index = wp.tid()
+    if (particle_flags[particle_index] & active_flag) == 0:
+        return
+
+    velocity_W_m_s = particle_qd[particle_index]
+    if not wp.isfinite(velocity_W_m_s):
+        wp.atomic_add(nonfinite_velocity_count, 0, 1)
+        return
+
+    wp.atomic_max(
+        maximum_speed_m_s,
+        0,
+        wp.length(velocity_W_m_s),
+    )
+
+
 class LumoSimulation:
     """Construct and own the runtime for one analytic LUMO fingertip."""
 
@@ -93,6 +131,21 @@ class LumoSimulation:
         self._body_wrenches = wp.zeros(
             model.body_count,
             dtype=wp.spatial_vector,
+            device=model.device,
+        )
+        self._reaction_force_n = wp.zeros(
+            1,
+            dtype=float,
+            device=model.device,
+        )
+        self._maximum_particle_speed_m_s = wp.zeros(
+            1,
+            dtype=float,
+            device=model.device,
+        )
+        self._nonfinite_particle_velocity_count = wp.zeros(
+            1,
+            dtype=wp.int32,
             device=model.device,
         )
         self._has_step_result = False
@@ -188,21 +241,54 @@ class LumoSimulation:
             raise ValueError("motion_direction_W must be a finite 3-vector")
         direction_norm = float(np.linalg.norm(direction_W))
         require_positive("motion_direction_W norm", direction_norm)
-        direction_W /= direction_norm
+        direction_W = direction_W / direction_norm
 
-        wrench_on_indenter_W = self._body_wrenches.numpy()[
-            indenter.body_index
-        ]
-        if not np.all(np.isfinite(wrench_on_indenter_W)):
+        wp.launch(
+            _project_body_reaction_force,
+            dim=1,
+            inputs=[
+                self._body_wrenches,
+                indenter.body_index,
+                wp.vec3(*direction_W),
+            ],
+            outputs=[self._reaction_force_n],
+            device=self.fingertip_model.model.device,
+        )
+        reaction_force_n = float(self._reaction_force_n.numpy()[0])
+        if not np.isfinite(reaction_force_n):
             raise RuntimeError(
                 "simulation step produced a non-finite body wrench"
             )
+        return reaction_force_n
 
-        force_on_indenter_W = wrench_on_indenter_W[:3]
-        return max(
-            0.0,
-            -float(np.dot(force_on_indenter_W, direction_W)),
+    def maximum_active_particle_speed_m_s(self) -> float:
+        """Return the maximum speed among active silicone particles."""
+        particle_qd = self.state.particle_qd
+        particle_flags = self.fingertip_model.model.particle_flags
+        if particle_qd is None or particle_flags is None:
+            raise RuntimeError("simulation has no silicone particle velocity")
+
+        self._maximum_particle_speed_m_s.zero_()
+        self._nonfinite_particle_velocity_count.zero_()
+        wp.launch(
+            _measure_active_particle_speed,
+            dim=self.fingertip_model.model.particle_count,
+            inputs=[
+                particle_qd,
+                particle_flags,
+                int(newton.ParticleFlags.ACTIVE),
+            ],
+            outputs=[
+                self._maximum_particle_speed_m_s,
+                self._nonfinite_particle_velocity_count,
+            ],
+            device=self.fingertip_model.model.device,
         )
+        if int(self._nonfinite_particle_velocity_count.numpy()[0]) != 0:
+            raise RuntimeError(
+                "simulation step produced a non-finite particle velocity"
+            )
+        return float(self._maximum_particle_speed_m_s.numpy()[0])
 
 
 __all__ = ["LumoSimulation"]

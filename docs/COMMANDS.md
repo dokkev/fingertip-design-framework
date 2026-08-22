@@ -59,9 +59,11 @@ Run the three-location spherical indentation validation explicitly:
 conda run -n lit python validation/contact-physics/sphere_indentation.py
 ```
 
-The 5, 10, and 20 mm diameter URDF spheres run in independent simulations at
-`X=-7.5`, `0`, and `+7.5 mm`, respectively. Each prescribed positive-Z motion
-stops at a transient reaction-force target of `20 N`.
+The 5, 10, and 20 mm diameter URDF spheres each run in independent simulations
+at `X=-7.5`, `0`, and `+7.5 mm`, for nine cases total. Each prescribed
+positive-Z indentation settles at held poses and searches for a reaction force
+within `0.1 N` of `20 N`. This is an explicit multi-simulation validation, not
+part of ordinary focused tests.
 
 Run the Dragon Skin 10 NV Poisson-ratio contact sweep explicitly:
 

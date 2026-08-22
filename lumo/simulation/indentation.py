@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 
 import newton
@@ -16,7 +16,7 @@ from lumo.util.scalar_validation import require_positive
 
 
 class IndentationCase:
-    """Definition and final state of one prescribed URDF indentation."""
+    """Definition and lightweight result of one URDF indentation."""
 
     def __init__(
         self,
@@ -72,10 +72,14 @@ class IndentationCase:
         self.target_force_n = float(target_force_n)
         self.max_sim_time_s = float(max_sim_time_s)
 
-        self.simulation: LumoSimulation | None = None
-        self.indenter: Indenter | None = None
+        self.final_tf: wp.transform | None = None
+        self.travel_m: float | None = None
         self.step_count = 0
+        self.simulation_time_s: float | None = None
+        self.search_iteration_count = 0
         self.reaction_force_n: float | None = None
+        self.maximum_particle_speed_m_s: float | None = None
+        self.force_change_n: float | None = None
 
 
 class IndentationStudy:
@@ -87,10 +91,31 @@ class IndentationStudy:
         cases: Iterable[IndentationCase],
         *,
         sim_frequency: float,
+        force_tolerance_n: float,
+        velocity_tolerance_m_s: float,
+        force_change_tolerance_n: float,
+        settled_tick_count: int,
+        max_search_iterations: int,
     ) -> None:
         if not isinstance(fingertip, Fingertip):
             raise TypeError("fingertip must be a Fingertip")
         require_positive("sim_frequency", sim_frequency)
+        require_positive("force_tolerance_n", force_tolerance_n)
+        require_positive("velocity_tolerance_m_s", velocity_tolerance_m_s)
+        require_positive(
+            "force_change_tolerance_n",
+            force_change_tolerance_n,
+        )
+        for name, value in (
+            ("settled_tick_count", settled_tick_count),
+            ("max_search_iterations", max_search_iterations),
+        ):
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, int)
+                or value <= 0
+            ):
+                raise ValueError(f"{name} must be a positive integer")
 
         case_tuple = tuple(cases)
         if not case_tuple:
@@ -102,18 +127,33 @@ class IndentationStudy:
             raise TypeError("cases must contain only IndentationCase objects")
         if len({id(case) for case in case_tuple}) != len(case_tuple):
             raise ValueError("cases must not contain the same object twice")
-        if any(case.simulation is not None for case in case_tuple):
+        if any(case.final_tf is not None for case in case_tuple):
             raise ValueError("cases must not have been run already")
 
         self.fingertip = fingertip
         self.cases = case_tuple
         self.sim_frequency = float(sim_frequency)
+        self.force_tolerance_n = float(force_tolerance_n)
+        self.velocity_tolerance_m_s = float(velocity_tolerance_m_s)
+        self.force_change_tolerance_n = float(force_change_tolerance_n)
+        self.settled_tick_count = settled_tick_count
+        self.max_search_iterations = max_search_iterations
         self._has_run = False
 
-    def run(self) -> None:
-        """Run every case from a fresh reference state, in input order."""
+    def run(
+        self,
+        *,
+        inspect_case: Callable[
+            [IndentationCase, LumoSimulation, Indenter],
+            None,
+        ]
+        | None = None,
+    ) -> None:
+        """Run and release each case, optionally inspecting its live result."""
         if self._has_run:
             raise RuntimeError("indentation study has already been run")
+        if inspect_case is not None and not callable(inspect_case):
+            raise TypeError("inspect_case must be callable")
         self._has_run = True
 
         for case in self.cases:
@@ -124,6 +164,8 @@ class IndentationStudy:
                 case.translation_step_W_m,
                 dtype=np.float64,
             )
+            position_step_m = float(np.linalg.norm(translation_step_W_m))
+            motion_direction_W = translation_step_W_m / position_step_m
             max_step_count = int(
                 case.max_sim_time_s * self.sim_frequency
             )
@@ -143,8 +185,6 @@ class IndentationStudy:
                 builder=builder,
                 sim_frequency=self.sim_frequency,
             )
-            case.simulation = simulation
-            case.indenter = indenter
 
             simulation.collision_pipeline.collide(
                 simulation.state,
@@ -158,32 +198,97 @@ class IndentationStudy:
                     f"{case.name} has soft contacts before prescribed motion"
                 )
 
-            for step_count in range(1, max_step_count + 1):
+            travel_m = 0.0
+            previous_search_error_n = -case.target_force_n
+            reaction_force_n = 0.0
+            maximum_particle_speed_m_s = float("inf")
+            force_change_n = float("inf")
+
+            for search_iteration in range(
+                1,
+                self.max_search_iterations + 1,
+            ):
+                if previous_search_error_n < 0.0:
+                    travel_m += position_step_m
+                else:
+                    travel_m -= position_step_m
                 translation_W_m = (
                     initial_translation_W_m
-                    + step_count * translation_step_W_m
+                    + travel_m * motion_direction_W
+                )
+                pose = wp.transform(
+                    wp.vec3(*translation_W_m),
+                    initial_rotation,
                 )
                 simulation.apply_indenter_pose(
                     indenter,
-                    wp.transform(
-                        wp.vec3(*translation_W_m),
-                        initial_rotation,
-                    ),
+                    pose,
                 )
-                simulation.step()
-                case.step_count = step_count
-                case.reaction_force_n = simulation.indenter_reaction_force(
-                    indenter,
-                    motion_direction_W=case.translation_step_W_m,
-                )
-                if case.reaction_force_n >= case.target_force_n:
+
+                settled_ticks = 0
+                previous_tick_force_n: float | None = None
+                while settled_ticks < self.settled_tick_count:
+                    if simulation.step_count >= max_step_count:
+                        raise RuntimeError(
+                            f"{case.name} did not reach a settled "
+                            f"{case.target_force_n:g} N force within "
+                            f"{case.max_sim_time_s:g} s; last observed force "
+                            f"was {reaction_force_n:.9e} N"
+                        )
+
+                    simulation.step()
+                    reaction_force_n = simulation.indenter_reaction_force(
+                        indenter,
+                        motion_direction_W=case.translation_step_W_m,
+                    )
+                    maximum_particle_speed_m_s = (
+                        simulation.maximum_active_particle_speed_m_s()
+                    )
+                    force_change_n = (
+                        float("inf")
+                        if previous_tick_force_n is None
+                        else abs(reaction_force_n - previous_tick_force_n)
+                    )
+                    previous_tick_force_n = reaction_force_n
+
+                    if (
+                        maximum_particle_speed_m_s
+                        <= self.velocity_tolerance_m_s
+                        and force_change_n
+                        <= self.force_change_tolerance_n
+                    ):
+                        settled_ticks += 1
+                    else:
+                        settled_ticks = 0
+
+                search_error_n = reaction_force_n - case.target_force_n
+                if abs(search_error_n) <= self.force_tolerance_n:
+                    case.final_tf = pose
+                    case.travel_m = travel_m
+                    case.step_count = simulation.step_count
+                    case.simulation_time_s = simulation.time_s
+                    case.search_iteration_count = search_iteration
+                    case.reaction_force_n = reaction_force_n
+                    case.maximum_particle_speed_m_s = (
+                        maximum_particle_speed_m_s
+                    )
+                    case.force_change_n = force_change_n
+                    if inspect_case is not None:
+                        inspect_case(case, simulation, indenter)
                     break
+
+                if search_error_n * previous_search_error_n < 0.0:
+                    position_step_m *= 0.5
+                previous_search_error_n = search_error_n
             else:
                 raise RuntimeError(
-                    f"{case.name} did not reach {case.target_force_n:g} N "
-                    f"within {case.max_sim_time_s:g} s; last force was "
-                    f"{case.reaction_force_n:.9e} N"
+                    f"{case.name} did not reach the settled "
+                    f"{case.target_force_n:g} N target within "
+                    f"{self.max_search_iterations} search iterations; last "
+                    f"settled force was {reaction_force_n:.9e} N"
                 )
+
+            del simulation, indenter, builder
 
 
 def _soft_contact_count_for_body(
