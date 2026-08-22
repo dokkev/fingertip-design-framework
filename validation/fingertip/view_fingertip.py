@@ -8,7 +8,10 @@ import warp as wp
 
 from lumo.fingertip.fingertip import Fingertip
 from lumo.fingertip.fingertip_param import FingertipParameters
-from lumo.mechanics import build_fingertip_newton_model
+from lumo.newton import (
+    FingertipNewtonModel,
+    build_fingertip_newton_model,
+)
 from lumo.mesh.fingertip_mesh import make_fingertip_mesh
 from lumo.util.viewer_util import (
     configure_fingertip_camera,
@@ -30,21 +33,20 @@ def main() -> None:
         element_size_mm=1.0,
     )
 
-    mechanics = build_fingertip_newton_model(
+    fingertip_newton: FingertipNewtonModel = build_fingertip_newton_model(
         mesh,
         gravity=0.0,
         carrier_color=_ALUMINUM_COLOR,
     )
-    model = mechanics.model
+    model = fingertip_newton.model
     state = model.state()
 
     print("Newton fingertip")
     print("-----------------")
     print(f"mesh vertices:     {mesh.silicone.vertex_count}")
     print(f"mesh tetrahedra:   {mesh.silicone.tet_count}")
-    print(
-        f"bonded vertices:   {mechanics.bonded_particle_indices.shape[0]}"
-    )
+    bonded_vertex_count = fingertip_newton.bonded_particle_indices.shape[0]
+    print(f"bonded vertices:   {bonded_vertex_count}")
     print(f"model particles:   {model.particle_count}")
     print(f"model tetrahedra:  {model.tet_count}")
 

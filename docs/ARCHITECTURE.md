@@ -22,7 +22,7 @@ Route a change to the smallest owning area:
 | morphology fields, geometry invariants | `lumo/fingertip/` | solver settings, OptiX, GUI |
 | Gmsh or neutral mesh records | `lumo/mesh/` | mechanics stepping, objective policy |
 | first-contact pose and approach geometry | `lumo/contact/` | Newton stepping, optical scoring |
-| Newton/Warp mechanics | `lumo/physics/` | Ax policy, validation reports |
+| Newton/Warp mechanics | `lumo/newton/` | Ax policy, validation reports |
 | transport geometry, OptiX, optical results | `lumo/ray_tracing/` | mechanics imports, campaign policy |
 | concrete LUMO simulation flow | `lumo/` | generic backend abstractions, objective policy |
 | protocol, design space, objective, Ax boundary | `lumo/optimization/` | solver implementation |
@@ -64,7 +64,7 @@ lumo.fingertip.FingertipParameters
 | `lumo/util/` | dependency-free scalar validation helpers | narrow shared utility boundary |
 | `lumo/fingertip/` | raw morphology parameters and constructed Silicone/Carrier geometry | production domain source |
 | `lumo/mesh/` | 3D neutral volume-mesh records, Gmsh meshing, rigid geometry | production discretization boundary |
-| `lumo/mechanics/` | concrete Newton model construction and fingertip kinematic bond update | production mechanics boundary |
+| `lumo/newton/` | concrete Newton model construction and fingertip kinematic bond update | production mechanics boundary |
 | `lumo/contact/` | geometry-derived first-contact and sphere alignment | production contact initialization |
 | `lumo/physics/` | Newton 1.4 / Warp mechanics and trajectory state | one production mechanics path |
 | `lumo/ray_tracing/` | optical contracts and FULL_3D transport implementation | production BO path |
@@ -92,12 +92,12 @@ remains a repository-level concern.
 | morphology, material, optical inputs, and analytic assembly | `lumo/fingertip/fingertip_param.py::FingertipParameters` | `lumo/fingertip/fingertip.py`, `lumo/fingertip/geometric_param.py` |
 | discretized fingertip assembly and bonded support indices | `lumo/mesh/fingertip_mesh.py::FingertipMesh` | `lumo/mesh/fingertip_mesh.py::make_fingertip_mesh` |
 | neutral volume mesh | `lumo/mesh/volume/contracts.py` | `lumo/mesh/volume/mesh.py`, `lumo/mesh/volume/state.py` |
-| fingertip Newton boundary condition | `lumo/mechanics/fingertip.py::FingertipNewtonModel` | `validation/fingertip/kinematic_bond.py` |
+| fingertip Newton boundary condition | `lumo/newton/model.py::FingertipNewtonModel` | `validation/fingertip/kinematic_bond.py` |
 | rigid object/carrier mesh | `lumo/mesh/rigid/object.py` | `lumo/mesh/rigid/carrier.py` |
 | neutral rigid pose | `lumo/mesh/rigid/object.py::RigidPose3D` | `lumo/contact/`, `lumo/physics/` |
 | first contact | `lumo/contact/first_contact.py` | `lumo/contact/sphere_alignment.py` |
 | mechanics public API | `lumo/physics/trajectory/indentation.py` | `lumo/physics/trajectory/fingertip_adapter.py`, `lumo/physics/contracts/` |
-| Newton model and kinematic boundary | `lumo/mechanics/fingertip.py` | `validation/fingertip/kinematic_bond.py` |
+| Newton model and kinematic boundary | `lumo/newton/model.py` | `validation/fingertip/kinematic_bond.py` |
 | FULL_3D transport | `lumo/ray_tracing/optical_mechanics/transport.py` | `geometry.py`, `state_adapter.py`, `optix_backend.py` |
 | OptiX runtime/preflight | `lumo/ray_tracing/optix/runtime.py` | `scripts/tools/optix_smoke.py`, `scripts/tools/optix_doctor.py` |
 | evaluation protocol | `lumo/optimization/protocol.py` | `lumo/mechanics_contract.py` |
@@ -118,7 +118,7 @@ remains a repository-level concern.
 | `lumo.util` | small typed helpers with no domain or runtime dependencies | morphology policy, solver settings, persistence, or cross-layer orchestration |
 | `lumo.fingertip` | physical parameter groups and the constructed 2D `Fingertip` assembly containing `Silicone` and `Carrier` | mesh construction, mechanics, ray-tracing execution, UI |
 | `lumo.mesh` | `Fingertip` -> `FingertipMesh`, with silicone/carrier meshes and silicone bonded vertex indices | Newton stepping, OptiX calls, optimization policy |
-| `lumo.mechanics` | kinematic carrier body, non-active bonded particles, and state-buffer pose updates | generic attachment frameworks, contact policy, optimization |
+| `lumo.newton` | kinematic carrier body, non-active bonded particles, and state-buffer pose updates | generic attachment frameworks, contact policy, optimization |
 | `lumo.contact` | Shapely-based collision predicate, coarse bracket/bisection, canonical sphere alignment, clear/spawn/contact poses | deformation solve and optical transport |
 | `lumo.physics` | NumPy-facing Newton/Warp settings/results, prescribed indentation, continuous trajectory checkpoints, contact diagnostics | Ax generation, objective calculation, validation orchestration |
 | `lumo.ray_tracing` | optical boundary/result contracts, FULL_3D surface geometry, CUDA/OptiX runtime and launches | mechanics state evolution and BO decisions |
@@ -306,7 +306,7 @@ unsupported until the mechanics owner defines one.
 | Boundary | Owner | Consumer | Contract |
 | --- | --- | --- | --- |
 | morphology parameters and analytic assembly | `lumo.fingertip` | `lumo.mesh`, `lumo.optimization`, `validation`, `gui` | immutable physical inputs plus `Fingertip.silicone` and `Fingertip.carrier`; public geometry units are mm |
-| neutral volume mesh and support map | `lumo.mesh` | `lumo.mechanics`, `lumo.physics`, `lumo.ray_tracing`, `validation` | one canonical tetra topology plus bonded silicone vertex indices; no solver or OptiX object |
+| neutral volume mesh and support map | `lumo.mesh` | `lumo.newton`, `lumo.physics`, `lumo.ray_tracing`, `validation` | one canonical tetra topology plus bonded silicone vertex indices; no solver or OptiX object |
 | first-contact result | `lumo.contact` | `lumo.physics`, `validation` | geometry-derived poses and post-contact travel; `T_spawn` is clear-side initialization only |
 | mechanics result/checkpoint | `lumo.physics` | `lumo`, `lumo.optimization`, `validation` | NumPy arrays plus an explicit immutable checkpoint-state contract; debug diagnostics are not a required handoff |
 | in-memory deformed state | `lumo.mesh.FingertipVolumeState` via `lumo` | `lumo.ray_tracing.optical_mechanics` | exact Newton-compatible node order, deformed coordinates, and semantic triangles; authoritative production handoff |
@@ -336,7 +336,7 @@ mechanics/ray-tracing artifacts or optimization metrics.
 | Dependency | Owner | Boundary |
 | --- | --- | --- |
 | Gmsh | `lumo.mesh` | imported only when volume meshing is requested |
-| Newton / Warp | `lumo.mechanics` | required only for mechanics execution; keep geometry and optimization packages neutral |
+| Newton / Warp | `lumo.newton` | required only for mechanics execution; keep geometry and optimization packages neutral |
 | CuPy / PyOptiX / CUDA Python / NVRTC | `lumo.ray_tracing.optix` and `lumo.ray_tracing.optical_mechanics` | runtime/preflight/trace boundary; environment is externally managed |
 | Ax 1.3.1 | `lumo.optimization.adapters.ax` | optimizer execution boundary; importing `lumo.optimization` must stay lightweight |
 | NiceGUI / Matplotlib | `gui` | optional presentation boundary |
@@ -350,7 +350,7 @@ Installation and exact commands belong in `docs/COMMANDS.md`.
 The allowed high-level direction is:
 
 ```text
-lumo.fingertip -> lumo.mesh -> lumo.mechanics
+lumo.fingertip -> lumo.mesh -> lumo.newton
 lumo.fingertip / lumo.mesh -> lumo.ray_tracing
 lumo.contact / lumo.physics / lumo.ray_tracing -> lumo orchestration
 lumo -> lumo.optimization / validation consumers
@@ -368,7 +368,7 @@ Important guards:
 - `lumo.fingertip` remains geometry/model-only and does not import `lumo.mesh`, `lumo.physics`,
   `lumo.ray_tracing`, plotting, Gmsh, or Kratos;
 - `lumo.mesh` does not import mechanics, ray tracing, validation, plotting, or Kratos;
-- `lumo.mechanics` does not import ray tracing, validation, or optimization;
+- `lumo.newton` does not import ray tracing, validation, or optimization;
 - `lumo.physics` does not import ray tracing, validation, or tests;
 - `lumo.ray_tracing` does not import physics, validation, or tests;
 - low-level packages do not import GUI code;

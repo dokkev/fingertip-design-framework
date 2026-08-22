@@ -196,6 +196,7 @@ def build_fingertip_newton_model(
         label="fingertip_carrier_surface",
     )
 
+    builder.color()
     model = builder.finalize(device=device, requires_grad=False)
     local_positions = _bonded_local_positions(
         builder.particle_q,
