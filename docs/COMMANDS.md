@@ -60,10 +60,24 @@ conda run -n lit python validation/contact-physics/sphere_indentation.py
 ```
 
 The 5, 10, and 20 mm diameter URDF spheres each run in independent simulations
-at `X=-7.5`, `0`, and `+7.5 mm`, for nine cases total. Each prescribed
-positive-Z indentation settles at held poses and searches for a reaction force
-within `0.1 N` of `20 N`. This is an explicit multi-simulation validation, not
-part of ordinary focused tests.
+at `X=-7.5`, `0`, and `+7.5 mm`, for nine design trials total. Each prescribed
+positive-Z indentation triggers at `20 N`, corrects its held pose as needed,
+and must produce consecutive `20 ± 5 N` samples for `5 ms`, beginning with the
+trigger sample. This is an explicit multi-simulation validation, not part of
+ordinary focused tests.
+
+View one centered 15 mm sphere moving continuously to a transient `20 N`
+reaction force:
+
+```bash
+conda run --no-capture-output -n lit \
+  python -u validation/contact-physics/sphere_15mm_viewer.py
+```
+
+The viewer renders every Newton tick and prints travel, reaction force, maximum
+active silicone speed, and sphere contact count every 100 ticks. It freezes the
+target state until the window closes. This is an interactive contact diagnostic,
+not the force-duration validation above.
 
 Run the representative numerical/contact parameter sweep explicitly:
 
@@ -74,7 +88,8 @@ conda run --no-capture-output -n lit \
 
 Add the substantially finer `0.5 mm` mesh case with `--fine`. Add the current
 baseline 3-sphere by 3-location robustness matrix with `--matrix`. Parameters
-are varied one family at a time around the current baseline; neither flag
+are varied one family at a time around the current baseline, with the approach
+speed fixed at `25 mm/s` even when simulation frequency changes; neither flag
 creates a Cartesian product across numerical parameters. This is an expensive
 multi-simulation convergence study and is not part of ordinary focused tests.
 After every requested run finishes, it writes strict JSON to
@@ -117,6 +132,18 @@ python validation/ray-tracing/refit_test.py
 This translates the silicone surface by `+1 mm`, compares UPDATE against a
 fresh scene build, checks that the other instances remain unchanged, and
 reports representative update and full-construction timings.
+
+Run the real Newton-state to OptiX checkpoint validation:
+
+```bash
+OPTIX_INCLUDE_DIR=/path/to/NVIDIA-OptiX-SDK-9.1.0/include \
+conda run --no-capture-output -n lit \
+python validation/ray-tracing/newton_refit_test.py
+```
+
+This drives the centered 15 mm kinematic sphere at the same `25 mm/s` used by
+the interactive viewer, freezes the first transient state at or above `20 N`,
+and compares an in-place silicone UPDATE against a fresh OptiX scene build.
 
 First run the environment diagnosis:
 

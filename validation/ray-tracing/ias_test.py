@@ -76,34 +76,15 @@ def main() -> None:
     fingertip = Fingertip(FingertipParameters())
     fingertip_mesh = make_fingertip_mesh(fingertip)
 
-    silicone_vertices = np.asarray(
-        fingertip_mesh.silicone.vertices,
-        dtype=np.float32,
-    )
-    silicone_triangles = np.asarray(
+    silicone_triangle_count = np.asarray(
         fingertip_mesh.silicone.surface_tri_indices,
-        dtype=np.int32,
-    ).reshape(-1, 3)
-    bonded_vertices = np.zeros(len(silicone_vertices), dtype=bool)
-    bonded_vertices[fingertip_mesh.bonded_vertex_indices] = True
-    silicone_triangles = silicone_triangles[
-        ~np.all(bonded_vertices[silicone_triangles], axis=1)
-    ]
-
-    carrier_vertices = np.asarray(
-        fingertip_mesh.carrier.vertices,
-        dtype=np.float32,
-    )
-    carrier_triangles = np.asarray(
+    ).size // 3
+    carrier_triangle_count = np.asarray(
         fingertip_mesh.carrier.indices,
-        dtype=np.int32,
-    ).reshape(-1, 3)
+    ).size // 3
 
     scene = OptixScene(
-        silicone_vertices=silicone_vertices,
-        silicone_triangles=silicone_triangles,
-        carrier_vertices=carrier_vertices,
-        carrier_triangles=carrier_triangles,
+        fingertip_mesh,
         sphere_center=_SPHERE_CENTER_M,
         sphere_radius=_SPHERE_RADIUS_M,
         silicone_instance_id=SILICONE_INSTANCE_ID,
@@ -136,14 +117,14 @@ def main() -> None:
         "silicone",
         silicone_result,
         instance_id=SILICONE_INSTANCE_ID,
-        primitive_count=len(silicone_triangles),
+        primitive_count=silicone_triangle_count,
         triangle=True,
     )
     _require_hit(
         "carrier",
         carrier_result,
         instance_id=CARRIER_INSTANCE_ID,
-        primitive_count=len(carrier_triangles),
+        primitive_count=carrier_triangle_count,
         triangle=True,
     )
     _require_hit(
@@ -185,7 +166,7 @@ def main() -> None:
         "mask",
         masked_result,
         instance_id=SILICONE_INSTANCE_ID,
-        primitive_count=len(silicone_triangles),
+        primitive_count=silicone_triangle_count,
         triangle=True,
     )
 

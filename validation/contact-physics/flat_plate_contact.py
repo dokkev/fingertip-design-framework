@@ -30,25 +30,6 @@ _MAX_CARRIER_PENETRATION_M = 1.0e-5
 _MAX_BONDED_DRIFT_M = 1.0e-8
 
 
-def _soft_contact_count_for_body(
-    simulation: LumoSimulation,
-    body_index: int,
-) -> int:
-    contact_count = int(
-        simulation.contacts.soft_contact_count.numpy()[0]
-    )
-    shape_indices = simulation.contacts.soft_contact_shape.numpy()[
-        :contact_count
-    ]
-    valid = shape_indices >= 0
-    shape_bodies = simulation.fingertip_model.model.shape_body.numpy()
-    return int(
-        np.count_nonzero(
-            shape_bodies[shape_indices[valid]] == body_index
-        )
-    )
-
-
 def _carrier_interior_depths_m(
     positions_m: np.ndarray,
     *,
@@ -90,12 +71,8 @@ def _render(
 
 def main(*, show_viewer: bool = False) -> None:
     fingertip = Fingertip(FingertipParameters())
-    fingertip_tip_z_m = 1.0e-3 * (
-        fingertip.silicone.ellipse_center_z_mm
-        - fingertip.silicone.ellipse_radius_z_mm
-    )
     initial_plate_z_m = (
-        fingertip_tip_z_m
+        fingertip.tip_z_m
         - _INITIAL_CLEARANCE_M
         - _PLATE_HALF_THICKNESS_M
     )
@@ -156,17 +133,11 @@ def main(*, show_viewer: bool = False) -> None:
         configure_fingertip_camera(viewer)
 
     try:
-        simulation.collision_pipeline.collide(
-            simulation.state,
-            simulation.contacts,
+        initial_plate_contact_count = simulation.soft_contact_count(
+            indenter.body_index
         )
-        initial_plate_contact_count = _soft_contact_count_for_body(
-            simulation,
-            indenter.body_index,
-        )
-        initial_carrier_contact_count = _soft_contact_count_for_body(
-            simulation,
-            simulation.fingertip_model.carrier_body,
+        initial_carrier_contact_count = simulation.soft_contact_count(
+            simulation.fingertip_model.carrier_body
         )
         if initial_plate_contact_count != 0:
             raise RuntimeError(
@@ -221,13 +192,11 @@ def main(*, show_viewer: bool = False) -> None:
         contact_count = int(
             simulation.contacts.soft_contact_count.numpy()[0]
         )
-        plate_contact_count = _soft_contact_count_for_body(
-            simulation,
-            indenter.body_index,
+        plate_contact_count = simulation.soft_contact_count(
+            indenter.body_index
         )
-        carrier_contact_count = _soft_contact_count_for_body(
-            simulation,
-            simulation.fingertip_model.carrier_body,
+        carrier_contact_count = simulation.soft_contact_count(
+            simulation.fingertip_model.carrier_body
         )
         if plate_contact_count == 0:
             raise RuntimeError(

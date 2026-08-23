@@ -156,6 +156,14 @@ class Fingertip:
     silicone: Silicone = field(init=False)
     carrier: Carrier = field(init=False)
 
+    @property
+    def tip_z_m(self) -> float:
+        """Return the reference silicone tip Z coordinate in metres."""
+        return 1.0e-3 * (
+            self.silicone.ellipse_center_z_mm
+            - self.silicone.ellipse_radius_z_mm
+        )
+
     def __post_init__(self) -> None:
         geometry = self.parameters.geometry
         half_width = 0.5 * geometry.flat_pad_width_mm

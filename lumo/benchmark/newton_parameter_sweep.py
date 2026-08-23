@@ -1,4 +1,4 @@
-"""Benchmark numerical sensitivity of the quasi-static 20 N indentation."""
+"""Benchmark numerical sensitivity of force-duration 20 N indentation."""
 
 from __future__ import annotations
 
@@ -20,19 +20,16 @@ from shapely.geometry import Polygon
 from lumo.fingertip import Fingertip, FingertipParameters
 from lumo.fingertip.geometric_param import semiellipse_depth_at_x_mm
 from lumo.newton import Indenter
-from lumo.simulation import LumoSimulation
-from lumo.simulation.indentation import IndentationCase, IndentationStudy
+from lumo.simulation import DesignStudy, DesignTrial, LumoSimulation
 
 
 _TARGET_FORCE_N = 20.0
 _INITIAL_CLEARANCE_M = 1.0e-3
-_TRANSLATION_STEP_M = 2.5e-5
+_APPROACH_SPEED_M_S = 2.5e-2
 _MAX_SIM_TIME_S = 30.0
 
-_FORCE_TOLERANCE_N = 0.1
-_VELOCITY_TOLERANCE_M_S = 1.0e-4
-_FORCE_CHANGE_TOLERANCE_N = 1.0e-2
-_SETTLED_TICK_COUNT = 5
+_FORCE_TOLERANCE_N = 5.0
+_FORCE_DURATION_S = 5.0e-3
 _MAX_SEARCH_ITERATIONS = 256
 _MAX_BONDED_DRIFT_M = 1.0e-8
 _MAX_CARRIER_PENETRATION_M = 1.0e-5
@@ -156,7 +153,7 @@ def _write_results(
     matrix_results: list[tuple[float, float, _SweepResult]],
 ) -> None:
     payload = {
-        "schema_version": 1,
+        "schema_version": 2,
         "benchmark": "newton_parameter_sweep",
         "completed_at_utc": datetime.now(timezone.utc).isoformat(),
         "options": {
@@ -168,7 +165,7 @@ def _write_results(
             "contact_x_mm": 0.0,
             "target_force_n": _TARGET_FORCE_N,
             "initial_clearance_m": _INITIAL_CLEARANCE_M,
-            "translation_step_m": _TRANSLATION_STEP_M,
+            "approach_speed_m_s": _APPROACH_SPEED_M_S,
             "maximum_simulation_time_s": _MAX_SIM_TIME_S,
             "maximum_search_iterations": _MAX_SEARCH_ITERATIONS,
         },
@@ -183,9 +180,7 @@ def _write_results(
         },
         "acceptance": {
             "force_tolerance_n": _FORCE_TOLERANCE_N,
-            "velocity_tolerance_m_s": _VELOCITY_TOLERANCE_M_S,
-            "force_change_tolerance_n": _FORCE_CHANGE_TOLERANCE_N,
-            "settled_tick_count": _SETTLED_TICK_COUNT,
+            "force_duration_s": _FORCE_DURATION_S,
             "maximum_bonded_drift_m": _MAX_BONDED_DRIFT_M,
             "maximum_carrier_penetration_m": (
                 _MAX_CARRIER_PENETRATION_M
@@ -241,25 +236,6 @@ def _write_results(
     output_path.write_text(
         json.dumps(payload, indent=2, sort_keys=True, allow_nan=False) + "\n",
         encoding="utf-8",
-    )
-
-
-def _soft_contact_count_for_body(
-    simulation: LumoSimulation,
-    body_index: int,
-) -> int:
-    contact_count = int(
-        simulation.contacts.soft_contact_count.numpy()[0]
-    )
-    shape_indices = simulation.contacts.soft_contact_shape.numpy()[
-        :contact_count
-    ]
-    valid = shape_indices >= 0
-    shape_bodies = simulation.fingertip_model.model.shape_body.numpy()
-    return int(
-        np.count_nonzero(
-            shape_bodies[shape_indices[valid]] == body_index
-        )
     )
 
 
@@ -325,24 +301,23 @@ def _run_case(
         ),
         wp.quat_identity(),
     )
-    case = IndentationCase(
+    translation_step_m = _APPROACH_SPEED_M_S / sim_frequency_hz
+    trial = DesignTrial(
         name=(
             f"sphere_{sphere_diameter_mm:g}mm_x{contact_x_mm:+g}mm"
         ),
         urdf_path=urdf_path,
         initial_tf=initial_tf,
-        translation_step_W_m=wp.vec3(0.0, 0.0, _TRANSLATION_STEP_M),
+        translation_step_W_m=wp.vec3(0.0, 0.0, translation_step_m),
         target_force_n=_TARGET_FORCE_N,
         max_sim_time_s=_MAX_SIM_TIME_S,
     )
-    study = IndentationStudy(
+    study = DesignStudy(
         fingertip,
-        (case,),
+        (trial,),
         sim_frequency=sim_frequency_hz,
         force_tolerance_n=_FORCE_TOLERANCE_N,
-        velocity_tolerance_m_s=_VELOCITY_TOLERANCE_M_S,
-        force_change_tolerance_n=_FORCE_CHANGE_TOLERANCE_N,
-        settled_tick_count=_SETTLED_TICK_COUNT,
+        force_duration_s=_FORCE_DURATION_S,
         max_search_iterations=_MAX_SEARCH_ITERATIONS,
         element_size_mm=element_size_mm,
         iterations=iterations,
@@ -353,8 +328,8 @@ def _run_case(
     result: _SweepResult | None = None
     simulation_wall_time_s: float | None = None
 
-    def inspect_case(
-        completed_case: IndentationCase,
+    def inspect_trial(
+        completed_trial: DesignTrial,
         simulation: LumoSimulation,
         indenter: Indenter,
     ) -> None:
@@ -362,10 +337,10 @@ def _run_case(
         wp.synchronize()
         simulation_wall_time_s = perf_counter() - start_time
         if (
-            completed_case.travel_m is None
-            or completed_case.reaction_force_n is None
-            or completed_case.maximum_particle_speed_m_s is None
-            or completed_case.force_change_n is None
+            completed_trial.travel_m is None
+            or completed_trial.reaction_force_n is None
+            or completed_trial.maximum_particle_speed_m_s is None
+            or completed_trial.force_change_n is None
         ):
             raise RuntimeError("indentation completed without scalar results")
 
@@ -378,9 +353,8 @@ def _run_case(
         bonded_indices = (
             simulation.fingertip_model.bonded_particle_indices.numpy()
         )
-        contact_count = _soft_contact_count_for_body(
-            simulation,
-            indenter.body_index,
+        contact_count = simulation.soft_contact_count(
+            indenter.body_index
         )
         particle_count = int(
             simulation.fingertip_mesh.silicone.vertex_count
@@ -430,18 +404,11 @@ def _run_case(
             )
 
         force_error_n = abs(
-            completed_case.reaction_force_n - _TARGET_FORCE_N
+            completed_trial.reaction_force_n - _TARGET_FORCE_N
         )
         failures = []
         if force_error_n > _FORCE_TOLERANCE_N:
             failures.append("force tolerance")
-        if (
-            completed_case.maximum_particle_speed_m_s
-            > _VELOCITY_TOLERANCE_M_S
-        ):
-            failures.append("velocity settling tolerance")
-        if completed_case.force_change_n > _FORCE_CHANGE_TOLERANCE_N:
-            failures.append("force-change settling tolerance")
         if not finite_state:
             failures.append("non-finite state")
         if contact_count == 0:
@@ -454,12 +421,12 @@ def _run_case(
         result = _SweepResult(
             passed=not failures,
             failure=", ".join(failures),
-            reaction_force_n=completed_case.reaction_force_n,
+            reaction_force_n=completed_trial.reaction_force_n,
             force_error_n=force_error_n,
             maximum_particle_speed_m_s=(
-                completed_case.maximum_particle_speed_m_s
+                completed_trial.maximum_particle_speed_m_s
             ),
-            force_change_n=completed_case.force_change_n,
+            force_change_n=completed_trial.force_change_n,
             maximum_bonded_drift_m=maximum_bonded_drift_m,
             maximum_carrier_penetration_m=(
                 maximum_carrier_penetration_m
@@ -467,10 +434,10 @@ def _run_case(
             finite_state=finite_state,
             indenter_contact_count=contact_count,
             travel_from_zero_contact_m=(
-                completed_case.travel_m - _INITIAL_CLEARANCE_M
+                completed_trial.travel_m - _INITIAL_CLEARANCE_M
             ),
-            simulation_ticks=completed_case.step_count,
-            search_iterations=completed_case.search_iteration_count,
+            simulation_ticks=completed_trial.step_count,
+            search_iterations=completed_trial.search_iteration_count,
             particle_count=particle_count,
             tetrahedron_count=int(tet_indices.shape[0]),
         )
@@ -478,7 +445,7 @@ def _run_case(
     wp.synchronize()
     start_time = perf_counter()
     try:
-        study.run(inspect_case=inspect_case)
+        study.run(inspect_trial=inspect_trial)
         wp.synchronize()
     except Exception as error:
         wp.synchronize()
@@ -695,7 +662,7 @@ def _print_matrix(
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
-            "Sweep numerical Newton parameters for one quasi-static 20 N "
+            "Sweep numerical Newton parameters for one force-duration 20 N "
             "spherical indentation."
         )
     )

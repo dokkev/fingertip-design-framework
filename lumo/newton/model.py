@@ -61,8 +61,35 @@ class FingertipNewtonModel:
     carrier_body: int
     carrier_shape: int
     carrier_collision_shape: int
+    silicone_particle_start: int
+    silicone_particle_count: int
     bonded_particle_indices: wp.array
     bonded_local_positions: wp.array
+
+    def silicone_vertices(self, state: newton.State) -> np.ndarray:
+        """Return current silicone positions in fingertip-mesh vertex order."""
+        if state.particle_q is None:
+            raise ValueError("state must contain particle positions")
+
+        particle_stop = (
+            self.silicone_particle_start + self.silicone_particle_count
+        )
+        particle_positions = state.particle_q.numpy()
+        if particle_stop > particle_positions.shape[0]:
+            raise ValueError("state does not contain the silicone particle range")
+
+        vertices = np.ascontiguousarray(
+            particle_positions[self.silicone_particle_start:particle_stop],
+            dtype=np.float32,
+        )
+        expected_shape = (self.silicone_particle_count, 3)
+        if vertices.shape != expected_shape:
+            raise ValueError(
+                f"silicone particle positions must have shape {expected_shape}"
+            )
+        if not np.all(np.isfinite(vertices)):
+            raise RuntimeError("silicone particle positions are not finite")
+        return vertices
 
     def apply_carrier_pose(
         self,
@@ -187,6 +214,11 @@ def build_fingertip_newton_model(
         particle_radius=0.0,
         label="fingertip_silicone",
     )
+    particle_count = builder.particle_count - particle_start
+    if particle_count != fingertip_mesh.silicone.vertex_count:
+        raise RuntimeError(
+            "Newton did not preserve the fingertip silicone vertex count"
+        )
 
     global_indices = particle_start + local_indices
     active_flag = int(newton.ParticleFlags.ACTIVE)
@@ -248,6 +280,8 @@ def build_fingertip_newton_model(
         carrier_body=carrier_body,
         carrier_shape=carrier_shape,
         carrier_collision_shape=carrier_collision_shape,
+        silicone_particle_start=particle_start,
+        silicone_particle_count=particle_count,
         bonded_particle_indices=wp.array(
             global_indices,
             dtype=wp.int32,

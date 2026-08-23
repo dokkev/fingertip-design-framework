@@ -8,8 +8,12 @@ import sys
 from importlib.resources import files
 from math import isfinite
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
+
+if TYPE_CHECKING:
+    from lumo.mesh import FingertipMesh
 
 
 _MISS_INT = -1
@@ -167,15 +171,12 @@ def _sbt_header(optix, program_group) -> np.ndarray:
 
 
 class OptixScene:
-    """Static silicone, carrier, and spherical-object IAS scene."""
+    """Fingertip silicone, carrier, and spherical-object IAS scene."""
 
     def __init__(
         self,
+        fingertip_mesh: FingertipMesh,
         *,
-        silicone_vertices: np.ndarray,
-        silicone_triangles: np.ndarray,
-        carrier_vertices: np.ndarray,
-        carrier_triangles: np.ndarray,
         sphere_center: np.ndarray,
         sphere_radius: float,
         silicone_instance_id: int,
@@ -184,25 +185,57 @@ class OptixScene:
         silicone_visibility_mask: int,
         carrier_visibility_mask: int,
         sphere_visibility_mask: int,
+        silicone_vertices: np.ndarray | None = None,
         optix_include_dir: str | Path | None = None,
     ) -> None:
+        from lumo.mesh import FingertipMesh
+
+        if not isinstance(fingertip_mesh, FingertipMesh):
+            raise TypeError("fingertip_mesh must be a FingertipMesh")
+        mesh_silicone_vertices = _vertices(
+            fingertip_mesh.silicone.vertices,
+            name="fingertip_mesh.silicone.vertices",
+        )
+        if silicone_vertices is None:
+            silicone_vertices = mesh_silicone_vertices
         silicone_vertices = _vertices(
             silicone_vertices,
             name="silicone_vertices",
         )
+        if len(silicone_vertices) != len(mesh_silicone_vertices):
+            raise ValueError(
+                "silicone_vertices must preserve the fingertip mesh vertex count"
+            )
+
         silicone_triangles = _triangles(
-            silicone_triangles,
+            fingertip_mesh.silicone.surface_tri_indices,
             vertex_count=len(silicone_vertices),
-            name="silicone_triangles",
+            name="fingertip_mesh.silicone.surface_tri_indices",
         )
+        bonded_indices = np.asarray(
+            fingertip_mesh.bonded_vertex_indices,
+            dtype=np.int64,
+        )
+        if bonded_indices.size and int(bonded_indices.max()) >= len(
+            silicone_vertices
+        ):
+            raise ValueError("bonded vertex index exceeds silicone vertex count")
+        bonded_vertices = np.zeros(len(silicone_vertices), dtype=bool)
+        bonded_vertices[bonded_indices] = True
+        silicone_triangles = np.ascontiguousarray(
+            silicone_triangles[
+                ~np.all(bonded_vertices[silicone_triangles], axis=1)
+            ]
+        )
+
         carrier_vertices = _vertices(
-            carrier_vertices,
-            name="carrier_vertices",
+            fingertip_mesh.carrier.vertices,
+            name="fingertip_mesh.carrier.vertices",
         )
         carrier_triangles = _triangles(
-            carrier_triangles,
+            fingertip_mesh.carrier.indices,
             vertex_count=len(carrier_vertices),
-            name="carrier_triangles",
+            name="fingertip_mesh.carrier.indices",
         )
         sphere_center = np.ascontiguousarray(
             sphere_center,

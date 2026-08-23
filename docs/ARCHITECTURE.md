@@ -73,7 +73,9 @@ Lamé values correspond to a Poisson ratio of `0.495`. The default Newton
 damping value remains an uncalibrated `10 Pa·s`, not a datasheet-derived
 material measurement.
 
-`Fingertip` constructs the analytic fingertip assembly.
+`Fingertip` constructs the analytic fingertip assembly. Its `tip_z_m` property
+exposes the reference silicone tip coordinate in Newton-compatible metres so
+callers do not repeat the semiellipse endpoint calculation and unit conversion.
 
 `Silicone` and `Carrier` are constructed geometry objects, not separate
 parameter systems. `BondingInterface` is the derived pair of left and right
@@ -192,7 +194,7 @@ when a different scene scale requires it.
 The current numerical construction defaults are a `1 mm` mesh element size,
 `1000 Hz` simulation frequency, `10` SolverVBD iterations, `1e-4 m` soft
 contact margin, and `1e6 N/m` carrier contact stiffness. `LumoSimulation` and
-`IndentationStudy` expose only these concrete scalars for the convergence
+`DesignStudy` expose only these concrete scalars for the convergence
 study; there is no simulation-configuration abstraction.
 
 `LumoSimulation(fingertip, builder=...)` is the high-level construction entry
@@ -223,6 +225,10 @@ advance global step count and time
 `LumoSimulation.step()` does not own approach trajectories, force thresholds,
 validation policy, or result reporting. It is the only production API that
 advances Newton state, the global step count, or simulation time.
+Construction populates the initial contact buffer once, and each global step
+refreshes it before SolverVBD. `soft_contact_count()` exposes total or
+body-specific counts without leaking Newton contact-array indexing into
+callers.
 `set_fingertip_pose()` replaces a held fingertip pose that defaults to the
 identity pose, and `step()` reapplies it through the rigid carrier and bonded
 silicone vertices before every Newton tick.
@@ -233,34 +239,32 @@ buffers rather than cloning full velocity or wrench arrays on every tick. The
 runtime may later orchestrate optical work, but no ray-tracing behavior is part
 of the current runtime.
 
-#### `indentation.py`
+#### `design_trial.py`
 
-`IndentationCase` is a plain case definition plus lightweight scalar and pose
+`DesignTrial` is one indentation definition plus lightweight scalar and pose
 results. It never retains its `LumoSimulation` or `Indenter`.
-`IndentationStudy` owns one immutable analytic `Fingertip` and an ordered tuple
-of cases. It constructs a fresh builder, indenter, `LumoSimulation`, and Newton
-state for each case, so every case uses the exact same fingertip object but
-starts from an independent reference state.
+`DesignStudy` owns one immutable analytic `Fingertip` design and an
+ordered tuple of design trials. It constructs a fresh builder, indenter,
+`LumoSimulation`, and Newton state for each trial, so every trial evaluates the
+same fingertip morphology but starts from an independent reference state.
 
-The study keeps the per-case quasi-static search direct:
+The study keeps the per-trial force-duration search direct:
 
 ```text
-apply indenter pose
+approach until reaction reaches the target
         ↓
-hold pose and call LumoSimulation.step()
+count consecutive in-band samples, including the trigger sample
         ↓
-require low active-particle speed and low force change for consecutive ticks
+reset the duration counter and correct pose when force leaves the band
         ↓
-measure settled reaction force
-        ↓
-correct the one-dimensional pose step until the force is within tolerance
+finish after the force remains in-band for the requested duration
 ```
 
 Only `LumoSimulation.step()` mutates Newton state or simulation time. The study
-does not share mutable Newton state between cases, run cases in parallel, or
-introduce a generic simulation manager. A synchronous case-inspection callback
-may validate the live final state; after it returns, the case runtime is
-released before the next case is constructed.
+does not share mutable Newton state between trials, run trials in parallel, or
+introduce a generic simulation manager. A synchronous trial-inspection callback
+may validate the live final state; after it returns, the trial runtime is
+released before the next trial is constructed.
 
 ### `lumo/benchmark/`
 
@@ -268,12 +272,14 @@ Owns explicit, long-running measurement commands that consume the current
 production simulation APIs. It is not imported by the mechanics runtime.
 
 `newton_parameter_sweep.py` holds the physical fingertip and 10 mm
-center-sphere case fixed while varying mesh element size, simulation frequency,
-SolverVBD iterations, soft-contact margin, and carrier contact stiffness one
-family at a time. It writes one strict JSON artifact after every requested run
-has finished. The artifact contains the raw scalar results and comparisons to
-the measured baseline. `--fine` adds only the expensive `0.5 mm` mesh case;
-`--matrix` adds the baseline-only 3-by-3 sphere/location robustness check.
+center-sphere case and `25 mm/s` approach speed fixed while varying mesh element
+size, simulation frequency, SolverVBD iterations, soft-contact margin, and
+carrier contact stiffness one family at a time. Each frequency therefore uses
+a per-tick translation derived from the fixed speed. The benchmark writes one
+strict JSON artifact after every requested run has finished. The artifact
+contains the raw scalar results and comparisons to the measured baseline.
+`--fine` adds only the expensive `0.5 mm` mesh case; `--matrix` adds the
+baseline-only 3-by-3 sphere/location robustness check.
 
 Benchmarks may report production behavior, but they do not own simulation
 state, solver policy, material calibration, or production defaults.
@@ -391,12 +397,20 @@ carrier. Its optional ViewerGL path only observes simulation state and
 contacts; it does not advance or mutate the simulation.
 
 `validation/contact-physics/sphere_indentation.py` creates one analytic
-fingertip and uses an `IndentationStudy` to run the packaged 5, 10, and 20 mm
+fingertip and uses a `DesignStudy` to run the packaged 5, 10, and 20 mm
 diameter sphere URDFs at `X=-7.5`, `0`, and `+7.5 mm`. It places each sphere
 from the local analytic semiellipse height at that X location. Each of the nine
-independent simulations settles at held poses and searches for a reaction force
-within `0.1 N` of `20 N`, then checks contact, finite silicone state,
-perfect-bond drift, and carrier penetration before releasing that runtime.
+independent simulations triggers at `20 N`, corrects the held pose as needed,
+and requires consecutive `20 ± 5 N` samples for `5 ms`, beginning with the
+trigger sample. It then checks contact, finite silicone state, perfect-bond
+drift, and carrier penetration before releasing that runtime.
+
+`validation/contact-physics/sphere_15mm_viewer.py` is a focused interactive
+contact diagnostic. It loads the packaged 15 mm sphere, advances that one
+kinematic body at a fixed positive-Z speed, renders every Newton state and
+contact set, and freezes the first state whose transient reaction reaches
+`20 N`. It reports force, active-particle speed, and sphere contact count at a
+throttled interval; it does not run the force-duration search.
 
 `validation/contact-physics/poisson_ratio_sweep.py` repeats that prescribed
 contact protocol for explicit near-incompressible Poisson ratios. It derives
@@ -416,6 +430,14 @@ expected `+1 mm` hit-distance change without changing the hit primitive or
 barycentrics. It also compares displaced-scene hits against a fresh full build,
 checks that carrier, sphere, and miss results are unchanged, and reports
 validation-local update and fresh-construction timing.
+
+`validation/ray-tracing/newton_refit_test.py` exercises the explicit mechanics
+checkpoint handoff. It uses the same centered 15 mm indenter and fixed-speed
+transient `20 N` approach as the interactive contact viewer, extracts the live
+Newton silicone vertices, updates the existing OptiX silicone GAS and IAS, and
+compares ray results against a fresh scene built from the same deformed
+vertices. The OptiX test sphere remains a separate static instance used to
+verify that non-silicone instances survive the update unchanged.
 
 They should normally:
 

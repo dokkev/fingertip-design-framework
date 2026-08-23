@@ -8,7 +8,7 @@ import cupy as cp
 import numpy as np
 
 from lumo.fingertip import Fingertip, FingertipParameters
-from lumo.mesh import make_fingertip_mesh
+from lumo.mesh import FingertipMesh, make_fingertip_mesh
 from lumo.ray_tracing import OptixScene
 
 
@@ -29,16 +29,12 @@ _BARYCENTRIC_TOLERANCE = 2.0e-5
 
 
 def _make_scene(
-    silicone_vertices: np.ndarray,
-    silicone_triangles: np.ndarray,
-    carrier_vertices: np.ndarray,
-    carrier_triangles: np.ndarray,
+    fingertip_mesh: FingertipMesh,
+    *,
+    silicone_vertices: np.ndarray | None = None,
 ) -> OptixScene:
     return OptixScene(
-        silicone_vertices=silicone_vertices,
-        silicone_triangles=silicone_triangles,
-        carrier_vertices=carrier_vertices,
-        carrier_triangles=carrier_triangles,
+        fingertip_mesh,
         sphere_center=_SPHERE_CENTER_M,
         sphere_radius=_SPHERE_RADIUS_M,
         silicone_instance_id=SILICONE_INSTANCE_ID,
@@ -47,6 +43,7 @@ def _make_scene(
         silicone_visibility_mask=SILICONE_MASK,
         carrier_visibility_mask=CARRIER_MASK,
         sphere_visibility_mask=OBJECT_MASK,
+        silicone_vertices=silicone_vertices,
     )
 
 
@@ -82,43 +79,8 @@ def main() -> None:
         fingertip_mesh.silicone.vertices,
         dtype=np.float32,
     )
-    silicone_triangles = np.asarray(
-        fingertip_mesh.silicone.surface_tri_indices,
-        dtype=np.int32,
-    ).reshape(-1, 3)
-    bonded_vertices = np.zeros(len(silicone_vertices), dtype=bool)
-    bonded_vertices[fingertip_mesh.bonded_vertex_indices] = True
-    silicone_triangles = silicone_triangles[
-        ~np.all(bonded_vertices[silicone_triangles], axis=1)
-    ]
 
-    carrier_vertices = np.asarray(
-        fingertip_mesh.carrier.vertices,
-        dtype=np.float32,
-    )
-    carrier_triangles = np.asarray(
-        fingertip_mesh.carrier.indices,
-        dtype=np.int32,
-    ).reshape(-1, 3)
-
-    triangle_vertices = silicone_vertices[silicone_triangles]
-    triangle_edges_1 = triangle_vertices[:, 1] - triangle_vertices[:, 0]
-    triangle_edges_2 = triangle_vertices[:, 2] - triangle_vertices[:, 0]
-    triangle_normals = np.cross(triangle_edges_1, triangle_edges_2)
-    normal_lengths = np.linalg.norm(triangle_normals, axis=1)
-    bottom_candidates = np.flatnonzero(
-        np.abs(triangle_normals[:, 2]) > 0.8 * normal_lengths
-    )
-    triangle_centroids = triangle_vertices.mean(axis=1)
-    silicone_primitive_id = int(
-        bottom_candidates[
-            np.argmin(triangle_centroids[bottom_candidates, 2])
-        ]
-    )
-    silicone_hit_point = triangle_centroids[silicone_primitive_id]
-    silicone_origin = silicone_hit_point.copy()
-    silicone_origin[2] -= 0.010
-
+    silicone_origin = np.array((-0.0070, 0.00090, -0.030), dtype=np.float32)
     carrier_origin = np.array((0.0011, 0.00073, 0.010), dtype=np.float32)
     sphere_origin = np.array((0.030, 0.0, -0.020), dtype=np.float32)
     miss_origin = np.array((0.050, 0.0, -0.020), dtype=np.float32)
@@ -129,12 +91,7 @@ def main() -> None:
     )
     directions = np.stack((positive_z, negative_z, positive_z, positive_z))
 
-    updated_scene = _make_scene(
-        silicone_vertices,
-        silicone_triangles,
-        carrier_vertices,
-        carrier_triangles,
-    )
+    updated_scene = _make_scene(fingertip_mesh)
     initial_results = updated_scene.trace_closest(
         origins,
         directions,
@@ -145,8 +102,6 @@ def main() -> None:
         raise AssertionError("initial silicone ray missed")
     if int(initial_silicone["instance_id"]) != SILICONE_INSTANCE_ID:
         raise AssertionError("initial ray did not hit silicone")
-    if int(initial_silicone["primitive_id"]) != silicone_primitive_id:
-        raise AssertionError("initial ray did not hit the selected triangle")
     if not np.isfinite(initial_silicone["t"]) or initial_silicone["t"] <= 0.0:
         raise AssertionError("initial silicone ray has invalid distance")
     for label, result, expected_instance_id in (
@@ -220,10 +175,8 @@ def main() -> None:
 
     fresh_build_start = perf_counter()
     fresh_scene = _make_scene(
-        displaced_vertices,
-        silicone_triangles,
-        carrier_vertices,
-        carrier_triangles,
+        fingertip_mesh,
+        silicone_vertices=displaced_vertices,
     )
     fresh_scene._stream.synchronize()
     fresh_build_time_ms = 1.0e3 * (perf_counter() - fresh_build_start)

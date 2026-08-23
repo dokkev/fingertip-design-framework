@@ -62,12 +62,8 @@ def _run_case(poisson_ratio: float) -> None:
             )
         )
     )
-    fingertip_tip_z_m = 1.0e-3 * (
-        fingertip.silicone.ellipse_center_z_mm
-        - fingertip.silicone.ellipse_radius_z_mm
-    )
     initial_plate_z_m = (
-        fingertip_tip_z_m
+        fingertip.tip_z_m
         - _INITIAL_CLEARANCE_M
         - _PLATE_HALF_THICKNESS_M
     )
@@ -101,13 +97,7 @@ def _run_case(poisson_ratio: float) -> None:
         tet_indices,
     )
 
-    simulation.collision_pipeline.collide(
-        simulation.state,
-        simulation.contacts,
-    )
-    initial_contact_count = int(
-        simulation.contacts.soft_contact_count.numpy()[0]
-    )
+    initial_contact_count = simulation.soft_contact_count()
     if initial_contact_count != 0:
         raise RuntimeError(
             f"nu={poisson_ratio:g} has soft contacts before prescribed motion"

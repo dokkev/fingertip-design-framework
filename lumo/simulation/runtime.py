@@ -164,10 +164,15 @@ class LumoSimulation:
             device=model.device,
         )
         self._has_step_result = False
+        self.collision_pipeline.collide(self.state, self.contacts)
 
     def set_fingertip_pose(self, pose: wp.transform) -> None:
         """Set the fingertip pose held across subsequent simulation ticks."""
         self._fingertip_pose = pose
+
+    def silicone_vertices(self) -> np.ndarray:
+        """Return current silicone positions in fingertip-mesh vertex order."""
+        return self.fingertip_model.silicone_vertices(self.state)
 
     def apply_indenter_pose(
         self,
@@ -191,6 +196,32 @@ class LumoSimulation:
                 outputs=[state.body_q],
                 device=state.body_q.device,
             )
+
+    def soft_contact_count(self, body_index: int | None = None) -> int:
+        """Return the current total or body-specific soft-contact count."""
+        contact_count = int(self.contacts.soft_contact_count.numpy()[0])
+        if body_index is None:
+            return contact_count
+        if (
+            isinstance(body_index, bool)
+            or not isinstance(body_index, (int, np.integer))
+            or body_index < 0
+            or body_index >= self.fingertip_model.model.body_count
+        ):
+            raise ValueError("body_index is outside this simulation")
+        if contact_count == 0:
+            return 0
+
+        shape_indices = self.contacts.soft_contact_shape.numpy()[
+            :contact_count
+        ]
+        valid = shape_indices >= 0
+        shape_bodies = self.fingertip_model.model.shape_body.numpy()
+        return int(
+            np.count_nonzero(
+                shape_bodies[shape_indices[valid]] == body_index
+            )
+        )
 
     def step(self) -> None:
         """Advance one global tick and record its rigid-body wrenches."""
