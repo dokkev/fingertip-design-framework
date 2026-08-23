@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from math import isfinite
-from typing import ClassVar
 
 import numpy as np
+
+from lumo.fingertip import LEDParameters
 
 from .transport import lambertian_emission
 
@@ -24,23 +25,17 @@ _EMISSION_DTYPE = np.dtype(
 class LED:
     """One Adafruit Green LED Sequin modeled as a Lambertian point source.
 
-    ``power`` is normalized modeled optical power. It is not a datasheet
-    optical-watt value and remains uncalibrated.
+    ``parameters.normalized_power`` is modeled optical power. It is not a
+    datasheet optical-watt value and remains uncalibrated.
     """
-
-    ADAFRUIT_PRODUCT_ID: ClassVar[int] = 1756
-    LED_PART_NUMBER: ClassVar[str] = "LuckyLight S150PGC-G5-1B"
-    PACKAGE: ClassVar[str] = "1206 Pure Green InGaN"
 
     position_W_m: np.ndarray
     normal_W: np.ndarray
-    power: float = 1.0
-    dominant_wavelength_nm: float = 525.0
-    peak_wavelength_nm: float = 520.0
-    spectral_half_width_nm: float = 35.0
-    viewing_half_angle_deg: float = 60.0
+    parameters: LEDParameters
 
     def __post_init__(self) -> None:
+        if not isinstance(self.parameters, LEDParameters):
+            raise TypeError("parameters must be LEDParameters")
         position = np.asarray(self.position_W_m, dtype=np.float64)
         normal = np.asarray(self.normal_W, dtype=np.float64)
         if position.shape != (3,) or not np.all(np.isfinite(position)):
@@ -51,24 +46,6 @@ class LED:
             normal_norm = float(np.linalg.norm(normal))
         if not isfinite(normal_norm) or normal_norm <= np.finfo(np.float64).tiny:
             raise ValueError("normal_W must have a finite nonzero norm")
-
-        for name in (
-            "dominant_wavelength_nm",
-            "peak_wavelength_nm",
-            "spectral_half_width_nm",
-        ):
-            value = float(getattr(self, name))
-            if not isfinite(value) or value <= 0.0:
-                raise ValueError(f"{name} must be finite and positive")
-        if not isfinite(self.power) or self.power < 0.0:
-            raise ValueError("power must be finite and nonnegative")
-        if not (
-            isfinite(self.viewing_half_angle_deg)
-            and 0.0 < self.viewing_half_angle_deg < 90.0
-        ):
-            raise ValueError(
-                "viewing_half_angle_deg must be finite and between 0 and 90"
-            )
 
         position = position.copy()
         normal = normal / normal_norm
@@ -86,7 +63,7 @@ class LED:
 
         sampled = lambertian_emission(
             np.repeat(self.normal_W[None, :], len(u1), axis=0),
-            total_power=self.power,
+            total_power=self.parameters.normalized_power,
             u1=u1,
             u2=u2,
         )

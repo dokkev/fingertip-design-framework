@@ -215,12 +215,14 @@ python validation/ray-tracing/led_sensor_response_test.py
 
 This uses the current Adafruit Green LED Sequin hardware metadata with an ideal
 Lambertian point-source approximation, runs one central 10 mm sphere indentation
-to the existing force-duration checkpoint, and compares explicit bounce caps
-`4`, `8`, `16`, and `24`. The same source and per-ray/per-bounce samples are
-used at every cap before and after the silicone UPDATE. Source placement,
-receiver geometry, carrier albedo, and normalized optical power remain
-uncalibrated validation placeholders. This is an explicit Newton/OptiX study
-rather than part of the focused unit-test suite.
+to the existing force-duration checkpoint, and evaluates a fixed 24-bounce
+transport cap for the low/nominal/high Solaris and Dragon Skin 10 NV optical
+sensitivity presets. All six cases use the same 4096 emitted rays, deformation,
+and per-ray/per-bounce random samples before and after the silicone UPDATE.
+Source placement, receiver geometry, carrier albedo, normalized optical power,
+and literature-derived extinction priors remain uncalibrated validation inputs.
+This is an explicit Newton/OptiX study rather than part of the focused unit-test
+suite.
 
 Run the CPU-only sampled dielectric branch regression:
 

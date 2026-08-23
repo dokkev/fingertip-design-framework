@@ -5,7 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from .geometric_param import FingertipGeometry, InvalidFingertipParameters
-from .optical_param import LEDParameters, OpticalParameters
+from .optical_param import (
+    DRAGON_SKIN_10_NV_OPTICS_NOMINAL,
+    LEDParameters,
+    SiliconeOptics,
+)
 from .viscoelastic_param import ViscoelasticParameters
 
 
@@ -17,7 +21,7 @@ class FingertipParameters:
     viscoelastic: ViscoelasticParameters = field(
         default_factory=ViscoelasticParameters
     )
-    optical: OpticalParameters = field(default_factory=OpticalParameters)
+    optical: SiliconeOptics = DRAGON_SKIN_10_NV_OPTICS_NOMINAL
     led: LEDParameters = field(default_factory=LEDParameters)
 
     def __post_init__(self) -> None:

@@ -67,6 +67,20 @@ FingertipParameters
 
 `FingertipParameters` contains physical input values.
 
+`FingertipParameters.led` is the single parameter source for the current
+Adafruit Green LED Sequin. Its `LEDParameters` owns the hardware identity,
+two-dimensional fingertip design envelope, normalized modeled source power,
+wavelength metadata, and viewing half-angle. Ray tracing consumes this object
+directly rather than maintaining a second copy of those values.
+
+`FingertipParameters.optical` is one immutable `SiliconeOptics` value. The
+default is the nominal Dragon Skin 10 NV optical sensitivity preset, matching
+the current default mechanics material. Concrete low/nominal/high presets also
+exist for Solaris and Dragon Skin 10 NV. These are monochromatic effective
+properties, not a material hierarchy: Solaris refractive index is manufacturer
+data, while Dragon Skin refractive index and every extinction coefficient are
+explicit literature/modeling priors rather than measured product calibration.
+
 The default `ViscoelasticParameters` use the current Dragon Skin 10 NV
 baseline: `1070 kg/m³`, `k_mu=1.06e5 Pa`, and `k_lambda=1.0494e7 Pa`. The
 Lamé values correspond to a Poisson ratio of `0.495`. The default Newton
@@ -338,16 +352,19 @@ sampling operation for one ideal Lambertian source. Caller-supplied sample
 coordinates determine the directions, and normalized total source power is
 divided equally among the rays.
 
-`LED` is one concrete point-source approximation of the current Adafruit Green
-LED Sequin (Product ID 1756), whose underlying LED is the LuckyLight
-S150PGC-G5-1B 1206 Pure Green InGaN package. Its hardware metadata is a 525 nm
-dominant wavelength, 520 nm peak wavelength, 35 nm spectral half-width, and
-60-degree off-axis half-intensity angle (120-degree full viewing angle). The
-60-degree half-intensity angle is consistent with an ideal Lambertian
-first-order model because `cos(60 degrees) = 0.5`, but the model does not claim
-to reproduce the complete measured radiation diagram. Source power remains a
-normalized `1.0` until optical calibration, and current transport remains
-monochromatic scalar-power transport. Hardware values come from the
+`LED` combines one `LEDParameters` with a world-frame position and unit normal,
+then delegates emission sampling to `lambertian_emission()`. It does not copy
+or independently own hardware or optical parameter values. The current
+parameters identify the Adafruit Green LED Sequin (Product ID 1756), whose
+underlying LED is the LuckyLight S150PGC-G5-1B 1206 Pure Green InGaN package.
+Its hardware metadata is a 525 nm dominant wavelength, 520 nm peak wavelength,
+35 nm spectral half-width, and 60-degree off-axis half-intensity angle
+(120-degree full viewing angle). The 60-degree half-intensity angle is
+consistent with an ideal Lambertian first-order model because
+`cos(60 degrees) = 0.5`, but the model does not claim to reproduce the complete
+measured radiation diagram. Source power remains a normalized `1.0` until
+optical calibration, and current transport remains monochromatic scalar-power
+transport. Hardware values come from the
 [Adafruit product page](https://www.adafruit.com/product/1756) and the
 [LuckyLight datasheet](https://cdn-shop.adafruit.com/datasheets/S150PGC-G5-1B.pdf).
 
@@ -358,12 +375,18 @@ medium stack. Each silicone event reuses `interface_transport()` and samples
 one Fresnel branch from caller-precomputed values indexed by bounce and
 original ray ID. Because the selection probability equals the lossless branch
 contribution, the selected path retains its power rather than multiplying by
-Fresnel a second time. Carrier events reuse `lambertian_reflection()` and
-accumulate absorption. External misses become escaped structured rays,
-internal misses remain explicit unresolved power, and active power at the
-caller-supplied depth cap is reported as remaining power. The aggregate ledger
-closes emitted power against escape, absorption, internal miss, and remaining
-power. This is a bounded concrete fingertip path operation, not a renderer.
+Fresnel a second time. Before each hit reached while the path is inside
+silicone, the operation applies Beer-Lambert attenuation using that OptiX hit's
+metric `t` distance and accumulates the removed ballistic power as bulk loss.
+Air segments are not attenuated, and no second geometry-distance calculation
+exists. Carrier events reuse `lambertian_reflection()` and accumulate carrier
+absorption. External misses become escaped structured rays, internal misses
+remain explicit unresolved power, and active power at the caller-supplied depth
+cap is reported as remaining power. The aggregate ledger closes emitted power
+against escape, carrier absorption, bulk loss, internal miss, and remaining
+power. The effective extinction may include unresolved scattering, especially
+for translucent Dragon Skin 10 NV; volumetric scattering is not modeled. This
+is a bounded concrete fingertip path operation, not a renderer.
 
 `safe_secondary_origins()` selects the OTK front or back spawn position by the
 sign of the outgoing direction dotted with `normal_W`. It does not infer media

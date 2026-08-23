@@ -65,6 +65,7 @@ def trace_bounded_paths(
     inside_silicone: bool | np.ndarray,
     n_air: float,
     n_silicone: float,
+    extinction_coefficient_m_inv: float,
     carrier_albedo: float,
     max_bounces: int,
     dielectric_branch_u: np.ndarray,
@@ -77,8 +78,9 @@ def trace_bounded_paths(
     """Trace one sampled optical path per input ray for a bounded depth.
 
     Dielectric branches are selected with their Fresnel probabilities, so a
-    selected lossless branch retains its current path power. Carrier absorption
-    is the only modeled power loss before escape or bounded termination.
+    selected lossless branch retains its current path power. Silicone segments
+    lose ballistic-path power through Beer-Lambert attenuation, and carrier
+    events lose the fraction complementary to the carrier albedo.
     """
     origins = np.asarray(origins_W_m, dtype=np.float64)
     directions = np.asarray(directions_W, dtype=np.float64)
@@ -113,6 +115,13 @@ def trace_bounded_paths(
         raise ValueError("n_air must be finite and positive")
     if not isfinite(n_silicone) or n_silicone <= 0.0:
         raise ValueError("n_silicone must be finite and positive")
+    if (
+        not isfinite(extinction_coefficient_m_inv)
+        or extinction_coefficient_m_inv < 0.0
+    ):
+        raise ValueError(
+            "extinction_coefficient_m_inv must be finite and nonnegative"
+        )
     if not isfinite(carrier_albedo) or not 0.0 <= carrier_albedo <= 1.0:
         raise ValueError("carrier_albedo must be finite and in [0, 1]")
     if silicone_instance_id == carrier_instance_id:
@@ -145,13 +154,35 @@ def trace_bounded_paths(
     dielectric_branch_u, carrier_u1, carrier_u2 = sample_arrays
 
     emitted_power = float(power.sum())
+    power = power.copy()
     ray_id = np.arange(ray_count, dtype=np.int64)
     escaped_batches: list[np.ndarray] = []
     absorbed_power = 0.0
+    bulk_loss_power = 0.0
     unresolved_internal_miss_power = 0.0
 
     for bounce in range(max_bounces):
         hits = scene.trace_closest(origins, directions, mask=mask)
+        silicone_segment = inside & hits["hit"]
+        if np.any(silicone_segment):
+            segment_length_m = np.asarray(
+                hits["t"][silicone_segment],
+                dtype=np.float64,
+            )
+            if not np.all(np.isfinite(segment_length_m)) or np.any(
+                segment_length_m < 0.0
+            ):
+                raise RuntimeError(
+                    "OptiX returned an invalid silicone segment length"
+                )
+            power_before = power[silicone_segment].copy()
+            power[silicone_segment] *= np.exp(
+                -extinction_coefficient_m_inv * segment_length_m
+            )
+            bulk_loss_power += float(
+                (power_before - power[silicone_segment]).sum()
+            )
+
         miss = ~hits["hit"]
         external_miss = miss & ~inside
         if np.any(external_miss):
@@ -264,6 +295,7 @@ def trace_bounded_paths(
     accounted_power = (
         escaped_power
         + absorbed_power
+        + bulk_loss_power
         + unresolved_internal_miss_power
         + remaining_power
     )
@@ -276,6 +308,7 @@ def trace_bounded_paths(
         "emitted_power": emitted_power,
         "escaped_power": escaped_power,
         "absorbed_power": absorbed_power,
+        "bulk_loss_power": bulk_loss_power,
         "unresolved_internal_miss_power": unresolved_internal_miss_power,
         "remaining_power": remaining_power,
         "accounted_power": accounted_power,
