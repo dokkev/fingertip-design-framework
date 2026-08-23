@@ -263,17 +263,20 @@ results. It never retains its `LumoSimulation` or `Indenter`.
 ordered tuple of design trials. It constructs a fresh builder, indenter,
 `LumoSimulation`, and Newton state for each trial, so every trial evaluates the
 same fingertip morphology but starts from an independent reference state.
+Each trial specifies a normalized `motion_direction_W` and physical
+`approach_speed_m_s`; the study derives its per-tick displacement from the
+simulation frequency.
 
-The study keeps the per-trial force-duration search direct:
+The study keeps the per-trial settled-force search direct:
 
 ```text
 approach until reaction reaches the target
         ↓
-count consecutive in-band samples, including the trigger sample
+hold that pose for the settling duration
         ↓
-reset the duration counter and correct pose when force leaves the band
+evaluate the settled force
         ↓
-finish after the force remains in-band for the requested duration
+apply one translation correction and hold again when needed
 ```
 
 Only `LumoSimulation.step()` mutates Newton state or simulation time. The study
@@ -526,16 +529,17 @@ fingertip and uses a `DesignStudy` to run the packaged 5, 10, and 20 mm
 diameter sphere URDFs at `X=-7.5`, `0`, and `+7.5 mm`. It places each sphere
 from the local analytic semiellipse height at that X location. Each of the nine
 independent simulations triggers at `20 N`, corrects the held pose as needed,
-and requires consecutive `20 ± 5 N` samples for `5 ms`, beginning with the
-trigger sample. It then checks contact, finite silicone state, perfect-bond
-drift, and carrier penetration before releasing that runtime.
+and holds each checkpoint for `5 ms` before evaluating the settled force. If it
+is outside `20 ± 5 N`, one translation correction is applied before the next
+hold. It then checks contact, finite silicone state, perfect-bond drift, and
+carrier penetration before releasing that runtime.
 
 `validation/contact-physics/sphere_15mm_viewer.py` is a focused interactive
 contact diagnostic. It loads the packaged 15 mm sphere, advances that one
 kinematic body at a fixed positive-Z speed, renders every Newton state and
 contact set, and freezes the first state whose transient reaction reaches
 `20 N`. It reports force, active-particle speed, and sphere contact count at a
-throttled interval; it does not run the force-duration search.
+throttled interval; it does not run the settled-force search.
 
 `validation/contact-physics/poisson_ratio_sweep.py` repeats that prescribed
 contact protocol for explicit near-incompressible Poisson ratios. It derives
@@ -638,15 +642,14 @@ This Matplotlib-only diagnostic is not a 2D optical simulation or production
 rendering API.
 
 `validation/contact-physics/sensing_convergence.py` is the single procedural
-Newton/OptiX convergence study for that evaluator. It runs one-factor-at-a-time
-Newton settings, evaluates each valid setting immediately with the same 4096
-optical samples, then releases that setting before constructing the next one.
-Only the baseline reference/contact vertex snapshots survive for the later
-256-to-16384-ray, three-seed convergence comparison. The script adds no
-production sweep or convergence abstraction. If the baseline itself fails the
-existing mechanics acceptance checks, the script still completes and records
-the Newton sweep, skips optical conclusions that would depend on that invalid
-reference, writes an incomplete-study JSON report, and exits unsuccessfully.
+Newton/OptiX convergence study for that evaluator. It first compares 5, 20,
+and 50 ms fixed-pose settling holds, then runs a small one-factor-at-a-time
+study of carrier stiffness, timestep frequency, VBD iterations, and mesh size.
+Only the selected hard-valid reference/contact vertex snapshots survive for the
+later 16384/65536-ray, three-seed convergence comparison. The script adds no
+production sweep or convergence abstraction. If a Newton setting fails the
+existing mechanics acceptance checks, the script records it and continues with
+the remaining settings.
 Its carrier check treats tetrahedra touching the perfect-bond interface as a
 separate diagnostic because that interface intentionally has no contact
 constraint; only nonbonded particles and nonbonded tetrahedra determine the

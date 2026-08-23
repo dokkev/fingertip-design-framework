@@ -25,7 +25,8 @@ class DesignTrial:
         name: str,
         urdf_path: str | Path,
         initial_tf: wp.transform,
-        translation_step_W_m: wp.vec3,
+        motion_direction_W: wp.vec3,
+        approach_speed_m_s: float,
         target_force_n: float,
         max_sim_time_s: float,
     ) -> None:
@@ -45,23 +46,18 @@ class DesignTrial:
         ):
             raise ValueError("initial_tf must be a finite Warp transform")
 
-        translation_step = np.asarray(
-            translation_step_W_m,
+        motion_direction = np.asarray(
+            motion_direction_W,
             dtype=np.float64,
         )
-        if translation_step.shape != (3,) or not np.all(
-            np.isfinite(translation_step)
+        if motion_direction.shape != (3,) or not np.all(
+            np.isfinite(motion_direction)
         ):
-            raise ValueError(
-                "translation_step_W_m must be a finite 3-vector"
-            )
-        translation_step_norm_m = float(
-            np.linalg.norm(translation_step)
-        )
-        require_positive(
-            "translation_step_W_m norm",
-            translation_step_norm_m,
-        )
+            raise ValueError("motion_direction_W must be a finite 3-vector")
+        motion_direction_norm = float(np.linalg.norm(motion_direction))
+        require_positive("motion_direction_W norm", motion_direction_norm)
+        require_positive("approach_speed_m_s", approach_speed_m_s)
+        motion_direction /= motion_direction_norm
 
         self.name = name.strip()
         self.urdf_path = path
@@ -69,7 +65,8 @@ class DesignTrial:
             wp.vec3(*initial_tf_values[:3]),
             wp.quat(*initial_tf_values[3:]),
         )
-        self.translation_step_W_m = wp.vec3(*translation_step)
+        self.motion_direction_W = wp.vec3(*motion_direction)
+        self.approach_speed_m_s = float(approach_speed_m_s)
         self.target_force_n = float(target_force_n)
         self.max_sim_time_s = float(max_sim_time_s)
 
@@ -93,7 +90,7 @@ class DesignStudy:
         *,
         sim_frequency: float,
         force_tolerance_n: float,
-        force_duration_s: float,
+        settle_duration_s: float,
         max_search_iterations: int,
         element_size_mm: float = 1.0,
         iterations: int = 10,
@@ -104,7 +101,7 @@ class DesignStudy:
             raise TypeError("fingertip must be a Fingertip")
         require_positive("sim_frequency", sim_frequency)
         require_positive("force_tolerance_n", force_tolerance_n)
-        require_positive("force_duration_s", force_duration_s)
+        require_positive("settle_duration_s", settle_duration_s)
         require_positive("element_size_mm", element_size_mm)
         require_nonnegative(
             "soft_contact_margin_m",
@@ -142,7 +139,7 @@ class DesignStudy:
         self.trials = trial_tuple
         self.sim_frequency = float(sim_frequency)
         self.force_tolerance_n = float(force_tolerance_n)
-        self.force_duration_s = float(force_duration_s)
+        self.settle_duration_s = float(settle_duration_s)
         self.max_search_iterations = max_search_iterations
         self.element_size_mm = float(element_size_mm)
         self.iterations = iterations
@@ -172,12 +169,11 @@ class DesignStudy:
             initial_tf = np.asarray(trial.initial_tf, dtype=np.float64)
             initial_translation_W_m = initial_tf[:3]
             initial_rotation = wp.quat(*initial_tf[3:])
-            translation_step_W_m = np.asarray(
-                trial.translation_step_W_m,
+            motion_direction_W = np.asarray(
+                trial.motion_direction_W,
                 dtype=np.float64,
             )
-            position_step_m = float(np.linalg.norm(translation_step_W_m))
-            motion_direction_W = translation_step_W_m / position_step_m
+            position_step_m = trial.approach_speed_m_s / self.sim_frequency
             max_step_count = int(
                 trial.max_sim_time_s * self.sim_frequency
             )
@@ -185,9 +181,9 @@ class DesignStudy:
                 raise ValueError(
                     "max_sim_time_s must include at least one simulation tick"
                 )
-            required_force_ticks = max(
+            settle_ticks = max(
                 1,
-                ceil(self.force_duration_s * self.sim_frequency),
+                ceil(self.settle_duration_s * self.sim_frequency),
             )
 
             builder = newton.ModelBuilder(gravity=0.0)
@@ -214,40 +210,17 @@ class DesignStudy:
                 )
 
             travel_m = 0.0
-            previous_search_error_n = -trial.target_force_n
             reaction_force_n = 0.0
             force_change_n = float("inf")
-            previous_tick_force_n: float | None = None
-            target_triggered = False
-            force_ticks = 0
+            previous_hold_force_n: float | None = None
+            target_reached = False
+            hold_ticks = 0
             search_iteration = 0
             pose = trial.initial_tf
 
             while simulation.step_count < max_step_count:
-                if not target_triggered:
-                    correction_sign = 1.0
-                elif reaction_force_n < (
-                    trial.target_force_n - self.force_tolerance_n
-                ):
-                    correction_sign = 1.0
-                elif reaction_force_n > (
-                    trial.target_force_n + self.force_tolerance_n
-                ):
-                    correction_sign = -1.0
-                else:
-                    correction_sign = 0.0
-
-                if correction_sign != 0.0:
-                    if target_triggered:
-                        if search_iteration >= self.max_search_iterations:
-                            raise RuntimeError(
-                                f"{trial.name} did not hold "
-                                f"{trial.target_force_n:g} N within tolerance "
-                                f"after {self.max_search_iterations} pose "
-                                "corrections"
-                            )
-                        search_iteration += 1
-                    travel_m += correction_sign * position_step_m
+                if not target_reached:
+                    travel_m += position_step_m
                     translation_W_m = (
                         initial_translation_W_m
                         + travel_m * motion_direction_W
@@ -261,39 +234,29 @@ class DesignStudy:
                 simulation.step()
                 reaction_force_n = simulation.indenter_reaction_force(
                     indenter,
-                    motion_direction_W=trial.translation_step_W_m,
+                    motion_direction_W=trial.motion_direction_W,
                 )
                 force_change_n = (
                     float("inf")
-                    if previous_tick_force_n is None
-                    else abs(reaction_force_n - previous_tick_force_n)
+                    if previous_hold_force_n is None
+                    else abs(reaction_force_n - previous_hold_force_n)
                 )
-                previous_tick_force_n = reaction_force_n
-                search_error_n = reaction_force_n - trial.target_force_n
+                previous_hold_force_n = reaction_force_n
 
-                if not target_triggered and reaction_force_n >= (
-                    trial.target_force_n
-                ):
-                    target_triggered = True
-
-                if (
-                    target_triggered
-                    and abs(search_error_n) <= self.force_tolerance_n
-                ):
-                    # The trigger or correction tick intentionally counts as
-                    # the first consecutive in-band force sample.
-                    force_ticks += 1
+                if not target_reached:
+                    if reaction_force_n < trial.target_force_n:
+                        continue
+                    target_reached = True
+                    hold_ticks = 1
                 else:
-                    force_ticks = 0
-                    if (
-                        target_triggered
-                        and search_error_n * previous_search_error_n < 0.0
-                    ):
-                        position_step_m *= 0.5
-                    if target_triggered:
-                        previous_search_error_n = search_error_n
+                    hold_ticks += 1
 
-                if force_ticks >= required_force_ticks:
+                if hold_ticks < settle_ticks:
+                    continue
+
+                if abs(reaction_force_n - trial.target_force_n) <= (
+                    self.force_tolerance_n
+                ):
                     trial.final_tf = pose
                     trial.travel_m = travel_m
                     trial.step_count = simulation.step_count
@@ -307,10 +270,36 @@ class DesignStudy:
                     if inspect_trial is not None:
                         inspect_trial(trial, simulation, indenter)
                     break
+
+                if search_iteration >= self.max_search_iterations:
+                    raise RuntimeError(
+                        f"{trial.name} did not hold {trial.target_force_n:g} N "
+                        f"within tolerance after {self.max_search_iterations} "
+                        "pose corrections"
+                    )
+                search_iteration += 1
+                correction_sign = (
+                    1.0
+                    if reaction_force_n < trial.target_force_n
+                    else -1.0
+                )
+                travel_m += correction_sign * position_step_m
+                translation_W_m = (
+                    initial_translation_W_m
+                    + travel_m * motion_direction_W
+                )
+                pose = wp.transform(
+                    wp.vec3(*translation_W_m),
+                    initial_rotation,
+                )
+                simulation.apply_indenter_pose(indenter, pose)
+                hold_ticks = 0
+                previous_hold_force_n = None
             else:
                 raise RuntimeError(
                     f"{trial.name} did not hold {trial.target_force_n:g} N "
-                    f"within tolerance for {self.force_duration_s:g} s "
+                    f"within tolerance after settling for "
+                    f"{self.settle_duration_s:g} s "
                     f"during {trial.max_sim_time_s:g} s of simulation; last "
                     f"force was {reaction_force_n:.9e} N"
                 )

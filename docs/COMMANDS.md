@@ -77,10 +77,10 @@ conda run -n lit python validation/contact-physics/sphere_indentation.py
 
 The 5, 10, and 20 mm diameter URDF spheres each run in independent simulations
 at `X=-7.5`, `0`, and `+7.5 mm`, for nine design trials total. Each prescribed
-positive-Z indentation triggers at `20 N`, corrects its held pose as needed,
-and must produce consecutive `20 ± 5 N` samples for `5 ms`, beginning with the
-trigger sample. This is an explicit multi-simulation validation, not part of
-ordinary focused tests.
+positive-Z indentation approaches `20 N`, holds the first target pose fixed for
+`5 ms`, and makes at most one-step pose corrections between additional holds.
+This is an explicit multi-simulation validation, not part of ordinary focused
+tests.
 
 View one centered 15 mm sphere moving continuously to a transient `20 N`
 reaction force:
@@ -93,7 +93,7 @@ conda run --no-capture-output -n lit \
 The viewer renders every Newton tick and prints travel, reaction force, maximum
 active silicone speed, and sphere contact count every 100 ticks. It freezes the
 target state until the window closes. This is an interactive contact diagnostic,
-not the force-duration validation above.
+not the settled-force validation above.
 
 Run the representative numerical/contact parameter sweep explicitly:
 
@@ -119,16 +119,18 @@ conda run --no-capture-output -n lit \
   python -u validation/contact-physics/sensing_convergence.py
 ```
 
-This one script runs the one-factor-at-a-time Newton/contact sweep, evaluates
-each valid setting with 4096 common optical samples, and reuses only the
-baseline deformation snapshots for the 256/1024/4096/16384-ray three-seed
-study. It prints progress and compact final tables, then writes strict JSON to
+This one script first compares `5/20/50 ms` fixed-pose settling holds, then runs
+the small one-factor-at-a-time Newton/contact study for carrier stiffness,
+timestep frequency, VBD iterations, and mesh size. It evaluates the selected
+hard-valid deformation with common optical samples at 16384 and 65536 rays,
+using 24 bounces and three fixed seeds. It prints progress and compact final
+tables, including raw per-contact quadrant responses and worst-pair diagnostics
+in the JSON output, then writes strict JSON to
 `output/validation/sensing_convergence.json`. Use `--output PATH` to select a
 different final JSON file. This is an expensive unattended validation and is
-not part of ordinary focused tests. A failed Newton baseline no longer discards
-the rest of the mechanics sweep: the script records all Newton settings and a
-clear incomplete-study result, but skips optical comparisons and exits nonzero
-because those comparisons require a valid baseline.
+not part of ordinary focused tests. A failed Newton setting is recorded and the
+remaining settings continue; optical comparisons run from the first hard-valid
+reference configuration.
 
 Run the Dragon Skin 10 NV Poisson-ratio contact sweep explicitly:
 
@@ -233,7 +235,7 @@ python validation/ray-tracing/led_sensor_response_test.py
 
 This uses the current Adafruit Green LED Sequin hardware metadata with an ideal
 Lambertian point-source approximation, runs one central 10 mm sphere indentation
-to the existing force-duration checkpoint, and evaluates a fixed 24-bounce
+to the existing settled-force checkpoint, and evaluates a fixed 24-bounce
 transport cap for the low/nominal/high Solaris and Dragon Skin 10 NV optical
 sensitivity presets. All six cases use the same 4096 emitted rays, deformation,
 and per-ray/per-bounce random samples before and after the silicone UPDATE.

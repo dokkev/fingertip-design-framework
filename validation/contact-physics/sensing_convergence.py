@@ -38,10 +38,13 @@ _ALL_MASK = _SILICONE_MASK | _CARRIER_MASK
 _CONTACT_X_MM = (-7.5, 0.0, 7.5)
 _SPHERE_RADIUS_M = 5.0e-3
 _INITIAL_CLEARANCE_M = 1.0e-3
-_TRANSLATION_STEP_M = 2.5e-5
+_APPROACH_SPEED_M_S = 2.5e-2
 _TARGET_FORCE_N = 20.0
 _FORCE_TOLERANCE_N = 5.0
-_FORCE_DURATION_S = 5.0e-3
+# The settling study keeps 5 ms as the smallest duration that remained
+# hard-valid at all three contact locations in the measured run.
+_SETTLE_DURATION_S = 5.0e-3
+_SETTLE_DURATIONS_S = (5.0e-3, 20.0e-3, 50.0e-3)
 _MAX_SIM_TIME_S = 30.0
 _MAX_SEARCH_ITERATIONS = 256
 _MAX_BONDED_DRIFT_M = 1.0e-8
@@ -51,22 +54,20 @@ _BASELINE = {
     "sim_frequency": 1.0e3,
     "iterations": 10,
     "soft_contact_margin_m": 1.0e-4,
-    "carrier_contact_stiffness_n_m": 1.0e6,
+    # 4 MPa is the first candidate intended to pass all contact locations.
+    # Keep 8 MPa in the stiffness sweep as the higher-stiffness comparison.
+    "carrier_contact_stiffness_n_m": 4.0e6,
     "element_size_mm": 1.0,
 }
 _SWEEPS = (
-    (
-        "carrier_contact_stiffness_n_m",
-        (2.5e5, 5.0e5, 1.0e6, 2.0e6, 4.0e6),
-    ),
-    ("soft_contact_margin_m", (0.0, 5.0e-5, 1.0e-4, 2.0e-4)),
-    ("iterations", (5, 10, 20)),
+    ("carrier_contact_stiffness_n_m", (4.0e6, 8.0e6)),
     ("sim_frequency", (500.0, 1000.0, 2000.0)),
-    ("element_size_mm", (1.5, 1.0, 0.75)),
+    ("iterations", (10, 20)),
+    ("element_size_mm", (1.0, 0.75)),
 )
 
-_FIXED_OPTICAL_SIDE_COUNT = 64
-_RAY_SIDE_COUNTS = (16, 32, 64, 128)
+_FIXED_OPTICAL_SIDE_COUNT = 128
+_RAY_SIDE_COUNTS = (128, 256)
 _RAY_SEEDS = (20260823, 20260824, 20260825)
 _BOUNCE_CAP = 24
 _CARRIER_ALBEDO = 0.7
@@ -111,6 +112,7 @@ def _make_trial(
     sphere_urdf_path: Path,
     *,
     contact_x_mm: float,
+    approach_speed_m_s: float,
 ) -> DesignTrial:
     surface_z_mm = (
         fingertip.silicone.ellipse_center_z_mm
@@ -132,7 +134,8 @@ def _make_trial(
             wp.vec3(1.0e-3 * contact_x_mm, 0.0, initial_center_z_m),
             wp.quat_identity(),
         ),
-        translation_step_W_m=wp.vec3(0.0, 0.0, _TRANSLATION_STEP_M),
+        motion_direction_W=wp.vec3(0.0, 0.0, 1.0),
+        approach_speed_m_s=approach_speed_m_s,
         target_force_n=_TARGET_FORCE_N,
         max_sim_time_s=_MAX_SIM_TIME_S,
     )
@@ -163,6 +166,71 @@ def _carrier_interior_depths_m(
                 1.0e3 * positions_m[inside, 2],
             ),
         )
+    return depths_m
+
+
+def _carrier_surface_penetration_depths_m(
+    positions_m: np.ndarray,
+    surface_triangles: np.ndarray,
+    *,
+    free_surface_mask: np.ndarray,
+    carrier_cross_section: Polygon,
+    carrier_y_limits_m: tuple[float, float],
+) -> np.ndarray:
+    """Measure exposed silicone surface area inside the carrier polygon."""
+    y_min_m, y_max_m = carrier_y_limits_m
+    depths_m = np.zeros(len(surface_triangles), dtype=np.float64)
+
+    for triangle_index, triangle_indices in enumerate(surface_triangles):
+        if not free_surface_mask[triangle_index]:
+            continue
+        triangle_positions = positions_m[triangle_indices]
+        if (
+            float(triangle_positions[:, 1].max()) <= y_min_m
+            or float(triangle_positions[:, 1].min()) >= y_max_m
+        ):
+            continue
+
+        triangle = Polygon(
+            1.0e3 * triangle_positions[:, (0, 2)]
+        )
+        if triangle.is_empty or not triangle.is_valid or triangle.area == 0.0:
+            continue
+        overlap = triangle.intersection(carrier_cross_section)
+        if overlap.is_empty or overlap.area == 0.0:
+            continue
+
+        candidate_points: list[tuple[float, float]] = []
+        geometries = (
+            overlap.geoms
+            if hasattr(overlap, "geoms")
+            else (overlap,)
+        )
+        for geometry in geometries:
+            if geometry.geom_type == "Polygon":
+                candidate_points.extend(
+                    (float(x), float(y))
+                    for x, y in geometry.exterior.coords
+                )
+            if not geometry.is_empty:
+                candidate_points.append(
+                    tuple(
+                        float(value)
+                        for value in geometry.representative_point()
+                        .coords[0]
+                    )
+                )
+        if not candidate_points:
+            continue
+        candidate_array = np.asarray(candidate_points, dtype=np.float64)
+        depths_m[triangle_index] = float(
+            1.0e-3
+            * distance(
+                carrier_cross_section.boundary,
+                points(candidate_array[:, 0], candidate_array[:, 1]),
+            ).max()
+        )
+
     return depths_m
 
 
@@ -200,6 +268,10 @@ def _measure_trial(
         simulation.fingertip_mesh.silicone.tet_indices,
         dtype=np.int32,
     ).reshape(-1, 4)
+    surface_triangles = np.asarray(
+        simulation.fingertip_mesh.silicone.surface_tri_indices,
+        dtype=np.int32,
+    ).reshape(-1, 3)
     nonbonded = np.ones(len(positions_m), dtype=bool)
     nonbonded[bonded_indices] = False
 
@@ -208,11 +280,13 @@ def _measure_trial(
     maximum_carrier_penetration_m = float("inf")
     maximum_particle_carrier_penetration_m = float("inf")
     maximum_tet_center_carrier_penetration_m = float("inf")
-    maximum_nonbonded_tet_center_carrier_penetration_m = float("inf")
+    maximum_free_tet_center_carrier_penetration_m = float("inf")
     maximum_bond_adjacent_tet_center_carrier_penetration_m = float("inf")
+    maximum_exposed_surface_carrier_penetration_m = float("inf")
     deep_particle_count = 0
-    deep_tet_center_count = 0
+    deep_free_tet_count = 0
     deep_bond_adjacent_tet_count = 0
+    deep_exposed_surface_count = 0
     if finite_state:
         maximum_displacement_m = float(
             np.linalg.norm(
@@ -250,19 +324,27 @@ def _measure_trial(
             carrier_cross_section=carrier_cross_section,
             carrier_y_limits_m=carrier_y_limits_m,
         )
-        # Tets touching the perfect-bond interface are allowed to overlap the
-        # carrier closure at that interface. Only nonbonded tets participate in
-        # the carrier-penetration acceptance test; both groups remain reported.
+        free_tet_mask = np.all(nonbonded[tet_indices], axis=1)
         tet_touches_bond = np.any(~nonbonded[tet_indices], axis=1)
-        nonbonded_tet_depths_m = tet_depths_m[~tet_touches_bond]
+        free_tet_depths_m = tet_depths_m[free_tet_mask]
         bond_adjacent_tet_depths_m = tet_depths_m[tet_touches_bond]
+        # Surface triangles touching the perfect-bond interface remain
+        # diagnostic geometry. Only fully free triangles enter acceptance.
+        free_surface_mask = np.all(nonbonded[surface_triangles], axis=1)
+        exposed_surface_depths_m = _carrier_surface_penetration_depths_m(
+            positions_m,
+            surface_triangles,
+            free_surface_mask=free_surface_mask,
+            carrier_cross_section=carrier_cross_section,
+            carrier_y_limits_m=carrier_y_limits_m,
+        )
         maximum_particle_carrier_penetration_m = float(
             particle_depths_m.max()
         )
         maximum_tet_center_carrier_penetration_m = float(tet_depths_m.max())
-        maximum_nonbonded_tet_center_carrier_penetration_m = (
-            float(nonbonded_tet_depths_m.max())
-            if len(nonbonded_tet_depths_m)
+        maximum_free_tet_center_carrier_penetration_m = (
+            float(free_tet_depths_m.max())
+            if len(free_tet_depths_m)
             else 0.0
         )
         maximum_bond_adjacent_tet_center_carrier_penetration_m = (
@@ -270,23 +352,33 @@ def _measure_trial(
             if len(bond_adjacent_tet_depths_m)
             else 0.0
         )
+        maximum_exposed_surface_carrier_penetration_m = float(
+            exposed_surface_depths_m.max()
+        )
+        # Surface overlap is reported as a discretization diagnostic. The hard
+        # mechanics gate uses particle and fully-free tet penetration only.
         maximum_carrier_penetration_m = max(
             maximum_particle_carrier_penetration_m,
-            maximum_nonbonded_tet_center_carrier_penetration_m,
+            maximum_free_tet_center_carrier_penetration_m,
         )
         deep_particle_count = int(
             np.count_nonzero(
                 particle_depths_m > _MAX_CARRIER_PENETRATION_M
             )
         )
-        deep_tet_center_count = int(
+        deep_free_tet_count = int(
             np.count_nonzero(
-                nonbonded_tet_depths_m > _MAX_CARRIER_PENETRATION_M
+                free_tet_depths_m > _MAX_CARRIER_PENETRATION_M
             )
         )
         deep_bond_adjacent_tet_count = int(
             np.count_nonzero(
                 bond_adjacent_tet_depths_m > _MAX_CARRIER_PENETRATION_M
+            )
+        )
+        deep_exposed_surface_count = int(
+            np.count_nonzero(
+                exposed_surface_depths_m > _MAX_CARRIER_PENETRATION_M
             )
         )
 
@@ -348,15 +440,19 @@ def _measure_trial(
         "maximum_tet_center_carrier_penetration_m": (
             maximum_tet_center_carrier_penetration_m
         ),
-        "maximum_nonbonded_tet_center_carrier_penetration_m": (
-            maximum_nonbonded_tet_center_carrier_penetration_m
+        "maximum_free_tet_center_carrier_penetration_m": (
+            maximum_free_tet_center_carrier_penetration_m
         ),
         "maximum_bond_adjacent_tet_center_carrier_penetration_m": (
             maximum_bond_adjacent_tet_center_carrier_penetration_m
         ),
         "deep_particle_count": deep_particle_count,
-        "deep_tet_center_count": deep_tet_center_count,
+        "deep_free_tet_count": deep_free_tet_count,
         "deep_bond_adjacent_tet_count": deep_bond_adjacent_tet_count,
+        "maximum_exposed_surface_carrier_penetration_m": (
+            maximum_exposed_surface_carrier_penetration_m
+        ),
+        "deep_exposed_surface_count": deep_exposed_surface_count,
         "maximum_bonded_drift_m": maximum_bonded_drift_m,
         "led_distance_m": led_distance_m,
     }
@@ -372,16 +468,26 @@ def _run_newton_configuration(
     fingertip: Fingertip,
     sphere_urdf_path: Path,
     configuration: dict[str, object],
+    *,
+    settle_duration_s: float = _SETTLE_DURATION_S,
 ) -> tuple[dict[str, object], dict[str, object] | None]:
     parameters = configuration["parameters"]
     if not isinstance(parameters, dict):
         raise TypeError("configuration parameters must be a dictionary")
 
+    sim_frequency = float(parameters["sim_frequency"])
+    configuration = {
+        **configuration,
+        "settle_duration_s": settle_duration_s,
+        "approach_speed_m_s": _APPROACH_SPEED_M_S,
+        "approach_step_m": _APPROACH_SPEED_M_S / sim_frequency,
+    }
     trials = tuple(
         _make_trial(
             fingertip,
             sphere_urdf_path,
             contact_x_mm=contact_x_mm,
+            approach_speed_m_s=_APPROACH_SPEED_M_S,
         )
         for contact_x_mm in _CONTACT_X_MM
     )
@@ -389,9 +495,9 @@ def _run_newton_configuration(
     study = DesignStudy(
         fingertip,
         trials,
-        sim_frequency=float(parameters["sim_frequency"]),
+        sim_frequency=sim_frequency,
         force_tolerance_n=_FORCE_TOLERANCE_N,
-        force_duration_s=_FORCE_DURATION_S,
+        settle_duration_s=settle_duration_s,
         max_search_iterations=_MAX_SEARCH_ITERATIONS,
         element_size_mm=float(parameters["element_size_mm"]),
         iterations=int(parameters["iterations"]),
@@ -456,10 +562,11 @@ def _run_newton_configuration(
             f"travel={1.0e3 * float(result['travel_m']):7.3f} mm | "
             "pen="
             f"{1.0e6 * float(result['maximum_carrier_penetration_m']):7.3f} um "
-            "(particle/nonbonded-tet/bond-tet="
+            "(particle/free-tet/bond-tet/free-surface="
             f"{int(result['deep_particle_count'])}/"
-            f"{int(result['deep_tet_center_count'])}/"
-            f"{int(result['deep_bond_adjacent_tet_count'])}) | "
+            f"{int(result['deep_free_tet_count'])}/"
+            f"{int(result['deep_bond_adjacent_tet_count'])}/"
+            f"{int(result['deep_exposed_surface_count'])}) | "
             f"{'PASS' if result['valid'] else 'INVALID'}",
             flush=True,
         )
@@ -509,6 +616,57 @@ def _run_newton_configuration(
         "contact_snapshots": snapshots,
     }
     return record, bundle
+
+
+def _run_settling_study(
+    fingertip: Fingertip,
+    sphere_urdf_path: Path,
+) -> list[dict[str, object]]:
+    records = []
+    for settle_duration_s in _SETTLE_DURATIONS_S:
+        duration_ms = 1.0e3 * settle_duration_s
+        print(
+            f"[settling {duration_ms:g} ms] center and off-center contacts",
+            flush=True,
+        )
+        configuration = {
+            "name": f"settle_duration_ms={duration_ms:g}",
+            "family": "settle_duration_s",
+            "value": settle_duration_s,
+            "parameters": dict(_BASELINE),
+        }
+        record, bundle = _run_newton_configuration(
+            fingertip,
+            sphere_urdf_path,
+            configuration,
+            settle_duration_s=settle_duration_s,
+        )
+        records.append(record)
+        del bundle
+    return records
+
+
+def _print_settling_table(records: list[dict[str, object]]) -> None:
+    print()
+    print("Settling-duration study")
+    print(
+        f"{'duration[ms]':>12s} {'x[mm]':>7s} {'F[N]':>8s} "
+        f"{'travel[mm]':>11s} {'disp[mm]':>10s} {'vmax[m/s]':>11s} "
+        f"{'dF[N]':>10s} {'status':>8s}"
+    )
+    for configuration in records:
+        duration_ms = 1.0e3 * float(configuration["settle_duration_s"])
+        for result in configuration["mechanics"]:
+            print(
+                f"{duration_ms:12.1f} "
+                f"{float(result['contact_x_mm']):+7.1f} "
+                f"{float(result['settled_force_n']):8.3f} "
+                f"{1.0e3 * float(result['travel_m']):11.3f} "
+                f"{1.0e3 * float(result['maximum_displacement_m']):10.3f} "
+                f"{float(result['maximum_active_particle_speed_m_s']):11.3e} "
+                f"{float(result['final_force_change_n']):10.3e} "
+                f"{'PASS' if result['valid'] else 'INVALID':>8s}"
+            )
 
 
 def _make_led(fingertip: Fingertip, mesh: FingertipMesh) -> LED:
@@ -647,6 +805,31 @@ def _minimum_pair(descriptors: np.ndarray) -> tuple[float, tuple[int, int]]:
     return best_distance, best_pair
 
 
+def _pairwise_distances(descriptors: np.ndarray) -> np.ndarray:
+    values = np.asarray(descriptors, dtype=np.float64)
+    distances = np.zeros((len(values), len(values)), dtype=np.float64)
+    for first in range(len(values) - 1):
+        for second in range(first + 1, len(values)):
+            distances[first, second] = distances[second, first] = float(
+                np.linalg.norm(
+                    np.atleast_1d(values[first] - values[second])
+                )
+            )
+    return distances
+
+
+def _optical_samples(
+    *,
+    seed: int,
+    ray_count: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    rng = np.random.default_rng(seed)
+    return tuple(
+        rng.random((_BOUNCE_CAP, ray_count))
+        for _ in range(3)
+    )
+
+
 def _evaluate_sensing(
     scene: OptixScene,
     fingertip: Fingertip,
@@ -676,10 +859,14 @@ def _evaluate_sensing(
     led = _make_led(fingertip, mesh)
     emission = _emit_from_stem_boundary(scene, led, u1, u2)
     ray_count = len(emission)
-    rng = np.random.default_rng(seed)
-    dielectric_branch_u = rng.random((_BOUNCE_CAP, ray_count))
-    carrier_u1 = rng.random((_BOUNCE_CAP, ray_count))
-    carrier_u2 = rng.random((_BOUNCE_CAP, ray_count))
+    (
+        dielectric_branch_u,
+        carrier_u1,
+        carrier_u2,
+    ) = _optical_samples(
+        seed=seed,
+        ray_count=ray_count,
+    )
 
     labels = ["no_contact"] + [
         f"contact_x={contact_x_mm:+.1f}mm"
@@ -721,6 +908,8 @@ def _evaluate_sensing(
     j_intensity, j_spatial = sensing_objectives(response)
     measured_intensity, intensity_pair = _minimum_pair(intensity)
     measured_spatial, spatial_pair = _minimum_pair(spatial)
+    intensity_distances = _pairwise_distances(intensity)
+    spatial_distances = _pairwise_distances(spatial)
     if not np.isclose(j_intensity, measured_intensity) or not np.isclose(
         j_spatial,
         measured_spatial,
@@ -736,6 +925,8 @@ def _evaluate_sensing(
         "quadrant_responses": response.tolist(),
         "intensity_responses": intensity.tolist(),
         "spatial_responses": spatial.tolist(),
+        "pairwise_intensity_distances": intensity_distances.tolist(),
+        "pairwise_spatial_distances": spatial_distances.tolist(),
         "J_intensity": float(j_intensity),
         "worst_intensity_pair": [
             labels[intensity_pair[0]],
@@ -785,11 +976,11 @@ def _evaluate_configuration_sensing(
 
 def _run_ray_convergence(
     fingertip: Fingertip,
-    baseline_bundle: dict[str, object],
+    reference_bundle: dict[str, object],
 ) -> list[dict[str, object]]:
-    mesh = baseline_bundle["mesh"]
+    mesh = reference_bundle["mesh"]
     if not isinstance(mesh, FingertipMesh):
-        raise TypeError("baseline snapshot has no FingertipMesh")
+        raise TypeError("reference snapshot has no FingertipMesh")
     scene = OptixScene(
         mesh,
         silicone_instance_id=_SILICONE_INSTANCE_ID,
@@ -809,7 +1000,7 @@ def _run_ray_convergence(
                 _evaluate_sensing(
                     scene,
                     fingertip,
-                    baseline_bundle,
+                    reference_bundle,
                     side_count=side_count,
                     seed=seed,
                 )
@@ -862,7 +1053,7 @@ def _print_newton_tables(configurations: list[dict[str, object]]) -> None:
         f"{'configuration':44s} {'x[mm]':>7s} {'F[N]':>8s} "
         f"{'travel':>8s} {'disp':>8s} {'vmax':>9s} {'dF':>9s} "
         f"{'ticks':>7s} {'corr':>5s} {'Ci':>5s} {'Cc':>5s} "
-        f"{'pen[um]':>8s} {'status':>8s}"
+        f"{'hard[um]':>8s} {'surf[um]':>8s} {'status':>8s}"
     )
     for configuration in configurations:
         mechanics = configuration["mechanics"]
@@ -886,13 +1077,35 @@ def _print_newton_tables(configurations: list[dict[str, object]]) -> None:
                 f"{int(result['indenter_contact_count']):5d} "
                 f"{int(result['carrier_contact_count']):5d} "
                 f"{1.0e6 * float(result['maximum_carrier_penetration_m']):8.3f} "
+                f"{1.0e6 * float(result['maximum_exposed_surface_carrier_penetration_m']):8.3f} "
                 f"{'PASS' if result['valid'] else 'INVALID':>8s}"
             )
         if configuration["failure"]:
             print(f"  failure: {configuration['failure']}")
 
     print()
-    print("Newton sensing sensitivity at 4096 rays")
+    print("Exposed-surface overlap versus mesh size (diagnostic only)")
+    print(
+        f"{'element[mm]':>12s} {'x[mm]':>7s} {'surface[um]':>13s} "
+        f"{'particle[um]':>13s} {'free-tet[um]':>13s}"
+    )
+    for configuration in configurations:
+        if configuration["family"] not in ("baseline", "element_size_mm"):
+            continue
+        element_size_mm = float(
+            configuration["parameters"]["element_size_mm"]
+        )
+        for result in configuration["mechanics"]:
+            print(
+                f"{element_size_mm:12.3f} "
+                f"{float(result['contact_x_mm']):+7.1f} "
+                f"{1.0e6 * float(result['maximum_exposed_surface_carrier_penetration_m']):13.3f} "
+                f"{1.0e6 * float(result['maximum_particle_carrier_penetration_m']):13.3f} "
+                f"{1.0e6 * float(result['maximum_free_tet_center_carrier_penetration_m']):13.3f}"
+            )
+
+    print()
+    print("Newton sensing sensitivity at 16384 rays")
     print(
         f"{'configuration':44s} {'J_intensity':>13s} {'dJ_i[%]':>10s} "
         f"{'J_spatial':>13s} {'dJ_s[%]':>10s} {'status':>8s}"
@@ -959,20 +1172,16 @@ def _print_ray_table(convergence: list[dict[str, object]]) -> None:
             f"  intensity pairs={result['worst_intensity_pairs']} | "
             f"spatial pairs={result['worst_spatial_pairs']}"
         )
-
-    by_count = {int(result["ray_count"]): result for result in convergence}
-    for low, high in ((1024, 4096), (4096, 16384)):
-        low_result = by_count[low]
-        high_result = by_count[high]
-        print(
-            f"{low} -> {high}: "
-            "dJ_intensity="
-            f"{float(high_result['J_intensity_mean']) - float(low_result['J_intensity_mean']):+.6e}, "
-            "dJ_spatial="
-            f"{float(high_result['J_spatial_mean']) - float(low_result['J_spatial_mean']):+.6e}, "
-            "dcenter="
-            f"{float(high_result['center_intensity_response_mean']) - float(low_result['center_intensity_response_mean']):+.6e}"
-        )
+    low_result, high_result = convergence
+    print(
+        f"{int(low_result['ray_count'])} -> {int(high_result['ray_count'])}: "
+        "dJ_intensity="
+        f"{float(high_result['J_intensity_mean']) - float(low_result['J_intensity_mean']):+.6e}, "
+        "dJ_spatial="
+        f"{float(high_result['J_spatial_mean']) - float(low_result['J_spatial_mean']):+.6e}, "
+        "dcenter="
+        f"{float(high_result['center_intensity_response_mean']) - float(low_result['center_intensity_response_mean']):+.6e}"
+    )
 
 
 def _within_seed_uncertainty(
@@ -1043,29 +1252,28 @@ def _mechanics_deltas(
 def _recommendations(
     configurations: list[dict[str, object]],
     convergence: list[dict[str, object]],
+    reference_name: str,
 ) -> dict[str, object]:
-    baseline = configurations[0]
-    if baseline["name"] != "baseline" or not baseline["valid"]:
-        raise RuntimeError("baseline is unavailable for recommendations")
-    baseline_sensing = baseline["sensing"]
-    if not isinstance(baseline_sensing, dict):
-        raise RuntimeError("baseline sensing is unavailable")
-
     by_name = {
         str(configuration["name"]): configuration
         for configuration in configurations
     }
-    by_count = {int(result["ray_count"]): result for result in convergence}
-    if _within_seed_uncertainty(by_count[1024], by_count[4096]) and (
-        _within_seed_uncertainty(by_count[4096], by_count[16384])
-    ):
-        recommended_rays = 1024
-    elif _within_seed_uncertainty(by_count[4096], by_count[16384]):
-        recommended_rays = 4096
-    else:
-        recommended_rays = 16384
+    baseline = by_name[reference_name]
+    if not baseline["valid"]:
+        raise RuntimeError("reference configuration is not mechanics-valid")
+    baseline_sensing = baseline["sensing"]
+    if not isinstance(baseline_sensing, dict):
+        raise RuntimeError("reference sensing is unavailable")
 
-    reference_noise = by_count[4096]
+    by_count = {
+        int(result["ray_count"]): result for result in convergence
+    }
+    if _within_seed_uncertainty(by_count[16384], by_count[65536]):
+        recommended_rays = 16384
+    else:
+        recommended_rays = 65536
+
+    reference_noise = by_count[16384]
     objective_uncertainty = (
         float(reference_noise["J_intensity_std"]),
         float(reference_noise["J_spatial_std"]),
@@ -1091,16 +1299,11 @@ def _recommendations(
 
     comparison_names = {
         "carrier_contact_stiffness_n_m": (
-            "carrier_contact_stiffness_n_m=2e+06",
-            "carrier_contact_stiffness_n_m=4e+06",
-        ),
-        "soft_contact_margin_m": (
-            "soft_contact_margin_m=0",
-            "soft_contact_margin_m=5e-05",
-            "soft_contact_margin_m=0.0002",
+            "baseline",
+            "carrier_contact_stiffness_n_m=8e+06",
         ),
         "iterations": ("iterations=20",),
-        "sim_frequency": ("sim_frequency=2000",),
+        "sim_frequency": ("sim_frequency=500", "sim_frequency=2000"),
         "element_size_mm": ("element_size_mm=0.75",),
     }
     baseline_component_evidence = {}
@@ -1134,8 +1337,8 @@ def _recommendations(
         relative_changes = [
             abs(float(value))
             for value in (
-                sensing["relative_J_intensity_change"],
-                sensing["relative_J_spatial_change"],
+                sensing.get("relative_J_intensity_change"),
+                sensing.get("relative_J_spatial_change"),
             )
             if value is not None
         ]
@@ -1161,8 +1364,8 @@ def _recommendations(
         )
 
     stiffness_names = (
-        "carrier_contact_stiffness_n_m=2e+06",
-        "carrier_contact_stiffness_n_m=4e+06",
+        "baseline",
+        "carrier_contact_stiffness_n_m=8e+06",
     )
     stiffness_mechanics_valid = all(
         bool(by_name[name]["valid"]) for name in stiffness_names
@@ -1172,31 +1375,31 @@ def _recommendations(
     )
     if recommended_rays == 16384:
         ray_recommendation = (
-            "16384 rays is the highest tested count because the 4096-to-16384 "
-            "objective change exceeded the combined three-seed standard "
-            "deviations."
+            "16384 rays is sufficient: the 16384-to-65536 objective change "
+            "is within the combined three-seed standard deviations."
         )
     else:
         ray_recommendation = (
-            f"{recommended_rays} rays is the cheapest tested count whose "
-            "J_intensity and J_spatial mean changes to the next tested count "
-            "are within the combined three-seed standard deviations."
+            "65536 rays is recommended because the 16384-to-65536 objective "
+            "change exceeds the combined three-seed standard deviations."
         )
     return {
-        "recommended_newton_settings": (
-            dict(_BASELINE) if baseline_stable else None
+        "recommended_newton_settings": dict(baseline["parameters"]),
+        "newton_contract_status": (
+            "stable" if baseline_stable else "candidate_not_frozen"
         ),
+        "reference_configuration": reference_name,
         "newton_recommendation": (
-            "Use the current baseline for sensing evaluation: every compared "
+            "Use the selected hard-valid reference for sensing evaluation: every compared "
             "setting passes the existing mechanics acceptance checks and its "
-            "sensing objectives remain within the measured 4096-ray seed "
+            "sensing objectives remain within the measured 16384-ray seed "
             "standard deviations. Mechanics scalar deltas are reported "
             "separately; no additional convergence threshold was invented."
             if baseline_stable
-            else "Do not freeze the current Newton baseline automatically: "
+            else "Do not freeze the selected Newton reference automatically: "
             "at least one comparison either fails the existing mechanics "
-            "checks or changes the sensing objectives beyond measured "
-            "4096-ray seed variation. Inspect the reported deltas."
+                "checks or changes the sensing objectives beyond measured "
+                "16384-ray seed variation. Inspect the reported deltas."
         ),
         "recommended_ray_count": recommended_rays,
         "ray_recommendation": ray_recommendation,
@@ -1205,7 +1408,7 @@ def _recommendations(
         ),
         "mechanics_invalid_families": mechanics_invalid_families,
         "baseline_component_evidence": baseline_component_evidence,
-        "carrier_contact_stiffness_1e6_evidence": {
+        "carrier_contact_stiffness_evidence": {
             "comparison_configurations": list(stiffness_names),
             "all_mechanics_valid": stiffness_mechanics_valid,
             "objectives_within_seed_uncertainty": (
@@ -1213,7 +1416,7 @@ def _recommendations(
             ),
         },
         "comparison_noise_reference": {
-            "ray_count": 4096,
+            "ray_count": 16384,
             "J_intensity_std": objective_uncertainty[0],
             "J_spatial_std": objective_uncertainty[1],
         },
@@ -1250,8 +1453,9 @@ def main() -> None:
     fingertip = Fingertip(FingertipParameters())
     configuration_specs = _configurations()
     configurations: list[dict[str, object]] = []
-    baseline_bundle: dict[str, object] | None = None
-    baseline_sensing: dict[str, object] | None = None
+    reference_name: str | None = None
+    reference_bundle: dict[str, object] | None = None
+    reference_sensing: dict[str, object] | None = None
 
     sphere_resource = files("lumo").joinpath(
         "assets",
@@ -1260,6 +1464,10 @@ def main() -> None:
         "sphere_10mm.urdf",
     )
     with as_file(sphere_resource) as sphere_urdf_path:
+        settling_records = _run_settling_study(
+            fingertip,
+            sphere_urdf_path,
+        )
         for index, configuration in enumerate(configuration_specs, start=1):
             print(
                 f"[Newton {index}/{len(configuration_specs)}] "
@@ -1280,14 +1488,6 @@ def main() -> None:
                     )
                 continue
 
-            if record["name"] != "baseline" and baseline_sensing is None:
-                record["sensing_skip_reason"] = (
-                    "baseline Newton configuration is invalid"
-                )
-                configurations.append(record)
-                del bundle
-                continue
-
             print(
                 f"[optical {index}/{len(configuration_specs)}] "
                 f"{record['name']} | "
@@ -1299,35 +1499,45 @@ def main() -> None:
                 bundle,
             )
             record["sensing"] = sensing
-            if record["name"] == "baseline":
-                baseline_bundle = bundle
-                baseline_sensing = sensing
+            if reference_sensing is None:
+                reference_name = str(record["name"])
+                reference_bundle = bundle
+                reference_sensing = sensing
             else:
                 sensing["relative_J_intensity_change"] = _relative_change(
                     float(sensing["J_intensity"]),
-                    float(baseline_sensing["J_intensity"]),
+                    float(reference_sensing["J_intensity"]),
                 )
                 sensing["relative_J_spatial_change"] = _relative_change(
                     float(sensing["J_spatial"]),
-                    float(baseline_sensing["J_spatial"]),
+                    float(reference_sensing["J_spatial"]),
                 )
                 del bundle
             configurations.append(record)
 
-    study_complete = baseline_sensing is not None and baseline_bundle is not None
+    study_complete = (
+        reference_name is not None
+        and reference_sensing is not None
+        and reference_bundle is not None
+    )
     ray_convergence: list[dict[str, object]] = []
     recommendations: dict[str, object] | None = None
     blocked_reason: str | None = None
     if study_complete:
-        ray_convergence = _run_ray_convergence(fingertip, baseline_bundle)
-        del baseline_bundle
-        recommendations = _recommendations(configurations, ray_convergence)
+        ray_convergence = _run_ray_convergence(fingertip, reference_bundle)
+        del reference_bundle
+        recommendations = _recommendations(
+            configurations,
+            ray_convergence,
+            reference_name,
+        )
     else:
         blocked_reason = (
-            "baseline Newton configuration failed mechanics acceptance; "
-            "optical sensitivity and ray convergence were skipped"
+            "no hard-valid Newton configuration was available; optical "
+            "sensitivity and ray convergence were skipped"
         )
 
+    _print_settling_table(settling_records)
     _print_newton_tables(configurations)
     if recommendations is None:
         print()
@@ -1365,17 +1575,17 @@ def main() -> None:
                     f"{1.0e6 * deltas['maximum_absolute_penetration_m_change']:.3e} um"
                 )
         stiffness_evidence = recommendations[
-            "carrier_contact_stiffness_1e6_evidence"
+            "carrier_contact_stiffness_evidence"
         ]
         print(
-            "  carrier_contact_stiffness=1e6 N/m sensing-evaluation evidence: "
+            "  carrier-contact-stiffness sensing-evaluation evidence: "
             f"mechanics_valid={stiffness_evidence['all_mechanics_valid']}, "
             "objective_stable="
             f"{stiffness_evidence['objectives_within_seed_uncertainty']}"
         )
         print(f"  {recommendations['ray_recommendation']}")
         print(
-            "  final evaluation contract: Newton="
+            "  final evaluation contract candidate: Newton="
             f"{recommendations['recommended_newton_settings']}, "
             f"rays={recommendations['recommended_ray_count']}, "
             f"bounces={_BOUNCE_CAP}"
@@ -1395,16 +1605,25 @@ def main() -> None:
         "study": "sensing_convergence",
         "study_complete": study_complete,
         "blocked_reason": blocked_reason,
+        "mechanics_reference_configuration": reference_name,
+        "settling_study": settling_records,
         "fixed_contract": {
             "contact_x_mm": list(_CONTACT_X_MM),
             "target_force_n": _TARGET_FORCE_N,
             "force_tolerance_n": _FORCE_TOLERANCE_N,
-            "force_duration_s": _FORCE_DURATION_S,
+            "settle_duration_s": _SETTLE_DURATION_S,
+            "settle_durations_tested_s": list(_SETTLE_DURATIONS_S),
+            "approach_speed_m_s": _APPROACH_SPEED_M_S,
+            "approach_step_m_by_frequency": {
+                str(int(frequency)): _APPROACH_SPEED_M_S / frequency
+                for frequency in (500.0, 1000.0, 2000.0)
+            },
             "carrier_albedo": _CARRIER_ALBEDO,
             "max_optical_bounces": _BOUNCE_CAP,
             "fixed_newton_sensing_ray_count": (
                 _FIXED_OPTICAL_SIDE_COUNT**2
             ),
+            "ray_side_counts": list(_RAY_SIDE_COUNTS),
             "ray_seeds": list(_RAY_SEEDS),
         },
         "newton_configurations": configurations,

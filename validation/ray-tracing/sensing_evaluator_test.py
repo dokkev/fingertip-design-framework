@@ -37,10 +37,10 @@ _CARRIER_ALBEDO = 0.7
 _CONTACT_X_MM = (-7.5, 0.0, 7.5)
 _SPHERE_RADIUS_M = 5.0e-3
 _INITIAL_CLEARANCE_M = 1.0e-3
-_TRANSLATION_STEP_M = 2.5e-5
+_APPROACH_SPEED_M_S = 2.5e-2
 _TARGET_FORCE_N = 20.0
 _FORCE_TOLERANCE_N = 5.0
-_FORCE_DURATION_S = 5.0e-3
+_SETTLE_DURATION_S = 5.0e-3
 _MAX_SIM_TIME_S = 30.0
 _MAX_SEARCH_ITERATIONS = 256
 _SIM_FREQUENCY_HZ = 1.0e3
@@ -201,7 +201,8 @@ def _make_trial(
             wp.vec3(1.0e-3 * contact_x_mm, 0.0, initial_center_z_m),
             wp.quat_identity(),
         ),
-        translation_step_W_m=wp.vec3(0.0, 0.0, _TRANSLATION_STEP_M),
+        motion_direction_W=wp.vec3(0.0, 0.0, 1.0),
+        approach_speed_m_s=_APPROACH_SPEED_M_S,
         target_force_n=_TARGET_FORCE_N,
         max_sim_time_s=_MAX_SIM_TIME_S,
     )
@@ -353,7 +354,7 @@ def main() -> None:
             trials,
             sim_frequency=_SIM_FREQUENCY_HZ,
             force_tolerance_n=_FORCE_TOLERANCE_N,
-            force_duration_s=_FORCE_DURATION_S,
+            settle_duration_s=_SETTLE_DURATION_S,
             max_search_iterations=_MAX_SEARCH_ITERATIONS,
         ).run(inspect_trial=inspect_contact)
 

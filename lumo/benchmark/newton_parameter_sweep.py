@@ -1,4 +1,4 @@
-"""Benchmark numerical sensitivity of force-duration 20 N indentation."""
+"""Benchmark numerical sensitivity of settled 20 N indentation."""
 
 from __future__ import annotations
 
@@ -29,7 +29,7 @@ _APPROACH_SPEED_M_S = 2.5e-2
 _MAX_SIM_TIME_S = 30.0
 
 _FORCE_TOLERANCE_N = 5.0
-_FORCE_DURATION_S = 5.0e-3
+_SETTLE_DURATION_S = 5.0e-3
 _MAX_SEARCH_ITERATIONS = 256
 _MAX_BONDED_DRIFT_M = 1.0e-8
 _MAX_CARRIER_PENETRATION_M = 1.0e-5
@@ -180,7 +180,7 @@ def _write_results(
         },
         "acceptance": {
             "force_tolerance_n": _FORCE_TOLERANCE_N,
-            "force_duration_s": _FORCE_DURATION_S,
+            "settle_duration_s": _SETTLE_DURATION_S,
             "maximum_bonded_drift_m": _MAX_BONDED_DRIFT_M,
             "maximum_carrier_penetration_m": (
                 _MAX_CARRIER_PENETRATION_M
@@ -301,14 +301,14 @@ def _run_case(
         ),
         wp.quat_identity(),
     )
-    translation_step_m = _APPROACH_SPEED_M_S / sim_frequency_hz
     trial = DesignTrial(
         name=(
             f"sphere_{sphere_diameter_mm:g}mm_x{contact_x_mm:+g}mm"
         ),
         urdf_path=urdf_path,
         initial_tf=initial_tf,
-        translation_step_W_m=wp.vec3(0.0, 0.0, translation_step_m),
+        motion_direction_W=wp.vec3(0.0, 0.0, 1.0),
+        approach_speed_m_s=_APPROACH_SPEED_M_S,
         target_force_n=_TARGET_FORCE_N,
         max_sim_time_s=_MAX_SIM_TIME_S,
     )
@@ -317,7 +317,7 @@ def _run_case(
         (trial,),
         sim_frequency=sim_frequency_hz,
         force_tolerance_n=_FORCE_TOLERANCE_N,
-        force_duration_s=_FORCE_DURATION_S,
+        settle_duration_s=_SETTLE_DURATION_S,
         max_search_iterations=_MAX_SEARCH_ITERATIONS,
         element_size_mm=element_size_mm,
         iterations=iterations,
@@ -662,7 +662,7 @@ def _print_matrix(
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
-            "Sweep numerical Newton parameters for one force-duration 20 N "
+            "Sweep numerical Newton parameters for one settled 20 N "
             "spherical indentation."
         )
     )
