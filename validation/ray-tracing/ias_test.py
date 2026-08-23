@@ -56,9 +56,20 @@ def main() -> None:
     fingertip = Fingertip(FingertipParameters())
     fingertip_mesh = make_fingertip_mesh(fingertip)
 
-    silicone_triangle_count = np.asarray(
+    silicone_triangles = np.asarray(
         fingertip_mesh.silicone.surface_tri_indices,
-    ).size // 3
+        dtype=np.int64,
+    ).reshape(-1, 3)
+    bonded_vertices = np.zeros(
+        len(fingertip_mesh.silicone.vertices),
+        dtype=bool,
+    )
+    bonded_vertices[fingertip_mesh.bonded_vertex_indices] = True
+    exposed_silicone_triangle_count = int(
+        np.count_nonzero(
+            ~np.all(bonded_vertices[silicone_triangles], axis=1),
+        )
+    )
     carrier_triangle_count = np.asarray(
         fingertip_mesh.carrier.indices,
     ).size // 3
@@ -90,7 +101,7 @@ def main() -> None:
         "silicone",
         silicone_result,
         instance_id=SILICONE_INSTANCE_ID,
-        primitive_count=silicone_triangle_count,
+        primitive_count=exposed_silicone_triangle_count,
     )
     _require_hit(
         "carrier",
@@ -121,7 +132,7 @@ def main() -> None:
         "mask",
         masked_result,
         instance_id=SILICONE_INSTANCE_ID,
-        primitive_count=silicone_triangle_count,
+        primitive_count=exposed_silicone_triangle_count,
     )
 
     expected_silicone_z_m = 1.0e-3 * (

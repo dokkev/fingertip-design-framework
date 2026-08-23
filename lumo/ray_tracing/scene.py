@@ -1,4 +1,4 @@
-"""One static multi-instance OptiX scene."""
+"""OptiX fingertip scene for silicone and carrier."""
 
 from __future__ import annotations
 
