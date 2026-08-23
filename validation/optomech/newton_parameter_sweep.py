@@ -716,7 +716,9 @@ def _warm_up(fingertip: Fingertip, sphere_urdf_path: Path) -> float:
     indenter = None
     scene = None
     try:
-        newton_builder = newton.ModelBuilder(gravity=0.0)
+        newton_builder = newton.ModelBuilder(
+            gravity=wp.vec3(0.0, 0.0, 0.0)
+        )
         warmup_center_z_m = (
             fingertip.tip_z_m - _INITIAL_CLEARANCE_M - _SPHERE_RADIUS_M
         )

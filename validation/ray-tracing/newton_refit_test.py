@@ -180,7 +180,7 @@ def main() -> None:
     )
 
     with as_file(sphere_resource) as sphere_urdf_path:
-        builder = newton.ModelBuilder(gravity=0.0)
+        builder = newton.ModelBuilder(gravity=wp.vec3(0.0, 0.0, 0.0))
         indenter = Indenter.add_urdf(
             builder,
             sphere_urdf_path,

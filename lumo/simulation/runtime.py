@@ -16,6 +16,7 @@ from lumo.util.scalar_validation import require_nonnegative, require_positive
 _DEFAULT_SOFT_CONTACT_MARGIN_M = 1.0e-4
 _DEFAULT_ELEMENT_SIZE_MM = 1.0
 _DEFAULT_CARRIER_CONTACT_STIFFNESS_N_M = 1.0e6
+_VBD_BODY_PARTICLE_CONTACT_BUFFER_SIZE = 2048
 
 
 @wp.kernel
@@ -76,6 +77,8 @@ class LumoSimulation:
         sim_frequency: float,
         iterations: int = 10,
         soft_contact_margin_m: float = _DEFAULT_SOFT_CONTACT_MARGIN_M,
+        soft_contact_stiffness_n_m: float | None = None,
+        soft_contact_damping_n_s_m: float | None = None,
         element_size_mm: float = _DEFAULT_ELEMENT_SIZE_MM,
         carrier_contact_stiffness_n_m: float = (
             _DEFAULT_CARRIER_CONTACT_STIFFNESS_N_M
@@ -99,6 +102,16 @@ class LumoSimulation:
             "soft_contact_margin_m",
             soft_contact_margin_m,
         )
+        if soft_contact_stiffness_n_m is not None:
+            require_positive(
+                "soft_contact_stiffness_n_m",
+                soft_contact_stiffness_n_m,
+            )
+        if soft_contact_damping_n_s_m is not None:
+            require_nonnegative(
+                "soft_contact_damping_n_s_m",
+                soft_contact_damping_n_s_m,
+            )
         require_positive("element_size_mm", element_size_mm)
         require_positive(
             "carrier_contact_stiffness_n_m",
@@ -116,6 +129,10 @@ class LumoSimulation:
             carrier_contact_stiffness_n_m=carrier_contact_stiffness_n_m,
         )
         model = self.fingertip_model.model
+        if soft_contact_stiffness_n_m is not None:
+            model.soft_contact_ke = float(soft_contact_stiffness_n_m)
+        if soft_contact_damping_n_s_m is not None:
+            model.soft_contact_kd = float(soft_contact_damping_n_s_m)
 
         self.sim_frequency = float(sim_frequency)
         self.time_step_s = 1.0 / self.sim_frequency
@@ -126,6 +143,9 @@ class LumoSimulation:
             model,
             iterations=iterations,
             particle_enable_self_contact=False,
+            rigid_body_particle_contact_buffer_size=(
+                _VBD_BODY_PARTICLE_CONTACT_BUFFER_SIZE
+            ),
         )
         self.collision_pipeline = newton.CollisionPipeline(
             model,
@@ -235,7 +255,6 @@ class LumoSimulation:
             raise RuntimeError("simulation state has no rigid-body velocities")
         wp.copy(self._body_qd_before, self.state.body_qd)
         state_before = self.state
-
         self.solver.coupling_notify_input_state_update(
             self.state,
             newton.StateFlags.BODY_Q,

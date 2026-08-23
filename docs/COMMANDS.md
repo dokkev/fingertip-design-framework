@@ -12,7 +12,7 @@ conda activate lit
 python -m pip install -e ".[mesh,physics,ax,test]"
 ```
 
-`mesh` supplies Gmsh, `physics` supplies Newton/Warp and rigid asset loading,
+`mesh` supplies Gmsh, `physics` supplies Newton 1.5/Warp and rigid asset loading,
 and `ax` supplies Ax 1.3.1. CUDA, OptiX, and GPU drivers are externally managed.
 The editable install exposes the sole framework namespace from `lumo/`;
 repository scripts do not insert the checkout into `sys.path`.
@@ -91,9 +91,56 @@ conda run --no-capture-output -n lit \
 ```
 
 The viewer renders every Newton tick and prints travel, reaction force, maximum
-active silicone speed, and sphere contact count every 100 ticks. It freezes the
-target state until the window closes. This is an interactive contact diagnostic,
-not the settled-force validation above.
+active silicone speed, and sphere contact count every 100 ticks. After the first
+transient `20 N` crossing it holds the sphere pose fixed while continuing the
+simulation for `10 s`, then freezes the final held state until the window
+closes. This is an interactive contact diagnostic, not the settled-force
+correction validation above.
+
+Record the fixed-pose reaction-force trajectory after the same centered 15 mm
+sphere first reaches transient `20 N`:
+
+```bash
+conda run --no-capture-output -n lit \
+  python -u validation/contact-physics/force_traj.py
+```
+
+The script compares the baseline, a validation-only one-time particle-velocity
+reset, a 30-iteration solve, and a smaller-timestep solve. Each case holds the
+trigger pose for `10 s`, prints early transient checkpoints through `1 s` plus
+`2`, `5`, and `10 s`, and writes combined force, speed, contact, penetration,
+and tetrahedral-volume trajectories to `output/validation/force_traj.csv` and
+`force_traj.png`. It is an explicit GPU validation and is not part of focused
+tests.
+
+Measure the nominal centered 15 mm sphere force-depth curve and direct sphere
+penetration diagnostics without holding or force correction:
+
+```bash
+conda run --no-capture-output -n lit \
+  python -u validation/contact-physics/sphere_force_depth.py
+```
+
+The script continuously pushes to `10 mm` analytic indentation depth and writes
+`output/validation/sphere_force_depth.csv` and `sphere_force_depth.png`. It also
+reports sphere contact count, particle/surface/centroid/tet-center penetration,
+minimum tet `det(F)`, and inverted-tet count. A fresh second simulation reaches
+the first transient `20 N` crossing, holds that exact pose for `1 s`, and
+reports force at `0`, `5`, `100`, and `1000 ms`.
+
+Run the focused centered-sphere rigid-soft contact diagnostic:
+
+```bash
+conda run --no-capture-output -n lit \
+  python -u validation/contact-physics/sphere_contact_tuning.py
+```
+
+The script uses Newton 1.5's full-surface VBD wrench harvest, equalizes the
+rigid-shape and soft-contact `ke/kd` endpoints, and compares `ke=1e4`, `3e4`,
+and `1e5 N/m` with mass-scaled damping at `2 kHz`. It checks two stable cases
+at `4 kHz` and writes `output/validation/sphere_contact_tuning.csv`,
+`sphere_contact_tuning_force_depth.csv`, and `sphere_contact_tuning.png`.
+This explicit GPU diagnostic does not run the larger mechanics or OptiX sweeps.
 
 Run the representative numerical/contact parameter sweep explicitly:
 

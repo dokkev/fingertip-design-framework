@@ -68,7 +68,7 @@ def _run_case(poisson_ratio: float) -> None:
         - _PLATE_HALF_THICKNESS_M
     )
 
-    builder = newton.ModelBuilder(gravity=0.0)
+    builder = newton.ModelBuilder(gravity=wp.vec3(0.0, 0.0, 0.0))
 
     flat_plate_resource = files("lumo").joinpath(
         "assets",

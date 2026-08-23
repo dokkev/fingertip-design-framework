@@ -177,6 +177,14 @@ default normal contact stiffness is `1e6 N/m`; model construction exposes that
 scalar only so the numerical sensitivity benchmark can vary it without
 changing material parameters.
 
+`Indenter.add_urdf()` and `Indenter.add_mesh()` accept optional normal-contact
+stiffness and damping overrides. Their default `None` values preserve Newton's
+shape material because no indenter contact pair has been frozen as a production
+numerical contract. URDF construction applies requested values only while the
+importer creates that asset and then restores the builder defaults.
+Prepared-mesh construction applies requested values to a copied shape
+configuration. Neither path changes objects added later.
+
 Do not introduce a generic physics-backend layer while Newton is the only
 mechanics implementation.
 
@@ -207,11 +215,21 @@ the zero-radius silicone particles discoverable by Newton's mesh query without
 adding physical particle or shape thickness. Callers may override the margin
 when a different scene scale requires it.
 
+Newton is pinned to `1.5.0`. `LumoSimulation` uses its full-surface VBD proxy
+wrench harvest, added upstream in Newton #3756, so indenter reaction includes
+particle, edge, and face rigid-soft contact records while the indenter remains
+kinematic. The runtime does not maintain a repository-owned copy of Newton's
+contact-force kernel. SolverVBD's per-body rigid-soft contact list is allocated
+for `2048` records; the current kinematic indenter is not truncated by that
+dynamic-body list, but the larger capacity keeps dense future proxy use away
+from Newton's default `256`-record limit.
+
 The current numerical construction defaults are a `1 mm` mesh element size,
 `1000 Hz` simulation frequency, `10` SolverVBD iterations, `1e-4 m` soft
-contact margin, and `1e6 N/m` carrier contact stiffness. `LumoSimulation` and
-`DesignStudy` expose only these concrete scalars for the convergence
-study; there is no simulation-configuration abstraction.
+contact margin, and `1e6 N/m` carrier contact stiffness. Optional
+`soft_contact_stiffness_n_m` and `soft_contact_damping_n_s_m` values support the
+focused rigid-soft pair study; `None` preserves Newton's model defaults. There
+is no simulation-configuration abstraction.
 
 `LumoSimulation(fingertip, builder=...)` is the high-level construction entry
 point. It meshes the fingertip, adds it to an optional caller-populated Newton
@@ -263,6 +281,9 @@ results. It never retains its `LumoSimulation` or `Indenter`.
 ordered tuple of design trials. It constructs a fresh builder, indenter,
 `LumoSimulation`, and Newton state for each trial, so every trial evaluates the
 same fingertip morphology but starts from an independent reference state.
+The study passes its optional `indenter_contact_stiffness_n_m` into each URDF
+indenter without changing the carrier or silicone contact material. `None`
+preserves the imported Newton shape material.
 Each trial specifies a normalized `motion_direction_W` and physical
 `approach_speed_m_s`; the study derives its per-tick displacement from the
 simulation frequency.
@@ -537,9 +558,44 @@ carrier penetration before releasing that runtime.
 `validation/contact-physics/sphere_15mm_viewer.py` is a focused interactive
 contact diagnostic. It loads the packaged 15 mm sphere, advances that one
 kinematic body at a fixed positive-Z speed, renders every Newton state and
-contact set, and freezes the first state whose transient reaction reaches
-`20 N`. It reports force, active-particle speed, and sphere contact count at a
-throttled interval; it does not run the settled-force search.
+contact set, and holds the sphere pose fixed for `10 s` after the transient
+reaction first reaches `20 N`. It continues advancing and rendering Newton
+during that hold, reports force, active-particle speed, and sphere contact count
+at a throttled interval, and freezes the final held state until the viewer
+closes. It does not run the settled-force correction search.
+
+`validation/contact-physics/force_traj.py` repeats that centered 15 mm sphere
+approach without a viewer, stops prescribed motion at the first transient
+`20 N` crossing, and then holds the indenter pose exactly fixed for `10 s`.
+It compares the default `1000 Hz / 10 iteration` run against a diagnostic
+one-time particle-velocity reset, `1000 Hz / 30 iterations`, and
+`2000 Hz / 20 iterations`. Every hold tick records reaction force, maximum
+active-particle speed, sphere and carrier contact counts, nonbonded-particle
+carrier penetration, and total tetrahedral volume ratio. The velocity reset is
+validation-only and is not a production settling behavior. The script diagnoses
+rate-dependent and numerical settling; it does not interpret the measured decay
+as a calibrated material relaxation law.
+
+`validation/contact-physics/sphere_force_depth.py` performs one nominal centered
+15 mm sphere indentation with no force correction. It continuously advances
+the sphere to `10 mm` analytic indentation depth while recording the
+full-surface reaction force, sphere contact count, analytic sphere penetration for
+nonbonded particles, free surface vertices, free surface-triangle centroids,
+and fully-free tetrahedron centers, plus per-tet signed volume ratios and
+inversion counts. A fresh second runtime stops at the first `20 N` crossing,
+holds the sphere pose fixed for `1 s`, and reports force at `0`, `5`, `100`, and
+`1000 ms`. Its CSV and plot distinguish a nonmonotonic force branch from
+sphere-contact leakage or tetrahedron collapse without changing production
+mechanics.
+
+`validation/contact-physics/sphere_contact_tuning.py` is the focused contact
+system diagnostic. It first measures the actual full-surface contact record
+masses, then sets equal rigid-shape and soft-contact endpoint values for
+`ke={1e4,3e4,1e5} N/m` and mass-scaled under/critical/over damping at `2 kHz`.
+It checks two stable candidates again at `4 kHz`, records force-depth,
+penetration, tetrahedral quality, fixed-pose force, contact-list overflow, and
+active-particle speed, and writes CSV/PNG evidence. It does not set a production
+contact default or run optics.
 
 `validation/contact-physics/poisson_ratio_sweep.py` repeats that prescribed
 contact protocol for explicit near-incompressible Poisson ratios. It derives

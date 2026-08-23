@@ -96,6 +96,7 @@ class DesignStudy:
         iterations: int = 10,
         soft_contact_margin_m: float = 1.0e-4,
         carrier_contact_stiffness_n_m: float = 1.0e6,
+        indenter_contact_stiffness_n_m: float | None = None,
     ) -> None:
         if not isinstance(fingertip, Fingertip):
             raise TypeError("fingertip must be a Fingertip")
@@ -111,6 +112,11 @@ class DesignStudy:
             "carrier_contact_stiffness_n_m",
             carrier_contact_stiffness_n_m,
         )
+        if indenter_contact_stiffness_n_m is not None:
+            require_positive(
+                "indenter_contact_stiffness_n_m",
+                indenter_contact_stiffness_n_m,
+            )
         for name, value in (
             ("max_search_iterations", max_search_iterations),
             ("iterations", iterations),
@@ -146,6 +152,11 @@ class DesignStudy:
         self.soft_contact_margin_m = float(soft_contact_margin_m)
         self.carrier_contact_stiffness_n_m = float(
             carrier_contact_stiffness_n_m
+        )
+        self.indenter_contact_stiffness_n_m = (
+            None
+            if indenter_contact_stiffness_n_m is None
+            else float(indenter_contact_stiffness_n_m)
         )
         self._has_run = False
 
@@ -186,11 +197,16 @@ class DesignStudy:
                 ceil(self.settle_duration_s * self.sim_frequency),
             )
 
-            builder = newton.ModelBuilder(gravity=0.0)
+            builder = newton.ModelBuilder(
+                gravity=wp.vec3(0.0, 0.0, 0.0)
+            )
             indenter = Indenter.add_urdf(
                 builder,
                 trial.urdf_path,
                 tf=trial.initial_tf,
+                contact_stiffness_n_m=(
+                    self.indenter_contact_stiffness_n_m
+                ),
             )
             simulation = LumoSimulation(
                 self.fingertip,

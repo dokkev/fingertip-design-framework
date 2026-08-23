@@ -81,7 +81,7 @@ def main(*, show_viewer: bool = False) -> None:
         wp.quat_identity(),
     )
 
-    builder = newton.ModelBuilder(gravity=0.0)
+    builder = newton.ModelBuilder(gravity=wp.vec3(0.0, 0.0, 0.0))
 
     flat_plate_resource = files("lumo").joinpath(
         "assets",

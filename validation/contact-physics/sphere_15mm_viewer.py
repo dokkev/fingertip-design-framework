@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from importlib.resources import as_file, files
+from math import ceil
 
 import newton
 import newton.viewer
@@ -18,7 +19,8 @@ _SIM_FREQUENCY_HZ = 1.0e3
 _SPHERE_RADIUS_M = 7.5e-3
 _INITIAL_CLEARANCE_M = 1.0e-3
 _APPROACH_SPEED_M_S = 2.5e-2
-_TARGET_FORCE_N = 20.0
+_TARGET_FORCE_N = 3.0
+_HOLD_DURATION_S = 10.0
 _MAX_SIM_TIME_S = 30.0
 _REPORT_INTERVAL_TICKS = 100
 _MOTION_DIRECTION_W = wp.vec3(0.0, 0.0, 1.0)
@@ -46,7 +48,7 @@ def main() -> None:
         wp.quat_identity(),
     )
 
-    builder = newton.ModelBuilder(gravity=0.0)
+    builder = newton.ModelBuilder(gravity=wp.vec3(0.0, 0.0, 0.0))
     sphere_resource = files("lumo").joinpath(
         "assets",
         "objects",
@@ -134,6 +136,49 @@ def main() -> None:
                 print(
                     f"transient 20 N target reached at "
                     f"{1.0e3 * travel_m:.4f} mm travel; "
+                    f"holding the sphere pose for {_HOLD_DURATION_S:g} s.",
+                    flush=True,
+                )
+
+                hold_step_count = ceil(
+                    _HOLD_DURATION_S * simulation.sim_frequency
+                )
+                for hold_step in range(1, hold_step_count + 1):
+                    if not viewer.is_running():
+                        print("viewer closed during the fixed-pose hold")
+                        return
+
+                    # Do not update the sphere pose during settling.
+                    simulation.step()
+                    reaction_force_n = simulation.indenter_reaction_force(
+                        indenter,
+                        motion_direction_W=_MOTION_DIRECTION_W,
+                    )
+                    _render(viewer, simulation)
+
+                    if (
+                        hold_step % _REPORT_INTERVAL_TICKS == 0
+                        or hold_step == hold_step_count
+                    ):
+                        hold_time_s = (
+                            hold_step / simulation.sim_frequency
+                        )
+                        maximum_speed_m_s = (
+                            simulation.maximum_active_particle_speed_m_s()
+                        )
+                        sphere_contact_count = simulation.soft_contact_count(
+                            indenter.body_index
+                        )
+                        print(
+                            f"hold={hold_time_s:7.3f} s | "
+                            f"F={reaction_force_n:9.4f} N | "
+                            f"vmax={maximum_speed_m_s:9.3e} m/s | "
+                            f"contacts={sphere_contact_count}",
+                            flush=True,
+                        )
+
+                print(
+                    f"{_HOLD_DURATION_S:g} s fixed-pose hold complete; "
                     "close the viewer to finish.",
                     flush=True,
                 )
