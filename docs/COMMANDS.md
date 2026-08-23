@@ -112,6 +112,18 @@ After every requested run finishes, it writes strict JSON to
 `output/benchmark/newton_parameter_sweep.json`. Use `--output PATH` to select a
 different result file. An interrupted run does not write a partial result.
 
+Run the full measured optomechanical Newton/OptiX factorial sweep explicitly:
+
+```bash
+conda run --no-capture-output -n lit \
+  python -u validation/optomech/newton_parameter_sweep.py
+```
+
+This runs the fixed 24-configuration Newton sweep at `65,536` rays and `24`
+bounces, measures mechanics and optical wall time, and writes strict JSON to
+`output/validation/newton_parameter_sweep.json`. It selects the fastest
+hard-valid configuration that completes the fixed sensing evaluation.
+
 Run the complete sensing numerical-convergence study overnight:
 
 ```bash

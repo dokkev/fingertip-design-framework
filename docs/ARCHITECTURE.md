@@ -655,6 +655,12 @@ separate diagnostic because that interface intentionally has no contact
 constraint; only nonbonded particles and nonbonded tetrahedra determine the
 penetration acceptance result.
 
+`validation/optomech/newton_parameter_sweep.py` is a separate procedural
+throughput study. It runs the requested 24 Newton combinations, evaluates only
+hard-valid states with the fixed 65,536-ray optical protocol, records stage
+timings and per-contact diagnostics, and writes a machine-readable result. It
+does not introduce a benchmark framework or production timing hooks.
+
 They should normally:
 
 1. construct production objects;
