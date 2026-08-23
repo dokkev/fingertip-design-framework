@@ -16,6 +16,10 @@ struct HitGroupData
     float sphere_radius;
 };
 
+static constexpr unsigned int RESULT_WORD_COUNT = 9u;
+static constexpr unsigned int NORMAL_X_WORD = 6u;
+static constexpr unsigned int NAN_BITS = 0x7fc00000u;
+
 extern "C" {
 __constant__ LaunchParams params;
 }
@@ -30,9 +34,40 @@ static __forceinline__ __device__ void set_miss_payload()
     optixSetPayload_5(__float_as_uint(-1.0f));
 }
 
+static __forceinline__ __device__ void write_world_normal(
+    const float3 normal_object)
+{
+    const float3 normal_world =
+        optixTransformNormalFromObjectToWorldSpace(normal_object);
+    const float length_squared = normal_world.x * normal_world.x
+        + normal_world.y * normal_world.y
+        + normal_world.z * normal_world.z;
+    unsigned int* result = params.results
+        + RESULT_WORD_COUNT * optixGetLaunchIndex().x;
+    if (!(length_squared > 0.0f) || !isfinite(length_squared))
+    {
+        result[NORMAL_X_WORD] = NAN_BITS;
+        result[NORMAL_X_WORD + 1u] = NAN_BITS;
+        result[NORMAL_X_WORD + 2u] = NAN_BITS;
+        return;
+    }
+
+    const float inverse_length = rsqrtf(length_squared);
+    result[NORMAL_X_WORD] = __float_as_uint(normal_world.x * inverse_length);
+    result[NORMAL_X_WORD + 1u] =
+        __float_as_uint(normal_world.y * inverse_length);
+    result[NORMAL_X_WORD + 2u] =
+        __float_as_uint(normal_world.z * inverse_length);
+}
+
 extern "C" __global__ void __raygen__trace_closest()
 {
     const unsigned int ray_index = optixGetLaunchIndex().x;
+    unsigned int* result = params.results + RESULT_WORD_COUNT * ray_index;
+    result[NORMAL_X_WORD] = NAN_BITS;
+    result[NORMAL_X_WORD + 1u] = NAN_BITS;
+    result[NORMAL_X_WORD + 2u] = NAN_BITS;
+
     unsigned int hit = 0u;
     unsigned int t = __float_as_uint(-1.0f);
     unsigned int instance_id = static_cast<unsigned int>(-1);
@@ -59,7 +94,6 @@ extern "C" __global__ void __raygen__trace_closest()
         barycentric_u,
         barycentric_v);
 
-    unsigned int* result = params.results + 6u * ray_index;
     result[0] = hit;
     result[1] = t;
     result[2] = instance_id;
@@ -76,6 +110,21 @@ extern "C" __global__ void __miss__trace_closest()
 extern "C" __global__ void __closesthit__triangle()
 {
     const float2 barycentrics = optixGetTriangleBarycentrics();
+    float3 vertices[3];
+    optixGetTriangleVertexData(vertices);
+    const float3 edge_1 = make_float3(
+        vertices[1].x - vertices[0].x,
+        vertices[1].y - vertices[0].y,
+        vertices[1].z - vertices[0].z);
+    const float3 edge_2 = make_float3(
+        vertices[2].x - vertices[0].x,
+        vertices[2].y - vertices[0].y,
+        vertices[2].z - vertices[0].z);
+    write_world_normal(make_float3(
+        edge_1.y * edge_2.z - edge_1.z * edge_2.y,
+        edge_1.z * edge_2.x - edge_1.x * edge_2.z,
+        edge_1.x * edge_2.y - edge_1.y * edge_2.x));
+
     optixSetPayload_0(1u);
     optixSetPayload_1(__float_as_uint(optixGetRayTmax()));
     optixSetPayload_2(optixGetInstanceId());
@@ -86,6 +135,11 @@ extern "C" __global__ void __closesthit__triangle()
 
 extern "C" __global__ void __closesthit__sphere()
 {
+    write_world_normal(make_float3(
+        __uint_as_float(optixGetAttribute_0()),
+        __uint_as_float(optixGetAttribute_1()),
+        __uint_as_float(optixGetAttribute_2())));
+
     optixSetPayload_0(1u);
     optixSetPayload_1(__float_as_uint(optixGetRayTmax()));
     optixSetPayload_2(optixGetInstanceId());
@@ -122,11 +176,31 @@ extern "C" __global__ void __intersection__sphere()
     float root = (-half_b - square_root) / a;
     if (root > optixGetRayTmin() && root < optixGetRayTmax())
     {
-        if (optixReportIntersection(root, 0u))
+        const float3 normal = make_float3(
+            offset.x + root * direction.x,
+            offset.y + root * direction.y,
+            offset.z + root * direction.z);
+        if (optixReportIntersection(
+                root,
+                0u,
+                __float_as_uint(normal.x),
+                __float_as_uint(normal.y),
+                __float_as_uint(normal.z)))
             return;
     }
 
     root = (-half_b + square_root) / a;
     if (root > optixGetRayTmin() && root < optixGetRayTmax())
-        optixReportIntersection(root, 0u);
+    {
+        const float3 normal = make_float3(
+            offset.x + root * direction.x,
+            offset.y + root * direction.y,
+            offset.z + root * direction.z);
+        optixReportIntersection(
+            root,
+            0u,
+            __float_as_uint(normal.x),
+            __float_as_uint(normal.y),
+            __float_as_uint(normal.z));
+    }
 }

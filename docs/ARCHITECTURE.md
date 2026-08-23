@@ -295,19 +295,35 @@ persistent CUDA stream, the OptiX context and pipeline resources, device
 geometry buffers, two triangle GASes for silicone and carrier, one spherical
 custom-primitive GAS, and the IAS containing those three instances. Its only
 query `trace_closest()` returns hit state, distance, instance ID, primitive ID,
-and triangle barycentrics. `update_silicone()` accepts positions for the same
-vertex count and topology, copies them into the persistent silicone vertex
-buffer, and performs an in-place silicone GAS UPDATE followed by IAS UPDATE.
-The two acceleration structures reuse their original output buffers and
-dedicated persistent update scratch buffers. Carrier and sphere GASes remain
-static. The sphere uses a minimal custom intersection program because the
-installed PyOptiX 9.1 binding does not expose OptiX's built-in sphere build
-input.
+triangle barycentrics, and the world-frame geometric normal `normal_W`.
+Triangle closest-hit programs fetch the current triangle vertices through the
+OptiX 9.1 current-hit API and use OptiX's object-to-world normal transform; no
+random vertex access build flag or host-side normal lookup is used. The custom
+sphere intersection reports its object-space radial normal as three attributes,
+which its closest-hit program transforms through the same OptiX helper. Misses
+return a NaN normal.
 
-The scene does not yet update geometry from Newton or implement optical
-transport. The silicone input surface is selected by the caller; the first IAS
-validation removes surface triangles whose three vertices all belong to the
-perfect bonded interface.
+`update_silicone()` accepts positions for the same vertex count and topology,
+copies them into the persistent silicone vertex buffer, and performs an in-place
+silicone GAS UPDATE followed by IAS UPDATE. The two acceleration structures
+reuse their original output buffers and dedicated persistent update scratch
+buffers. Carrier and sphere GASes remain static. The sphere uses a minimal
+custom intersection program because the installed PyOptiX 9.1 binding does not
+expose OptiX's built-in sphere build input.
+
+`interface_transport()` in `transport.py` is the first concrete optical
+operation. It normalizes a batch of incident directions and geometric normals,
+locally orients each normal against its incident ray, and evaluates one
+lossless dielectric interface with caller-supplied scalar refractive indices.
+It returns reflected and refracted directions, unpolarized Fresnel reflectance,
+transmittance, and a total-internal-reflection flag. A TIR result uses a NaN
+refracted direction. It does not track media or launch secondary rays.
+
+The scene has no Newton dependency. A caller may explicitly pass a Newton
+checkpoint through `update_silicone()`, but no production runtime currently
+orchestrates Newton and OptiX. The silicone input surface is selected by the
+caller; the first IAS validation removes surface triangles whose three vertices
+all belong to the perfect bonded interface.
 
 This package should define only the optical semantics required by LUMO and use
 OptiX for generic ray-tracing functionality.
@@ -438,6 +454,17 @@ Newton silicone vertices, updates the existing OptiX silicone GAS and IAS, and
 compares ray results against a fresh scene built from the same deformed
 vertices. The OptiX test sphere remains a separate static instance used to
 verify that non-silicone instances survive the update unchanged.
+
+`validation/ray-tracing/normal_test.py` traces deterministic rays against a
+planar carrier face, the custom sphere, and the exposed silicone semiellipse.
+It compares their world-frame geometric normals with analytic references and
+feeds the silicone hit normal into one air-to-silicone
+`interface_transport()` call.
+
+`validation/ray-tracing/interface_transport_test.py` independently checks
+normal and oblique air-to-silicone refraction, below-critical silicone-to-air
+refraction, and above-critical total internal reflection against deterministic
+analytic results.
 
 They should normally:
 

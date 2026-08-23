@@ -69,6 +69,18 @@ def _assert_same_result(
         atol=_BARYCENTRIC_TOLERANCE,
     ):
         raise AssertionError(f"{label} differs in barycentrics")
+    if bool(left["hit"]) and not np.allclose(
+        left["normal_W"],
+        right["normal_W"],
+        rtol=0.0,
+        atol=2.0e-5,
+    ):
+        raise AssertionError(f"{label} differs in world-space normal")
+    if not bool(left["hit"]) and not (
+        np.all(np.isnan(left["normal_W"]))
+        and np.all(np.isnan(right["normal_W"]))
+    ):
+        raise AssertionError(f"{label} differs in miss normal sentinel")
 
 
 def main() -> None:

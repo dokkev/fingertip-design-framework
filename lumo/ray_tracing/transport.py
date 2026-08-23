@@ -1,0 +1,125 @@
+"""Single-interface dielectric optical transport."""
+
+from __future__ import annotations
+
+from math import isfinite
+
+import numpy as np
+
+
+_RESULT_DTYPE = np.dtype(
+    [
+        ("reflected_direction", np.float64, (3,)),
+        ("refracted_direction", np.float64, (3,)),
+        ("reflectance", np.float64),
+        ("transmittance", np.float64),
+        ("total_internal_reflection", np.bool_),
+    ]
+)
+
+
+def _normalized_vectors(value: np.ndarray, *, name: str) -> np.ndarray:
+    vectors = np.asarray(value, dtype=np.float64)
+    if vectors.ndim != 2 or vectors.shape[1] != 3:
+        raise ValueError(f"{name} must have shape (N, 3)")
+    if not len(vectors):
+        raise ValueError(f"{name} must not be empty")
+    if not np.all(np.isfinite(vectors)):
+        raise ValueError(f"{name} must be finite")
+
+    norms = np.linalg.norm(vectors, axis=1)
+    if np.any(norms <= np.finfo(np.float64).tiny):
+        raise ValueError(f"{name} must contain nonzero vectors")
+    return vectors / norms[:, None]
+
+
+def interface_transport(
+    directions: np.ndarray,
+    normals: np.ndarray,
+    *,
+    n_incident: float,
+    n_transmitted: float,
+) -> np.ndarray:
+    """Apply one lossless dielectric interaction to a batch of rays.
+
+    ``n_incident`` and ``n_transmitted`` are supplied explicitly; this function
+    does not infer the current medium. Each geometric normal is locally flipped
+    when necessary so that it opposes its incident direction.
+    """
+    directions = _normalized_vectors(directions, name="directions")
+    normals = _normalized_vectors(normals, name="normals")
+    if directions.shape != normals.shape:
+        raise ValueError("directions and normals must have the same shape")
+
+    n_incident = float(n_incident)
+    n_transmitted = float(n_transmitted)
+    if not isfinite(n_incident) or n_incident <= 0.0:
+        raise ValueError("n_incident must be finite and positive")
+    if not isfinite(n_transmitted) or n_transmitted <= 0.0:
+        raise ValueError("n_transmitted must be finite and positive")
+
+    dots = np.sum(directions * normals, axis=1)
+    oriented_normals = np.where((dots > 0.0)[:, None], -normals, normals)
+    cosine_incident = np.clip(
+        -np.sum(directions * oriented_normals, axis=1),
+        0.0,
+        1.0,
+    )
+
+    reflected = directions + 2.0 * cosine_incident[:, None] * oriented_normals
+    reflected /= np.linalg.norm(reflected, axis=1)[:, None]
+
+    result = np.empty(len(directions), dtype=_RESULT_DTYPE)
+    result["reflected_direction"] = reflected
+    result["refracted_direction"] = np.nan
+
+    if n_incident == n_transmitted:
+        result["refracted_direction"] = directions
+        result["reflectance"] = 0.0
+        result["transmittance"] = 1.0
+        result["total_internal_reflection"] = False
+        return result
+
+    index_ratio = n_incident / n_transmitted
+    sine_transmitted_squared = index_ratio**2 * (1.0 - cosine_incident**2)
+    total_internal_reflection = sine_transmitted_squared > 1.0
+    transmitted = ~total_internal_reflection
+    cosine_transmitted = np.sqrt(
+        np.maximum(0.0, 1.0 - sine_transmitted_squared)
+    )
+
+    refracted = (
+        index_ratio * directions[transmitted]
+        + (
+            index_ratio * cosine_incident[transmitted]
+            - cosine_transmitted[transmitted]
+        )[:, None]
+        * oriented_normals[transmitted]
+    )
+    refracted /= np.linalg.norm(refracted, axis=1)[:, None]
+    result["refracted_direction"][transmitted] = refracted
+
+    reflectance = np.ones(len(directions), dtype=np.float64)
+    cosine_i = cosine_incident[transmitted]
+    cosine_t = cosine_transmitted[transmitted]
+    reflection_s = (
+        n_incident * cosine_i - n_transmitted * cosine_t
+    ) / (
+        n_incident * cosine_i + n_transmitted * cosine_t
+    )
+    reflection_p = (
+        n_transmitted * cosine_i - n_incident * cosine_t
+    ) / (
+        n_transmitted * cosine_i + n_incident * cosine_t
+    )
+    reflectance[transmitted] = 0.5 * (
+        reflection_s**2 + reflection_p**2
+    )
+
+    result["reflectance"] = reflectance
+    result["transmittance"] = 1.0 - reflectance
+    result["total_internal_reflection"] = total_internal_reflection
+    return result
+
+
+__all__ = ["interface_transport"]

@@ -121,6 +121,27 @@ This builds silicone, carrier, and sphere GASes under one IAS and checks
 closest hits, a miss, and visibility masking. Synchronization occurs only when
 the batched results are copied to the host.
 
+Run the CPU-only single-interface dielectric validation:
+
+```bash
+conda run --no-capture-output -n lit \
+python validation/ray-tracing/interface_transport_test.py
+```
+
+This checks deterministic normal-incidence and oblique Fresnel/Snell cases,
+including below-critical refraction and total internal reflection.
+
+Run the OptiX world-space geometric-normal and interface integration check:
+
+```bash
+OPTIX_INCLUDE_DIR=/path/to/NVIDIA-OptiX-SDK-9.1.0/include \
+conda run --no-capture-output -n lit \
+python validation/ray-tracing/normal_test.py
+```
+
+This checks a planar carrier face, the custom sphere, the analytic silicone
+semiellipse, and one OptiX-hit-to-dielectric-interface operation.
+
 Run the silicone GAS and IAS UPDATE/refit validation with the same SDK headers:
 
 ```bash

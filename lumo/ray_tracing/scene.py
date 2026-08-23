@@ -18,7 +18,8 @@ if TYPE_CHECKING:
 
 _MISS_INT = -1
 _MISS_FLOAT = -1.0
-_RESULT_WORD_COUNT = 6
+_PAYLOAD_WORD_COUNT = 6
+_RESULT_WORD_COUNT = 9
 _RESULT_DTYPE = np.dtype(
     [
         ("hit", np.bool_),
@@ -26,6 +27,7 @@ _RESULT_DTYPE = np.dtype(
         ("instance_id", np.int32),
         ("primitive_id", np.int32),
         ("barycentrics", np.float32, (2,)),
+        ("normal_W", np.float32, (3,)),
     ]
 )
 
@@ -570,8 +572,8 @@ class OptixScene:
             traversableGraphFlags=int(
                 optix.TRAVERSABLE_GRAPH_FLAG_ALLOW_SINGLE_LEVEL_INSTANCING
             ),
-            numPayloadValues=_RESULT_WORD_COUNT,
-            numAttributeValues=2,
+            numPayloadValues=_PAYLOAD_WORD_COUNT,
+            numAttributeValues=3,
             exceptionFlags=int(optix.EXCEPTION_FLAG_NONE),
             pipelineLaunchParamsVariableName="params",
             usesPrimitiveTypeFlags=primitive_flags,
@@ -821,6 +823,9 @@ class OptixScene:
         results["primitive_id"] = raw[:, 3].view(np.int32)
         results["barycentrics"][:, 0] = raw[:, 4].view(np.float32)
         results["barycentrics"][:, 1] = raw[:, 5].view(np.float32)
+        results["normal_W"][:, 0] = raw[:, 6].view(np.float32)
+        results["normal_W"][:, 1] = raw[:, 7].view(np.float32)
+        results["normal_W"][:, 2] = raw[:, 8].view(np.float32)
         return results
 
 
