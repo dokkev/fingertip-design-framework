@@ -292,31 +292,27 @@ OptiX is the ray-tracing backend.
 
 `OptixScene` is the first concrete OptiX 9.1 runtime component. It owns one
 persistent CUDA stream, the OptiX context and pipeline resources, device
-geometry buffers, two triangle GASes for silicone and carrier, one spherical
-custom-primitive GAS, and the IAS containing those three instances. Its only
-query `trace_closest()` returns hit state, distance, instance ID, primitive ID,
-triangle barycentrics, and the world-frame geometric normal `normal_W`.
+geometry buffers, two triangle GASes for silicone and carrier, and the IAS
+containing those two instances. Its only query `trace_closest()` returns hit
+state, distance, instance ID, primitive ID, triangle barycentrics, and the
+world-frame geometric normal `normal_W`.
 Triangle hits also return NVIDIA OptiX Toolkit ShaderUtil
 `spawn_front_W` and `spawn_back_W` positions for robust secondary-ray launch;
-custom-sphere hits and misses return NaN spawn positions.
+misses return NaN normal and spawn positions.
 
-Triangle closest-hit programs fetch the current triangle vertices through the
-OptiX 9.1 current-hit API and use OptiX's object-to-world normal transform. The
-same vertices and barycentrics are passed to OTK
+The triangle closest-hit program fetches the current triangle vertices through
+the OptiX 9.1 current-hit API. The vertices and barycentrics are passed to OTK
 `getSafeTriangleSpawnOffset()`, followed by the current-hit transform and
-two-sided offset operations. This explicit-vertex OTK overload avoids the
-random vertex access build flag and any host-side triangle lookup. The custom
-sphere intersection reports its object-space radial normal as three attributes,
-which its closest-hit program transforms through the same OptiX helper. Misses
-return a NaN normal.
+two-sided offset operations. The world-space unit normal returned by that OTK
+transform is both reported as `normal_W` and used to construct the safe spawn
+points. This explicit-vertex OTK overload avoids the random vertex access build
+flag, a duplicate normal transform, and any host-side triangle lookup.
 
 `update_silicone()` accepts positions for the same vertex count and topology,
 copies them into the persistent silicone vertex buffer, and performs an in-place
 silicone GAS UPDATE followed by IAS UPDATE. The two acceleration structures
 reuse their original output buffers and dedicated persistent update scratch
-buffers. Carrier and sphere GASes remain static. The sphere uses a minimal
-custom intersection program because the installed PyOptiX 9.1 binding does not
-expose OptiX's built-in sphere build input.
+buffers. The carrier GAS remains static.
 
 `interface_transport()` in `transport.py` is the first concrete optical
 operation. It normalizes a batch of incident directions and geometric normals,
@@ -460,17 +456,17 @@ the Lamé `k_lambda` from a fixed `k_mu`, reports force and tetrahedral volume
 change, and keeps all sweep policy local to the validation script.
 
 `validation/ray-tracing/ias_test.py` builds a static OptiX IAS from the real
-undeformed silicone surface, full carrier mesh, and one 10 mm sphere. Its
-deterministic rays verify closest silicone, carrier, and sphere instance hits,
-a full-scene miss, visibility-mask exclusion, triangle barycentrics, and an
-analytic sphere hit distance. It does not perform optical transport or couple
-Newton state into OptiX.
+undeformed silicone surface and full carrier mesh. Its deterministic rays
+verify closest silicone and carrier instance hits, a full-scene miss,
+visibility-mask exclusion, triangle barycentrics, and the analytic silicone
+surface distance. It does not perform optical transport or couple Newton state
+into OptiX.
 
 `validation/ray-tracing/refit_test.py` translates every silicone vertex by
 `+1 mm` in Z, updates the existing silicone GAS and IAS, and verifies the
 expected `+1 mm` hit-distance change without changing the hit primitive or
 barycentrics. It also compares displaced-scene hits against a fresh full build,
-checks that carrier, sphere, and miss results are unchanged, and reports
+checks that carrier and miss results are unchanged, and reports
 validation-local update and fresh-construction timing.
 
 `validation/ray-tracing/newton_refit_test.py` exercises the explicit mechanics
@@ -478,14 +474,13 @@ checkpoint handoff. It uses the same centered 15 mm indenter and fixed-speed
 transient `20 N` approach as the interactive contact viewer, extracts the live
 Newton silicone vertices, updates the existing OptiX silicone GAS and IAS, and
 compares ray results against a fresh scene built from the same deformed
-vertices. The OptiX test sphere remains a separate static instance used to
-verify that non-silicone instances survive the update unchanged.
+vertices. Carrier and miss queries verify that the non-silicone scene state
+remains unchanged; the Newton sphere indenter is not an optical scene instance.
 
 `validation/ray-tracing/normal_test.py` traces deterministic rays against a
-planar carrier face, the custom sphere, and the exposed silicone semiellipse.
-It compares their world-frame geometric normals with analytic references and
-feeds the silicone hit normal into one air-to-silicone
-`interface_transport()` call.
+planar carrier face and the exposed silicone semiellipse. It compares their
+world-frame geometric normals with analytic references and feeds the silicone
+hit normal into one air-to-silicone `interface_transport()` call.
 
 `validation/ray-tracing/interface_transport_test.py` independently checks
 normal and oblique air-to-silicone refraction, below-critical silicone-to-air

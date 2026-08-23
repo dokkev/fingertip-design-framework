@@ -15,28 +15,19 @@ from lumo.ray_tracing import (
 
 SILICONE_INSTANCE_ID = 1
 CARRIER_INSTANCE_ID = 2
-SPHERE_INSTANCE_ID = 3
 
 SILICONE_MASK = 0x01
 CARRIER_MASK = 0x02
-SPHERE_MASK = 0x04
-ALL_MASK = SILICONE_MASK | CARRIER_MASK | SPHERE_MASK
-
-_SPHERE_CENTER_M = np.array((0.030, 0.0, 0.0), dtype=np.float32)
-_SPHERE_RADIUS_M = 0.005
+ALL_MASK = SILICONE_MASK | CARRIER_MASK
 
 
 def main() -> None:
     scene = OptixScene(
         make_fingertip_mesh(Fingertip(FingertipParameters())),
-        sphere_center=_SPHERE_CENTER_M,
-        sphere_radius=_SPHERE_RADIUS_M,
         silicone_instance_id=SILICONE_INSTANCE_ID,
         carrier_instance_id=CARRIER_INSTANCE_ID,
-        sphere_instance_id=SPHERE_INSTANCE_ID,
         silicone_visibility_mask=SILICONE_MASK,
         carrier_visibility_mask=CARRIER_MASK,
-        sphere_visibility_mask=SPHERE_MASK,
     )
 
     primary_origins = np.array(

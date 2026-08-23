@@ -133,9 +133,9 @@ conda run --no-capture-output -n lit \
 python validation/ray-tracing/ias_test.py
 ```
 
-This builds silicone, carrier, and sphere GASes under one IAS and checks
-closest hits, a miss, and visibility masking. Synchronization occurs only when
-the batched results are copied to the host.
+This builds silicone and carrier GASes under one IAS and checks closest hits, a
+miss, and visibility masking. Synchronization occurs only when the batched
+results are copied to the host.
 
 Run the CPU-only single-interface dielectric validation:
 
@@ -156,8 +156,8 @@ conda run --no-capture-output -n lit \
 python validation/ray-tracing/normal_test.py
 ```
 
-This checks a planar carrier face, the custom sphere, the analytic silicone
-semiellipse, and one OptiX-hit-to-dielectric-interface operation.
+This checks a planar carrier face, the analytic silicone semiellipse, and one
+OptiX-hit-to-dielectric-interface operation.
 
 Run the single refracted secondary-ray validation:
 

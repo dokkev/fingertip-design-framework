@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from math import sqrt
-
 import numpy as np
 
 from lumo.fingertip import Fingertip, FingertipParameters
@@ -14,15 +12,11 @@ from lumo.ray_tracing import OptixScene
 
 SILICONE_INSTANCE_ID = 1
 CARRIER_INSTANCE_ID = 2
-OBJECT_INSTANCE_ID = 3
 
 SILICONE_MASK = 0x01
 CARRIER_MASK = 0x02
-OBJECT_MASK = 0x04
-ALL_MASK = SILICONE_MASK | CARRIER_MASK | OBJECT_MASK
+ALL_MASK = SILICONE_MASK | CARRIER_MASK
 
-_SPHERE_CENTER_M = np.array((0.030, 0.0, 0.0), dtype=np.float32)
-_SPHERE_RADIUS_M = 0.005
 _BARYCENTRIC_TOLERANCE = 1.0e-5
 
 
@@ -32,7 +26,6 @@ def _require_hit(
     *,
     instance_id: int,
     primitive_count: int,
-    triangle: bool,
 ) -> None:
     if not bool(result["hit"]):
         raise AssertionError(f"{label} unexpectedly missed")
@@ -48,28 +41,15 @@ def _require_hit(
         raise AssertionError(f"{label} returned an invalid primitive ID")
 
     barycentrics = np.asarray(result["barycentrics"])
-    if triangle:
-        u, v = (float(value) for value in barycentrics)
-        if not np.all(np.isfinite(barycentrics)):
-            raise AssertionError(f"{label} barycentrics are not finite")
-        if (
-            u < -_BARYCENTRIC_TOLERANCE
-            or v < -_BARYCENTRIC_TOLERANCE
-            or u + v > 1.0 + _BARYCENTRIC_TOLERANCE
-        ):
-            raise AssertionError(f"{label} barycentrics lie outside the triangle")
-    elif not np.array_equal(barycentrics, (-1.0, -1.0)):
-        raise AssertionError(f"{label} should not report triangle barycentrics")
-
-
-def _sphere_distance_m(origin: np.ndarray, direction: np.ndarray) -> float:
-    offset = origin - _SPHERE_CENTER_M
-    half_b = float(np.dot(offset, direction))
-    c = float(np.dot(offset, offset)) - _SPHERE_RADIUS_M**2
-    discriminant = half_b**2 - c
-    if discriminant < 0.0:
-        raise AssertionError("CPU sphere reference unexpectedly missed")
-    return -half_b - sqrt(discriminant)
+    u, v = (float(value) for value in barycentrics)
+    if not np.all(np.isfinite(barycentrics)):
+        raise AssertionError(f"{label} barycentrics are not finite")
+    if (
+        u < -_BARYCENTRIC_TOLERANCE
+        or v < -_BARYCENTRIC_TOLERANCE
+        or u + v > 1.0 + _BARYCENTRIC_TOLERANCE
+    ):
+        raise AssertionError(f"{label} barycentrics lie outside the triangle")
 
 
 def main() -> None:
@@ -85,14 +65,10 @@ def main() -> None:
 
     scene = OptixScene(
         fingertip_mesh,
-        sphere_center=_SPHERE_CENTER_M,
-        sphere_radius=_SPHERE_RADIUS_M,
         silicone_instance_id=SILICONE_INSTANCE_ID,
         carrier_instance_id=CARRIER_INSTANCE_ID,
-        sphere_instance_id=OBJECT_INSTANCE_ID,
         silicone_visibility_mask=SILICONE_MASK,
         carrier_visibility_mask=CARRIER_MASK,
-        sphere_visibility_mask=OBJECT_MASK,
     )
 
     silicone_x_m = -0.0065
@@ -101,51 +77,27 @@ def main() -> None:
         dtype=np.float32,
     )
     carrier_origin = np.array((0.0011, 0.00073, 0.010), dtype=np.float32)
-    sphere_origin = np.array((0.030, 0.0, -0.020), dtype=np.float32)
     miss_origin = np.array((0.050, 0.0, -0.020), dtype=np.float32)
     positive_z = np.array((0.0, 0.0, 1.0), dtype=np.float32)
     negative_z = np.array((0.0, 0.0, -1.0), dtype=np.float32)
 
-    origins = np.stack(
-        (silicone_origin, carrier_origin, sphere_origin, miss_origin)
-    )
-    directions = np.stack((positive_z, negative_z, positive_z, positive_z))
+    origins = np.stack((silicone_origin, carrier_origin, miss_origin))
+    directions = np.stack((positive_z, negative_z, positive_z))
     results = scene.trace_closest(origins, directions, mask=ALL_MASK)
 
-    silicone_result, carrier_result, sphere_result, miss_result = results
+    silicone_result, carrier_result, miss_result = results
     _require_hit(
         "silicone",
         silicone_result,
         instance_id=SILICONE_INSTANCE_ID,
         primitive_count=silicone_triangle_count,
-        triangle=True,
     )
     _require_hit(
         "carrier",
         carrier_result,
         instance_id=CARRIER_INSTANCE_ID,
         primitive_count=carrier_triangle_count,
-        triangle=True,
     )
-    _require_hit(
-        "sphere",
-        sphere_result,
-        instance_id=OBJECT_INSTANCE_ID,
-        primitive_count=1,
-        triangle=False,
-    )
-
-    expected_sphere_t_m = _sphere_distance_m(sphere_origin, positive_z)
-    if not np.isclose(
-        sphere_result["t"],
-        expected_sphere_t_m,
-        rtol=0.0,
-        atol=1.0e-6,
-    ):
-        raise AssertionError(
-            f"sphere t={float(sphere_result['t']):.9e} m, "
-            f"CPU reference={expected_sphere_t_m:.9e} m"
-        )
 
     if bool(miss_result["hit"]):
         raise AssertionError("miss ray unexpectedly hit the IAS")
@@ -170,7 +122,6 @@ def main() -> None:
         masked_result,
         instance_id=SILICONE_INSTANCE_ID,
         primitive_count=silicone_triangle_count,
-        triangle=True,
     )
 
     expected_silicone_z_m = 1.0e-3 * (
@@ -199,11 +150,6 @@ def main() -> None:
         "carrier:  PASS | "
         f"instance={int(carrier_result['instance_id'])} | "
         f"t={float(carrier_result['t']):.9e} m"
-    )
-    print(
-        "sphere:   PASS | "
-        f"instance={int(sphere_result['instance_id'])} | "
-        f"t={float(sphere_result['t']):.9e} m"
     )
     print("miss:     PASS")
     print(

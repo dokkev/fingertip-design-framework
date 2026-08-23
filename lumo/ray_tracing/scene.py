@@ -6,7 +6,6 @@ import ctypes
 import os
 import sys
 from importlib.resources import files
-from math import isfinite
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -16,8 +15,6 @@ if TYPE_CHECKING:
     from lumo.mesh import FingertipMesh
 
 
-_MISS_INT = -1
-_MISS_FLOAT = -1.0
 _PAYLOAD_WORD_COUNT = 6
 _RESULT_WORD_COUNT = 15
 _RESULT_DTYPE = np.dtype(
@@ -188,20 +185,16 @@ def _sbt_header(optix, program_group) -> np.ndarray:
 
 
 class OptixScene:
-    """Fingertip silicone, carrier, and spherical-object IAS scene."""
+    """Fingertip silicone and carrier IAS scene."""
 
     def __init__(
         self,
         fingertip_mesh: FingertipMesh,
         *,
-        sphere_center: np.ndarray,
-        sphere_radius: float,
         silicone_instance_id: int,
         carrier_instance_id: int,
-        sphere_instance_id: int,
         silicone_visibility_mask: int,
         carrier_visibility_mask: int,
-        sphere_visibility_mask: int,
         silicone_vertices: np.ndarray | None = None,
         optix_include_dir: str | Path | None = None,
         otk_include_dir: str | Path | None = None,
@@ -255,16 +248,6 @@ class OptixScene:
             vertex_count=len(carrier_vertices),
             name="fingertip_mesh.carrier.indices",
         )
-        sphere_center = np.ascontiguousarray(
-            sphere_center,
-            dtype=np.float32,
-        )
-        if sphere_center.shape != (3,) or not np.all(np.isfinite(sphere_center)):
-            raise ValueError("sphere_center must be one finite 3-vector")
-        sphere_radius = float(sphere_radius)
-        if not isfinite(sphere_radius) or sphere_radius <= 0.0:
-            raise ValueError("sphere_radius must be finite and positive")
-
         instance_ids = (
             _instance_id(
                 silicone_instance_id,
@@ -273,10 +256,6 @@ class OptixScene:
             _instance_id(
                 carrier_instance_id,
                 name="carrier_instance_id",
-            ),
-            _instance_id(
-                sphere_instance_id,
-                name="sphere_instance_id",
             ),
         )
         if len(set(instance_ids)) != len(instance_ids):
@@ -289,10 +268,6 @@ class OptixScene:
             _visibility_mask(
                 carrier_visibility_mask,
                 name="carrier_visibility_mask",
-            ),
-            _visibility_mask(
-                sphere_visibility_mask,
-                name="sphere_visibility_mask",
             ),
         )
 
@@ -362,7 +337,7 @@ class OptixScene:
             cuda_include_dir=cuda_include_path,
         )
         self._create_pipeline(ptx)
-        self._create_sbt(sphere_center, sphere_radius)
+        self._create_sbt()
 
         self._build_silicone_gas(
             silicone_vertices,
@@ -371,10 +346,6 @@ class OptixScene:
         self._carrier_gas_handle = self._build_triangle_gas(
             carrier_vertices,
             carrier_triangles,
-        )
-        self._sphere_gas_handle = self._build_sphere_gas(
-            sphere_center,
-            sphere_radius,
         )
         self._build_ias()
 
@@ -500,30 +471,6 @@ class OptixScene:
         )
         return handle
 
-    def _build_sphere_gas(
-        self,
-        center: np.ndarray,
-        radius: float,
-    ) -> int:
-        optix = self._optix
-        bounds = np.concatenate((center - radius, center + radius)).astype(
-            np.float32
-        )
-        device_bounds = self._device_array(bounds)
-        self._geometry_buffers.append(device_bounds)
-        build_input = optix.BuildInputCustomPrimitiveArray(
-            aabbBuffers=[device_bounds.data.ptr],
-            numPrimitives=1,
-            strideInBytes=6 * np.dtype(np.float32).itemsize,
-            flags=[int(optix.GEOMETRY_FLAG_DISABLE_ANYHIT)],
-            numSbtRecords=1,
-        )
-        handle, _, _ = self._build_accel(
-            build_input,
-            build_flags=int(optix.BUILD_FLAG_PREFER_FAST_TRACE),
-        )
-        return handle
-
     def _instance_bytes(self) -> np.ndarray:
         optix = self._optix
         identity = [
@@ -543,18 +490,17 @@ class OptixScene:
         handles = (
             self._silicone_gas_handle,
             self._carrier_gas_handle,
-            self._sphere_gas_handle,
         )
         instances = [
             optix.Instance(
                 transform=identity,
                 instanceId=self._instance_ids[index],
-                sbtOffset=0 if index < 2 else 1,
+                sbtOffset=0,
                 visibilityMask=self._visibility_masks[index],
                 flags=int(optix.INSTANCE_FLAG_NONE),
-                traversableHandle=handles[index],
+                traversableHandle=handle,
             )
-            for index in range(3)
+            for index, handle in enumerate(handles)
         ]
         return np.frombuffer(
             optix.getDeviceRepresentation(instances),
@@ -568,7 +514,7 @@ class OptixScene:
         self._geometry_buffers.append(self._ias_instances)
         self._ias_build_input = optix.BuildInputInstanceArray(
             instances=self._ias_instances.data.ptr,
-            numInstances=3,
+            numInstances=2,
         )
         build_flags = int(optix.BUILD_FLAG_PREFER_FAST_TRACE) | int(
             optix.BUILD_FLAG_ALLOW_UPDATE
@@ -589,19 +535,16 @@ class OptixScene:
 
     def _create_pipeline(self, ptx: str) -> None:
         optix = self._optix
-        primitive_flags = int(optix.PRIMITIVE_TYPE_FLAGS_TRIANGLE) | int(
-            optix.PRIMITIVE_TYPE_FLAGS_CUSTOM
-        )
         self._pipeline_compile_options = optix.PipelineCompileOptions(
             usesMotionBlur=False,
             traversableGraphFlags=int(
                 optix.TRAVERSABLE_GRAPH_FLAG_ALLOW_SINGLE_LEVEL_INSTANCING
             ),
             numPayloadValues=_PAYLOAD_WORD_COUNT,
-            numAttributeValues=3,
+            numAttributeValues=2,
             exceptionFlags=int(optix.EXCEPTION_FLAG_NONE),
             pipelineLaunchParamsVariableName="params",
-            usesPrimitiveTypeFlags=primitive_flags,
+            usesPrimitiveTypeFlags=int(optix.PRIMITIVE_TYPE_FLAGS_TRIANGLE),
         )
         module_options = optix.ModuleCompileOptions(
             maxRegisterCount=optix.COMPILE_DEFAULT_MAX_REGISTER_COUNT,
@@ -628,12 +571,6 @@ class OptixScene:
             optix.ProgramGroupDesc(
                 hitgroupModuleCH=self._module,
                 hitgroupEntryFunctionNameCH="__closesthit__triangle",
-            ),
-            optix.ProgramGroupDesc(
-                hitgroupModuleCH=self._module,
-                hitgroupEntryFunctionNameCH="__closesthit__sphere",
-                hitgroupModuleIS=self._module,
-                hitgroupEntryFunctionNameIS="__intersection__sphere",
             ),
         )
         self._program_groups = []
@@ -666,7 +603,7 @@ class OptixScene:
             2,
         )
 
-    def _create_sbt(self, sphere_center: np.ndarray, sphere_radius: float) -> None:
+    def _create_sbt(self) -> None:
         optix = self._optix
         header_size = optix.SBT_RECORD_HEADER_SIZE
         alignment = optix.SBT_RECORD_ALIGNMENT
@@ -693,32 +630,11 @@ class OptixScene:
             self._program_groups[1],
         )
 
-        hit_record_size = (
-            (header_size + 16 + alignment - 1) // alignment * alignment
-        )
-        hit_dtype = np.dtype(
-            {
-                "names": ["header", "center", "radius"],
-                "formats": [
-                    (np.uint8, header_size),
-                    (np.float32, 3),
-                    np.float32,
-                ],
-                "offsets": [0, header_size, header_size + 12],
-                "itemsize": hit_record_size,
-            }
-        )
-        hit_records = np.zeros(2, dtype=hit_dtype)
+        hit_records = np.zeros(1, dtype=header_dtype)
         hit_records["header"][0] = _sbt_header(
             optix,
             self._program_groups[2],
         )
-        hit_records["header"][1] = _sbt_header(
-            optix,
-            self._program_groups[3],
-        )
-        hit_records["center"][1] = sphere_center
-        hit_records["radius"][1] = sphere_radius
 
         device_raygen = self._device_bytes(raygen_record)
         device_miss = self._device_bytes(miss_record)
@@ -731,7 +647,7 @@ class OptixScene:
             missRecordCount=1,
             hitgroupRecordBase=device_hits.ptr,
             hitgroupRecordStrideInBytes=hit_records.dtype.itemsize,
-            hitgroupRecordCount=2,
+            hitgroupRecordCount=1,
         )
 
     def update_silicone(self, vertices: np.ndarray) -> None:

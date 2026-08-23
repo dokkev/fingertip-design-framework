@@ -12,14 +12,9 @@ from lumo.ray_tracing import OptixScene, interface_transport
 
 SILICONE_INSTANCE_ID = 1
 CARRIER_INSTANCE_ID = 2
-SPHERE_INSTANCE_ID = 3
 
 SILICONE_MASK = 0x01
 CARRIER_MASK = 0x02
-SPHERE_MASK = 0x04
-
-_SPHERE_CENTER_M = np.array((0.030, 0.0, 0.0), dtype=np.float32)
-_SPHERE_RADIUS_M = 0.005
 _NORMAL_TOLERANCE = 2.0e-5
 
 
@@ -39,14 +34,10 @@ def main() -> None:
     fingertip = Fingertip(FingertipParameters())
     scene = OptixScene(
         make_fingertip_mesh(fingertip),
-        sphere_center=_SPHERE_CENTER_M,
-        sphere_radius=_SPHERE_RADIUS_M,
         silicone_instance_id=SILICONE_INSTANCE_ID,
         carrier_instance_id=CARRIER_INSTANCE_ID,
-        sphere_instance_id=SPHERE_INSTANCE_ID,
         silicone_visibility_mask=SILICONE_MASK,
         carrier_visibility_mask=CARRIER_MASK,
-        sphere_visibility_mask=SPHERE_MASK,
     )
 
     positive_z = np.array((0.0, 0.0, 1.0), dtype=np.float32)
@@ -63,27 +54,6 @@ def main() -> None:
     _require_unit_normal("carrier", carrier_normal)
     if abs(float(np.dot(carrier_normal, positive_z))) < 1.0 - _NORMAL_TOLERANCE:
         raise AssertionError("carrier normal is not parallel to the planar face")
-
-    sphere_origin = np.array((0.030, 0.0, -0.020), dtype=np.float32)
-    sphere = scene.trace_closest(
-        sphere_origin[None, :],
-        positive_z[None, :],
-        mask=SPHERE_MASK,
-    )[0]
-    if not bool(sphere["hit"]) or int(sphere["instance_id"]) != SPHERE_INSTANCE_ID:
-        raise AssertionError("sphere ray did not hit the sphere")
-    sphere_normal = np.asarray(sphere["normal_W"], dtype=np.float64)
-    _require_unit_normal("sphere", sphere_normal)
-    sphere_hit = sphere_origin + float(sphere["t"]) * positive_z
-    expected_sphere_normal = sphere_hit - _SPHERE_CENTER_M
-    expected_sphere_normal /= np.linalg.norm(expected_sphere_normal)
-    if not np.allclose(
-        sphere_normal,
-        expected_sphere_normal,
-        rtol=0.0,
-        atol=_NORMAL_TOLERANCE,
-    ):
-        raise AssertionError("sphere normal differs from the analytic normal")
 
     silicone_x_m = -0.0032
     silicone_origin = np.array(
@@ -153,7 +123,6 @@ def main() -> None:
         raise AssertionError("integration R + T is not one")
 
     print(f"carrier normal:  PASS | n_W={carrier_normal}")
-    print(f"sphere normal:   PASS | n_W={sphere_normal}")
     print(f"silicone normal: PASS | n_W={silicone_normal}")
     print("OptiX -> dielectric interface: PASS")
     print()

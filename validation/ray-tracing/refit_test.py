@@ -14,15 +14,11 @@ from lumo.ray_tracing import OptixScene
 
 SILICONE_INSTANCE_ID = 1
 CARRIER_INSTANCE_ID = 2
-OBJECT_INSTANCE_ID = 3
 
 SILICONE_MASK = 0x01
 CARRIER_MASK = 0x02
-OBJECT_MASK = 0x04
-ALL_MASK = SILICONE_MASK | CARRIER_MASK | OBJECT_MASK
+ALL_MASK = SILICONE_MASK | CARRIER_MASK
 
-_SPHERE_CENTER_M = np.array((0.030, 0.0, 0.0), dtype=np.float32)
-_SPHERE_RADIUS_M = 0.005
 _DELTA_Z_M = 1.0e-3
 _T_TOLERANCE_M = 2.0e-6
 _BARYCENTRIC_TOLERANCE = 2.0e-5
@@ -35,14 +31,10 @@ def _make_scene(
 ) -> OptixScene:
     return OptixScene(
         fingertip_mesh,
-        sphere_center=_SPHERE_CENTER_M,
-        sphere_radius=_SPHERE_RADIUS_M,
         silicone_instance_id=SILICONE_INSTANCE_ID,
         carrier_instance_id=CARRIER_INSTANCE_ID,
-        sphere_instance_id=OBJECT_INSTANCE_ID,
         silicone_visibility_mask=SILICONE_MASK,
         carrier_visibility_mask=CARRIER_MASK,
-        sphere_visibility_mask=OBJECT_MASK,
         silicone_vertices=silicone_vertices,
     )
 
@@ -94,14 +86,11 @@ def main() -> None:
 
     silicone_origin = np.array((-0.0070, 0.00090, -0.030), dtype=np.float32)
     carrier_origin = np.array((0.0011, 0.00073, 0.010), dtype=np.float32)
-    sphere_origin = np.array((0.030, 0.0, -0.020), dtype=np.float32)
     miss_origin = np.array((0.050, 0.0, -0.020), dtype=np.float32)
     positive_z = np.array((0.0, 0.0, 1.0), dtype=np.float32)
     negative_z = np.array((0.0, 0.0, -1.0), dtype=np.float32)
-    origins = np.stack(
-        (silicone_origin, carrier_origin, sphere_origin, miss_origin)
-    )
-    directions = np.stack((positive_z, negative_z, positive_z, positive_z))
+    origins = np.stack((silicone_origin, carrier_origin, miss_origin))
+    directions = np.stack((positive_z, negative_z, positive_z))
 
     updated_scene = _make_scene(fingertip_mesh)
     initial_results = updated_scene.trace_closest(
@@ -116,17 +105,14 @@ def main() -> None:
         raise AssertionError("initial ray did not hit silicone")
     if not np.isfinite(initial_silicone["t"]) or initial_silicone["t"] <= 0.0:
         raise AssertionError("initial silicone ray has invalid distance")
-    for label, result, expected_instance_id in (
-        ("carrier", initial_results[1], CARRIER_INSTANCE_ID),
-        ("sphere", initial_results[2], OBJECT_INSTANCE_ID),
-    ):
-        if not bool(result["hit"]):
-            raise AssertionError(f"initial {label} ray missed")
-        if int(result["instance_id"]) != expected_instance_id:
-            raise AssertionError(f"initial {label} ray hit the wrong instance")
-        if not np.isfinite(result["t"]) or float(result["t"]) <= 0.0:
-            raise AssertionError(f"initial {label} ray has invalid distance")
-    if bool(initial_results[3]["hit"]):
+    initial_carrier = initial_results[1]
+    if not bool(initial_carrier["hit"]):
+        raise AssertionError("initial carrier ray missed")
+    if int(initial_carrier["instance_id"]) != CARRIER_INSTANCE_ID:
+        raise AssertionError("initial carrier ray hit the wrong instance")
+    if not np.isfinite(initial_carrier["t"]) or initial_carrier["t"] <= 0.0:
+        raise AssertionError("initial carrier ray has invalid distance")
+    if bool(initial_results[2]["hit"]):
         raise AssertionError("initial miss ray unexpectedly hit the scene")
     initial_barycentrics = np.asarray(initial_silicone["barycentrics"])
     barycentric_weights = np.array(
@@ -178,7 +164,7 @@ def main() -> None:
     ):
         raise AssertionError("silicone barycentrics changed after translation")
 
-    for label, result_index in (("carrier", 1), ("sphere", 2), ("miss", 3)):
+    for label, result_index in (("carrier", 1), ("miss", 2)):
         _assert_same_result(
             label,
             initial_results[result_index],
@@ -199,7 +185,7 @@ def main() -> None:
     )
 
     for label, updated, fresh in zip(
-        ("silicone", "carrier", "sphere", "miss"),
+        ("silicone", "carrier", "miss"),
         updated_results,
         fresh_results,
         strict=True,
@@ -215,7 +201,6 @@ def main() -> None:
         f"dt={1.0e3 * measured_delta_t_m:.6f} mm"
     )
     print("carrier unchanged:   PASS")
-    print("sphere unchanged:    PASS")
     print("miss unchanged:      PASS")
     print("update vs rebuild:   PASS")
     print()

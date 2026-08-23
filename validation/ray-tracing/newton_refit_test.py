@@ -17,12 +17,10 @@ from lumo.simulation import LumoSimulation
 
 SILICONE_INSTANCE_ID = 1
 CARRIER_INSTANCE_ID = 2
-OBJECT_INSTANCE_ID = 3
 
 SILICONE_MASK = 0x01
 CARRIER_MASK = 0x02
-OBJECT_MASK = 0x04
-ALL_MASK = SILICONE_MASK | CARRIER_MASK | OBJECT_MASK
+ALL_MASK = SILICONE_MASK | CARRIER_MASK
 
 _SIM_FREQUENCY_HZ = 1.0e3
 _INDENTER_RADIUS_M = 7.5e-3
@@ -33,8 +31,6 @@ _TARGET_FORCE_N = 20.0
 _MAX_BONDED_DRIFT_M = 1.0e-8
 _MOTION_DIRECTION_W = wp.vec3(0.0, 0.0, 1.0)
 
-_SPHERE_CENTER_M = np.array((0.030, 0.0, 0.0), dtype=np.float32)
-_SPHERE_RADIUS_M = 0.005
 _T_TOLERANCE_M = 2.0e-6
 _BARYCENTRIC_TOLERANCE = 2.0e-5
 
@@ -46,14 +42,10 @@ def _make_scene(
 ) -> OptixScene:
     return OptixScene(
         fingertip_mesh,
-        sphere_center=_SPHERE_CENTER_M,
-        sphere_radius=_SPHERE_RADIUS_M,
         silicone_instance_id=SILICONE_INSTANCE_ID,
         carrier_instance_id=CARRIER_INSTANCE_ID,
-        sphere_instance_id=OBJECT_INSTANCE_ID,
         silicone_visibility_mask=SILICONE_MASK,
         carrier_visibility_mask=CARRIER_MASK,
-        sphere_visibility_mask=OBJECT_MASK,
         silicone_vertices=silicone_vertices,
     )
 
@@ -62,7 +54,6 @@ def _assert_expected_hits(results: np.ndarray) -> None:
     for label, result, expected_instance_id in (
         ("silicone", results[0], SILICONE_INSTANCE_ID),
         ("carrier", results[1], CARRIER_INSTANCE_ID),
-        ("sphere", results[2], OBJECT_INSTANCE_ID),
     ):
         if not bool(result["hit"]):
             raise AssertionError(f"{label} ray missed")
@@ -70,13 +61,13 @@ def _assert_expected_hits(results: np.ndarray) -> None:
             raise AssertionError(f"{label} ray hit the wrong instance")
         if not np.isfinite(result["t"]) or float(result["t"]) <= 0.0:
             raise AssertionError(f"{label} ray returned an invalid distance")
-    if bool(results[3]["hit"]):
+    if bool(results[2]["hit"]):
         raise AssertionError("miss ray unexpectedly hit the scene")
 
 
 def _assert_same_results(updated: np.ndarray, fresh: np.ndarray) -> None:
     for label, updated_result, fresh_result in zip(
-        ("silicone", "carrier", "sphere", "miss"),
+        ("silicone", "carrier", "miss"),
         updated,
         fresh,
         strict=True,
@@ -159,13 +150,10 @@ def main() -> None:
         raise AssertionError("no unambiguous central silicone ray was found")
 
     carrier_origin = np.array((0.0011, 0.00073, 0.010), dtype=np.float32)
-    sphere_origin = np.array((0.030, 0.0, -0.020), dtype=np.float32)
     miss_origin = np.array((0.050, 0.0, -0.020), dtype=np.float32)
     negative_z = np.array((0.0, 0.0, -1.0), dtype=np.float32)
-    origins = np.stack(
-        (silicone_origin, carrier_origin, sphere_origin, miss_origin)
-    )
-    directions = np.stack((positive_z, negative_z, positive_z, positive_z))
+    origins = np.stack((silicone_origin, carrier_origin, miss_origin))
+    directions = np.stack((positive_z, negative_z, positive_z))
     reference_results = scene.trace_closest(
         origins,
         directions,
