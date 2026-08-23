@@ -288,16 +288,20 @@ OptiX is the ray-tracing backend.
 persistent CUDA stream, the OptiX context and pipeline resources, device
 geometry buffers, two triangle GASes for silicone and carrier, one spherical
 custom-primitive GAS, and the IAS containing those three instances. Its only
-public operation is the batched geometric query `trace_closest()`, which
-returns hit state, distance, instance ID, primitive ID, and triangle
-barycentrics. The sphere uses a minimal custom intersection program because
-the installed PyOptiX 9.1 binding does not expose OptiX's built-in sphere build
+query `trace_closest()` returns hit state, distance, instance ID, primitive ID,
+and triangle barycentrics. `update_silicone()` accepts positions for the same
+vertex count and topology, copies them into the persistent silicone vertex
+buffer, and performs an in-place silicone GAS UPDATE followed by IAS UPDATE.
+The two acceleration structures reuse their original output buffers and
+dedicated persistent update scratch buffers. Carrier and sphere GASes remain
+static. The sphere uses a minimal custom intersection program because the
+installed PyOptiX 9.1 binding does not expose OptiX's built-in sphere build
 input.
 
-The current scene is static: it does not update geometry from Newton, refit
-acceleration structures, or implement optical transport. The silicone input
-surface is selected by the caller; the first IAS validation removes surface
-triangles whose three vertices all belong to the perfect bonded interface.
+The scene does not yet update geometry from Newton or implement optical
+transport. The silicone input surface is selected by the caller; the first IAS
+validation removes surface triangles whose three vertices all belong to the
+perfect bonded interface.
 
 This package should define only the optical semantics required by LUMO and use
 OptiX for generic ray-tracing functionality.
@@ -405,6 +409,13 @@ deterministic rays verify closest silicone, carrier, and sphere instance hits,
 a full-scene miss, visibility-mask exclusion, triangle barycentrics, and an
 analytic sphere hit distance. It does not perform optical transport or couple
 Newton state into OptiX.
+
+`validation/ray-tracing/refit_test.py` translates every silicone vertex by
+`+1 mm` in Z, updates the existing silicone GAS and IAS, and verifies the
+expected `+1 mm` hit-distance change without changing the hit primitive or
+barycentrics. It also compares displaced-scene hits against a fresh full build,
+checks that carrier, sphere, and miss results are unchanged, and reports
+validation-local update and fresh-construction timing.
 
 They should normally:
 

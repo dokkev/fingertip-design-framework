@@ -285,6 +285,8 @@ class OptixScene:
         self._sbt_buffers: list[object] = []
         self._launch_buffers: list[object] = []
         self._log_messages: list[str] = []
+        self._instance_ids = instance_ids
+        self._visibility_masks = visibility_masks
 
         cp.cuda.runtime.free(0)
         context_options = optix.DeviceContextOptions(
@@ -302,20 +304,19 @@ class OptixScene:
         self._create_pipeline(ptx)
         self._create_sbt(sphere_center, sphere_radius)
 
-        silicone_handle = self._build_triangle_gas(
+        self._build_silicone_gas(
             silicone_vertices,
             silicone_triangles,
         )
-        carrier_handle = self._build_triangle_gas(
+        self._carrier_gas_handle = self._build_triangle_gas(
             carrier_vertices,
             carrier_triangles,
         )
-        sphere_handle = self._build_sphere_gas(sphere_center, sphere_radius)
-        self._ias_handle = self._build_ias(
-            handles=(silicone_handle, carrier_handle, sphere_handle),
-            instance_ids=instance_ids,
-            visibility_masks=visibility_masks,
+        self._sphere_gas_handle = self._build_sphere_gas(
+            sphere_center,
+            sphere_radius,
         )
+        self._build_ias()
 
     def _log(self, level: int, tag: str, message: str) -> None:
         self._log_messages.append(f"[{level}][{tag}] {message}")
@@ -333,10 +334,15 @@ class OptixScene:
         )
         return device_memory
 
-    def _build_accel(self, build_input) -> int:
+    def _build_accel(
+        self,
+        build_input,
+        *,
+        build_flags: int,
+    ) -> tuple[int, object, object]:
         optix = self._optix
         options = optix.AccelBuildOptions(
-            buildFlags=int(optix.BUILD_FLAG_PREFER_FAST_TRACE),
+            buildFlags=build_flags,
             operation=optix.BUILD_OPERATION_BUILD,
         )
         sizes = self._context.accelComputeMemoryUsage(
@@ -357,7 +363,54 @@ class OptixScene:
         )
         self._build_temporaries.append(temporary)
         self._accel_buffers.append(output)
-        return int(handle)
+        return int(handle), sizes, output
+
+    def _build_silicone_gas(
+        self,
+        vertices: np.ndarray,
+        triangles: np.ndarray,
+    ) -> None:
+        optix = self._optix
+        self._silicone_vertices = self._device_array(vertices)
+        self._silicone_triangles = self._device_array(triangles)
+        self._silicone_vertex_count = len(vertices)
+        self._geometry_buffers.extend(
+            (self._silicone_vertices, self._silicone_triangles)
+        )
+
+        self._silicone_build_input = optix.BuildInputTriangleArray(
+            vertexBuffers_=[self._silicone_vertices.data.ptr],
+            vertexFormat=optix.VERTEX_FORMAT_FLOAT3,
+            vertexStrideInBytes=3 * np.dtype(np.float32).itemsize,
+            indexBuffer=self._silicone_triangles.data.ptr,
+            numIndexTriplets=len(triangles),
+            indexFormat=optix.INDICES_FORMAT_UNSIGNED_INT3,
+            indexStrideInBytes=3 * np.dtype(np.uint32).itemsize,
+            flags_=[int(optix.GEOMETRY_FLAG_DISABLE_ANYHIT)],
+            numSbtRecords=1,
+        )
+        self._silicone_build_input.numVertices = len(vertices)
+
+        build_flags = int(optix.BUILD_FLAG_PREFER_FAST_TRACE) | int(
+            optix.BUILD_FLAG_ALLOW_UPDATE
+        )
+        (
+            self._silicone_gas_handle,
+            sizes,
+            self._silicone_gas_output,
+        ) = self._build_accel(
+            self._silicone_build_input,
+            build_flags=build_flags,
+        )
+        self._silicone_gas_output_size = sizes.outputSizeInBytes
+        self._silicone_update_options = optix.AccelBuildOptions(
+            buildFlags=build_flags,
+            operation=optix.BUILD_OPERATION_UPDATE,
+        )
+        self._silicone_update_scratch_size = sizes.tempUpdateSizeInBytes
+        self._silicone_update_scratch = self._cp.cuda.alloc(
+            self._silicone_update_scratch_size
+        )
 
     def _build_triangle_gas(
         self,
@@ -381,7 +434,11 @@ class OptixScene:
             numSbtRecords=1,
         )
         build_input.numVertices = len(vertices)
-        return self._build_accel(build_input)
+        handle, _, _ = self._build_accel(
+            build_input,
+            build_flags=int(optix.BUILD_FLAG_PREFER_FAST_TRACE),
+        )
+        return handle
 
     def _build_sphere_gas(
         self,
@@ -401,15 +458,13 @@ class OptixScene:
             flags=[int(optix.GEOMETRY_FLAG_DISABLE_ANYHIT)],
             numSbtRecords=1,
         )
-        return self._build_accel(build_input)
+        handle, _, _ = self._build_accel(
+            build_input,
+            build_flags=int(optix.BUILD_FLAG_PREFER_FAST_TRACE),
+        )
+        return handle
 
-    def _build_ias(
-        self,
-        *,
-        handles: tuple[int, int, int],
-        instance_ids: tuple[int, int, int],
-        visibility_masks: tuple[int, int, int],
-    ) -> int:
+    def _instance_bytes(self) -> np.ndarray:
         optix = self._optix
         identity = [
             1.0,
@@ -425,28 +480,52 @@ class OptixScene:
             1.0,
             0.0,
         ]
+        handles = (
+            self._silicone_gas_handle,
+            self._carrier_gas_handle,
+            self._sphere_gas_handle,
+        )
         instances = [
             optix.Instance(
                 transform=identity,
-                instanceId=instance_ids[index],
+                instanceId=self._instance_ids[index],
                 sbtOffset=0 if index < 2 else 1,
-                visibilityMask=visibility_masks[index],
+                visibilityMask=self._visibility_masks[index],
                 flags=int(optix.INSTANCE_FLAG_NONE),
                 traversableHandle=handles[index],
             )
             for index in range(3)
         ]
-        instance_bytes = np.frombuffer(
+        return np.frombuffer(
             optix.getDeviceRepresentation(instances),
             dtype=np.uint8,
         ).copy()
-        device_instances = self._device_array(instance_bytes)
-        self._geometry_buffers.append(device_instances)
-        build_input = optix.BuildInputInstanceArray(
-            instances=device_instances.data.ptr,
-            numInstances=len(instances),
+
+    def _build_ias(self) -> None:
+        optix = self._optix
+        instance_bytes = self._instance_bytes()
+        self._ias_instances = self._device_array(instance_bytes)
+        self._geometry_buffers.append(self._ias_instances)
+        self._ias_build_input = optix.BuildInputInstanceArray(
+            instances=self._ias_instances.data.ptr,
+            numInstances=3,
         )
-        return self._build_accel(build_input)
+        build_flags = int(optix.BUILD_FLAG_PREFER_FAST_TRACE) | int(
+            optix.BUILD_FLAG_ALLOW_UPDATE
+        )
+        self._ias_handle, sizes, self._ias_output = self._build_accel(
+            self._ias_build_input,
+            build_flags=build_flags,
+        )
+        self._ias_output_size = sizes.outputSizeInBytes
+        self._ias_update_options = optix.AccelBuildOptions(
+            buildFlags=build_flags,
+            operation=optix.BUILD_OPERATION_UPDATE,
+        )
+        self._ias_update_scratch_size = sizes.tempUpdateSizeInBytes
+        self._ias_update_scratch = self._cp.cuda.alloc(
+            self._ias_update_scratch_size
+        )
 
     def _create_pipeline(self, ptx: str) -> None:
         optix = self._optix
@@ -593,6 +672,44 @@ class OptixScene:
             hitgroupRecordBase=device_hits.ptr,
             hitgroupRecordStrideInBytes=hit_records.dtype.itemsize,
             hitgroupRecordCount=2,
+        )
+
+    def update_silicone(self, vertices: np.ndarray) -> None:
+        """Refit the silicone GAS and IAS after a vertex-position update."""
+        vertices = _vertices(vertices, name="vertices")
+        if len(vertices) != self._silicone_vertex_count:
+            raise ValueError(
+                "vertices must preserve the silicone vertex count "
+                f"({self._silicone_vertex_count})"
+            )
+
+        self._silicone_vertices.set(vertices, stream=self._stream)
+        self._silicone_gas_handle = int(
+            self._context.accelBuild(
+                self._stream.ptr,
+                [self._silicone_update_options],
+                [self._silicone_build_input],
+                self._silicone_update_scratch.ptr,
+                self._silicone_update_scratch_size,
+                self._silicone_gas_output.ptr,
+                self._silicone_gas_output_size,
+                [],
+            )
+        )
+
+        instance_bytes = self._instance_bytes()
+        self._ias_instances.set(instance_bytes, stream=self._stream)
+        self._ias_handle = int(
+            self._context.accelBuild(
+                self._stream.ptr,
+                [self._ias_update_options],
+                [self._ias_build_input],
+                self._ias_update_scratch.ptr,
+                self._ias_update_scratch_size,
+                self._ias_output.ptr,
+                self._ias_output_size,
+                [],
+            )
         )
 
     def trace_closest(

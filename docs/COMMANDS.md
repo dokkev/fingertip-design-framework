@@ -106,6 +106,18 @@ This builds silicone, carrier, and sphere GASes under one IAS and checks
 closest hits, a miss, and visibility masking. Synchronization occurs only when
 the batched results are copied to the host.
 
+Run the silicone GAS and IAS UPDATE/refit validation with the same SDK headers:
+
+```bash
+OPTIX_INCLUDE_DIR=/path/to/NVIDIA-OptiX-SDK-9.1.0/include \
+conda run --no-capture-output -n lit \
+python validation/ray-tracing/refit_test.py
+```
+
+This translates the silicone surface by `+1 mm`, compares UPDATE against a
+fresh scene build, checks that the other instances remain unchanged, and
+reports representative update and full-construction timings.
+
 First run the environment diagnosis:
 
 ```bash
