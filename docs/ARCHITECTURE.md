@@ -333,13 +333,44 @@ weight plus the complementary absorbed power. Albedo is supplied by the caller;
 current validation values are placeholders, not calibrated white-PLA material
 constants. The function does not own RNG policy, materials, media, or tracing.
 
+`lambertian_emission()` uses the same private cosine-weighted hemisphere
+sampling operation for one ideal Lambertian source. Caller-supplied sample
+coordinates determine the directions, and normalized total source power is
+divided equally among the rays.
+
+`LED` is one concrete point-source approximation of the current Adafruit Green
+LED Sequin (Product ID 1756), whose underlying LED is the LuckyLight
+S150PGC-G5-1B 1206 Pure Green InGaN package. Its hardware metadata is a 525 nm
+dominant wavelength, 520 nm peak wavelength, 35 nm spectral half-width, and
+60-degree off-axis half-intensity angle (120-degree full viewing angle). The
+60-degree half-intensity angle is consistent with an ideal Lambertian
+first-order model because `cos(60 degrees) = 0.5`, but the model does not claim
+to reproduce the complete measured radiation diagram. Source power remains a
+normalized `1.0` until optical calibration, and current transport remains
+monochromatic scalar-power transport. Hardware values come from the
+[Adafruit product page](https://www.adafruit.com/product/1756) and the
+[LuckyLight datasheet](https://cdn-shop.adafruit.com/datasheets/S150PGC-G5-1B.pdf).
+
+`trace_bounded_paths()` is the one host-side multi-bounce orchestration
+operation. It keeps flat NumPy arrays for origin, direction, power, original
+ray ID, and one `inside_silicone` boolean; there is no path object or generic
+medium stack. Each silicone event reuses `interface_transport()` and samples
+one Fresnel branch from caller-precomputed values indexed by bounce and
+original ray ID. Because the selection probability equals the lossless branch
+contribution, the selected path retains its power rather than multiplying by
+Fresnel a second time. Carrier events reuse `lambertian_reflection()` and
+accumulate absorption. External misses become escaped structured rays,
+internal misses remain explicit unresolved power, and active power at the
+caller-supplied depth cap is reported as remaining power. The aggregate ledger
+closes emitted power against escape, absorption, internal miss, and remaining
+power. This is a bounded concrete fingertip path operation, not a renderer.
+
 `safe_secondary_origins()` selects the OTK front or back spawn position by the
 sign of the outgoing direction dotted with `normal_W`. It does not infer media
-or trace a ray. The current secondary-ray workflow remains two explicit
-`trace_closest()` launches separated by `interface_transport()` and this spawn
-selection; there is no bounce loop or recursive OptiX trace. OptiX traversal
-uses `tmin=0`: the OTK origin owns self-intersection separation, so no second
-scene epsilon is combined with the official offset.
+or trace a ray. Both focused single-event validations and the bounded path loop
+use this operation for every triangle departure. OptiX traversal uses `tmin=0`:
+the OTK origin owns self-intersection separation, so no second scene epsilon is
+combined with the official offset.
 
 The scene has no Newton dependency. A caller may explicitly pass a Newton
 checkpoint through `update_silicone()`, but no production runtime currently
@@ -506,6 +537,29 @@ cosine-weighted Lambertian directions and opaque reflected/absorbed power, then
 traces one real undeformed path from air through silicone to carrier and back to
 the exposed silicone surface. It uses the existing OTK-safe triangle spawn and
 stops at that third geometry hit without processing another interface.
+
+`validation/ray-tracing/silicone_exit_test.py` composes the existing trace,
+dielectric, Lambertian, and OTK-safe spawn operations into one deterministic
+`air -> silicone -> carrier -> silicone -> air` path. The final silicone-to-air
+transmission must miss the scene, and the validation accounts for all reflected,
+absorbed, and escaped power without introducing a bounce loop or medium state.
+
+`validation/ray-tracing/dielectric_branch_test.py` checks the critical sampled
+dielectric rule directly: `u < R` reflects, `u >= R` transmits, TIR always
+reflects, only transmission toggles the silicone-medium flag, and a selected
+lossless branch retains its incident path power.
+
+`validation/ray-tracing/led_sensor_response_test.py` is one deterministic
+source-to-receiver convergence study. It uses the actual Green Sequin hardware
+metadata through `LED`, while its point-source pose and ideal planar receiver
+remain validation-local placeholders. The study reuses the same 64-by-64
+stratified LED samples and the same precomputed per-ray/per-bounce dielectric
+and carrier samples before and after a force-stable central 10 mm sphere
+indentation. It updates the silicone GAS from the live Newton checkpoint and
+reports received, escaped, absorbed, internal-miss, and remaining power for
+explicit bounce caps `4`, `8`, `16`, and `24`. It demonstrates a bounded
+numerical deformation-to-signal path; it is not a calibrated LED, receiver, or
+sensor prediction.
 
 They should normally:
 

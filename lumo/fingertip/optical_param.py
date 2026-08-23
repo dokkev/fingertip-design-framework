@@ -33,13 +33,14 @@ class OpticalParameters:
 
 @dataclass(frozen=True)
 class LEDParameters:
-    """Physical and optical parameters of the embedded LED."""
+    """Physical design envelope and normalized power of the embedded LED."""
 
     width_mm: float = 4.0
     height_mm: float = 2.0
 
     relative_radiant_power: float = 1.0
-    emission_half_angle_deg: float = 80.0
+    # LuckyLight S150PGC-G5-1B: 120 degree full half-intensity viewing angle.
+    emission_half_angle_deg: float = 60.0
 
     def __post_init__(self) -> None:
         error_type = InvalidFingertipParameters
