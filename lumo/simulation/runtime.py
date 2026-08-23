@@ -130,6 +130,7 @@ class LumoSimulation:
         self.collision_pipeline = newton.CollisionPipeline(
             model,
             soft_contact_margin=soft_contact_margin_m,
+            enable_rigid_soft_full_surface_contact=True,
         )
         self.contacts = self.collision_pipeline.contacts()
         self.state = model.state()

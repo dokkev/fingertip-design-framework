@@ -112,6 +112,24 @@ After every requested run finishes, it writes strict JSON to
 `output/benchmark/newton_parameter_sweep.json`. Use `--output PATH` to select a
 different result file. An interrupted run does not write a partial result.
 
+Run the complete sensing numerical-convergence study overnight:
+
+```bash
+conda run --no-capture-output -n lit \
+  python -u validation/contact-physics/sensing_convergence.py
+```
+
+This one script runs the one-factor-at-a-time Newton/contact sweep, evaluates
+each valid setting with 4096 common optical samples, and reuses only the
+baseline deformation snapshots for the 256/1024/4096/16384-ray three-seed
+study. It prints progress and compact final tables, then writes strict JSON to
+`output/validation/sensing_convergence.json`. Use `--output PATH` to select a
+different final JSON file. This is an expensive unattended validation and is
+not part of ordinary focused tests. A failed Newton baseline no longer discards
+the rest of the mechanics sweep: the script records all Newton settings and a
+clear incomplete-study result, but skips optical comparisons and exits nonzero
+because those comparisons require a valid baseline.
+
 Run the Dragon Skin 10 NV Poisson-ratio contact sweep explicitly:
 
 ```bash

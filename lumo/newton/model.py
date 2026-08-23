@@ -230,6 +230,17 @@ def build_fingertip_newton_model(
             & ~active_flag
         )
 
+    # Full-surface rigid/soft contact catches tetrahedral faces that can pass
+    # between particle vertices.  Build the carrier proxy SDF once per mesh;
+    # the collision pipeline consumes it after finalization.
+    if fingertip_mesh.carrier_collision.sdf is None:
+        fingertip_mesh.carrier_collision.build_sdf(
+            max_resolution=256,
+            margin=5.0e-4,
+            narrow_band_range=(-1.0e-2, 1.0e-2),
+            texture_format="float32",
+        )
+
     carrier_body = builder.add_body(
         xform=wp.transform_identity(),
         mass=0.0,
@@ -256,16 +267,25 @@ def build_fingertip_newton_model(
         margin=0.0,
         is_solid=True,
         collision_group=1,
-        has_shape_collision=False,
+        # Newton's full-surface soft contact path requires a provisioned SDF
+        # on a participating mesh shape.  Rigid shape pairs are filtered
+        # below; particle contact remains the only physical carrier contact.
+        has_shape_collision=True,
         has_particle_collision=True,
         is_visible=False,
     )
+    existing_shape_indices = tuple(range(builder.shape_count))
     carrier_collision_shape = builder.add_shape_mesh(
         body=carrier_body,
         mesh=fingertip_mesh.carrier_collision,
         cfg=carrier_collision_cfg,
         label="fingertip_carrier_collision_surface",
     )
+    for shape_index in existing_shape_indices:
+        builder.add_shape_collision_filter_pair(
+            shape_index,
+            carrier_collision_shape,
+        )
 
     builder.color()
     model = builder.finalize(device=device, requires_grad=False)

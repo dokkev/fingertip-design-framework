@@ -129,8 +129,10 @@ The silicone is discretized as a Newton-compatible tetrahedral mesh.
 body. Its silicone-reachable boundary contains only the cavity-facing lips,
 stem sides, and stem bottom. Its cross-section closes through the carrier
 interior, and its end caps lie outside the silicone extrusion, so Newton's
-signed particle-mesh query remains well-defined without exposing closure faces
-to silicone particles.
+signed mesh query remains well-defined without exposing closure faces to
+silicone particles. The proxy has a cached volume SDF and uses Newton's
+full-surface rigid/soft contact path, which catches tetrahedral faces that
+would otherwise pass between particle vertices.
 
 `bonded_vertex_indices` identifies silicone vertices lying on
 `Fingertip.bonding_interface`. The mesh layer consumes its left and right
@@ -164,16 +166,16 @@ needed:
 Use Newton's public API directly whenever practical.
 
 The full carrier shape has collision disabled. The collision proxy is attached
-to the same kinematic body with rigid-shape collision disabled and silicone
-particle collision enabled. Bonded particles remain inactive, so the bond
-interface is controlled only by the prescribed kinematic bond. Silicone
-particle radius is explicitly zero at model construction; contact detection
-distance is supplied separately by `LumoSimulation` through the collision
-pipeline. The rigid carrier proxy uses a stiff shape-contact material while
-VBD still permits a small, measured penalty penetration. Its default normal
-contact stiffness is `1e6 N/m`; model construction exposes that scalar only so
-the numerical sensitivity benchmark can vary it without changing material
-parameters.
+to the same kinematic body with its rigid-shape pairs explicitly filtered and
+silicone particle/full-surface collision enabled. Bonded particles remain
+inactive, so the bond interface is controlled only by the prescribed kinematic
+bond. Silicone particle radius is explicitly zero at model construction;
+contact detection distance is supplied separately by `LumoSimulation` through
+the collision pipeline. The rigid carrier proxy uses a stiff shape-contact
+material while VBD still permits a small, measured penalty penetration. Its
+default normal contact stiffness is `1e6 N/m`; model construction exposes that
+scalar only so the numerical sensitivity benchmark can vary it without
+changing material parameters.
 
 Do not introduce a generic physics-backend layer while Newton is the only
 mechanics implementation.
@@ -634,6 +636,21 @@ the actual triangle-plane section of unloaded and Newton-deformed silicone,
 the LED, `+Y` escape locations, and the observation quadrants in matched axes.
 This Matplotlib-only diagnostic is not a 2D optical simulation or production
 rendering API.
+
+`validation/contact-physics/sensing_convergence.py` is the single procedural
+Newton/OptiX convergence study for that evaluator. It runs one-factor-at-a-time
+Newton settings, evaluates each valid setting immediately with the same 4096
+optical samples, then releases that setting before constructing the next one.
+Only the baseline reference/contact vertex snapshots survive for the later
+256-to-16384-ray, three-seed convergence comparison. The script adds no
+production sweep or convergence abstraction. If the baseline itself fails the
+existing mechanics acceptance checks, the script still completes and records
+the Newton sweep, skips optical conclusions that would depend on that invalid
+reference, writes an incomplete-study JSON report, and exits unsuccessfully.
+Its carrier check treats tetrahedra touching the perfect-bond interface as a
+separate diagnostic because that interface intentionally has no contact
+constraint; only nonbonded particles and nonbonded tetrahedra determine the
+penetration acceptance result.
 
 They should normally:
 
