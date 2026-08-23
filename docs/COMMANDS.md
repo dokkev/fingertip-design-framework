@@ -182,6 +182,17 @@ This splits one incident ray's scalar power by Fresnel `R/T`, traces each
 OTK-safe branch once, and stops after the reflected miss and refracted carrier
 hit.
 
+Run the one-event opaque Lambertian carrier validation:
+
+```bash
+OPTIX_INCLUDE_DIR=/path/to/NVIDIA-OptiX-SDK-9.1.0/include \
+conda run --no-capture-output -n lit \
+python validation/ray-tracing/carrier_reflection_test.py
+```
+
+This checks deterministic cosine-weighted sampling and opaque power accounting,
+then traces one `air -> silicone -> carrier -> silicone` path and stops.
+
 Run the silicone GAS and IAS UPDATE/refit validation with the same SDK headers:
 
 ```bash

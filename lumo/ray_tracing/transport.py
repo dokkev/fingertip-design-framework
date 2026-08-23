@@ -19,6 +19,14 @@ _RESULT_DTYPE = np.dtype(
     ]
 )
 
+_LAMBERTIAN_RESULT_DTYPE = np.dtype(
+    [
+        ("reflected_direction", np.float64, (3,)),
+        ("reflected_power", np.float64),
+        ("absorbed_power", np.float64),
+    ]
+)
+
 
 def _normalized_vectors(value: np.ndarray, *, name: str) -> np.ndarray:
     vectors = np.asarray(value, dtype=np.float64)
@@ -140,4 +148,76 @@ def interface_transport(
     return result
 
 
-__all__ = ["interface_transport"]
+def lambertian_reflection(
+    directions: np.ndarray,
+    normals: np.ndarray,
+    *,
+    incident_power: float | np.ndarray,
+    albedo: float | np.ndarray,
+    u1: float | np.ndarray,
+    u2: float | np.ndarray,
+) -> np.ndarray:
+    """Sample one opaque cosine-weighted Lambertian reflection per ray."""
+    directions = _normalized_vectors(directions, name="directions")
+    normals = _normalized_vectors(normals, name="normals")
+    if directions.shape != normals.shape:
+        raise ValueError("directions and normals must have the same shape")
+
+    batch_values = []
+    for name, value in (
+        ("incident_power", incident_power),
+        ("albedo", albedo),
+        ("u1", u1),
+        ("u2", u2),
+    ):
+        values = np.asarray(value, dtype=np.float64)
+        if values.ndim == 0:
+            values = np.full(len(directions), values.item())
+        elif values.shape != (len(directions),):
+            raise ValueError(f"{name} must be a scalar or have shape (N,)")
+        if not np.all(np.isfinite(values)):
+            raise ValueError(f"{name} must be finite")
+        batch_values.append(values)
+    incident_power, albedo, u1, u2 = batch_values
+
+    if np.any(incident_power < 0.0):
+        raise ValueError("incident_power must be nonnegative")
+    if np.any((albedo < 0.0) | (albedo > 1.0)):
+        raise ValueError("albedo must be in [0, 1]")
+    if np.any((u1 < 0.0) | (u1 >= 1.0)):
+        raise ValueError("u1 must be in [0, 1)")
+    if np.any((u2 < 0.0) | (u2 >= 1.0)):
+        raise ValueError("u2 must be in [0, 1)")
+
+    dots = np.sum(directions * normals, axis=1)
+    oriented_normals = np.where((dots > 0.0)[:, None], -normals, normals)
+
+    reference_axes = np.zeros_like(oriented_normals)
+    use_z_axis = np.abs(oriented_normals[:, 2]) < 0.999
+    reference_axes[use_z_axis, 2] = 1.0
+    reference_axes[~use_z_axis, 0] = 1.0
+    tangents = np.cross(reference_axes, oriented_normals)
+    tangents /= np.linalg.norm(tangents, axis=1)[:, None]
+    bitangents = np.cross(oriented_normals, tangents)
+
+    # Malley's method: project a uniform unit-disk sample onto the hemisphere.
+    radius = np.sqrt(u1)
+    azimuth = 2.0 * np.pi * u2
+    local_x = radius * np.cos(azimuth)
+    local_y = radius * np.sin(azimuth)
+    local_z = np.sqrt(1.0 - u1)
+    reflected = (
+        local_x[:, None] * tangents
+        + local_y[:, None] * bitangents
+        + local_z[:, None] * oriented_normals
+    )
+    reflected /= np.linalg.norm(reflected, axis=1)[:, None]
+
+    result = np.empty(len(directions), dtype=_LAMBERTIAN_RESULT_DTYPE)
+    result["reflected_direction"] = reflected
+    result["reflected_power"] = incident_power * albedo
+    result["absorbed_power"] = incident_power * (1.0 - albedo)
+    return result
+
+
+__all__ = ["interface_transport", "lambertian_reflection"]

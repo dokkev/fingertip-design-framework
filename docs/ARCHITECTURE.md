@@ -330,6 +330,13 @@ weight: the lossless split is `P * R` and `P * T`, without radiance transport
 factors. A TIR result preserves all power in reflection and uses a NaN refracted
 direction. The function does not track media or launch secondary rays.
 
+`lambertian_reflection()` models one effective opaque Lambertian carrier event.
+It cosine-samples the reflected hemisphere from caller-supplied deterministic
+sample coordinates and returns `albedo * incident_power` as one Monte Carlo ray
+weight plus the complementary absorbed power. Albedo is supplied by the caller;
+current validation values are placeholders, not calibrated white-PLA material
+constants. The function does not own RNG policy, materials, media, or tracing.
+
 `safe_secondary_origins()` selects the OTK front or back spawn position by the
 sign of the outgoing direction dotted with `normal_W`. It does not infer media
 or trace a ray. The current secondary-ray workflow remains two explicit
@@ -498,6 +505,12 @@ refracted branches exactly once each, verifies power conservation and no
 primary-triangle self-hit, and requires the reflected branch to leave the
 fingertip while the refracted branch reaches the carrier. It does not recurse or
 assign optical behavior to the carrier.
+
+`validation/ray-tracing/carrier_reflection_test.py` checks deterministic
+cosine-weighted Lambertian directions and opaque reflected/absorbed power, then
+traces one real undeformed path from air through silicone to carrier and back to
+the exposed silicone surface. It uses the existing OTK-safe triangle spawn and
+stops at that third geometry hit without processing another interface.
 
 They should normally:
 
