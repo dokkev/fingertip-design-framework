@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 _MISS_INT = -1
 _MISS_FLOAT = -1.0
 _PAYLOAD_WORD_COUNT = 6
-_RESULT_WORD_COUNT = 9
+_RESULT_WORD_COUNT = 15
 _RESULT_DTYPE = np.dtype(
     [
         ("hit", np.bool_),
@@ -28,6 +28,8 @@ _RESULT_DTYPE = np.dtype(
         ("primitive_id", np.int32),
         ("barycentrics", np.float32, (2,)),
         ("normal_W", np.float32, (3,)),
+        ("spawn_front_W", np.float32, (3,)),
+        ("spawn_back_W", np.float32, (3,)),
     ]
 )
 
@@ -117,8 +119,17 @@ def _compile_trace_cuda(
     *,
     nvrtc,
     optix_include_dir: Path,
+    otk_include_dir: Path,
     cuda_include_dir: Path,
 ) -> str:
+    cuda_standard_include_dir = cuda_include_dir / "cccl" / "cuda" / "std"
+    cuda_assert_include_dir = cuda_standard_include_dir / "__cccl"
+    cuda_cccl_include_dir = cuda_include_dir / "cccl"
+    if not (
+        (cuda_standard_include_dir / "cassert").is_file()
+        and (cuda_assert_include_dir / "assert.h").is_file()
+    ):
+        raise RuntimeError("CUDA's NVRTC-compatible cassert header was not found")
     source = files("lumo.ray_tracing").joinpath(
         "kernels",
         "trace.cu",
@@ -137,10 +148,14 @@ def _compile_trace_cuda(
         b"-use_fast_math",
         b"-lineinfo",
         b"-default-device",
-        b"-std=c++14",
+        b"-std=c++17",
         b"-rdc",
         b"true",
         f"-I{optix_include_dir}".encode(),
+        f"-I{otk_include_dir}".encode(),
+        f"-I{cuda_standard_include_dir}".encode(),
+        f"-I{cuda_assert_include_dir}".encode(),
+        f"-I{cuda_cccl_include_dir}".encode(),
         f"-I{cuda_include_dir}".encode(),
     ]
     try:
@@ -189,6 +204,7 @@ class OptixScene:
         sphere_visibility_mask: int,
         silicone_vertices: np.ndarray | None = None,
         optix_include_dir: str | Path | None = None,
+        otk_include_dir: str | Path | None = None,
     ) -> None:
         from lumo.mesh import FingertipMesh
 
@@ -299,6 +315,14 @@ class OptixScene:
             environment_name="OPTIX_INCLUDE_DIR",
             header_name="optix.h",
         )
+        otk_include_path = _include_directory(
+            otk_include_dir,
+            environment_name="OTK_INCLUDE_DIR",
+            header_name=(
+                "OptiXToolkit/ShaderUtil/"
+                "OptixSelfIntersectionAvoidance.h"
+            ),
+        )
         cuda_include_path = _include_directory(
             None,
             environment_name="CUDA_INCLUDE_DIR",
@@ -334,6 +358,7 @@ class OptixScene:
         ptx = _compile_trace_cuda(
             nvrtc=nvrtc,
             optix_include_dir=optix_include_path,
+            otk_include_dir=otk_include_path,
             cuda_include_dir=cuda_include_path,
         )
         self._create_pipeline(ptx)
@@ -826,7 +851,60 @@ class OptixScene:
         results["normal_W"][:, 0] = raw[:, 6].view(np.float32)
         results["normal_W"][:, 1] = raw[:, 7].view(np.float32)
         results["normal_W"][:, 2] = raw[:, 8].view(np.float32)
+        results["spawn_front_W"][:, 0] = raw[:, 9].view(np.float32)
+        results["spawn_front_W"][:, 1] = raw[:, 10].view(np.float32)
+        results["spawn_front_W"][:, 2] = raw[:, 11].view(np.float32)
+        results["spawn_back_W"][:, 0] = raw[:, 12].view(np.float32)
+        results["spawn_back_W"][:, 1] = raw[:, 13].view(np.float32)
+        results["spawn_back_W"][:, 2] = raw[:, 14].view(np.float32)
         return results
 
 
-__all__ = ["OptixScene"]
+def safe_secondary_origins(
+    hits: np.ndarray,
+    outgoing_directions: np.ndarray,
+) -> np.ndarray:
+    """Select each OTK safe spawn point from its outgoing direction."""
+    if hits.ndim != 1 or hits.dtype.names is None:
+        raise ValueError("hits must be a one-dimensional structured array")
+    required_fields = {
+        "hit",
+        "normal_W",
+        "spawn_front_W",
+        "spawn_back_W",
+    }
+    if not required_fields.issubset(hits.dtype.names):
+        raise ValueError("hits must be results from OptixScene.trace_closest()")
+
+    outgoing_directions = _vertices(
+        outgoing_directions,
+        name="outgoing_directions",
+    )
+    if len(hits) != len(outgoing_directions):
+        raise ValueError("hits and outgoing_directions must have equal lengths")
+    if np.any(np.linalg.norm(outgoing_directions, axis=1) == 0.0):
+        raise ValueError("outgoing_directions must be nonzero")
+    if not np.all(hits["hit"]):
+        raise ValueError("safe secondary origins require triangle hits")
+    if not (
+        np.all(np.isfinite(hits["normal_W"]))
+        and np.all(np.isfinite(hits["spawn_front_W"]))
+        and np.all(np.isfinite(hits["spawn_back_W"]))
+    ):
+        raise ValueError("safe secondary origins require triangle spawn data")
+
+    use_front = np.sum(
+        outgoing_directions * hits["normal_W"],
+        axis=1,
+    ) > 0.0
+    return np.ascontiguousarray(
+        np.where(
+            use_front[:, None],
+            hits["spawn_front_W"],
+            hits["spawn_back_W"],
+        ),
+        dtype=np.float32,
+    )
+
+
+__all__ = ["OptixScene", "safe_secondary_origins"]

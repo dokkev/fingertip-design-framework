@@ -155,6 +155,8 @@ def main() -> None:
         or int(miss_result["primitive_id"]) != -1
         or not np.array_equal(miss_result["barycentrics"], (-1.0, -1.0))
         or not np.all(np.isnan(miss_result["normal_W"]))
+        or not np.all(np.isnan(miss_result["spawn_front_W"]))
+        or not np.all(np.isnan(miss_result["spawn_back_W"]))
     ):
         raise AssertionError("miss ray did not return the designated miss values")
 

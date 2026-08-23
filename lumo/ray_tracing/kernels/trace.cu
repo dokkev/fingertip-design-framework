@@ -1,5 +1,6 @@
 #include <optix.h>
 #include <cuda_runtime.h>
+#include <OptiXToolkit/ShaderUtil/OptixSelfIntersectionAvoidance.h>
 
 struct LaunchParams
 {
@@ -16,8 +17,10 @@ struct HitGroupData
     float sphere_radius;
 };
 
-static constexpr unsigned int RESULT_WORD_COUNT = 9u;
+static constexpr unsigned int RESULT_WORD_COUNT = 15u;
 static constexpr unsigned int NORMAL_X_WORD = 6u;
+static constexpr unsigned int SPAWN_FRONT_X_WORD = 9u;
+static constexpr unsigned int SPAWN_BACK_X_WORD = 12u;
 static constexpr unsigned int NAN_BITS = 0x7fc00000u;
 
 extern "C" {
@@ -60,13 +63,26 @@ static __forceinline__ __device__ void write_world_normal(
         __float_as_uint(normal_world.z * inverse_length);
 }
 
+static __forceinline__ __device__ void write_spawn_points(
+    const float3 front,
+    const float3 back)
+{
+    unsigned int* result = params.results
+        + RESULT_WORD_COUNT * optixGetLaunchIndex().x;
+    result[SPAWN_FRONT_X_WORD] = __float_as_uint(front.x);
+    result[SPAWN_FRONT_X_WORD + 1u] = __float_as_uint(front.y);
+    result[SPAWN_FRONT_X_WORD + 2u] = __float_as_uint(front.z);
+    result[SPAWN_BACK_X_WORD] = __float_as_uint(back.x);
+    result[SPAWN_BACK_X_WORD + 1u] = __float_as_uint(back.y);
+    result[SPAWN_BACK_X_WORD + 2u] = __float_as_uint(back.z);
+}
+
 extern "C" __global__ void __raygen__trace_closest()
 {
     const unsigned int ray_index = optixGetLaunchIndex().x;
     unsigned int* result = params.results + RESULT_WORD_COUNT * ray_index;
-    result[NORMAL_X_WORD] = NAN_BITS;
-    result[NORMAL_X_WORD + 1u] = NAN_BITS;
-    result[NORMAL_X_WORD + 2u] = NAN_BITS;
+    for (unsigned int index = NORMAL_X_WORD; index < RESULT_WORD_COUNT; ++index)
+        result[index] = NAN_BITS;
 
     unsigned int hit = 0u;
     unsigned int t = __float_as_uint(-1.0f);
@@ -79,7 +95,7 @@ extern "C" __global__ void __raygen__trace_closest()
         params.handle,
         params.origins[ray_index],
         params.directions[ray_index],
-        1.0e-7f,
+        0.0f,
         1.0e16f,
         0.0f,
         OptixVisibilityMask(params.mask),
@@ -112,18 +128,41 @@ extern "C" __global__ void __closesthit__triangle()
     const float2 barycentrics = optixGetTriangleBarycentrics();
     float3 vertices[3];
     optixGetTriangleVertexData(vertices);
-    const float3 edge_1 = make_float3(
-        vertices[1].x - vertices[0].x,
-        vertices[1].y - vertices[0].y,
-        vertices[1].z - vertices[0].z);
-    const float3 edge_2 = make_float3(
-        vertices[2].x - vertices[0].x,
-        vertices[2].y - vertices[0].y,
-        vertices[2].z - vertices[0].z);
-    write_world_normal(make_float3(
-        edge_1.y * edge_2.z - edge_1.z * edge_2.y,
-        edge_1.z * edge_2.x - edge_1.x * edge_2.z,
-        edge_1.x * edge_2.y - edge_1.y * edge_2.x));
+
+    float3 position_object;
+    float3 normal_object;
+    float offset_object;
+    SelfIntersectionAvoidance::getSafeTriangleSpawnOffset(
+        position_object,
+        normal_object,
+        offset_object,
+        vertices[0],
+        vertices[1],
+        vertices[2],
+        barycentrics);
+
+    float3 position_world;
+    float3 normal_world;
+    float offset_world;
+    SelfIntersectionAvoidance::transformSafeSpawnOffset(
+        position_world,
+        normal_world,
+        offset_world,
+        position_object,
+        normal_object,
+        offset_object);
+
+    float3 spawn_front_world;
+    float3 spawn_back_world;
+    SelfIntersectionAvoidance::offsetSpawnPoint(
+        spawn_front_world,
+        spawn_back_world,
+        position_world,
+        normal_world,
+        offset_world);
+
+    write_world_normal(normal_object);
+    write_spawn_points(spawn_front_world, spawn_back_world);
 
     optixSetPayload_0(1u);
     optixSetPayload_1(__float_as_uint(optixGetRayTmax()));

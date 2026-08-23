@@ -133,6 +133,7 @@ def main() -> None:
         silicone["normal_W"][None, :],
         n_incident=1.0,
         n_transmitted=1.4,
+        incident_power=1.0,
     )[0]
     if bool(optical["total_internal_reflection"]):
         raise AssertionError("air-to-silicone integration ray reported TIR")

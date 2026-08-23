@@ -296,9 +296,16 @@ geometry buffers, two triangle GASes for silicone and carrier, one spherical
 custom-primitive GAS, and the IAS containing those three instances. Its only
 query `trace_closest()` returns hit state, distance, instance ID, primitive ID,
 triangle barycentrics, and the world-frame geometric normal `normal_W`.
+Triangle hits also return NVIDIA OptiX Toolkit ShaderUtil
+`spawn_front_W` and `spawn_back_W` positions for robust secondary-ray launch;
+custom-sphere hits and misses return NaN spawn positions.
+
 Triangle closest-hit programs fetch the current triangle vertices through the
-OptiX 9.1 current-hit API and use OptiX's object-to-world normal transform; no
-random vertex access build flag or host-side normal lookup is used. The custom
+OptiX 9.1 current-hit API and use OptiX's object-to-world normal transform. The
+same vertices and barycentrics are passed to OTK
+`getSafeTriangleSpawnOffset()`, followed by the current-hit transform and
+two-sided offset operations. This explicit-vertex OTK overload avoids the
+random vertex access build flag and any host-side triangle lookup. The custom
 sphere intersection reports its object-space radial normal as three attributes,
 which its closest-hit program transforms through the same OptiX helper. Misses
 return a NaN normal.
@@ -316,8 +323,20 @@ operation. It normalizes a batch of incident directions and geometric normals,
 locally orients each normal against its incident ray, and evaluates one
 lossless dielectric interface with caller-supplied scalar refractive indices.
 It returns reflected and refracted directions, unpolarized Fresnel reflectance,
-transmittance, and a total-internal-reflection flag. A TIR result uses a NaN
-refracted direction. It does not track media or launch secondary rays.
+transmittance, reflected and refracted scalar ray power, and a
+total-internal-reflection flag. Incident power is either one scalar for the
+batch or one nonnegative value per ray. This power is a discrete optical-energy
+weight: the lossless split is `P * R` and `P * T`, without radiance transport
+factors. A TIR result preserves all power in reflection and uses a NaN refracted
+direction. The function does not track media or launch secondary rays.
+
+`safe_secondary_origins()` selects the OTK front or back spawn position by the
+sign of the outgoing direction dotted with `normal_W`. It does not infer media
+or trace a ray. The current secondary-ray workflow remains two explicit
+`trace_closest()` launches separated by `interface_transport()` and this spawn
+selection; there is no bounce loop or recursive OptiX trace. OptiX traversal
+uses `tmin=0`: the OTK origin owns self-intersection separation, so no second
+scene epsilon is combined with the official offset.
 
 The scene has no Newton dependency. A caller may explicitly pass a Newton
 checkpoint through `update_silicone()`, but no production runtime currently
@@ -464,7 +483,21 @@ feeds the silicone hit normal into one air-to-silicone
 `validation/ray-tracing/interface_transport_test.py` independently checks
 normal and oblique air-to-silicone refraction, below-critical silicone-to-air
 refraction, and above-critical total internal reflection against deterministic
-analytic results.
+analytic results. It also checks scalar and per-ray power splitting,
+conservation, zero power, and invalid power inputs.
+
+`validation/ray-tracing/secondary_ray_test.py` traces one undeformed-fingertip
+ray from air into exposed silicone, applies one dielectric refraction, selects
+the transmitted-side OTK spawn position, and performs exactly one second OptiX
+launch. The deterministic path must hit carrier rather than immediately
+self-intersecting the primary silicone triangle.
+
+`validation/ray-tracing/power_branch_test.py` applies one lossless power split
+at that same real silicone interface. It traces the OTK-safe reflected and
+refracted branches exactly once each, verifies power conservation and no
+primary-triangle self-hit, and requires the reflected branch to leave the
+fingertip while the refracted branch reaches the carrier. It does not recurse or
+assign optical behavior to the carrier.
 
 They should normally:
 
@@ -539,6 +572,8 @@ silently duplicated across packages.
 ## External libraries
 
 Newton and OptiX are primary dependencies, not reference implementations.
+NVIDIA OTK ShaderUtil supplies the official header-only self-intersection
+avoidance implementation consumed by the OptiX kernel.
 
 Before adding nontrivial functionality using either library:
 

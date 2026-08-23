@@ -22,13 +22,48 @@ def _require_unit(label: str, direction: np.ndarray) -> None:
         raise AssertionError(f"{label} is not normalized")
 
 
+def _require_power_split(
+    label: str,
+    optical: np.ndarray,
+    incident_power: float | np.ndarray,
+) -> None:
+    incident_power = np.broadcast_to(
+        np.asarray(incident_power, dtype=np.float64),
+        optical.shape,
+    )
+    if not np.allclose(
+        optical["reflected_power"],
+        incident_power * optical["reflectance"],
+        rtol=0.0,
+        atol=1.0e-14,
+    ):
+        raise AssertionError(f"{label} reflected power is wrong")
+    if not np.allclose(
+        optical["refracted_power"],
+        incident_power * optical["transmittance"],
+        rtol=0.0,
+        atol=1.0e-14,
+    ):
+        raise AssertionError(f"{label} refracted power is wrong")
+    if not np.allclose(
+        optical["reflected_power"] + optical["refracted_power"],
+        incident_power,
+        rtol=0.0,
+        atol=1.0e-14,
+    ):
+        raise AssertionError(f"{label} does not conserve ray power")
+
+
 def main() -> None:
-    normal_incidence = interface_transport(
+    normal_incidence_result = interface_transport(
         np.array(((0.0, 0.0, -1.0),)),
         _NORMAL[None, :],
         n_incident=1.0,
         n_transmitted=1.4,
-    )[0]
+        incident_power=0.37,
+    )
+    _require_power_split("normal incidence", normal_incidence_result, 0.37)
+    normal_incidence = normal_incidence_result[0]
     expected_reflectance = ((1.0 - 1.4) / (1.0 + 1.4)) ** 2
     if not np.allclose(
         normal_incidence["reflected_direction"],
@@ -55,17 +90,22 @@ def main() -> None:
         atol=1.0e-12,
     ):
         raise AssertionError("normal-incidence R + T is not one")
-    reversed_normal = interface_transport(
+    reversed_normal_result = interface_transport(
         np.array(((0.0, 0.0, -1.0),)),
         -_NORMAL[None, :],
         n_incident=1.0,
         n_transmitted=1.4,
-    )[0]
+        incident_power=0.37,
+    )
+    _require_power_split("reversed normal", reversed_normal_result, 0.37)
+    reversed_normal = reversed_normal_result[0]
     for field in (
         "reflected_direction",
         "refracted_direction",
         "reflectance",
         "transmittance",
+        "reflected_power",
+        "refracted_power",
     ):
         if not np.allclose(
             reversed_normal[field],
@@ -75,12 +115,16 @@ def main() -> None:
             raise AssertionError("local normal orientation is inconsistent")
 
     oblique_direction = _direction(30.0)
-    oblique = interface_transport(
-        oblique_direction[None, :],
-        _NORMAL[None, :],
+    oblique_powers = np.array((0.37, 0.0))
+    oblique_result = interface_transport(
+        np.repeat(oblique_direction[None, :], 2, axis=0),
+        np.repeat(_NORMAL[None, :], 2, axis=0),
         n_incident=1.0,
         n_transmitted=1.4,
-    )[0]
+        incident_power=oblique_powers,
+    )
+    _require_power_split("oblique incidence", oblique_result, oblique_powers)
+    oblique = oblique_result[0]
     reflected = oblique["reflected_direction"]
     refracted = oblique["refracted_direction"]
     expected_reflected = np.array(
@@ -108,12 +152,19 @@ def main() -> None:
         raise AssertionError("oblique Fresnel powers are invalid")
 
     below_critical_direction = _direction(30.0)
-    below_critical = interface_transport(
+    below_critical_result = interface_transport(
         below_critical_direction[None, :],
         _NORMAL[None, :],
         n_incident=1.4,
         n_transmitted=1.0,
-    )[0]
+        incident_power=0.37,
+    )
+    _require_power_split(
+        "below-critical incidence",
+        below_critical_result,
+        0.37,
+    )
+    below_critical = below_critical_result[0]
     if bool(below_critical["total_internal_reflection"]):
         raise AssertionError("below-critical ray incorrectly reported TIR")
     if not np.all(np.isfinite(below_critical["refracted_direction"])):
@@ -125,24 +176,53 @@ def main() -> None:
     ):
         raise AssertionError("silicone-to-air refraction violates Snell's law")
 
-    above_critical = interface_transport(
+    above_critical_result = interface_transport(
         _direction(60.0)[None, :],
         _NORMAL[None, :],
         n_incident=1.4,
         n_transmitted=1.0,
-    )[0]
+        incident_power=0.37,
+    )
+    _require_power_split(
+        "total internal reflection",
+        above_critical_result,
+        0.37,
+    )
+    above_critical = above_critical_result[0]
     if not bool(above_critical["total_internal_reflection"]):
         raise AssertionError("above-critical ray did not report TIR")
     if above_critical["reflectance"] != 1.0:
         raise AssertionError("TIR reflectance is not one")
     if above_critical["transmittance"] != 0.0:
         raise AssertionError("TIR transmittance is not zero")
+    if above_critical["reflected_power"] != 0.37:
+        raise AssertionError("TIR did not preserve incident power")
+    if above_critical["refracted_power"] != 0.0:
+        raise AssertionError("TIR produced refracted power")
     if np.any(np.isfinite(above_critical["refracted_direction"])):
         raise AssertionError("TIR returned a finite refracted direction")
     _require_unit(
         "TIR reflected direction",
         above_critical["reflected_direction"],
     )
+
+    for label, invalid_power in (
+        ("negative", -1.0),
+        ("non-finite", np.nan),
+        ("wrong-count", np.array((0.2, 0.3))),
+    ):
+        try:
+            interface_transport(
+                np.array(((0.0, 0.0, -1.0),)),
+                _NORMAL[None, :],
+                n_incident=1.0,
+                n_transmitted=1.4,
+                incident_power=invalid_power,
+            )
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"{label} incident power was accepted")
 
     print("normal incidence air -> silicone: PASS")
     print("oblique incidence air -> silicone: PASS")

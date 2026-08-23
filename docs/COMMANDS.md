@@ -17,6 +17,22 @@ and `ax` supplies Ax 1.3.1. CUDA, OptiX, and GPU drivers are externally managed.
 The editable install exposes the sole framework namespace from `lumo/`;
 repository scripts do not insert the checkout into `sys.path`.
 
+Install the NVIDIA OptiX Toolkit source once for its header-only ShaderUtil
+self-intersection implementation. No OTK build is required:
+
+```bash
+git clone --depth 1 \
+  https://github.com/NVIDIA/optix-toolkit.git \
+  /path/to/optix-toolkit
+
+conda env config vars set -n lit \
+  OTK_INCLUDE_DIR=/path/to/optix-toolkit/ShaderUtil/include
+```
+
+Reactivate the environment after changing its persistent variables. The
+runtime also accepts an explicit `otk_include_dir` when constructing
+`OptixScene`.
+
 ## Focused tests
 
 ```bash
@@ -129,7 +145,8 @@ python validation/ray-tracing/interface_transport_test.py
 ```
 
 This checks deterministic normal-incidence and oblique Fresnel/Snell cases,
-including below-critical refraction and total internal reflection.
+including below-critical refraction, total internal reflection, and scalar or
+per-ray power conservation.
 
 Run the OptiX world-space geometric-normal and interface integration check:
 
@@ -141,6 +158,29 @@ python validation/ray-tracing/normal_test.py
 
 This checks a planar carrier face, the custom sphere, the analytic silicone
 semiellipse, and one OptiX-hit-to-dielectric-interface operation.
+
+Run the single refracted secondary-ray validation:
+
+```bash
+OPTIX_INCLUDE_DIR=/path/to/NVIDIA-OptiX-SDK-9.1.0/include \
+conda run --no-capture-output -n lit \
+python validation/ray-tracing/secondary_ray_test.py
+```
+
+This uses OTK ShaderUtil safe spawn positions to trace exactly one refracted
+ray from exposed silicone to carrier without a numerical self-hit.
+
+Run the single-interface reflected/refracted power-branch validation:
+
+```bash
+OPTIX_INCLUDE_DIR=/path/to/NVIDIA-OptiX-SDK-9.1.0/include \
+conda run --no-capture-output -n lit \
+python validation/ray-tracing/power_branch_test.py
+```
+
+This splits one incident ray's scalar power by Fresnel `R/T`, traces each
+OTK-safe branch once, and stops after the reflected miss and refracted carrier
+hit.
 
 Run the silicone GAS and IAS UPDATE/refit validation with the same SDK headers:
 

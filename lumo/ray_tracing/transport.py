@@ -13,6 +13,8 @@ _RESULT_DTYPE = np.dtype(
         ("refracted_direction", np.float64, (3,)),
         ("reflectance", np.float64),
         ("transmittance", np.float64),
+        ("reflected_power", np.float64),
+        ("refracted_power", np.float64),
         ("total_internal_reflection", np.bool_),
     ]
 )
@@ -39,17 +41,29 @@ def interface_transport(
     *,
     n_incident: float,
     n_transmitted: float,
+    incident_power: float | np.ndarray,
 ) -> np.ndarray:
     """Apply one lossless dielectric interaction to a batch of rays.
 
     ``n_incident`` and ``n_transmitted`` are supplied explicitly; this function
     does not infer the current medium. Each geometric normal is locally flipped
-    when necessary so that it opposes its incident direction.
+    when necessary so that it opposes its incident direction. ``incident_power``
+    is either one nonnegative scalar for the batch or one value per ray.
     """
     directions = _normalized_vectors(directions, name="directions")
     normals = _normalized_vectors(normals, name="normals")
     if directions.shape != normals.shape:
         raise ValueError("directions and normals must have the same shape")
+
+    incident_power = np.asarray(incident_power, dtype=np.float64)
+    if incident_power.ndim == 0:
+        incident_power = np.full(len(directions), incident_power.item())
+    elif incident_power.shape != (len(directions),):
+        raise ValueError("incident_power must be a scalar or have shape (N,)")
+    if not np.all(np.isfinite(incident_power)):
+        raise ValueError("incident_power must be finite")
+    if np.any(incident_power < 0.0):
+        raise ValueError("incident_power must be nonnegative")
 
     n_incident = float(n_incident)
     n_transmitted = float(n_transmitted)
@@ -77,6 +91,8 @@ def interface_transport(
         result["refracted_direction"] = directions
         result["reflectance"] = 0.0
         result["transmittance"] = 1.0
+        result["reflected_power"] = 0.0
+        result["refracted_power"] = incident_power
         result["total_internal_reflection"] = False
         return result
 
@@ -118,6 +134,8 @@ def interface_transport(
 
     result["reflectance"] = reflectance
     result["transmittance"] = 1.0 - reflectance
+    result["reflected_power"] = incident_power * result["reflectance"]
+    result["refracted_power"] = incident_power * result["transmittance"]
     result["total_internal_reflection"] = total_internal_reflection
     return result
 
