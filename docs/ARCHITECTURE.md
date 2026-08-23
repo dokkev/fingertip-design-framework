@@ -154,7 +154,10 @@ interface is controlled only by the prescribed kinematic bond. Silicone
 particle radius is explicitly zero at model construction; contact detection
 distance is supplied separately by `LumoSimulation` through the collision
 pipeline. The rigid carrier proxy uses a stiff shape-contact material while
-VBD still permits a small, measured penalty penetration.
+VBD still permits a small, measured penalty penetration. Its default normal
+contact stiffness is `1e6 N/m`; model construction exposes that scalar only so
+the numerical sensitivity benchmark can vary it without changing material
+parameters.
 
 Do not introduce a generic physics-backend layer while Newton is the only
 mechanics implementation.
@@ -185,6 +188,12 @@ The runtime's default soft-contact detection margin is `1e-4 m`. This keeps
 the zero-radius silicone particles discoverable by Newton's mesh query without
 adding physical particle or shape thickness. Callers may override the margin
 when a different scene scale requires it.
+
+The current numerical construction defaults are a `1 mm` mesh element size,
+`1000 Hz` simulation frequency, `10` SolverVBD iterations, `1e-4 m` soft
+contact margin, and `1e6 N/m` carrier contact stiffness. `LumoSimulation` and
+`IndentationStudy` expose only these concrete scalars for the convergence
+study; there is no simulation-configuration abstraction.
 
 `LumoSimulation(fingertip, builder=...)` is the high-level construction entry
 point. It meshes the fingertip, adds it to an optional caller-populated Newton
@@ -253,11 +262,42 @@ introduce a generic simulation manager. A synchronous case-inspection callback
 may validate the live final state; after it returns, the case runtime is
 released before the next case is constructed.
 
+### `lumo/benchmark/`
+
+Owns explicit, long-running measurement commands that consume the current
+production simulation APIs. It is not imported by the mechanics runtime.
+
+`newton_parameter_sweep.py` holds the physical fingertip and 10 mm
+center-sphere case fixed while varying mesh element size, simulation frequency,
+SolverVBD iterations, soft-contact margin, and carrier contact stiffness one
+family at a time. It writes one strict JSON artifact after every requested run
+has finished. The artifact contains the raw scalar results and comparisons to
+the measured baseline. `--fine` adds only the expensive `0.5 mm` mesh case;
+`--matrix` adds the baseline-only 3-by-3 sphere/location robustness check.
+
+Benchmarks may report production behavior, but they do not own simulation
+state, solver policy, material calibration, or production defaults.
+
 ### `lumo/ray_tracing/`
 
 Owns LUMO-specific optical transport behavior.
 
 OptiX is the ray-tracing backend.
+
+`OptixScene` is the first concrete OptiX 9.1 runtime component. It owns one
+persistent CUDA stream, the OptiX context and pipeline resources, device
+geometry buffers, two triangle GASes for silicone and carrier, one spherical
+custom-primitive GAS, and the IAS containing those three instances. Its only
+public operation is the batched geometric query `trace_closest()`, which
+returns hit state, distance, instance ID, primitive ID, and triangle
+barycentrics. The sphere uses a minimal custom intersection program because
+the installed PyOptiX 9.1 binding does not expose OptiX's built-in sphere build
+input.
+
+The current scene is static: it does not update geometry from Newton, refit
+acceleration structures, or implement optical transport. The silicone input
+surface is selected by the caller; the first IAS validation removes surface
+triangles whose three vertices all belong to the perfect bonded interface.
 
 This package should define only the optical semantics required by LUMO and use
 OptiX for generic ray-tracing functionality.
@@ -359,6 +399,13 @@ contact protocol for explicit near-incompressible Poisson ratios. It derives
 the Lamé `k_lambda` from a fixed `k_mu`, reports force and tetrahedral volume
 change, and keeps all sweep policy local to the validation script.
 
+`validation/ray-tracing/ias_test.py` builds a static OptiX IAS from the real
+undeformed silicone surface, full carrier mesh, and one 10 mm sphere. Its
+deterministic rays verify closest silicone, carrier, and sphere instance hits,
+a full-scene miss, visibility-mask exclusion, triangle barycentrics, and an
+analytic sphere hit distance. It does not perform optical transport or couple
+Newton state into OptiX.
+
 They should normally:
 
 1. construct production objects;
@@ -385,6 +432,8 @@ lumo.mesh
 lumo.newton
       ↓
 lumo.simulation
+      ↓
+lumo.benchmark
 
 lumo.fingertip / lumo.mesh
       ↓
@@ -403,6 +452,8 @@ Important constraints:
 - `lumo.newton` must not import ray-tracing, optimization, or validation code.
 - `lumo.simulation` may compose the concrete Newton runtime but must not import
   validation or optimization policy.
+- `lumo.benchmark` may consume fingertip and simulation APIs; production runtime
+  packages must not import benchmark code.
 - `lumo.ray_tracing` must not import Newton solver implementation.
 - production packages must not import `validation/` or `tests/`.
 - optional heavy dependencies should enter only at their owning execution

@@ -12,7 +12,7 @@ import warp as wp
 from lumo.fingertip import Fingertip
 from lumo.newton import Indenter
 from lumo.simulation.runtime import LumoSimulation
-from lumo.util.scalar_validation import require_positive
+from lumo.util.scalar_validation import require_nonnegative, require_positive
 
 
 class IndentationCase:
@@ -96,6 +96,10 @@ class IndentationStudy:
         force_change_tolerance_n: float,
         settled_tick_count: int,
         max_search_iterations: int,
+        element_size_mm: float = 1.0,
+        iterations: int = 10,
+        soft_contact_margin_m: float = 1.0e-4,
+        carrier_contact_stiffness_n_m: float = 1.0e6,
     ) -> None:
         if not isinstance(fingertip, Fingertip):
             raise TypeError("fingertip must be a Fingertip")
@@ -106,9 +110,19 @@ class IndentationStudy:
             "force_change_tolerance_n",
             force_change_tolerance_n,
         )
+        require_positive("element_size_mm", element_size_mm)
+        require_nonnegative(
+            "soft_contact_margin_m",
+            soft_contact_margin_m,
+        )
+        require_positive(
+            "carrier_contact_stiffness_n_m",
+            carrier_contact_stiffness_n_m,
+        )
         for name, value in (
             ("settled_tick_count", settled_tick_count),
             ("max_search_iterations", max_search_iterations),
+            ("iterations", iterations),
         ):
             if (
                 isinstance(value, bool)
@@ -138,6 +152,12 @@ class IndentationStudy:
         self.force_change_tolerance_n = float(force_change_tolerance_n)
         self.settled_tick_count = settled_tick_count
         self.max_search_iterations = max_search_iterations
+        self.element_size_mm = float(element_size_mm)
+        self.iterations = iterations
+        self.soft_contact_margin_m = float(soft_contact_margin_m)
+        self.carrier_contact_stiffness_n_m = float(
+            carrier_contact_stiffness_n_m
+        )
         self._has_run = False
 
     def run(
@@ -184,6 +204,12 @@ class IndentationStudy:
                 self.fingertip,
                 builder=builder,
                 sim_frequency=self.sim_frequency,
+                iterations=self.iterations,
+                soft_contact_margin_m=self.soft_contact_margin_m,
+                element_size_mm=self.element_size_mm,
+                carrier_contact_stiffness_n_m=(
+                    self.carrier_contact_stiffness_n_m
+                ),
             )
 
             simulation.collision_pipeline.collide(

@@ -10,14 +10,15 @@ import newton
 import warp as wp
 
 from lumo.mesh import FingertipMesh
+from lumo.util.scalar_validation import require_positive
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
 
-# VBD body-particle contact is penalty-based. This keeps the nominally rigid
-# carrier below the validation's 10 micrometre penetration tolerance at 15 N.
-_CARRIER_CONTACT_STIFFNESS_N_M = 1.0e6
+# VBD body-particle contact is penalty-based. The numerical sweep measures
+# whether this baseline is stiff enough for the current force-controlled case.
+_DEFAULT_CARRIER_CONTACT_STIFFNESS_N_M = 1.0e6
 
 
 @wp.kernel
@@ -132,6 +133,9 @@ def build_fingertip_newton_model(
     *,
     builder: newton.ModelBuilder | None = None,
     gravity: float = 0.0,
+    carrier_contact_stiffness_n_m: float = (
+        _DEFAULT_CARRIER_CONTACT_STIFFNESS_N_M
+    ),
     carrier_color: wp.vec3 | None = None,
     device: str | None = None,
 ) -> FingertipNewtonModel:
@@ -145,6 +149,10 @@ def build_fingertip_newton_model(
     """
     if not isinstance(fingertip_mesh, FingertipMesh):
         raise TypeError("fingertip_mesh must be a FingertipMesh")
+    require_positive(
+        "carrier_contact_stiffness_n_m",
+        carrier_contact_stiffness_n_m,
+    )
 
     local_indices = np.asarray(
         fingertip_mesh.bonded_vertex_indices,
@@ -212,7 +220,7 @@ def build_fingertip_newton_model(
     )
     carrier_collision_cfg = newton.ModelBuilder.ShapeConfig(
         density=0.0,
-        ke=_CARRIER_CONTACT_STIFFNESS_N_M,
+        ke=carrier_contact_stiffness_n_m,
         margin=0.0,
         is_solid=True,
         collision_group=1,

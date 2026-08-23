@@ -14,6 +14,8 @@ from lumo.util.scalar_validation import require_nonnegative, require_positive
 
 
 _DEFAULT_SOFT_CONTACT_MARGIN_M = 1.0e-4
+_DEFAULT_ELEMENT_SIZE_MM = 1.0
+_DEFAULT_CARRIER_CONTACT_STIFFNESS_N_M = 1.0e6
 
 
 @wp.kernel
@@ -74,6 +76,10 @@ class LumoSimulation:
         sim_frequency: float,
         iterations: int = 10,
         soft_contact_margin_m: float = _DEFAULT_SOFT_CONTACT_MARGIN_M,
+        element_size_mm: float = _DEFAULT_ELEMENT_SIZE_MM,
+        carrier_contact_stiffness_n_m: float = (
+            _DEFAULT_CARRIER_CONTACT_STIFFNESS_N_M
+        ),
     ) -> None:
         if not isinstance(fingertip, Fingertip):
             raise TypeError("fingertip must be a Fingertip")
@@ -93,12 +99,21 @@ class LumoSimulation:
             "soft_contact_margin_m",
             soft_contact_margin_m,
         )
+        require_positive("element_size_mm", element_size_mm)
+        require_positive(
+            "carrier_contact_stiffness_n_m",
+            carrier_contact_stiffness_n_m,
+        )
 
         self.fingertip = fingertip
-        self.fingertip_mesh = make_fingertip_mesh(fingertip)
+        self.fingertip_mesh = make_fingertip_mesh(
+            fingertip,
+            element_size_mm=element_size_mm,
+        )
         self.fingertip_model = build_fingertip_newton_model(
             self.fingertip_mesh,
             builder=builder,
+            carrier_contact_stiffness_n_m=carrier_contact_stiffness_n_m,
         )
         model = self.fingertip_model.model
 

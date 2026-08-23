@@ -1,0 +1,677 @@
+"""One static multi-instance OptiX scene."""
+
+from __future__ import annotations
+
+import ctypes
+import os
+import sys
+from importlib.resources import files
+from math import isfinite
+from pathlib import Path
+
+import numpy as np
+
+
+_MISS_INT = -1
+_MISS_FLOAT = -1.0
+_RESULT_WORD_COUNT = 6
+_RESULT_DTYPE = np.dtype(
+    [
+        ("hit", np.bool_),
+        ("t", np.float32),
+        ("instance_id", np.int32),
+        ("primitive_id", np.int32),
+        ("barycentrics", np.float32, (2,)),
+    ]
+)
+
+
+def _vertices(value: np.ndarray, *, name: str) -> np.ndarray:
+    vertices = np.ascontiguousarray(value, dtype=np.float32)
+    if vertices.ndim != 2 or vertices.shape[1] != 3:
+        raise ValueError(f"{name} must have shape (N, 3)")
+    if not vertices.size:
+        raise ValueError(f"{name} must not be empty")
+    if not np.all(np.isfinite(vertices)):
+        raise ValueError(f"{name} must be finite")
+    return vertices
+
+
+def _triangles(
+    value: np.ndarray,
+    *,
+    vertex_count: int,
+    name: str,
+) -> np.ndarray:
+    triangle_indices = np.asarray(value, dtype=np.int64)
+    if triangle_indices.size % 3 != 0:
+        raise ValueError(f"{name} must contain index triplets")
+    triangle_indices = triangle_indices.reshape(-1, 3)
+    if not triangle_indices.size:
+        raise ValueError(f"{name} must not be empty")
+    if int(triangle_indices.min()) < 0:
+        raise ValueError(f"{name} contains a negative vertex index")
+    if int(triangle_indices.max()) >= vertex_count:
+        raise ValueError(f"{name} contains an out-of-range vertex index")
+    return np.ascontiguousarray(triangle_indices, dtype=np.uint32)
+
+
+def _instance_id(value: int, *, name: str) -> int:
+    value = int(value)
+    if not 0 <= value <= 0xFFFFFF:
+        raise ValueError(f"{name} must be in [0, 0xFFFFFF]")
+    return value
+
+
+def _visibility_mask(value: int, *, name: str) -> int:
+    value = int(value)
+    if not 1 <= value <= 0xFF:
+        raise ValueError(f"{name} must be in [1, 0xFF]")
+    return value
+
+
+def _include_directory(
+    explicit: str | Path | None,
+    *,
+    environment_name: str,
+    header_name: str,
+    fallback: Path | None = None,
+) -> Path:
+    candidate = explicit or os.environ.get(environment_name)
+    directory = Path(candidate).expanduser() if candidate else fallback
+    if directory is None or not (directory / header_name).is_file():
+        raise RuntimeError(
+            f"{header_name} was not found; set {environment_name} to its "
+            "include directory"
+        )
+    return directory.resolve()
+
+
+def _nvrtc_result(result, *, nvrtc, program=None):
+    error = result[0]
+    if error.value:
+        log = ""
+        if program is not None:
+            log_size_result = nvrtc.nvrtcGetProgramLogSize(program)
+            if not log_size_result[0].value:
+                log_buffer = b" " * log_size_result[1]
+                nvrtc.nvrtcGetProgramLog(program, log_buffer)
+                log = log_buffer.decode("utf-8", errors="replace").rstrip("\0")
+        error_name = nvrtc.nvrtcGetErrorString(error)[1].decode()
+        detail = f"\n{log}" if log else ""
+        raise RuntimeError(f"NVRTC failed: {error_name}{detail}")
+    if len(result) == 1:
+        return None
+    if len(result) == 2:
+        return result[1]
+    return result[1:]
+
+
+def _compile_trace_cuda(
+    *,
+    nvrtc,
+    optix_include_dir: Path,
+    cuda_include_dir: Path,
+) -> str:
+    source = files("lumo.ray_tracing").joinpath(
+        "kernels",
+        "trace.cu",
+    ).read_bytes()
+    program = _nvrtc_result(
+        nvrtc.nvrtcCreateProgram(
+            source,
+            b"trace.cu",
+            0,
+            [],
+            [],
+        ),
+        nvrtc=nvrtc,
+    )
+    options = [
+        b"-use_fast_math",
+        b"-lineinfo",
+        b"-default-device",
+        b"-std=c++14",
+        b"-rdc",
+        b"true",
+        f"-I{optix_include_dir}".encode(),
+        f"-I{cuda_include_dir}".encode(),
+    ]
+    try:
+        _nvrtc_result(
+            nvrtc.nvrtcCompileProgram(program, len(options), options),
+            nvrtc=nvrtc,
+            program=program,
+        )
+        ptx_size = _nvrtc_result(
+            nvrtc.nvrtcGetPTXSize(program),
+            nvrtc=nvrtc,
+            program=program,
+        )
+        ptx = b" " * ptx_size
+        _nvrtc_result(
+            nvrtc.nvrtcGetPTX(program, ptx),
+            nvrtc=nvrtc,
+            program=program,
+        )
+        return ptx.decode("utf-8").rstrip("\0")
+    finally:
+        nvrtc.nvrtcDestroyProgram(program)
+
+
+def _sbt_header(optix, program_group) -> np.ndarray:
+    return np.frombuffer(
+        optix.sbtRecordGetHeader(program_group),
+        dtype=np.uint8,
+    )
+
+
+class OptixScene:
+    """Static silicone, carrier, and spherical-object IAS scene."""
+
+    def __init__(
+        self,
+        *,
+        silicone_vertices: np.ndarray,
+        silicone_triangles: np.ndarray,
+        carrier_vertices: np.ndarray,
+        carrier_triangles: np.ndarray,
+        sphere_center: np.ndarray,
+        sphere_radius: float,
+        silicone_instance_id: int,
+        carrier_instance_id: int,
+        sphere_instance_id: int,
+        silicone_visibility_mask: int,
+        carrier_visibility_mask: int,
+        sphere_visibility_mask: int,
+        optix_include_dir: str | Path | None = None,
+    ) -> None:
+        silicone_vertices = _vertices(
+            silicone_vertices,
+            name="silicone_vertices",
+        )
+        silicone_triangles = _triangles(
+            silicone_triangles,
+            vertex_count=len(silicone_vertices),
+            name="silicone_triangles",
+        )
+        carrier_vertices = _vertices(
+            carrier_vertices,
+            name="carrier_vertices",
+        )
+        carrier_triangles = _triangles(
+            carrier_triangles,
+            vertex_count=len(carrier_vertices),
+            name="carrier_triangles",
+        )
+        sphere_center = np.ascontiguousarray(
+            sphere_center,
+            dtype=np.float32,
+        )
+        if sphere_center.shape != (3,) or not np.all(np.isfinite(sphere_center)):
+            raise ValueError("sphere_center must be one finite 3-vector")
+        sphere_radius = float(sphere_radius)
+        if not isfinite(sphere_radius) or sphere_radius <= 0.0:
+            raise ValueError("sphere_radius must be finite and positive")
+
+        instance_ids = (
+            _instance_id(
+                silicone_instance_id,
+                name="silicone_instance_id",
+            ),
+            _instance_id(
+                carrier_instance_id,
+                name="carrier_instance_id",
+            ),
+            _instance_id(
+                sphere_instance_id,
+                name="sphere_instance_id",
+            ),
+        )
+        if len(set(instance_ids)) != len(instance_ids):
+            raise ValueError("OptiX instance IDs must be distinct")
+        visibility_masks = (
+            _visibility_mask(
+                silicone_visibility_mask,
+                name="silicone_visibility_mask",
+            ),
+            _visibility_mask(
+                carrier_visibility_mask,
+                name="carrier_visibility_mask",
+            ),
+            _visibility_mask(
+                sphere_visibility_mask,
+                name="sphere_visibility_mask",
+            ),
+        )
+
+        try:
+            import cupy as cp
+            import optix
+            from cuda.bindings import nvrtc
+        except ImportError as exc:
+            raise RuntimeError(
+                "OptixScene requires pyoptix, cupy, and cuda-python"
+            ) from exc
+        if tuple(optix.version())[:2] != (9, 1):
+            raise RuntimeError(
+                "OptixScene currently targets PyOptiX 9.1; found "
+                f"{optix.version()}"
+            )
+
+        optix_include_path = _include_directory(
+            optix_include_dir,
+            environment_name="OPTIX_INCLUDE_DIR",
+            header_name="optix.h",
+        )
+        cuda_include_path = _include_directory(
+            None,
+            environment_name="CUDA_INCLUDE_DIR",
+            header_name="cuda_runtime.h",
+            fallback=(
+                Path(sys.prefix)
+                / "targets"
+                / "x86_64-linux"
+                / "include"
+            ),
+        )
+
+        self._cp = cp
+        self._optix = optix
+        self._stream = cp.cuda.Stream(non_blocking=True)
+        self._geometry_buffers: list[object] = []
+        self._accel_buffers: list[object] = []
+        self._build_temporaries: list[object] = []
+        self._sbt_buffers: list[object] = []
+        self._launch_buffers: list[object] = []
+        self._log_messages: list[str] = []
+
+        cp.cuda.runtime.free(0)
+        context_options = optix.DeviceContextOptions(
+            logCallbackFunction=self._log,
+            logCallbackLevel=2,
+            validationMode=optix.DEVICE_CONTEXT_VALIDATION_MODE_ALL,
+        )
+        self._context = optix.deviceContextCreate(0, context_options)
+
+        ptx = _compile_trace_cuda(
+            nvrtc=nvrtc,
+            optix_include_dir=optix_include_path,
+            cuda_include_dir=cuda_include_path,
+        )
+        self._create_pipeline(ptx)
+        self._create_sbt(sphere_center, sphere_radius)
+
+        silicone_handle = self._build_triangle_gas(
+            silicone_vertices,
+            silicone_triangles,
+        )
+        carrier_handle = self._build_triangle_gas(
+            carrier_vertices,
+            carrier_triangles,
+        )
+        sphere_handle = self._build_sphere_gas(sphere_center, sphere_radius)
+        self._ias_handle = self._build_ias(
+            handles=(silicone_handle, carrier_handle, sphere_handle),
+            instance_ids=instance_ids,
+            visibility_masks=visibility_masks,
+        )
+
+    def _log(self, level: int, tag: str, message: str) -> None:
+        self._log_messages.append(f"[{level}][{tag}] {message}")
+
+    def _device_array(self, host_array: np.ndarray):
+        with self._stream:
+            return self._cp.asarray(host_array)
+
+    def _device_bytes(self, host_array: np.ndarray):
+        device_memory = self._cp.cuda.alloc(host_array.nbytes)
+        device_memory.copy_from_async(
+            ctypes.c_void_p(host_array.ctypes.data),
+            host_array.nbytes,
+            self._stream,
+        )
+        return device_memory
+
+    def _build_accel(self, build_input) -> int:
+        optix = self._optix
+        options = optix.AccelBuildOptions(
+            buildFlags=int(optix.BUILD_FLAG_PREFER_FAST_TRACE),
+            operation=optix.BUILD_OPERATION_BUILD,
+        )
+        sizes = self._context.accelComputeMemoryUsage(
+            [options],
+            [build_input],
+        )
+        temporary = self._cp.cuda.alloc(sizes.tempSizeInBytes)
+        output = self._cp.cuda.alloc(sizes.outputSizeInBytes)
+        handle = self._context.accelBuild(
+            self._stream.ptr,
+            [options],
+            [build_input],
+            temporary.ptr,
+            sizes.tempSizeInBytes,
+            output.ptr,
+            sizes.outputSizeInBytes,
+            [],
+        )
+        self._build_temporaries.append(temporary)
+        self._accel_buffers.append(output)
+        return int(handle)
+
+    def _build_triangle_gas(
+        self,
+        vertices: np.ndarray,
+        triangles: np.ndarray,
+    ) -> int:
+        optix = self._optix
+        device_vertices = self._device_array(vertices)
+        device_triangles = self._device_array(triangles)
+        self._geometry_buffers.extend((device_vertices, device_triangles))
+
+        build_input = optix.BuildInputTriangleArray(
+            vertexBuffers_=[device_vertices.data.ptr],
+            vertexFormat=optix.VERTEX_FORMAT_FLOAT3,
+            vertexStrideInBytes=3 * np.dtype(np.float32).itemsize,
+            indexBuffer=device_triangles.data.ptr,
+            numIndexTriplets=len(triangles),
+            indexFormat=optix.INDICES_FORMAT_UNSIGNED_INT3,
+            indexStrideInBytes=3 * np.dtype(np.uint32).itemsize,
+            flags_=[int(optix.GEOMETRY_FLAG_DISABLE_ANYHIT)],
+            numSbtRecords=1,
+        )
+        build_input.numVertices = len(vertices)
+        return self._build_accel(build_input)
+
+    def _build_sphere_gas(
+        self,
+        center: np.ndarray,
+        radius: float,
+    ) -> int:
+        optix = self._optix
+        bounds = np.concatenate((center - radius, center + radius)).astype(
+            np.float32
+        )
+        device_bounds = self._device_array(bounds)
+        self._geometry_buffers.append(device_bounds)
+        build_input = optix.BuildInputCustomPrimitiveArray(
+            aabbBuffers=[device_bounds.data.ptr],
+            numPrimitives=1,
+            strideInBytes=6 * np.dtype(np.float32).itemsize,
+            flags=[int(optix.GEOMETRY_FLAG_DISABLE_ANYHIT)],
+            numSbtRecords=1,
+        )
+        return self._build_accel(build_input)
+
+    def _build_ias(
+        self,
+        *,
+        handles: tuple[int, int, int],
+        instance_ids: tuple[int, int, int],
+        visibility_masks: tuple[int, int, int],
+    ) -> int:
+        optix = self._optix
+        identity = [
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+        ]
+        instances = [
+            optix.Instance(
+                transform=identity,
+                instanceId=instance_ids[index],
+                sbtOffset=0 if index < 2 else 1,
+                visibilityMask=visibility_masks[index],
+                flags=int(optix.INSTANCE_FLAG_NONE),
+                traversableHandle=handles[index],
+            )
+            for index in range(3)
+        ]
+        instance_bytes = np.frombuffer(
+            optix.getDeviceRepresentation(instances),
+            dtype=np.uint8,
+        ).copy()
+        device_instances = self._device_array(instance_bytes)
+        self._geometry_buffers.append(device_instances)
+        build_input = optix.BuildInputInstanceArray(
+            instances=device_instances.data.ptr,
+            numInstances=len(instances),
+        )
+        return self._build_accel(build_input)
+
+    def _create_pipeline(self, ptx: str) -> None:
+        optix = self._optix
+        primitive_flags = int(optix.PRIMITIVE_TYPE_FLAGS_TRIANGLE) | int(
+            optix.PRIMITIVE_TYPE_FLAGS_CUSTOM
+        )
+        self._pipeline_compile_options = optix.PipelineCompileOptions(
+            usesMotionBlur=False,
+            traversableGraphFlags=int(
+                optix.TRAVERSABLE_GRAPH_FLAG_ALLOW_SINGLE_LEVEL_INSTANCING
+            ),
+            numPayloadValues=_RESULT_WORD_COUNT,
+            numAttributeValues=2,
+            exceptionFlags=int(optix.EXCEPTION_FLAG_NONE),
+            pipelineLaunchParamsVariableName="params",
+            usesPrimitiveTypeFlags=primitive_flags,
+        )
+        module_options = optix.ModuleCompileOptions(
+            maxRegisterCount=optix.COMPILE_DEFAULT_MAX_REGISTER_COUNT,
+            optLevel=optix.COMPILE_OPTIMIZATION_DEFAULT,
+            debugLevel=optix.COMPILE_DEBUG_LEVEL_DEFAULT,
+        )
+        self._module, module_log = self._context.moduleCreate(
+            module_options,
+            self._pipeline_compile_options,
+            ptx,
+        )
+        if module_log:
+            self._log_messages.append(module_log)
+
+        descriptions = (
+            optix.ProgramGroupDesc(
+                raygenModule=self._module,
+                raygenEntryFunctionName="__raygen__trace_closest",
+            ),
+            optix.ProgramGroupDesc(
+                missModule=self._module,
+                missEntryFunctionName="__miss__trace_closest",
+            ),
+            optix.ProgramGroupDesc(
+                hitgroupModuleCH=self._module,
+                hitgroupEntryFunctionNameCH="__closesthit__triangle",
+            ),
+            optix.ProgramGroupDesc(
+                hitgroupModuleCH=self._module,
+                hitgroupEntryFunctionNameCH="__closesthit__sphere",
+                hitgroupModuleIS=self._module,
+                hitgroupEntryFunctionNameIS="__intersection__sphere",
+            ),
+        )
+        self._program_groups = []
+        for description in descriptions:
+            groups, log = self._context.programGroupCreate([description])
+            self._program_groups.append(groups[0])
+            if log:
+                self._log_messages.append(log)
+
+        self._pipeline = self._context.pipelineCreate(
+            self._pipeline_compile_options,
+            optix.PipelineLinkOptions(maxTraceDepth=1),
+            self._program_groups,
+            "",
+        )
+        stack_sizes = optix.StackSizes()
+        for program_group in self._program_groups:
+            optix.util.accumulateStackSizes(
+                program_group,
+                stack_sizes,
+                self._pipeline,
+            )
+        stack_from_traversal, stack_from_state, continuation_stack = (
+            optix.util.computeStackSizes(stack_sizes, 1, 0, 0)
+        )
+        self._pipeline.setStackSize(
+            stack_from_traversal,
+            stack_from_state,
+            continuation_stack,
+            2,
+        )
+
+    def _create_sbt(self, sphere_center: np.ndarray, sphere_radius: float) -> None:
+        optix = self._optix
+        header_size = optix.SBT_RECORD_HEADER_SIZE
+        alignment = optix.SBT_RECORD_ALIGNMENT
+
+        header_record_size = (
+            (header_size + alignment - 1) // alignment * alignment
+        )
+        header_dtype = np.dtype(
+            {
+                "names": ["header"],
+                "formats": [(np.uint8, header_size)],
+                "offsets": [0],
+                "itemsize": header_record_size,
+            }
+        )
+        raygen_record = np.zeros(1, dtype=header_dtype)
+        raygen_record["header"][0] = _sbt_header(
+            optix,
+            self._program_groups[0],
+        )
+        miss_record = np.zeros(1, dtype=header_dtype)
+        miss_record["header"][0] = _sbt_header(
+            optix,
+            self._program_groups[1],
+        )
+
+        hit_record_size = (
+            (header_size + 16 + alignment - 1) // alignment * alignment
+        )
+        hit_dtype = np.dtype(
+            {
+                "names": ["header", "center", "radius"],
+                "formats": [
+                    (np.uint8, header_size),
+                    (np.float32, 3),
+                    np.float32,
+                ],
+                "offsets": [0, header_size, header_size + 12],
+                "itemsize": hit_record_size,
+            }
+        )
+        hit_records = np.zeros(2, dtype=hit_dtype)
+        hit_records["header"][0] = _sbt_header(
+            optix,
+            self._program_groups[2],
+        )
+        hit_records["header"][1] = _sbt_header(
+            optix,
+            self._program_groups[3],
+        )
+        hit_records["center"][1] = sphere_center
+        hit_records["radius"][1] = sphere_radius
+
+        device_raygen = self._device_bytes(raygen_record)
+        device_miss = self._device_bytes(miss_record)
+        device_hits = self._device_bytes(hit_records)
+        self._sbt_buffers.extend((device_raygen, device_miss, device_hits))
+        self._sbt = optix.ShaderBindingTable(
+            raygenRecord=device_raygen.ptr,
+            missRecordBase=device_miss.ptr,
+            missRecordStrideInBytes=miss_record.dtype.itemsize,
+            missRecordCount=1,
+            hitgroupRecordBase=device_hits.ptr,
+            hitgroupRecordStrideInBytes=hit_records.dtype.itemsize,
+            hitgroupRecordCount=2,
+        )
+
+    def trace_closest(
+        self,
+        origins: np.ndarray,
+        directions: np.ndarray,
+        *,
+        mask: int = 0xFF,
+    ) -> np.ndarray:
+        """Trace normalized metric rays once and return a structured array."""
+        origins = _vertices(origins, name="origins")
+        directions = _vertices(directions, name="directions")
+        if len(origins) != len(directions):
+            raise ValueError("origins and directions must contain equal ray counts")
+        norms = np.linalg.norm(directions, axis=1)
+        if np.any(norms == 0.0):
+            raise ValueError("ray directions must be nonzero")
+        directions = np.ascontiguousarray(
+            directions / norms[:, None],
+            dtype=np.float32,
+        )
+        mask = _visibility_mask(mask, name="mask")
+
+        device_origins = self._device_array(origins)
+        device_directions = self._device_array(directions)
+        with self._stream:
+            device_results = self._cp.empty(
+                (len(origins), _RESULT_WORD_COUNT),
+                dtype=self._cp.uint32,
+            )
+
+        params_dtype = np.dtype(
+            {
+                "names": [
+                    "origins",
+                    "directions",
+                    "results",
+                    "handle",
+                    "mask",
+                ],
+                "formats": [np.uint64, np.uint64, np.uint64, np.uint64, np.uint32],
+                "offsets": [0, 8, 16, 24, 32],
+                "itemsize": 40,
+            }
+        )
+        host_params = np.zeros(1, dtype=params_dtype)
+        host_params["origins"] = device_origins.data.ptr
+        host_params["directions"] = device_directions.data.ptr
+        host_params["results"] = device_results.data.ptr
+        host_params["handle"] = self._ias_handle
+        host_params["mask"] = mask
+        device_params = self._device_bytes(host_params)
+        self._launch_buffers = [
+            device_origins,
+            device_directions,
+            device_results,
+            device_params,
+        ]
+
+        self._optix.launch(
+            self._pipeline,
+            self._stream.ptr,
+            device_params.ptr,
+            host_params.dtype.itemsize,
+            self._sbt,
+            len(origins),
+            1,
+            1,
+        )
+        raw = device_results.get(stream=self._stream)
+
+        results = np.empty(len(origins), dtype=_RESULT_DTYPE)
+        results["hit"] = raw[:, 0] != 0
+        results["t"] = raw[:, 1].view(np.float32)
+        results["instance_id"] = raw[:, 2].view(np.int32)
+        results["primitive_id"] = raw[:, 3].view(np.int32)
+        results["barycentrics"][:, 0] = raw[:, 4].view(np.float32)
+        results["barycentrics"][:, 1] = raw[:, 5].view(np.float32)
+        return results
+
+
+__all__ = ["OptixScene"]

@@ -65,6 +65,22 @@ positive-Z indentation settles at held poses and searches for a reaction force
 within `0.1 N` of `20 N`. This is an explicit multi-simulation validation, not
 part of ordinary focused tests.
 
+Run the representative numerical/contact parameter sweep explicitly:
+
+```bash
+conda run --no-capture-output -n lit \
+  python -u -m lumo.benchmark.newton_parameter_sweep
+```
+
+Add the substantially finer `0.5 mm` mesh case with `--fine`. Add the current
+baseline 3-sphere by 3-location robustness matrix with `--matrix`. Parameters
+are varied one family at a time around the current baseline; neither flag
+creates a Cartesian product across numerical parameters. This is an expensive
+multi-simulation convergence study and is not part of ordinary focused tests.
+After every requested run finishes, it writes strict JSON to
+`output/benchmark/newton_parameter_sweep.json`. Use `--output PATH` to select a
+different result file. An interrupted run does not write a partial result.
+
 Run the Dragon Skin 10 NV Poisson-ratio contact sweep explicitly:
 
 ```bash
@@ -76,6 +92,19 @@ and reports force-target timing and tetrahedral volume change. It performs
 multiple Newton simulations and is not part of ordinary focused tests.
 
 ## OptiX gate before production BO
+
+Run the static multi-instance IAS validation with the OptiX 9.1 SDK include
+directory used by NVRTC:
+
+```bash
+OPTIX_INCLUDE_DIR=/path/to/NVIDIA-OptiX-SDK-9.1.0/include \
+conda run --no-capture-output -n lit \
+python validation/ray-tracing/ias_test.py
+```
+
+This builds silicone, carrier, and sphere GASes under one IAS and checks
+closest hits, a miss, and visibility masking. Synchronization occurs only when
+the batched results are copied to the host.
 
 First run the environment diagnosis:
 

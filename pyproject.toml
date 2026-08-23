@@ -17,7 +17,7 @@ dependencies = [
 mesh = ["gmsh>=4.12"]
 validation = ["scipy>=1.11"]
 optix = [
-  "pyoptix",
+  "pyoptix==9.1.0",
   "cupy-cuda13x",
   "cuda-python",
 ]
@@ -45,6 +45,7 @@ include = ["lumo*"]
   "assets/objects/urdf/*.urdf",
 ]
 "lumo.ray_tracing.optical_mechanics" = ["kernels/*.cu"]
+"lumo.ray_tracing" = ["kernels/*.cu"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests/unit", "tests/smoke"]
