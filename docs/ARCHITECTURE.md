@@ -395,6 +395,14 @@ use this operation for every triangle departure. OptiX traversal uses `tmin=0`:
 the OTK origin owns self-intersection separation, so no second scene epsilon is
 combined with the official offset.
 
+`side_view_observation()` in `observation.py` reduces escaped paths to one raw
+`H[LED, quadrant]` response. It keeps only rays traveling toward the canonical
+camera-facing `+Y` side and bins their power by the escape origin in the X-Z
+cross section. Quadrants are ordered upper-right, upper-left, lower-left,
+lower-right around the current analytic silicone semiellipse center. This is a
+directional side-view response, not a camera, image, projection plane, pixel
+model, or optimization score.
+
 The scene has no Newton dependency. A caller may explicitly pass a Newton
 checkpoint through `update_silicone()`, but no production runtime currently
 orchestrates Newton and OptiX. The silicone input surface is selected by the
@@ -412,8 +420,17 @@ This layer must not own mechanics evolution.
 
 Owns design-space and optimization policy.
 
-Current responsibilities include design parameter bounds and feasibility
-constraints.
+Current responsibilities include design parameter bounds, feasibility
+constraints, and pure sensing-objective evaluation.
+
+`sensing_descriptors()` consumes a state array shaped
+`(contact states, LEDs, 4)`. It forms the LED-intensity descriptor using one
+global no-contact visible-power scale and forms the spatial descriptor by
+normalizing the four LED-collapsed quadrant powers per state. It rejects a
+numerically zero no-contact reference or state-visible total instead of adding
+an objective-changing epsilon. `sensing_objectives()` returns two separate
+worst-case pairwise Euclidean separations, one for each descriptor. It does not
+know about LEDs, Newton, OptiX, ray tracing, morphology, or objective weights.
 
 Future optimization code should consume validated simulation outputs rather
 than implementing mechanics or optical transport itself.
@@ -573,16 +590,26 @@ reflects, only transmission toggles the silicone-medium flag, and a selected
 lossless branch retains its incident path power.
 
 `validation/ray-tracing/led_sensor_response_test.py` is one deterministic
-source-to-receiver convergence study. It uses the actual Green Sequin hardware
-metadata through `LED`, while its point-source pose and ideal planar receiver
-remain validation-local placeholders. The study reuses the same 64-by-64
-stratified LED samples and the same precomputed per-ray/per-bounce dielectric
-and carrier samples before and after a force-stable central 10 mm sphere
-indentation. It updates the silicone GAS from the live Newton checkpoint and
-reports received, escaped, absorbed, internal-miss, and remaining power for
-explicit bounce caps `4`, `8`, `16`, and `24`. It demonstrates a bounded
-numerical deformation-to-signal path; it is not a calibrated LED, receiver, or
-sensor prediction.
+source-to-receiver optical-property sensitivity study. It uses the actual Green
+Sequin hardware metadata through `LED`, while its point-source pose and ideal
+planar receiver remain validation-local placeholders. The study reuses the
+same 64-by-64 stratified LED samples and the same precomputed per-ray/per-bounce
+dielectric and carrier samples before and after a force-stable central 10 mm
+sphere indentation. It updates the silicone GAS from the live Newton checkpoint
+and evaluates a fixed 24-bounce cap for low, nominal, and high Solaris and
+Dragon Skin 10 NV optical priors.
+
+`validation/ray-tracing/sensing_evaluator_test.py` composes the first complete
+sensing evaluator. Because no physical 12-LED layout is present in production,
+the script keeps a representative 12-source grid outside the two straight
+silicone sidewalls. The sources remain above the sphere's swept region. The
+script verifies their external poses against every deformed state, and only
+paths that interact with the fingertip contribute to the response. It traces
+one no-contact state and independent `20 N` sphere
+contacts at `X=-7.5`, `0`, and `+7.5 mm` with common optical samples, produces
+one `12 x 4` side-view response per state, derives both descriptors, and reports
+each objective together with its worst-case state pair. It does not simulate a
+camera or optimize morphology.
 
 They should normally:
 

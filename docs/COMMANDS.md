@@ -224,6 +224,25 @@ and literature-derived extinction priors remain uncalibrated validation inputs.
 This is an explicit Newton/OptiX study rather than part of the focused unit-test
 suite.
 
+Run the first complete side-view sensing evaluator:
+
+```bash
+OPTIX_INCLUDE_DIR=/path/to/NVIDIA-OptiX-SDK-9.1.0/include \
+conda run --no-capture-output -n lit \
+python validation/ray-tracing/sensing_evaluator_test.py
+```
+
+This uses a validation-local 12-source grid outside the two straight silicone
+sidewalls because production does not yet define a physical 12-LED layout. The
+sources stay above the sphere's swept region; the study verifies their external
+poses against every state and excludes direct paths that never interact with
+the fingertip. With common deterministic samples and nominal
+Dragon Skin 10 NV optics, it compares no contact with independent
+`20 N` sphere contacts at `X=-7.5`, `0`, and `+7.5 mm`. Escaped `+Y` power is
+reduced to one `12 x 4` quadrant response per state, then to separate 12D
+intensity and 4D spatial descriptors. The script reports both worst-case
+pairwise separability objectives and their limiting contact-state pairs.
+
 Run the CPU-only sampled dielectric branch regression:
 
 ```bash
