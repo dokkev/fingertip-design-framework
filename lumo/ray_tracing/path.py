@@ -20,6 +20,17 @@ _ESCAPED_DTYPE = np.dtype(
     ]
 )
 
+_PATH_SEGMENT_DTYPE = np.dtype(
+    [
+        ("ray_id", np.int64),
+        ("bounce", np.int64),
+        ("start_W_m", np.float64, (3,)),
+        ("end_W_m", np.float64, (3,)),
+        ("power", np.float64),
+        ("instance_id", np.int32),
+    ]
+)
+
 
 def _sample_dielectric_branches(
     optical: np.ndarray,
@@ -74,13 +85,19 @@ def trace_bounded_paths(
     silicone_instance_id: int,
     carrier_instance_id: int,
     mask: int = 0xFF,
-) -> tuple[np.ndarray, dict[str, float | int]]:
+    record_segments: bool = False,
+) -> (
+    tuple[np.ndarray, dict[str, float | int]]
+    | tuple[np.ndarray, dict[str, float | int], np.ndarray]
+):
     """Trace one sampled optical path per input ray for a bounded depth.
 
     Dielectric branches are selected with their Fresnel probabilities, so a
     selected lossless branch retains its current path power. Silicone segments
     lose ballistic-path power through Beer-Lambert attenuation, and carrier
-    events lose the fraction complementary to the carrier albedo.
+    events lose the fraction complementary to the carrier albedo. When
+    ``record_segments`` is true, a compact hit-segment array is returned for
+    diagnostics; the default path does not retain segment history.
     """
     origins = np.asarray(origins_W_m, dtype=np.float64)
     directions = np.asarray(directions_W, dtype=np.float64)
@@ -126,6 +143,8 @@ def trace_bounded_paths(
         raise ValueError("carrier_albedo must be finite and in [0, 1]")
     if silicone_instance_id == carrier_instance_id:
         raise ValueError("silicone and carrier instance IDs must differ")
+    if not isinstance(record_segments, bool):
+        raise TypeError("record_segments must be a bool")
 
     inside = np.asarray(inside_silicone, dtype=np.bool_)
     if inside.ndim == 0:
@@ -157,12 +176,25 @@ def trace_bounded_paths(
     power = power.copy()
     ray_id = np.arange(ray_count, dtype=np.int64)
     escaped_batches: list[np.ndarray] = []
+    segment_batches: list[np.ndarray] | None = [] if record_segments else None
     absorbed_power = 0.0
     bulk_loss_power = 0.0
     unresolved_internal_miss_power = 0.0
 
     for bounce in range(max_bounces):
         hits = scene.trace_closest(origins, directions, mask=mask)
+        if segment_batches is not None:
+            hit = hits["hit"]
+            segments = np.empty(np.count_nonzero(hit), dtype=_PATH_SEGMENT_DTYPE)
+            segments["ray_id"] = ray_id[hit]
+            segments["bounce"] = bounce
+            segments["start_W_m"] = origins[hit]
+            segments["end_W_m"] = (
+                origins[hit] + hits["t"][hit, None] * directions[hit]
+            )
+            segments["power"] = power[hit]
+            segments["instance_id"] = hits["instance_id"][hit]
+            segment_batches.append(segments)
         silicone_segment = inside & hits["hit"]
         if np.any(silicone_segment):
             segment_length_m = np.asarray(
@@ -316,6 +348,13 @@ def trace_bounded_paths(
         "escaped_ray_count": len(escaped),
         "remaining_ray_count": len(power),
     }
+    if segment_batches is not None:
+        segments = (
+            np.concatenate(segment_batches)
+            if segment_batches
+            else np.empty(0, dtype=_PATH_SEGMENT_DTYPE)
+        )
+        return escaped, statistics, segments
     return escaped, statistics
 
 

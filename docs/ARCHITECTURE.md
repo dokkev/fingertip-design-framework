@@ -388,6 +388,11 @@ power. The effective extinction may include unresolved scattering, especially
 for translucent Dragon Skin 10 NV; volumetric scattering is not modeled. This
 is a bounded concrete fingertip path operation, not a renderer.
 
+The optional `record_segments=True` diagnostic mode returns compact ray ID,
+bounce, start, end, power, and hit-instance records for finite hit segments.
+The default is false and retains no segment history. The diagnostic data comes
+from the same 3D bounded transport; it does not define a second tracer.
+
 `safe_secondary_origins()` selects the OTK front or back spawn position by the
 sign of the outgoing direction dotted with `normal_W`. It does not infer media
 or trace a ray. Both focused single-event validations and the bounded path loop
@@ -395,13 +400,13 @@ use this operation for every triangle departure. OptiX traversal uses `tmin=0`:
 the OTK origin owns self-intersection separation, so no second scene epsilon is
 combined with the official offset.
 
-`side_view_observation()` in `observation.py` reduces escaped paths to one raw
-`H[LED, quadrant]` response. It keeps only rays traveling toward the canonical
-camera-facing `+Y` side and bins their power by the escape origin in the X-Z
-cross section. Quadrants are ordered upper-right, upper-left, lower-left,
-lower-right around the current analytic silicone semiellipse center. This is a
-directional side-view response, not a camera, image, projection plane, pixel
-model, or optimization score.
+`side_view_observation()` in `observation.py` reduces escaped paths from the one
+current optical-cell LED to one raw four-quadrant response. It keeps only rays
+traveling toward the canonical camera-facing `+Y` side and bins their power by
+the escape origin in the X-Z cross section. Quadrants are ordered upper-right,
+upper-left, lower-left, lower-right around the current analytic silicone
+semiellipse center. This is a directional side-view response, not a camera,
+image, projection plane, pixel model, or optimization score.
 
 The scene has no Newton dependency. A caller may explicitly pass a Newton
 checkpoint through `update_silicone()`, but no production runtime currently
@@ -423,14 +428,14 @@ Owns design-space and optimization policy.
 Current responsibilities include design parameter bounds, feasibility
 constraints, and pure sensing-objective evaluation.
 
-`sensing_descriptors()` consumes a state array shaped
-`(contact states, LEDs, 4)`. It forms the LED-intensity descriptor using one
-global no-contact visible-power scale and forms the spatial descriptor by
-normalizing the four LED-collapsed quadrant powers per state. It rejects a
-numerically zero no-contact reference or state-visible total instead of adding
-an objective-changing epsilon. `sensing_objectives()` returns two separate
-worst-case pairwise Euclidean separations, one for each descriptor. It does not
-know about LEDs, Newton, OptiX, ray tracing, morphology, or objective weights.
+`sensing_descriptors()` consumes a state array shaped `(contact states, 4)`.
+For the current single optical cell it forms one scalar intensity response from
+total side-visible power relative to no contact, and one normalized four-value
+spatial response per state. It rejects a numerically zero no-contact reference
+or state-visible total instead of adding an objective-changing epsilon.
+`sensing_objectives()` returns the separate worst-case pairwise scalar-intensity
+and Euclidean spatial separations. It does not know about LEDs, Newton, OptiX,
+ray tracing, morphology, or objective weights.
 
 Future optimization code should consume validated simulation outputs rather
 than implementing mechanics or optical transport itself.
@@ -600,16 +605,26 @@ and evaluates a fixed 24-bounce cap for low, nominal, and high Solaris and
 Dragon Skin 10 NV optical priors.
 
 `validation/ray-tracing/sensing_evaluator_test.py` composes the first complete
-sensing evaluator. Because no physical 12-LED layout is present in production,
-the script keeps a representative 12-source grid outside the two straight
-silicone sidewalls. The sources remain above the sphere's swept region. The
-script verifies their external poses against every deformed state, and only
-paths that interact with the fingertip contribute to the response. It traces
-one no-contact state and independent `20 N` sphere
-contacts at `X=-7.5`, `0`, and `+7.5 mm` with common optical samples, produces
-one `12 x 4` side-view response per state, derives both descriptors, and reports
-each objective together with its worst-case state pair. It does not simulate a
-camera or optimize morphology.
+sensing evaluator for one approximately 11 mm-wide optical cell. One LED is
+placed at the carrier stem-bottom center in X-Z and at the extrusion-axis center
+derived from the fingertip mesh. Its Lambertian hemisphere points in the pad
+direction (`-Z`). The physical point remains on the carrier boundary; an OTK
+safe pad-side origin removes coincident-triangle ambiguity. The first oriented
+silicone hit then determines whether a load-induced gap ahead of the fixed
+carrier source is air or silicone. The LED is not a mechanics or contact
+object. The script verifies every emitted primary ray against each deformed
+state. It traces one no-contact state and
+independent `20 N` sphere contacts at `X=-7.5`, `0`, and `+7.5 mm` with common
+optical samples, produces one four-quadrant side-view response per state,
+derives both descriptors, and reports each objective together with its
+worst-case state pair. It does not simulate a camera or optimize morphology.
+
+`validation/ray-tracing/sensing_visualization.py` projects a deterministic
+subset of those real 3D segment records onto the LED-center X-Z plane. It plots
+the actual triangle-plane section of unloaded and Newton-deformed silicone,
+the LED, `+Y` escape locations, and the observation quadrants in matched axes.
+This Matplotlib-only diagnostic is not a 2D optical simulation or production
+rendering API.
 
 They should normally:
 

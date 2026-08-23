@@ -232,16 +232,30 @@ conda run --no-capture-output -n lit \
 python validation/ray-tracing/sensing_evaluator_test.py
 ```
 
-This uses a validation-local 12-source grid outside the two straight silicone
-sidewalls because production does not yet define a physical 12-LED layout. The
-sources stay above the sphere's swept region; the study verifies their external
-poses against every state and excludes direct paths that never interact with
-the fingertip. With common deterministic samples and nominal
-Dragon Skin 10 NV optics, it compares no contact with independent
-`20 N` sphere contacts at `X=-7.5`, `0`, and `+7.5 mm`. Escaped `+Y` power is
-reduced to one `12 x 4` quadrant response per state, then to separate 12D
-intensity and 4D spatial descriptors. The script reports both worst-case
-pairwise separability objectives and their limiting contact-state pairs.
+This evaluates one approximately 11 mm-wide optical cell with one LED at the
+extrusion-axis center derived from the fingertip mesh. The point source is at
+the carrier stem-bottom center, emits toward the pad (`-Z`), and is not a
+mechanics/contact object. Rays start from an OTK-safe pad-side origin, and the
+study accounts for a load-induced air gap at that carrier boundary. With common
+deterministic samples and nominal Dragon Skin 10 NV optics, it compares no
+contact with independent `20 N` sphere contacts at
+`X=-7.5`, `0`, and `+7.5 mm`. Escaped `+Y` power is reduced to one four-quadrant
+response per state, then to a scalar normalized intensity response and a
+normalized 4D spatial response. The script reports both worst-case pairwise
+separability objectives and their limiting state pairs.
+
+Save the one-cell before/after sensing diagnostic without opening a window:
+
+```bash
+MPLBACKEND=Agg conda run --no-capture-output -n lit \
+python validation/ray-tracing/sensing_visualization.py \
+  --output /tmp/lumo_sensing.png
+```
+
+The two matched X-Z panels are projections of the existing full 3D bounded
+paths at the geometry-derived extrusion center, not a separate 2D ray tracer.
+The loaded panel uses the existing centered `20 ± 5 N` force-stable
+`DesignStudy` checkpoint.
 
 Run the CPU-only sampled dielectric branch regression:
 

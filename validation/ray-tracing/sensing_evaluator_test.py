@@ -16,6 +16,7 @@ from lumo.optimization import sensing_descriptors, sensing_objectives
 from lumo.ray_tracing import (
     LED,
     OptixScene,
+    safe_secondary_origins,
     side_view_observation,
     trace_bounded_paths,
 )
@@ -28,9 +29,6 @@ _SILICONE_MASK = 0x01
 _CARRIER_MASK = 0x02
 _ALL_MASK = _SILICONE_MASK | _CARRIER_MASK
 
-_SOURCE_Y_FRACTIONS = (-0.55, 0.0, 0.55)
-_SOURCE_Z_FRACTIONS = (0.15, 0.65)
-_SOURCE_CLEARANCE_M = 1.0e-3
 _SAMPLE_SIDE_COUNT = 32
 _BOUNCE_CAP = 24
 _RNG_SEED = 20260823
@@ -48,53 +46,87 @@ _MAX_SEARCH_ITERATIONS = 256
 _SIM_FREQUENCY_HZ = 1.0e3
 
 
-def _make_leds(
+def _make_led(
     fingertip: Fingertip,
     fingertip_mesh: FingertipMesh,
-) -> tuple[LED, ...]:
-    """Return 12 validation-local sources outside the straight sidewalls."""
+) -> LED:
+    """Return the pad-facing point source at the stem-bottom center."""
     vertices = np.asarray(fingertip_mesh.silicone.vertices, dtype=np.float64)
-    half_extrusion_m = 0.5 * float(vertices[:, 1].max() - vertices[:, 1].min())
-    side_x_m = 1.0e-3 * fingertip.silicone.half_width_mm + _SOURCE_CLEARANCE_M
-    bottom_z_mm = fingertip.silicone.ellipse_center_z_mm
-    side_height_mm = fingertip.silicone.bond_top_z_mm - bottom_z_mm
-    leds = []
-    for y_fraction in _SOURCE_Y_FRACTIONS:
-        for z_fraction in _SOURCE_Z_FRACTIONS:
-            z_m = 1.0e-3 * (bottom_z_mm + z_fraction * side_height_mm)
-            for x_m, normal_x in ((-side_x_m, 1.0), (side_x_m, -1.0)):
-                leds.append(
-                    LED(
-                        position_W_m=np.array(
-                            (x_m, y_fraction * half_extrusion_m, z_m)
-                        ),
-                        normal_W=np.array((normal_x, 0.0, 0.0)),
-                        parameters=fingertip.parameters.led,
-                    )
-                )
-    return tuple(leds)
+    extrusion_center_y_m = 0.5 * float(
+        vertices[:, 1].min() + vertices[:, 1].max()
+    )
+    stem_bottom_z_m = -1.0e-3 * fingertip.parameters.geometry.stem_height_mm
+    return LED(
+        position_W_m=np.array((0.0, extrusion_center_y_m, stem_bottom_z_m)),
+        normal_W=np.array((0.0, 0.0, -1.0)),
+        parameters=fingertip.parameters.led,
+    )
 
 
-def _assert_external_sources(
+def _source_inside_silicone(
     scene: OptixScene,
-    leds: tuple[LED, ...],
+    led: LED,
+    emission: np.ndarray,
     *,
     state_label: str,
-) -> None:
-    origins = np.stack([led.position_W_m for led in leds])
-    inward = np.stack([led.normal_W for led in leds])
-    inward_hits = scene.trace_closest(
+) -> bool:
+    initial_hits = scene.trace_closest(
+        emission["origin_W_m"],
+        emission["direction_W"],
+        mask=_ALL_MASK,
+    )
+    if not np.all(initial_hits["hit"]) or np.any(
+        initial_hits["instance_id"] != _SILICONE_INSTANCE_ID
+    ):
+        raise AssertionError(f"{state_label} has an obstructed source ray")
+
+    origins = emission["origin_W_m"][:1]
+    emission_direction = led.normal_W[None, :]
+    silicone_hit = scene.trace_closest(
         origins,
-        inward,
+        emission_direction,
         mask=_SILICONE_MASK,
-    )["hit"]
-    outward_hits = scene.trace_closest(
-        origins,
-        -inward,
-        mask=_SILICONE_MASK,
-    )["hit"]
-    if not np.all(inward_hits) or np.any(outward_hits):
-        raise AssertionError(f"{state_label} invalidated external source poses")
+    )[0]
+    if not silicone_hit["hit"]:
+        raise AssertionError(f"{state_label} invalidated the stem source path")
+    normal_projection = float(np.dot(silicone_hit["normal_W"], led.normal_W))
+    if abs(normal_projection) <= 1.0e-6:
+        raise AssertionError(f"{state_label} has an ambiguous source interface")
+    return normal_projection > 0.0
+
+
+def _emit_from_stem_boundary(
+    scene: OptixScene,
+    led: LED,
+    u1: np.ndarray,
+    u2: np.ndarray,
+) -> np.ndarray:
+    """Emit from the OTK-safe pad side of the physical source point."""
+    probe_distance_m = 0.5e-3 * led.parameters.height_mm
+    probe_origin = (
+        led.position_W_m - probe_distance_m * led.normal_W
+    )[None, :]
+    direction = led.normal_W[None, :]
+    carrier_hit = scene.trace_closest(
+        probe_origin,
+        direction,
+        mask=_CARRIER_MASK,
+    )
+    if not carrier_hit["hit"][0]:
+        raise AssertionError("carrier probe did not find the stem boundary")
+    hit_position = probe_origin[0] + carrier_hit["t"][0] * led.normal_W
+    if not np.allclose(
+        hit_position,
+        led.position_W_m,
+        rtol=0.0,
+        atol=1.0e-7,
+    ):
+        raise AssertionError("carrier probe found the wrong source boundary")
+
+    safe_origin = safe_secondary_origins(carrier_hit, direction)[0]
+    emission = led.emit(u1, u2)
+    emission["origin_W_m"] = safe_origin
+    return emission
 
 
 def _trace_observation(
@@ -102,7 +134,7 @@ def _trace_observation(
     fingertip: Fingertip,
     emission: np.ndarray,
     *,
-    rays_per_led: int,
+    inside_silicone: bool,
     dielectric_branch_u: np.ndarray,
     carrier_u1: np.ndarray,
     carrier_u2: np.ndarray,
@@ -113,7 +145,7 @@ def _trace_observation(
         emission["origin_W_m"],
         emission["direction_W"],
         emission["power"],
-        inside_silicone=False,
+        inside_silicone=inside_silicone,
         n_air=1.0,
         n_silicone=optics.refractive_index,
         extinction_coefficient_m_inv=optics.extinction_coefficient_m_inv,
@@ -134,16 +166,10 @@ def _trace_observation(
     ):
         raise AssertionError("bounded transport failed energy closure")
 
-    # The validation-local sources are external. Exclude rays that never
-    # interacted with the fingertip from its side-view optical response.
-    escaped = escaped[escaped["bounce"] > 0]
-    led_index = escaped["ray_id"] // rays_per_led
-    escaped_by_led = tuple(
-        escaped[led_index == index]
-        for index in range(len(emission) // rays_per_led)
-    )
+    if np.any(escaped["bounce"] == 0):
+        raise AssertionError("stem source escaped without a silicone hit")
     return side_view_observation(
-        escaped_by_led,
+        escaped,
         fingertip=fingertip,
     )
 
@@ -186,7 +212,9 @@ def _minimum_pair(descriptors: np.ndarray) -> tuple[float, tuple[int, int]]:
     for first in range(len(descriptors) - 1):
         for second in range(first + 1, len(descriptors)):
             distance = float(
-                np.linalg.norm(descriptors[first] - descriptors[second])
+                np.linalg.norm(
+                    np.atleast_1d(descriptors[first] - descriptors[second])
+                )
             )
             if distance < best_distance:
                 best_distance = distance
@@ -206,8 +234,7 @@ def main() -> None:
         carrier_visibility_mask=_CARRIER_MASK,
     )
 
-    leds = _make_leds(fingertip, fingertip_mesh)
-    _assert_external_sources(scene, leds, state_label="no_contact")
+    led = _make_led(fingertip, fingertip_mesh)
     sample_i, sample_j = np.meshgrid(
         np.arange(_SAMPLE_SIDE_COUNT),
         np.arange(_SAMPLE_SIDE_COUNT),
@@ -215,10 +242,20 @@ def main() -> None:
     )
     emission_u1 = (sample_i.ravel() + 0.5) / _SAMPLE_SIDE_COUNT
     emission_u2 = (sample_j.ravel() + 0.5) / _SAMPLE_SIDE_COUNT
-    emission = np.concatenate(
-        [led.emit(emission_u1, emission_u2) for led in leds]
+    emission = _emit_from_stem_boundary(
+        scene,
+        led,
+        emission_u1,
+        emission_u2,
     )
-    rays_per_led = len(emission_u1)
+    source_inside_silicone = _source_inside_silicone(
+        scene,
+        led,
+        emission,
+        state_label="no_contact",
+    )
+    if not source_inside_silicone:
+        raise AssertionError("reference stem source is not touching silicone")
     rng = np.random.default_rng(_RNG_SEED)
     dielectric_branch_u = rng.random((_BOUNCE_CAP, len(emission)))
     carrier_u1 = rng.random((_BOUNCE_CAP, len(emission)))
@@ -230,7 +267,7 @@ def main() -> None:
             scene,
             fingertip,
             emission,
-            rays_per_led=rays_per_led,
+            inside_silicone=source_inside_silicone,
             dielectric_branch_u=dielectric_branch_u,
             carrier_u1=carrier_u1,
             carrier_u2=carrier_u2,
@@ -271,11 +308,16 @@ def main() -> None:
         ):
             raise AssertionError(f"{trial.name} changed silicone topology")
         scene.update_silicone(vertices)
-        _assert_external_sources(scene, leds, state_label=trial.name)
+        source_inside_silicone = _source_inside_silicone(
+            scene,
+            led,
+            emission,
+            state_label=trial.name,
+        )
         if trial.final_tf is None:
             raise AssertionError(f"{trial.name} has no final indenter pose")
         sphere_top_z_m = float(np.asarray(trial.final_tf)[2]) + _SPHERE_RADIUS_M
-        if min(led.position_W_m[2] for led in leds) <= sphere_top_z_m:
+        if led.position_W_m[2] <= sphere_top_z_m:
             raise AssertionError(f"{trial.name} sphere reached the source plane")
         labels.append(trial.name)
         responses.append(
@@ -283,7 +325,7 @@ def main() -> None:
                 scene,
                 fingertip,
                 emission,
-                rays_per_led=rays_per_led,
+                inside_silicone=source_inside_silicone,
                 dielectric_branch_u=dielectric_branch_u,
                 carrier_u1=carrier_u1,
                 carrier_u2=carrier_u2,
@@ -315,8 +357,8 @@ def main() -> None:
         ).run(inspect_trial=inspect_contact)
 
     response_array = np.stack(responses)
-    if response_array.shape != (4, 12, 4):
-        raise AssertionError("side-view response does not have shape (4, 12, 4)")
+    if response_array.shape != (4, 4):
+        raise AssertionError("side-view response does not have shape (4, 4)")
     intensity, spatial = sensing_descriptors(response_array)
     objective_intensity, objective_spatial = sensing_objectives(response_array)
     measured_intensity, intensity_pair = _minimum_pair(intensity)
@@ -335,9 +377,12 @@ def main() -> None:
     print("LUMO side-view sensing evaluator")
     print("side convention: +Y; quadrants Q1,Q2,Q3,Q4 in canonical X-Z")
     print(
-        "sources: validation-local 2 sides x 3 Y x 2 Z grid | "
-        "1.0 mm outside straight sidewalls | interacted paths only | "
-        f"rays={rays_per_led} per LED | bounce_cap={_BOUNCE_CAP}"
+        f"LED position W [m]: {led.position_W_m} | normal={led.normal_W} | "
+        "stem-bottom center | extrusion-axis center"
+    )
+    print(
+        f"one optical cell | rays={len(emission)} | bounce_cap={_BOUNCE_CAP} | "
+        "OTK-safe pad-side source; load-induced gap resolved"
     )
     print(
         f"optics: {fingertip.parameters.optical.name} nominal | "
@@ -348,9 +393,9 @@ def main() -> None:
     print()
     for index, label in enumerate(labels):
         print(f"{label}")
-        print(f"  H (12 x 4):\n{response_array[index]}")
-        print(f"  intensity (12D): {intensity[index]}")
-        print(f"  spatial (4D):    {spatial[index]}")
+        print(f"  quadrant power [Q1 Q2 Q3 Q4]: {response_array[index]}")
+        print(f"  normalized intensity response: {intensity[index]:+.9e}")
+        print(f"  normalized spatial response:   {spatial[index]}")
     print()
     print(
         f"J_intensity={objective_intensity:.9e} | pair="
