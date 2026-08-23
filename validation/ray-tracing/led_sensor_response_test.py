@@ -108,7 +108,7 @@ def _trace_response(
     *,
     optics: SiliconeOptics,
 ) -> dict[str, float | int]:
-    escaped, statistics = trace_bounded_paths(
+    result = trace_bounded_paths(
         scene,
         emission["origin_W_m"],
         emission["direction_W"],
@@ -127,19 +127,26 @@ def _trace_response(
         mask=ALL_MASK,
     )
     received_power, received_count, escaped_not_received = (
-        _ideal_receiver_response(escaped)
+        _ideal_receiver_response(result.escaped_rays)
     )
-    response = dict(statistics)
-    response.update(
-        {
-            "received_power": received_power,
-            "received_ray_count": received_count,
-            "escaped_not_received_power": escaped_not_received,
-        }
-    )
+    response: dict[str, float | int] = {
+        "emitted_power": result.emitted_power,
+        "escaped_power": result.escaped_power,
+        "absorbed_power": result.absorbed_power,
+        "bulk_loss_power": result.bulk_loss_power,
+        "unresolved_internal_miss_power": result.unresolved_internal_miss_power,
+        "remaining_power": result.remaining_power,
+        "accounted_power": result.accounted_power,
+        "closure_error": result.closure_error,
+        "escaped_ray_count": result.escaped_ray_count,
+        "remaining_ray_count": result.remaining_ray_count,
+        "received_power": received_power,
+        "received_ray_count": received_count,
+        "escaped_not_received_power": escaped_not_received,
+    }
     if not np.isclose(
         received_power + escaped_not_received,
-        float(statistics["escaped_power"]),
+        result.escaped_power,
         rtol=0.0,
         atol=1.0e-12,
     ):

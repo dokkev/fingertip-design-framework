@@ -140,7 +140,7 @@ def _trace_observation(
     carrier_u2: np.ndarray,
 ) -> np.ndarray:
     optics = fingertip.parameters.optical
-    escaped, statistics = trace_bounded_paths(
+    result = trace_bounded_paths(
         scene,
         emission["origin_W_m"],
         emission["direction_W"],
@@ -158,9 +158,10 @@ def _trace_observation(
         carrier_instance_id=_CARRIER_INSTANCE_ID,
         mask=_ALL_MASK,
     )
+    escaped = result.escaped_rays
     if not np.isclose(
-        float(statistics["accounted_power"]),
-        float(statistics["emitted_power"]),
+        result.accounted_power,
+        result.emitted_power,
         rtol=0.0,
         atol=1.0e-12,
     ):

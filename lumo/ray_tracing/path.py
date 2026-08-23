@@ -6,30 +6,13 @@ from math import isfinite
 
 import numpy as np
 
+from .path_result import (
+    PathTraceResult,
+    _ESCAPED_RAY_DTYPE,
+    _PATH_SEGMENT_DTYPE,
+)
 from .scene import OptixScene, safe_secondary_origins
 from .transport import interface_transport, lambertian_reflection
-
-
-_ESCAPED_DTYPE = np.dtype(
-    [
-        ("ray_id", np.int64),
-        ("bounce", np.int64),
-        ("origin_W_m", np.float64, (3,)),
-        ("direction_W", np.float64, (3,)),
-        ("power", np.float64),
-    ]
-)
-
-_PATH_SEGMENT_DTYPE = np.dtype(
-    [
-        ("ray_id", np.int64),
-        ("bounce", np.int64),
-        ("start_W_m", np.float64, (3,)),
-        ("end_W_m", np.float64, (3,)),
-        ("power", np.float64),
-        ("instance_id", np.int32),
-    ]
-)
 
 
 def _sample_dielectric_branches(
@@ -86,18 +69,16 @@ def trace_bounded_paths(
     carrier_instance_id: int,
     mask: int = 0xFF,
     record_segments: bool = False,
-) -> (
-    tuple[np.ndarray, dict[str, float | int]]
-    | tuple[np.ndarray, dict[str, float | int], np.ndarray]
-):
+) -> PathTraceResult:
     """Trace one sampled optical path per input ray for a bounded depth.
 
     Dielectric branches are selected with their Fresnel probabilities, so a
     selected lossless branch retains its current path power. Silicone segments
     lose ballistic-path power through Beer-Lambert attenuation, and carrier
     events lose the fraction complementary to the carrier albedo. When
-    ``record_segments`` is true, a compact hit-segment array is returned for
-    diagnostics; the default path does not retain segment history.
+    The result shape is fixed. When ``record_segments`` is true, its
+    ``segments`` field contains compact hit-segment diagnostics; otherwise
+    that field is ``None`` and the path loop retains no segment history.
     """
     origins = np.asarray(origins_W_m, dtype=np.float64)
     directions = np.asarray(directions_W, dtype=np.float64)
@@ -218,7 +199,10 @@ def trace_bounded_paths(
         miss = ~hits["hit"]
         external_miss = miss & ~inside
         if np.any(external_miss):
-            escaped = np.empty(np.count_nonzero(external_miss), dtype=_ESCAPED_DTYPE)
+            escaped = np.empty(
+                np.count_nonzero(external_miss),
+                dtype=_ESCAPED_RAY_DTYPE,
+            )
             escaped["ray_id"] = ray_id[external_miss]
             escaped["bounce"] = bounce
             escaped["origin_W_m"] = origins[external_miss]
@@ -320,7 +304,7 @@ def trace_bounded_paths(
     escaped = (
         np.concatenate(escaped_batches)
         if escaped_batches
-        else np.empty(0, dtype=_ESCAPED_DTYPE)
+        else np.empty(0, dtype=_ESCAPED_RAY_DTYPE)
     )
     escaped_power = float(escaped["power"].sum())
     remaining_power = float(power.sum())
@@ -336,26 +320,24 @@ def trace_bounded_paths(
     if not np.isfinite(accounted_power) or abs(closure_error) > closure_tolerance:
         raise RuntimeError("bounded optical paths do not conserve modeled power")
 
-    statistics: dict[str, float | int] = {
-        "emitted_power": emitted_power,
-        "escaped_power": escaped_power,
-        "absorbed_power": absorbed_power,
-        "bulk_loss_power": bulk_loss_power,
-        "unresolved_internal_miss_power": unresolved_internal_miss_power,
-        "remaining_power": remaining_power,
-        "accounted_power": accounted_power,
-        "closure_error": closure_error,
-        "escaped_ray_count": len(escaped),
-        "remaining_ray_count": len(power),
-    }
+    segments = None
     if segment_batches is not None:
         segments = (
             np.concatenate(segment_batches)
             if segment_batches
             else np.empty(0, dtype=_PATH_SEGMENT_DTYPE)
         )
-        return escaped, statistics, segments
-    return escaped, statistics
+    return PathTraceResult(
+        escaped_rays=escaped,
+        emitted_power=emitted_power,
+        escaped_power=escaped_power,
+        absorbed_power=absorbed_power,
+        bulk_loss_power=bulk_loss_power,
+        unresolved_internal_miss_power=unresolved_internal_miss_power,
+        remaining_power=remaining_power,
+        remaining_ray_count=len(power),
+        segments=segments,
+    )
 
 
 __all__ = ["trace_bounded_paths"]

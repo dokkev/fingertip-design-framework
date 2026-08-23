@@ -388,10 +388,19 @@ power. The effective extinction may include unresolved scattering, especially
 for translucent Dragon Skin 10 NV; volumetric scattering is not modeled. This
 is a bounded concrete fingertip path operation, not a renderer.
 
-The optional `record_segments=True` diagnostic mode returns compact ray ID,
-bounce, start, end, power, and hit-instance records for finite hit segments.
-The default is false and retains no segment history. The diagnostic data comes
-from the same 3D bounded transport; it does not define a second tracer.
+`PathTraceResult` in `path_result.py` is the fixed public result contract for
+that operation. It owns the escaped-ray array, explicit scalar power ledger,
+remaining ray count, and optional diagnostic segments. The path algorithm no
+longer changes tuple arity or exposes a string-keyed statistics dictionary.
+OptiX hit layouts remain next to their CUDA decoding in `scene.py`, while the
+short-lived vectorized Fresnel and Lambertian result layouts remain next to the
+numerical operations in `transport.py`.
+
+The optional `record_segments=True` diagnostic mode fills
+`PathTraceResult.segments` with compact ray ID, bounce, start, end, power, and
+hit-instance records for finite hit segments. The default is false, retains no
+segment history, and returns `segments=None`. The diagnostic data comes from
+the same 3D bounded transport; it does not define a second tracer.
 
 `safe_secondary_origins()` selects the OTK front or back spawn position by the
 sign of the outgoing direction dotted with `normal_W`. It does not infer media

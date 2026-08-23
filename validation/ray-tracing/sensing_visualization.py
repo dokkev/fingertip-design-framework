@@ -205,7 +205,7 @@ def _trace_state(
     carrier_u2: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     optics = fingertip.parameters.optical
-    escaped, statistics, segments = trace_bounded_paths(
+    result = trace_bounded_paths(
         scene,
         emission["origin_W_m"],
         emission["direction_W"],
@@ -224,9 +224,13 @@ def _trace_state(
         mask=_ALL_MASK,
         record_segments=True,
     )
+    escaped = result.escaped_rays
+    segments = result.segments
+    if segments is None:
+        raise AssertionError("requested path segments were not recorded")
     if not np.isclose(
-        float(statistics["accounted_power"]),
-        float(statistics["emitted_power"]),
+        result.accounted_power,
+        result.emitted_power,
         rtol=0.0,
         atol=1.0e-12,
     ):
