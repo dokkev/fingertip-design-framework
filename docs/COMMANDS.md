@@ -313,7 +313,7 @@ python validation/ray-tracing/sensing_evaluator_test.py
 This runs the production evaluator for 5, 10, and 20 mm spheres at
 `X=-7.5, 0, +7.5 mm`. It builds one fingertip mesh and OptiX scene, traces the
 no-contact state once with `65,536` paths, and runs nine independent sequential
-Newton scenarios with the current `500 Hz / 10 iteration` force servo. Each
+Newton scenarios with the current `100 Hz / 10 iteration` force servo. Each
 scenario advances through `5, 10, 15, 20 N` in one runtime and accepts a level
 after remaining within its `+/- 10%` band for 5 s. Every checkpoint updates the
 existing silicone GAS/IAS and repeats the 24-bounce trace with the same
@@ -433,79 +433,51 @@ preflight, using the same typed execution YAML as production. Do not use it as
 a substitute for a reviewed production campaign, and do not run it as part of
 ordinary focused test execution.
 
-## Production BO entry point
+## Sequential Ax sensing BO
 
-Use `run_bo_ideal` as the canonical human-facing entry point. The strict YAML
-owns only device, mesh, Newton, first-contact, and optical transport numerical
-settings. Morphology/material/LED, the protocol, objective, and design bounds
-remain visible code contracts in the campaign engine.
-
-Run the cheap gate first:
+Create the campaign and run one new sequential multi-objective BO evaluation as
+the end-to-end smoke test. The existing 13-row Sobol warm start is attached and
+verified without Newton/OptiX re-evaluation:
 
 ```bash
-conda run -n lit python -m scripts.optimization.run_bo_ideal \
-  --preflight \
-  --execution-config config/lumo_execution.yaml
+OPTIX_INCLUDE_DIR=/path/to/NVIDIA-OptiX-SDK-9.1.0/include \
+OTK_INCLUDE_DIR=/path/to/optix-toolkit/ShaderUtil/include \
+conda run --no-capture-output -n lit \
+  python -u -m lumo.optimization.ax_bo \
+  --target-bo-trials 1 \
+  --output output/optimization/mobo
 ```
 
-For a minimal production-path smoke only:
+The command uses the installed Ax multi-objective MBM and requests one candidate
+at a time. A feasible candidate runs the unchanged production evaluator for
+centered 5, 10, and 20 mm spheres at sequential 5, 10, 15, and 20 N checkpoints.
+Both `J_intensity` and `J_spatial` are maximized without scalarization.
+Analytically invalid candidates are recorded and abandoned before GPU
+evaluation.
+
+If the smoke passes, continue the same checkpoint to the cumulative 120-new-
+trial target:
 
 ```bash
-conda run -n lit python -m scripts.optimization.run_bo_ideal \
-  --smoke \
-  --execution-config config/lumo_execution.yaml \
-  --output output/optimization/bo_smoke
+OPTIX_INCLUDE_DIR=/path/to/NVIDIA-OptiX-SDK-9.1.0/include \
+OTK_INCLUDE_DIR=/path/to/optix-toolkit/ShaderUtil/include \
+conda run --no-capture-output -n lit \
+  python -u -m lumo.optimization.ax_bo \
+  --target-bo-trials 120 \
+  --output output/optimization/mobo
 ```
 
-Without `--smoke`, the runner uses the authoritative 18-state production
-protocol. `--smoke` is the only route to the reduced two-state protocol. Both
-use the production evaluator, Ax adapter, and exact-contract evaluation
-registry. External `--registry PATH` reuse is currently limited to smoke and
-validation runs. Production rejects external registry reuse until
-same-contract evaluator reproducibility is established; its campaign-local
-registry remains available for exact resume and in-campaign duplicate handling.
-A Git-tracked registry is rejected, and concurrent campaigns targeting the
-same registry are serialized with an exclusive advisory lock. A
-shared CUDA/OptiX/Gmsh/Newton prerequisite failure aborts before candidate
-registration; a morphology failure is recorded as a candidate result. Smoke
-defaults to one successful Sobol observation, no MBM observation, two total
-evaluator calls including nominal, and one generated proposal.
+An existing complete campaign directory resumes automatically. Thus a future
+`--target-bo-trials 200` continues with trial 121 rather than adding 200 more or
+repeating completed morphologies. The 13 warm-start observations never count
+toward this target.
 
-Production requires an explicit MBM success target and independent evaluator
-and proposal caps. For example:
-
-```bash
-conda run -n lit python -m scripts.optimization.run_bo_ideal \
-  --execution-config config/lumo_execution.yaml \
-  --search-successes 4 \
-  --max-evaluations 20 \
-  --max-proposals 30 \
-  --output output/optimization/bo_production
-```
-
-Production defaults to six successful Sobol observations and rejects a search
-target below one. Candidate failures do not reduce either success target.
-`--max-evaluations` counts actual evaluator calls including nominal;
-`--max-proposals` counts every Ax-generated proposal including feasibility
-rejects and duplicates. Budget exhaustion, optimizer stall, nominal failure,
-or an unmet success target returns exit code `3`. Infrastructure, config, or
-persistence failure returns `2`.
-
-Production requires a clean Git source snapshot by default. If a reviewed
-dirty snapshot is intentional, add `--allow-dirty`; its tracked diff and
-untracked source contents are hashed into provenance. Same-contract registry
-records from another source snapshot are rejected unless
-`--allow-cross-revision-cache` is explicit. These opt-ins are persisted in the
-campaign audit and exact resume contract.
-
-To continue an interrupted campaign, pass `--resume` explicitly with the
-campaign directory or its current `checkpoint.json` pointer. Selecting an
-older immutable checkpoint directory is rejected because rollback also needs
-registry/trial reconciliation. The runner restores the public Ax JSON state, reconciles any
-pending candidate before requesting a new proposal, and fails fast on fixed
-input, budget, source, or Ax-package mismatches. Existing output alone never
-triggers resume. Omitted budget and YAML arguments are restored from the
-persisted campaign config; explicit values still have to match exactly.
+The directory contains `run_config.json`, atomically replaced `ax_state.json`,
+`trials.csv`, `pareto.csv`, one compact `trials/trial_NNNN.npz` per successful
+new trial, plots, and `run_summary.json`. Resume rejects changed scientific
+settings or changed production source instead of mixing incompatible results.
+Use `--target-bo-trials 0` only for a warm-start creation/resume check in a
+separate empty output directory.
 
 ## Representative scientific convergence harness
 

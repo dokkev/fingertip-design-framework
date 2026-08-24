@@ -531,8 +531,51 @@ within each sphere diameter and returns both the per-diameter values and their
 diameter-wise minima. It does not know about LEDs, Newton, OptiX, ray tracing,
 morphology, or objective weights.
 
-Future optimization code should consume validated simulation outputs rather
-than implementing mechanics or optical transport itself.
+`ax_bo.py` owns the one concrete sequential multi-objective optimization loop.
+It configures the installed Ax API with the six current geometry bounds and the
+two independent maximizing objectives, attaches and verifies the 13 completed
+Sobol observations from the sensing trade-off validation, and requests exactly
+one model-based candidate at a time. Every proposed parameterization passes
+through `DesignSpace.is_feasible()` before Newton or OptiX is constructed. An
+invalid proposal is marked abandoned in Ax without a fabricated objective
+value.
+An evaluator failure is preserved as `FAILED` with its reason in the CSV while
+its Ax arm is abandoned, preventing deterministic re-proposal of the same
+failed morphology. It receives no objective value or penalty.
+
+Each feasible proposal uses `evaluator.py` for the centered 5, 10, and 20 mm
+sphere scenarios and uses `sensing_objective.py` for the diameter-wise
+worst-case objectives. The optimizer does not implement mechanics, optical
+transport, or objective arithmetic. Each successful new trial keeps only the
+compact evaluator arrays in one compressed NPZ; Newton, OptiX, and escaped-ray
+buffers are not retained between candidates.
+
+`run_config.json` freezes the scientific contract and scientific-source digest
+before the first proposal. Resume refuses a changed contract or changed
+scientific production source; optimizer-only source changes are recorded
+separately so a persistence bug can be corrected without invalidating completed
+Newton/OptiX observations.
+`ax_state.json`, `trials.csv`, and `pareto.csv` are atomically replaced after
+state transitions. If interruption occurs after an NPZ is written but before
+Ax completion, the `EVALUATED` CSV row lets resume report that saved result to
+Ax without repeating Newton or OptiX. A trial interrupted during evaluation is
+abandoned, so a crash loses at most the currently running morphology. The CLI
+budget is cumulative and counts only successful new BO trials; the 13 attached
+warm starts are excluded.
+
+```text
+13 completed Sobol observations
+        ↓ attach to Ax
+Ax multi-objective MBM, max_trials=1
+        ↓
+analytic DesignSpace feasibility
+        ↓ valid
+production evaluator: three centered sphere scenarios
+        ↓
+diameter-wise J_intensity and J_spatial
+        ↓
+compressed raw NPZ → CSV → complete Ax → atomic Ax state + Pareto CSV
+```
 
 ### `lumo/util/`
 
