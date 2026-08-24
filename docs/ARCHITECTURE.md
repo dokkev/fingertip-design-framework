@@ -526,10 +526,10 @@ spatial response per state. It rejects a numerically zero no-contact reference
 or state-visible total instead of adding an objective-changing epsilon.
 `sensing_objectives()` returns the separate worst-case pairwise scalar-intensity
 and Euclidean spatial separations. With grouped responses shaped
-`(sphere diameter, force state, quadrant)`, it compares force states only
-within each sphere diameter and returns both the per-diameter values and their
-diameter-wise minima. It does not know about LEDs, Newton, OptiX, ray tracing,
-morphology, or objective weights.
+`(indenter, force state, quadrant)`, it compares force states only within each
+indenter and returns both the per-indenter values and their indenter-wise
+minima. It does not know about LEDs, Newton, OptiX, ray tracing, morphology, or
+objective weights.
 
 `ax_bo.py` owns the sequential multi-objective optimization loop and its two
 separate campaign definitions. The original `continuous` campaign attaches and
@@ -541,6 +541,18 @@ to physical millimeters only at the evaluator boundary. Ax directly enforces
 `flat_pad_height_step + semiellipse_height_step <= 60`; the existing
 `FingertipGeometry` and `DesignSpace` checks remain the sole owners of nonlinear
 geometry validity.
+`scripts/run_mobo.py` is the user-edited entry point for the discrete campaign.
+It exposes the physical parameter bounds, indenter URDF list, sequential force
+targets, fixed force-band dwell, relative tolerance, output directory, and
+successful-morphology target. The optimizer validates these inputs and records
+them in `run_config.json`; mechanics and optical algorithms remain owned by
+their production modules. All configured indenters share one initial center
+pose derived from a 20 mm reference indenter; smaller packaged spheres simply
+approach from farther away. URDF filenames identify result groups but do not
+encode placement dimensions. For these common-pose trials, `DesignTrial`
+records the first positive contact-force travel as the clearance so reported
+indentation excludes object-dependent free approach. Callers that already know
+their geometric clearance can continue supplying it directly.
 
 The discrete campaign records both integer steps and decoded millimeters in
 its CSV. Its six snapped continuous-Pareto designs are only ordered design
@@ -555,8 +567,8 @@ An evaluator failure is preserved as `FAILED` with its reason in the CSV while
 its Ax arm is abandoned, preventing deterministic re-proposal of the same
 failed morphology. It receives no objective value or penalty.
 
-Each feasible proposal uses `evaluator.py` for the centered 5, 10, and 20 mm
-sphere scenarios and uses `sensing_objective.py` for the diameter-wise
+Each feasible proposal uses `evaluator.py` for the configured centered
+indenter scenarios and uses `sensing_objective.py` for the indenter-wise
 worst-case objectives. The optimizer does not implement mechanics, optical
 transport, or objective arithmetic. Each successful new trial keeps only the
 compact evaluator arrays in one compressed NPZ; Newton, OptiX, and escaped-ray
@@ -582,9 +594,9 @@ Ax multi-objective MBM, max_trials=1
         ↓
 analytic DesignSpace feasibility
         ↓ valid
-production evaluator: three centered sphere scenarios
+production evaluator: configured centered indenter scenarios
         ↓
-diameter-wise J_intensity and J_spatial
+indenter-wise J_intensity and J_spatial
         ↓
 compressed raw NPZ → CSV → complete Ax → atomic Ax state + Pareto CSV
 ```

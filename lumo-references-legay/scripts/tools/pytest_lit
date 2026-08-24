@@ -1,8 +1,0 @@
-#!/usr/bin/env bash
-set -euo pipefail
-
-# This repository does not use ROS.  Keep ROS/ament pytest entry points that
-# may be inherited through PYTHONPATH out of every repository test run.
-export PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
-
-exec python -m pytest "$@"

@@ -33,7 +33,7 @@ class DesignTrial:
         approach_speed_m_s: float,
         target_force_n: float,
         max_sim_time_s: float,
-        initial_clearance_m: float = 0.0,
+        initial_clearance_m: float | None = 0.0,
     ) -> None:
         if not isinstance(name, str) or not name.strip():
             raise ValueError("name must be a nonempty string")
@@ -44,7 +44,8 @@ class DesignTrial:
             raise FileNotFoundError(path)
         require_positive("target_force_n", target_force_n)
         require_positive("max_sim_time_s", max_sim_time_s)
-        require_nonnegative("initial_clearance_m", initial_clearance_m)
+        if initial_clearance_m is not None:
+            require_nonnegative("initial_clearance_m", initial_clearance_m)
 
         initial_tf_values = np.asarray(initial_tf, dtype=np.float64)
         if initial_tf_values.shape != (7,) or not np.all(
@@ -73,7 +74,9 @@ class DesignTrial:
         self.approach_speed_m_s = float(approach_speed_m_s)
         self.target_force_n = float(target_force_n)
         self.max_sim_time_s = float(max_sim_time_s)
-        self.initial_clearance_m = float(initial_clearance_m)
+        self.initial_clearance_m = (
+            None if initial_clearance_m is None else float(initial_clearance_m)
+        )
 
         self.final_tf: wp.transform | None = None
         self.travel_m: float | None = None
@@ -334,6 +337,8 @@ class DesignStudy:
                     indenter,
                     motion_direction_W=trial.motion_direction_W,
                 )
+                if trial.initial_clearance_m is None and reaction_force_n > 0.0:
+                    trial.initial_clearance_m = travel_m
                 force_change_n = abs(reaction_force_n - previous_force_n)
                 previous_force_n = reaction_force_n
 
@@ -353,6 +358,8 @@ class DesignStudy:
                 if in_tolerance_ticks < settle_ticks:
                     continue
 
+                if trial.initial_clearance_m is None:
+                    raise RuntimeError(f"{trial.name} reached force without contact")
                 trial.final_tf = pose
                 trial.travel_m = travel_m
                 trial.step_count = simulation.step_count

@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import subprocess
+from collections.abc import Iterable, Mapping
 from contextlib import ExitStack
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
@@ -35,16 +36,24 @@ _CONTINUOUS_PARAMETER_NAMES = (
     "geometry.void_width_mm",
     "geometry.void_height_mm",
 )
-_DISCRETE_STEP_TO_PHYSICAL = (
-    ("flat_pad_height_step", "geometry.flat_pad_height_mm", 4, 58),
-    ("semiellipse_height_step", "geometry.semiellipse_height_mm", 2, 40),
-    ("stem_width_step", "geometry.stem_width_mm", 12, 20),
-    ("stem_height_step", "geometry.stem_height_mm", 8, 20),
-    ("void_width_step", "geometry.void_width_mm", 0, 8),
-    ("void_height_step", "geometry.void_height_mm", 0, 10),
+_DISCRETE_STEP_TO_PHYSICAL_NAMES = (
+    ("flat_pad_height_step", "geometry.flat_pad_height_mm"),
+    ("semiellipse_height_step", "geometry.semiellipse_height_mm"),
+    ("stem_width_step", "geometry.stem_width_mm"),
+    ("stem_height_step", "geometry.stem_height_mm"),
+    ("void_width_step", "geometry.void_width_mm"),
+    ("void_height_step", "geometry.void_height_mm"),
 )
 _DISCRETE_RESOLUTION_MM = 0.5
 _DISCRETE_FIXED_FLAT_PAD_WIDTH_MM = 30.0
+_DEFAULT_DISCRETE_PARAMETER_BOUNDS_MM = {
+    "geometry.flat_pad_height_mm": (2.0, 29.0),
+    "geometry.semiellipse_height_mm": (1.0, 20.0),
+    "geometry.stem_width_mm": (6.0, 10.0),
+    "geometry.stem_height_mm": (4.0, 10.0),
+    "geometry.void_width_mm": (0.0, 4.0),
+    "geometry.void_height_mm": (0.0, 5.0),
+}
 _DISCRETE_SEED_STEPS = (
     ("continuous_pareto_0116", (13, 40, 16, 12, 0, 6)),
     ("continuous_pareto_0164", (16, 24, 14, 12, 0, 6)),
@@ -54,18 +63,19 @@ _DISCRETE_SEED_STEPS = (
     ("continuous_pareto_0282", (16, 40, 14, 12, 1, 6)),
 )
 _OBJECTIVE_NAMES = ("J_intensity", "J_spatial")
-_SPHERE_DIAMETERS_MM = (5.0, 10.0, 20.0)
-_SPHERES = tuple(
-    (f"sphere_{diameter_mm:g}mm.urdf", diameter_mm)
-    for diameter_mm in _SPHERE_DIAMETERS_MM
+_DEFAULT_INDENTER_URDFS = (
+    "sphere_5mm.urdf",
+    "sphere_10mm.urdf",
+    "sphere_20mm.urdf",
 )
-_PER_DIAMETER_FIELDS = tuple(
-    field
-    for diameter_mm in _SPHERE_DIAMETERS_MM
-    for field in (
-        f"J_intensity_{diameter_mm:g}mm",
-        f"J_spatial_{diameter_mm:g}mm",
-    )
+_DEFAULT_FORCE_TARGETS_N = (5.0, 10.0, 15.0, 20.0)
+_DEFAULT_SETTLE_DURATION_S = 5.0
+_DEFAULT_FORCE_TOLERANCE_FRACTION = 0.1
+_INITIAL_INDENTER_REFERENCE_DIAMETER_MM = 20.0
+_CONTINUOUS_WARM_START_RESULT_FIELDS = (
+    ("sphere_5mm", "J_intensity_5mm", "J_spatial_5mm"),
+    ("sphere_10mm", "J_intensity_10mm", "J_spatial_10mm"),
+    ("sphere_20mm", "J_intensity_20mm", "J_spatial_20mm"),
 )
 _CONTINUOUS_WARM_START_PATH = (
     Path(__file__).resolve().parents[2]
@@ -94,8 +104,8 @@ _INITIAL_CLEARANCE_M = 1.0e-3
 _APPROACH_SPEED_M_S = 5.0e-3
 _MAX_SIM_TIME_S = 60.0
 _MAX_PROPOSALS_PER_COMPLETED_TRIAL = 50
-_OBJECTIVE_DEFINITION = "diameter-wise-force-pair-min-v1"
-_RUN_CONFIG_SCHEMA = 1
+_OBJECTIVE_DEFINITION = "indenter-wise-force-pair-min-v1"
+_RUN_CONFIG_SCHEMA = 2
 
 
 @dataclass(frozen=True)
@@ -114,7 +124,12 @@ class CampaignDefinition:
     warm_start_count: int = 0
     resolution_mm: float | None = None
     fixed_geometry: tuple[tuple[str, float], ...] = ()
+    discrete_step_to_physical: tuple[tuple[str, str, int, int], ...] = ()
     seed_steps: tuple[tuple[str, tuple[int, ...]], ...] = ()
+    indenters: tuple[tuple[str, str], ...] = ()
+    force_targets_n: tuple[float, ...] = _DEFAULT_FORCE_TARGETS_N
+    settle_duration_s: float = _DEFAULT_SETTLE_DURATION_S
+    force_tolerance_fraction: float = _DEFAULT_FORCE_TOLERANCE_FRACTION
 
     @property
     def ax_parameter_names(self) -> tuple[str, ...]:
@@ -129,6 +144,21 @@ class CampaignDefinition:
     @property
     def is_discrete(self) -> bool:
         return self.resolution_mm is not None
+
+    @property
+    def indenter_names(self) -> tuple[str, ...]:
+        return tuple(name for _, name in self.indenters)
+
+    @property
+    def per_indenter_fields(self) -> tuple[str, ...]:
+        return tuple(
+            field
+            for indenter_name in self.indenter_names
+            for field in (
+                f"J_intensity_{indenter_name}",
+                f"J_spatial_{indenter_name}",
+            )
+        )
 
 
 def _continuous_design_space() -> DesignSpace:
@@ -158,7 +188,93 @@ def _continuous_design_space() -> DesignSpace:
     )
 
 
-def _discrete_design_space() -> DesignSpace:
+def _discrete_parameter_bounds(
+    parameter_bounds_mm: Mapping[str, tuple[float, float]] | None,
+) -> tuple[dict[str, tuple[float, float]], tuple[tuple[str, str, int, int], ...]]:
+    if parameter_bounds_mm is None:
+        qualified_bounds = dict(_DEFAULT_DISCRETE_PARAMETER_BOUNDS_MM)
+    else:
+        expected_names = {
+            physical_name.removeprefix("geometry.")
+            for _, physical_name in _DISCRETE_STEP_TO_PHYSICAL_NAMES
+        }
+        if set(parameter_bounds_mm) != expected_names:
+            raise ValueError(
+                f"parameter_bounds_mm must define exactly {sorted(expected_names)!r}"
+            )
+        qualified_bounds = {
+            f"geometry.{name}": tuple(bounds)
+            for name, bounds in parameter_bounds_mm.items()
+        }
+
+    step_to_physical = []
+    for step_name, physical_name in _DISCRETE_STEP_TO_PHYSICAL_NAMES:
+        bounds = qualified_bounds[physical_name]
+        if len(bounds) != 2:
+            raise ValueError(f"{physical_name} bounds must contain two values")
+        lower, upper = (float(value) for value in bounds)
+        if not isfinite(lower) or not isfinite(upper) or lower >= upper:
+            raise ValueError(
+                f"{physical_name} bounds must be finite with lower < upper"
+            )
+        lower_step = round(lower / _DISCRETE_RESOLUTION_MM)
+        upper_step = round(upper / _DISCRETE_RESOLUTION_MM)
+        if not np.isclose(
+            lower,
+            _DISCRETE_RESOLUTION_MM * lower_step,
+            rtol=0.0,
+            atol=1.0e-12,
+        ) or not np.isclose(
+            upper,
+            _DISCRETE_RESOLUTION_MM * upper_step,
+            rtol=0.0,
+            atol=1.0e-12,
+        ):
+            raise ValueError(f"{physical_name} bounds must lie on the 0.5 mm grid")
+        qualified_bounds[physical_name] = (lower, upper)
+        step_to_physical.append((step_name, physical_name, lower_step, upper_step))
+    return qualified_bounds, tuple(step_to_physical)
+
+
+def _indenter_definitions(
+    indenter_urdfs: Iterable[str],
+) -> tuple[tuple[str, str], ...]:
+    definitions = []
+    for raw_name in indenter_urdfs:
+        if not isinstance(raw_name, str) or Path(raw_name).name != raw_name:
+            raise ValueError("indenter URDFs must be plain filenames")
+        if Path(raw_name).suffix.lower() != ".urdf":
+            raise ValueError("indenter filenames must end in .urdf")
+        resource = files("lumo").joinpath(
+            "assets",
+            "objects",
+            "urdf",
+            raw_name,
+        )
+        if not resource.is_file():
+            raise FileNotFoundError(resource)
+        definitions.append((raw_name, Path(raw_name).stem))
+    if not definitions:
+        raise ValueError("indenter_urdfs must contain at least one URDF")
+    if len({name for _, name in definitions}) != len(definitions):
+        raise ValueError("indenter filenames must have unique stems")
+    return tuple(definitions)
+
+
+def _force_targets(force_targets_n: Iterable[float]) -> tuple[float, ...]:
+    targets = tuple(float(target) for target in force_targets_n)
+    if len(targets) < 2:
+        raise ValueError("force_targets_n must contain at least two targets")
+    if any(not isfinite(target) or target <= 0.0 for target in targets):
+        raise ValueError("force targets must be finite and positive")
+    if any(current <= previous for previous, current in zip(targets, targets[1:])):
+        raise ValueError("force_targets_n must be strictly increasing")
+    return targets
+
+
+def _discrete_design_space(
+    parameter_bounds: Mapping[str, tuple[float, float]],
+) -> DesignSpace:
     parameters = FingertipParameters()
     parameters = replace(
         parameters,
@@ -170,12 +286,8 @@ def _discrete_design_space() -> DesignSpace:
     bounds = DesignParameterBounds(
         parameters=parameters,
         geometry={
-            "flat_pad_height_mm": ParameterBound(2.0, 29.0),
-            "semiellipse_height_mm": ParameterBound(1.0, 20.0),
-            "stem_width_mm": ParameterBound(6.0, 10.0),
-            "stem_height_mm": ParameterBound(4.0, 10.0),
-            "void_width_mm": ParameterBound(0.0, 4.0),
-            "void_height_mm": ParameterBound(0.0, 5.0),
+            name.removeprefix("geometry."): ParameterBound(*bounds)
+            for name, bounds in parameter_bounds.items()
         },
     )
     return DesignSpace(
@@ -193,8 +305,39 @@ def _discrete_design_space() -> DesignSpace:
     )
 
 
-def _campaign_definition(name: str) -> CampaignDefinition:
+def _campaign_definition(
+    name: str,
+    *,
+    parameter_bounds_mm: Mapping[str, tuple[float, float]] | None = None,
+    indenter_urdfs: Iterable[str] = _DEFAULT_INDENTER_URDFS,
+    force_targets_n: Iterable[float] = _DEFAULT_FORCE_TARGETS_N,
+    settle_duration_s: float = _DEFAULT_SETTLE_DURATION_S,
+    force_tolerance_fraction: float = _DEFAULT_FORCE_TOLERANCE_FRACTION,
+) -> CampaignDefinition:
+    indenters = _indenter_definitions(indenter_urdfs)
+    targets = _force_targets(force_targets_n)
+    settle_duration_s = float(settle_duration_s)
+    force_tolerance_fraction = float(force_tolerance_fraction)
+    if not isfinite(settle_duration_s) or settle_duration_s <= 0.0:
+        raise ValueError("settle_duration_s must be finite and positive")
+    if (
+        not isfinite(force_tolerance_fraction)
+        or force_tolerance_fraction <= 0.0
+        or force_tolerance_fraction >= 1.0
+    ):
+        raise ValueError("force_tolerance_fraction must lie between zero and one")
     if name == "continuous":
+        if parameter_bounds_mm is not None:
+            raise ValueError(
+                "custom parameter bounds are supported only by discrete-05mm"
+            )
+        if (
+            indenters != _indenter_definitions(_DEFAULT_INDENTER_URDFS)
+            or targets != _DEFAULT_FORCE_TARGETS_N
+            or settle_duration_s != _DEFAULT_SETTLE_DURATION_S
+            or force_tolerance_fraction != _DEFAULT_FORCE_TOLERANCE_FRACTION
+        ):
+            raise ValueError("custom evaluation settings require discrete-05mm")
         space = _continuous_design_space()
         parameters = tuple(
             RangeParameterConfig(
@@ -224,9 +367,39 @@ def _campaign_definition(name: str) -> CampaignDefinition:
             initialization_budget=_CONTINUOUS_WARM_START_COUNT,
             warm_start_path=_CONTINUOUS_WARM_START_PATH,
             warm_start_count=_CONTINUOUS_WARM_START_COUNT,
+            indenters=indenters,
+            force_targets_n=targets,
+            settle_duration_s=settle_duration_s,
+            force_tolerance_fraction=force_tolerance_fraction,
         )
     if name == "discrete-05mm":
-        space = _discrete_design_space()
+        parameter_bounds, step_to_physical = _discrete_parameter_bounds(
+            parameter_bounds_mm
+        )
+        space = _discrete_design_space(parameter_bounds)
+        seed_steps = tuple(
+            (source_design, steps)
+            for source_design, steps in _DISCRETE_SEED_STEPS
+            if all(
+                lower <= step <= upper
+                for step, (_, _, lower, upper) in zip(
+                    steps,
+                    step_to_physical,
+                    strict=True,
+                )
+            )
+            and steps[0] + steps[1] <= 60
+            and space.is_feasible(
+                {
+                    physical_name: _DISCRETE_RESOLUTION_MM * step
+                    for step, (_, physical_name, _, _) in zip(
+                        steps,
+                        step_to_physical,
+                        strict=True,
+                    )
+                }
+            )
+        )
         return CampaignDefinition(
             name=name,
             experiment_name="lumo_center_contact_sensing_discrete_05mm",
@@ -239,7 +412,7 @@ def _campaign_definition(name: str) -> CampaignDefinition:
                     bounds=(lower, upper),
                     parameter_type="int",
                 )
-                for step_name, _, lower, upper in _DISCRETE_STEP_TO_PHYSICAL
+                for step_name, _, lower, upper in step_to_physical
             ),
             ax_parameter_constraints=(
                 "flat_pad_height_step + semiellipse_height_step <= 60",
@@ -252,7 +425,12 @@ def _campaign_definition(name: str) -> CampaignDefinition:
                     _DISCRETE_FIXED_FLAT_PAD_WIDTH_MM,
                 ),
             ),
-            seed_steps=_DISCRETE_SEED_STEPS,
+            discrete_step_to_physical=step_to_physical,
+            seed_steps=seed_steps,
+            indenters=indenters,
+            force_targets_n=targets,
+            settle_duration_s=settle_duration_s,
+            force_tolerance_fraction=force_tolerance_fraction,
         )
     raise ValueError(f"unknown campaign {name!r}")
 
@@ -288,16 +466,31 @@ def _read_warm_start(
                     "design": raw_row["design"],
                     "parameters": parameters,
                     "objectives": objectives,
-                    "per_diameter": {
-                        field: float(raw_row[field]) for field in _PER_DIAMETER_FIELDS
+                    "per_indenter": {
+                        **{
+                            f"J_intensity_{indenter_name}": float(
+                                raw_row[intensity_field]
+                            )
+                            for indenter_name, intensity_field, _ in (
+                                _CONTINUOUS_WARM_START_RESULT_FIELDS
+                            )
+                        },
+                        **{
+                            f"J_spatial_{indenter_name}": float(raw_row[spatial_field])
+                            for indenter_name, _, spatial_field in (
+                                _CONTINUOUS_WARM_START_RESULT_FIELDS
+                            )
+                        },
                     },
-                    "worst_intensity_diameter_mm": raw_row[
-                        "worst_intensity_diameter_mm"
-                    ],
+                    "worst_intensity_indenter": (
+                        f"sphere_{float(raw_row['worst_intensity_diameter_mm']):g}mm"
+                    ),
                     "worst_intensity_force_pair_n": raw_row[
                         "worst_intensity_force_pair_n"
                     ],
-                    "worst_spatial_diameter_mm": raw_row["worst_spatial_diameter_mm"],
+                    "worst_spatial_indenter": (
+                        f"sphere_{float(raw_row['worst_spatial_diameter_mm']):g}mm"
+                    ),
                     "worst_spatial_force_pair_n": raw_row["worst_spatial_force_pair_n"],
                     "runtime_s": float(raw_row["runtime_s"]),
                 }
@@ -318,8 +511,9 @@ def _new_client(campaign: CampaignDefinition) -> Client:
     client.configure_experiment(
         name=campaign.experiment_name,
         description=(
-            "Center-contact LUMO sensing optimization over 5/10/20 mm spheres "
-            "and 5/10/15/20 N force states"
+            "Center-contact LUMO sensing optimization over indenters "
+            f"{campaign.indenter_names} and force states "
+            f"{campaign.force_targets_n} N"
         ),
         parameters=campaign.ax_parameters,
         parameter_constraints=campaign.ax_parameter_constraints,
@@ -348,14 +542,14 @@ def _decode_ax_parameters(
         }
 
     parameters = {}
-    for step_name, physical_name, lower, upper in _DISCRETE_STEP_TO_PHYSICAL:
+    for step_name, physical_name, lower, upper in campaign.discrete_step_to_physical:
         raw_step = raw_parameters[step_name]
         step = int(raw_step)
         if isinstance(raw_step, bool) or float(raw_step) != step:
             raise ValueError(f"{step_name} must be an exact integer")
         if not lower <= step <= upper:
             raise ValueError(f"{step_name} lies outside its integer bounds")
-        parameters[physical_name] = _DISCRETE_RESOLUTION_MM * step
+        parameters[physical_name] = campaign.resolution_mm * step
     return parameters
 
 
@@ -366,8 +560,8 @@ def _encode_ax_parameters(
     if not campaign.is_discrete:
         return dict(parameters)
     encoded = {}
-    for step_name, physical_name, lower, upper in _DISCRETE_STEP_TO_PHYSICAL:
-        scaled = parameters[physical_name] / _DISCRETE_RESOLUTION_MM
+    for step_name, physical_name, lower, upper in campaign.discrete_step_to_physical:
+        scaled = parameters[physical_name] / campaign.resolution_mm
         step = round(scaled)
         if not np.isclose(scaled, step, rtol=0.0, atol=1.0e-12):
             raise ValueError(f"{physical_name} is not on the 0.5 mm grid")
@@ -445,11 +639,11 @@ def _fieldnames(campaign: CampaignDefinition) -> list[str]:
         "status",
         "analytically_valid",
         *campaign.parameter_columns,
-        *_PER_DIAMETER_FIELDS,
+        *campaign.per_indenter_fields,
         *_OBJECTIVE_NAMES,
-        "worst_intensity_diameter_mm",
+        "worst_intensity_indenter",
         "worst_intensity_force_pair_n",
-        "worst_spatial_diameter_mm",
+        "worst_spatial_indenter",
         "worst_spatial_force_pair_n",
         "runtime_s",
         "raw_result_path",
@@ -458,13 +652,13 @@ def _fieldnames(campaign: CampaignDefinition) -> list[str]:
     ]
 
 
-def _empty_result_fields() -> dict[str, object]:
+def _empty_result_fields(campaign: CampaignDefinition) -> dict[str, object]:
     return {
-        **{name: "" for name in _PER_DIAMETER_FIELDS},
+        **{name: "" for name in campaign.per_indenter_fields},
         **{name: "" for name in _OBJECTIVE_NAMES},
-        "worst_intensity_diameter_mm": "",
+        "worst_intensity_indenter": "",
         "worst_intensity_force_pair_n": "",
-        "worst_spatial_diameter_mm": "",
+        "worst_spatial_indenter": "",
         "worst_spatial_force_pair_n": "",
         "runtime_s": "",
         "raw_result_path": "",
@@ -490,7 +684,7 @@ def _read_trials(
                     row[name] = int(float(value)) if value else ""
             numeric_fields = (
                 *campaign.physical_parameter_names,
-                *_PER_DIAMETER_FIELDS,
+                *campaign.per_indenter_fields,
                 *_OBJECTIVE_NAMES,
                 "runtime_s",
             )
@@ -740,9 +934,9 @@ def _run_config(campaign: CampaignDefinition) -> dict[str, object]:
                 "max_displacement_m_tick": (
                     _APPROACH_SPEED_M_S / evaluator._SIM_FREQUENCY_HZ
                 ),
-                "force_targets_n": list(evaluator._FORCE_TARGETS_N),
-                "force_tolerance_fraction": (evaluator._FORCE_TOLERANCE_FRACTION),
-                "fixed_servo_dwell_s": evaluator._SERVO_SETTLE_DURATION_S,
+                "force_targets_n": list(campaign.force_targets_n),
+                "force_tolerance_fraction": campaign.force_tolerance_fraction,
+                "fixed_servo_dwell_s": campaign.settle_duration_s,
                 "max_sim_time_s": _MAX_SIM_TIME_S,
                 "element_size_mm": evaluator._ELEMENT_SIZE_MM,
                 "soft_contact_margin_m": evaluator._SOFT_CONTACT_MARGIN_M,
@@ -753,7 +947,11 @@ def _run_config(campaign: CampaignDefinition) -> dict[str, object]:
                 "indenter_contact_damping_n_s_m": (evaluator._CONTACT_DAMPING_N_S_M),
             },
             "scenarios": {
-                "sphere_diameters_mm": list(_SPHERE_DIAMETERS_MM),
+                "indenter_urdfs": [filename for filename, _ in campaign.indenters],
+                "indenter_names": list(campaign.indenter_names),
+                "initial_pose_reference_diameter_mm": (
+                    _INITIAL_INDENTER_REFERENCE_DIAMETER_MM
+                ),
                 "contact_x_mm": 0.0,
             },
             "optics": {
@@ -771,7 +969,7 @@ def _run_config(campaign: CampaignDefinition) -> dict[str, object]:
                 "names": list(_OBJECTIVE_NAMES),
                 "directions": ["maximize", "maximize"],
                 "definition": _OBJECTIVE_DEFINITION,
-                "grouping": "force pairs within diameter, then minimum over diameter",
+                "grouping": "force pairs within indenter, then minimum over indenter",
             },
             "ax_random_seed": _RANDOM_SEED,
         },
@@ -843,7 +1041,10 @@ def _verify_warm_start_in_ax(
                 raise RuntimeError(f"Ax warm-start objective mismatch for {name}")
 
 
-def _evaluate_candidate(space: DesignSpace, parameters: dict[str, float]):
+def _evaluate_candidate(
+    campaign: CampaignDefinition,
+    parameters: dict[str, float],
+):
     import warp as wp
 
     from lumo.fingertip import Fingertip
@@ -851,37 +1052,44 @@ def _evaluate_candidate(space: DesignSpace, parameters: dict[str, float]):
 
     from .evaluator import evaluate_contact_sensing
 
-    fingertip = Fingertip(space.to_parameters(parameters))
+    fingertip = Fingertip(campaign.space.to_parameters(parameters))
     resource_root = files("lumo").joinpath("assets", "objects", "urdf")
     with ExitStack() as resources:
-        sphere_resources = tuple(
+        indenter_resources = tuple(
             (
                 resources.enter_context(as_file(resource_root.joinpath(filename))),
-                diameter_mm,
+                indenter_name,
             )
-            for filename, diameter_mm in _SPHERES
+            for filename, indenter_name in campaign.indenters
+        )
+        initial_z_m = (
+            fingertip.tip_z_m
+            - _INITIAL_CLEARANCE_M
+            - 0.5e-3 * _INITIAL_INDENTER_REFERENCE_DIAMETER_MM
         )
         trials = tuple(
             DesignTrial(
-                name=f"sphere_{diameter_mm:g}mm_center",
+                name=f"{indenter_name}_center",
                 urdf_path=urdf_path,
                 initial_tf=wp.transform(
-                    wp.vec3(
-                        0.0,
-                        0.0,
-                        fingertip.tip_z_m - _INITIAL_CLEARANCE_M - 0.5e-3 * diameter_mm,
-                    ),
+                    wp.vec3(0.0, 0.0, initial_z_m),
                     wp.quat_identity(),
                 ),
                 motion_direction_W=wp.vec3(0.0, 0.0, 1.0),
                 approach_speed_m_s=_APPROACH_SPEED_M_S,
-                target_force_n=20.0,
+                target_force_n=campaign.force_targets_n[-1],
                 max_sim_time_s=_MAX_SIM_TIME_S,
-                initial_clearance_m=_INITIAL_CLEARANCE_M,
+                initial_clearance_m=None,
             )
-            for urdf_path, diameter_mm in sphere_resources
+            for urdf_path, indenter_name in indenter_resources
         )
-        return evaluate_contact_sensing(fingertip, trials)
+        return evaluate_contact_sensing(
+            fingertip,
+            trials,
+            force_targets_n=campaign.force_targets_n,
+            settle_duration_s=campaign.settle_duration_s,
+            force_tolerance_fraction=campaign.force_tolerance_fraction,
+        )
 
 
 def _minimum_pair(
@@ -979,10 +1187,10 @@ def _save_trial_result(
             checkpoint_times_s=np.asarray(evaluation.checkpoint_times_s),
             scenario_runtime_s=np.asarray(evaluation.scenario_runtime_s),
             scenario_names=np.asarray(evaluation.scenario_names),
-            sphere_diameters_mm=np.asarray(_SPHERE_DIAMETERS_MM),
+            indenter_names=np.asarray(campaign.indenter_names),
             force_targets_n=np.asarray(evaluation.force_targets_n),
-            per_diameter_J_intensity=np.asarray(details["per_intensity"]),
-            per_diameter_J_spatial=np.asarray(details["per_spatial"]),
+            per_indenter_J_intensity=np.asarray(details["per_intensity"]),
+            per_indenter_J_spatial=np.asarray(details["per_spatial"]),
             J_intensity=np.asarray(details["J_intensity"]),
             J_spatial=np.asarray(details["J_spatial"]),
             evaluation_runtime_s=np.asarray(runtime_s),
@@ -1000,24 +1208,25 @@ def _apply_result_to_row(
     row: dict[str, object],
     details: dict[str, object],
     *,
+    campaign: CampaignDefinition,
     runtime_s: float,
     raw_result_path: str,
 ) -> None:
     per_intensity = np.asarray(details["per_intensity"])
     per_spatial = np.asarray(details["per_spatial"])
-    for index, diameter_mm in enumerate(_SPHERE_DIAMETERS_MM):
-        row[f"J_intensity_{diameter_mm:g}mm"] = float(per_intensity[index])
-        row[f"J_spatial_{diameter_mm:g}mm"] = float(per_spatial[index])
+    for index, indenter_name in enumerate(campaign.indenter_names):
+        row[f"J_intensity_{indenter_name}"] = float(per_intensity[index])
+        row[f"J_spatial_{indenter_name}"] = float(per_spatial[index])
     worst_intensity_index = int(details["worst_intensity_index"])
     worst_spatial_index = int(details["worst_spatial_index"])
     row.update(
         J_intensity=float(details["J_intensity"]),
         J_spatial=float(details["J_spatial"]),
-        worst_intensity_diameter_mm=(_SPHERE_DIAMETERS_MM[worst_intensity_index]),
+        worst_intensity_indenter=campaign.indenter_names[worst_intensity_index],
         worst_intensity_force_pair_n=_pair_text(
             details["intensity_pairs"][worst_intensity_index]
         ),
-        worst_spatial_diameter_mm=_SPHERE_DIAMETERS_MM[worst_spatial_index],
+        worst_spatial_indenter=campaign.indenter_names[worst_spatial_index],
         worst_spatial_force_pair_n=_pair_text(
             details["spatial_pairs"][worst_spatial_index]
         ),
@@ -1047,6 +1256,7 @@ def _running_row(
     ax_parameters: dict[str, object],
     parameters: dict[str, float],
     generation_node: str,
+    campaign: CampaignDefinition,
 ) -> dict[str, object]:
     return {
         "ax_trial_index": trial_index,
@@ -1057,7 +1267,7 @@ def _running_row(
         "analytically_valid": False,
         **ax_parameters,
         **parameters,
-        **_empty_result_fields(),
+        **_empty_result_fields(campaign),
     }
 
 
@@ -1089,6 +1299,7 @@ def _reconcile_resume(
             ax_parameters,
             parameters,
             str(summary_row.get("generation_node", "")),
+            campaign,
         )
         row["runtime_s"] = 0.0
         row["failure"] = "interrupted before proposal CSV persistence"
@@ -1223,11 +1434,11 @@ def _make_warm_row(
         "analytically_valid": True,
         **_encode_ax_parameters(campaign, warm["parameters"]),
         **warm["parameters"],
-        **warm["per_diameter"],
+        **warm["per_indenter"],
         **warm["objectives"],
-        "worst_intensity_diameter_mm": warm["worst_intensity_diameter_mm"],
+        "worst_intensity_indenter": warm["worst_intensity_indenter"],
         "worst_intensity_force_pair_n": warm["worst_intensity_force_pair_n"],
-        "worst_spatial_diameter_mm": warm["worst_spatial_diameter_mm"],
+        "worst_spatial_indenter": warm["worst_spatial_indenter"],
         "worst_spatial_force_pair_n": warm["worst_spatial_force_pair_n"],
         "runtime_s": warm["runtime_s"],
         "raw_result_path": "",
@@ -1450,13 +1661,25 @@ def run(
     output_directory: Path,
     target_bo_trials: int,
     campaign_name: str = "continuous",
+    parameter_bounds_mm: Mapping[str, tuple[float, float]] | None = None,
+    indenter_urdfs: Iterable[str] = _DEFAULT_INDENTER_URDFS,
+    force_targets_n: Iterable[float] = _DEFAULT_FORCE_TARGETS_N,
+    settle_duration_s: float = _DEFAULT_SETTLE_DURATION_S,
+    force_tolerance_fraction: float = _DEFAULT_FORCE_TOLERANCE_FRACTION,
 ) -> list[dict[str, object]]:
     """Create or resume the concrete cumulative center-contact campaign."""
     if target_bo_trials < 0:
         raise ValueError("target_bo_trials must be nonnegative")
     command_start_s = perf_counter()
     output_directory = output_directory.resolve()
-    campaign = _campaign_definition(campaign_name)
+    campaign = _campaign_definition(
+        campaign_name,
+        parameter_bounds_mm=parameter_bounds_mm,
+        indenter_urdfs=indenter_urdfs,
+        force_targets_n=force_targets_n,
+        settle_duration_s=settle_duration_s,
+        force_tolerance_fraction=force_tolerance_fraction,
+    )
     if (
         campaign.is_discrete
         and output_directory == _CONTINUOUS_OUTPUT_DIRECTORY.resolve()
@@ -1519,6 +1742,7 @@ def run(
             raw_parameters,
             parameters,
             generation_node,
+            campaign,
         )
         rows.append(row)
         proposal_count += 1
@@ -1556,7 +1780,7 @@ def run(
         row["analytically_valid"] = True
         evaluation_start_s = perf_counter()
         try:
-            evaluation = _evaluate_candidate(campaign.space, parameters)
+            evaluation = _evaluate_candidate(campaign, parameters)
             runtime_s = perf_counter() - evaluation_start_s
             details = _objective_details(evaluation)
             raw_result_path = _trial_result_path(output_directory, trial_index)
@@ -1571,6 +1795,7 @@ def run(
             _apply_result_to_row(
                 row,
                 details,
+                campaign=campaign,
                 runtime_s=runtime_s,
                 raw_result_path=raw_result_path.relative_to(
                     output_directory

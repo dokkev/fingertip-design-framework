@@ -189,10 +189,12 @@ def evaluate_contact_sensing(
     fingertip: Fingertip,
     trials: Iterable[DesignTrial],
     *,
+    force_targets_n: Iterable[float] = _FORCE_TARGETS_N,
     settle_duration_s: float = _SERVO_SETTLE_DURATION_S,
     settle_displacement_tolerance_m: float | None = (
         _SERVO_SETTLE_DISPLACEMENT_TOLERANCE_M
     ),
+    force_tolerance_fraction: float = _FORCE_TOLERANCE_FRACTION,
 ) -> ContactSensingEvaluation:
     """Evaluate one no-contact state and force-servo contact scenarios.
 
@@ -200,8 +202,9 @@ def evaluate_contact_sensing(
     trials reuse that mesh in independent Newton runtimes. Each accepted force
     checkpoint updates the existing silicone GAS and IAS before tracing with
     the same deterministic optical samples. Defaults implement the validated
-    five-second force-band dwell; scalar overrides support focused convergence
-    validation without changing the mechanics or optical pipeline.
+    five-second force-band dwell. Force targets, dwell, and relative tolerance
+    are explicit inputs so an optimization campaign can record and enforce its
+    own mechanics contract without changing the Newton or optical pipeline.
     """
     if not isinstance(fingertip, Fingertip):
         raise TypeError("fingertip must be a Fingertip")
@@ -212,6 +215,22 @@ def evaluate_contact_sensing(
         raise ValueError("trials must contain at least one DesignTrial")
     if any(not isinstance(trial, DesignTrial) for trial in trial_tuple):
         raise TypeError("trials must contain only DesignTrial objects")
+    force_targets = tuple(float(target) for target in force_targets_n)
+    if len(force_targets) < 2:
+        raise ValueError("force_targets_n must contain at least two targets")
+    if any(not np.isfinite(target) or target <= 0.0 for target in force_targets):
+        raise ValueError("force targets must be finite and positive")
+    if any(
+        current <= previous
+        for previous, current in zip(force_targets, force_targets[1:])
+    ):
+        raise ValueError("force_targets_n must be strictly increasing")
+    if (
+        not np.isfinite(force_tolerance_fraction)
+        or force_tolerance_fraction <= 0.0
+        or force_tolerance_fraction >= 1.0
+    ):
+        raise ValueError("force_tolerance_fraction must lie between zero and one")
 
     fingertip_mesh = make_fingertip_mesh(fingertip)
     scene = OptixScene(
@@ -254,7 +273,7 @@ def evaluate_contact_sensing(
     )
 
     scenario_count = len(trial_tuple)
-    force_count = len(_FORCE_TARGETS_N)
+    force_count = len(force_targets)
     response_matrix = np.empty((scenario_count, force_count, 4), dtype=np.float64)
     energy_matrix = np.empty(
         (scenario_count, force_count, len(_ENERGY_FIELDS)),
@@ -332,8 +351,8 @@ def evaluate_contact_sensing(
         sim_frequency=_SIM_FREQUENCY_HZ,
         settle_duration_s=settle_duration_s,
         settle_displacement_tolerance_m=settle_displacement_tolerance_m,
-        force_tolerance_fraction=_FORCE_TOLERANCE_FRACTION,
-        force_targets_n=_FORCE_TARGETS_N,
+        force_tolerance_fraction=force_tolerance_fraction,
+        force_targets_n=force_targets,
         force_gain_m_s_n=_FORCE_GAIN_M_S_N,
         element_size_mm=_ELEMENT_SIZE_MM,
         iterations=_VBD_ITERATIONS,
@@ -349,7 +368,7 @@ def evaluate_contact_sensing(
         no_contact_response=no_contact_response,
         no_contact_energy=no_contact_energy,
         scenario_names=tuple(trial.name for trial in trial_tuple),
-        force_targets_n=np.asarray(_FORCE_TARGETS_N, dtype=np.float64),
+        force_targets_n=np.asarray(force_targets, dtype=np.float64),
         actual_forces_n=actual_forces_n,
         indentations_m=indentations_m,
         response_matrix=response_matrix,
