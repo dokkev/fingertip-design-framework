@@ -531,11 +531,23 @@ within each sphere diameter and returns both the per-diameter values and their
 diameter-wise minima. It does not know about LEDs, Newton, OptiX, ray tracing,
 morphology, or objective weights.
 
-`ax_bo.py` owns the one concrete sequential multi-objective optimization loop.
-It configures the installed Ax API with the six current geometry bounds and the
-two independent maximizing objectives, attaches and verifies the 13 completed
-Sobol observations from the sensing trade-off validation, and requests exactly
-one model-based candidate at a time. Every proposed parameterization passes
+`ax_bo.py` owns the sequential multi-objective optimization loop and its two
+separate campaign definitions. The original `continuous` campaign attaches and
+verifies the 13 completed Sobol observations from the sensing trade-off
+validation. The `discrete-05mm` campaign starts a separate Ax state with no
+reused objective values. It fixes `flat_pad_width_mm=30`, exposes the other six
+geometry dimensions as integer half-millimeter steps, and decodes those steps
+to physical millimeters only at the evaluator boundary. Ax directly enforces
+`flat_pad_height_step + semiellipse_height_step <= 60`; the existing
+`FingertipGeometry` and `DesignSpace` checks remain the sole owners of nonlinear
+geometry validity.
+
+The discrete campaign records both integer steps and decoded millimeters in
+its CSV. Its six snapped continuous-Pareto designs are only ordered design
+seeds: each receives a fresh Newton-to-OptiX evaluation before it becomes an
+observation. No continuous objective is copied. Both campaigns maximize the
+same two independent objectives and request exactly one candidate at a time.
+Every proposed parameterization passes
 through `DesignSpace.is_feasible()` before Newton or OptiX is constructed. An
 invalid proposal is marked abandoned in Ax without a fabricated objective
 value.
@@ -576,6 +588,13 @@ diameter-wise J_intensity and J_spatial
         ↓
 compressed raw NPZ → CSV → complete Ax → atomic Ax state + Pareto CSV
 ```
+
+The discrete campaign follows the same persistence and evaluator flow, but its
+initialization begins with freshly evaluated snapped design seeds instead of
+completed warm-start observations. Its `run_config.json` additionally freezes
+the 0.5 mm resolution, integer step bounds, decoded physical bounds, fixed pad
+width, and step-space pad-depth constraint. Continuous and discrete campaigns
+use different output directories and cannot share Ax state or observations.
 
 ### `lumo/util/`
 

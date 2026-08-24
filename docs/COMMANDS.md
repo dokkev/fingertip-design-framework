@@ -444,6 +444,7 @@ OPTIX_INCLUDE_DIR=/path/to/NVIDIA-OptiX-SDK-9.1.0/include \
 OTK_INCLUDE_DIR=/path/to/optix-toolkit/ShaderUtil/include \
 conda run --no-capture-output -n lit \
   python -u -m lumo.optimization.ax_bo \
+  --campaign continuous \
   --target-bo-trials 1 \
   --output output/optimization/mobo
 ```
@@ -463,6 +464,7 @@ OPTIX_INCLUDE_DIR=/path/to/NVIDIA-OptiX-SDK-9.1.0/include \
 OTK_INCLUDE_DIR=/path/to/optix-toolkit/ShaderUtil/include \
 conda run --no-capture-output -n lit \
   python -u -m lumo.optimization.ax_bo \
+  --campaign continuous \
   --target-bo-trials 120 \
   --output output/optimization/mobo
 ```
@@ -478,6 +480,40 @@ new trial, plots, and `run_summary.json`. Resume rejects changed scientific
 settings or changed production source instead of mixing incompatible results.
 Use `--target-bo-trials 0` only for a warm-start creation/resume check in a
 separate empty output directory.
+
+### Discrete 0.5 mm campaign
+
+Create the independent integer-lattice campaign and run one fresh evaluation
+as its save/resume smoke test:
+
+```bash
+OPTIX_INCLUDE_DIR=/path/to/NVIDIA-OptiX-SDK-9.1.0/include \
+OTK_INCLUDE_DIR=/path/to/optix-toolkit/ShaderUtil/include \
+conda run --no-capture-output -n lit \
+  python -u -m lumo.optimization.ax_bo \
+  --campaign discrete-05mm \
+  --target-bo-trials 1 \
+  --output output/optimization/mobo_discrete_05mm
+```
+
+On a fresh directory the command first prints the Ax integer search space and
+checks deterministic candidate probes for exact 0.5 mm decoding, fixed
+`flat_pad_width_mm=30`, varied `stem_height_mm`, and the step-space pad-depth
+constraint. Snapped continuous-Pareto geometries are then evaluated as new
+observations; their old objectives are never attached. Resume is cumulative:
+
+```bash
+OPTIX_INCLUDE_DIR=/path/to/NVIDIA-OptiX-SDK-9.1.0/include \
+OTK_INCLUDE_DIR=/path/to/optix-toolkit/ShaderUtil/include \
+conda run --no-capture-output -n lit \
+  python -u -m lumo.optimization.ax_bo \
+  --campaign discrete-05mm \
+  --target-bo-trials 120 \
+  --output output/optimization/mobo_discrete_05mm
+```
+
+Do not point the discrete command at `output/optimization/mobo`; its Ax state
+and observations belong only to the continuous campaign.
 
 ## Representative scientific convergence harness
 
