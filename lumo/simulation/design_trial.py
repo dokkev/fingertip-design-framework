@@ -33,6 +33,7 @@ class DesignTrial:
         approach_speed_m_s: float,
         target_force_n: float,
         max_sim_time_s: float,
+        initial_clearance_m: float = 0.0,
     ) -> None:
         if not isinstance(name, str) or not name.strip():
             raise ValueError("name must be a nonempty string")
@@ -43,6 +44,7 @@ class DesignTrial:
             raise FileNotFoundError(path)
         require_positive("target_force_n", target_force_n)
         require_positive("max_sim_time_s", max_sim_time_s)
+        require_nonnegative("initial_clearance_m", initial_clearance_m)
 
         initial_tf_values = np.asarray(initial_tf, dtype=np.float64)
         if initial_tf_values.shape != (7,) or not np.all(
@@ -54,9 +56,7 @@ class DesignTrial:
             motion_direction_W,
             dtype=np.float64,
         )
-        if motion_direction.shape != (3,) or not np.all(
-            np.isfinite(motion_direction)
-        ):
+        if motion_direction.shape != (3,) or not np.all(np.isfinite(motion_direction)):
             raise ValueError("motion_direction_W must be a finite 3-vector")
         motion_direction_norm = float(np.linalg.norm(motion_direction))
         require_positive("motion_direction_W norm", motion_direction_norm)
@@ -73,6 +73,7 @@ class DesignTrial:
         self.approach_speed_m_s = float(approach_speed_m_s)
         self.target_force_n = float(target_force_n)
         self.max_sim_time_s = float(max_sim_time_s)
+        self.initial_clearance_m = float(initial_clearance_m)
 
         self.final_tf: wp.transform | None = None
         self.travel_m: float | None = None
@@ -93,8 +94,10 @@ class DesignStudy:
         *,
         fingertip_mesh: FingertipMesh | None = None,
         sim_frequency: float,
-        force_tolerance_n: float,
         settle_duration_s: float,
+        force_tolerance_n: float | None = None,
+        force_tolerance_fraction: float | None = None,
+        force_targets_n: Iterable[float] | None = None,
         force_gain_m_s_n: float = _DEFAULT_FORCE_GAIN_M_S_N,
         element_size_mm: float = 1.0,
         iterations: int = 10,
@@ -109,12 +112,22 @@ class DesignStudy:
             if not isinstance(fingertip_mesh, FingertipMesh):
                 raise TypeError("fingertip_mesh must be a FingertipMesh")
             if fingertip_mesh.fingertip is not fingertip:
-                raise ValueError(
-                    "fingertip_mesh must belong to the supplied fingertip"
-                )
+                raise ValueError("fingertip_mesh must belong to the supplied fingertip")
         require_positive("sim_frequency", sim_frequency)
-        require_positive("force_tolerance_n", force_tolerance_n)
         require_positive("settle_duration_s", settle_duration_s)
+        if (force_tolerance_n is None) == (force_tolerance_fraction is None):
+            raise ValueError(
+                "provide exactly one of force_tolerance_n or force_tolerance_fraction"
+            )
+        if force_tolerance_n is not None:
+            require_positive("force_tolerance_n", force_tolerance_n)
+        if force_tolerance_fraction is not None:
+            require_positive(
+                "force_tolerance_fraction",
+                force_tolerance_fraction,
+            )
+            if force_tolerance_fraction >= 1.0:
+                raise ValueError("force_tolerance_fraction must be smaller than 1")
         require_positive("force_gain_m_s_n", force_gain_m_s_n)
         require_positive("element_size_mm", element_size_mm)
         require_nonnegative(
@@ -145,38 +158,68 @@ class DesignStudy:
         trial_tuple = tuple(trials)
         if not trial_tuple:
             raise ValueError("trials must contain at least one indentation")
-        if any(
-            not isinstance(trial, DesignTrial)
-            for trial in trial_tuple
-        ):
+        if any(not isinstance(trial, DesignTrial) for trial in trial_tuple):
             raise TypeError("trials must contain only DesignTrial objects")
         if len({id(trial) for trial in trial_tuple}) != len(trial_tuple):
             raise ValueError("trials must not contain the same object twice")
         if any(trial.final_tf is not None for trial in trial_tuple):
             raise ValueError("trials must not have been run already")
 
+        target_tuple = (
+            None
+            if force_targets_n is None
+            else tuple(float(target) for target in force_targets_n)
+        )
+        if target_tuple is not None:
+            if not target_tuple:
+                raise ValueError("force_targets_n must not be empty")
+            for target in target_tuple:
+                require_positive("force target", target)
+            if any(
+                current <= previous
+                for previous, current in zip(
+                    target_tuple,
+                    target_tuple[1:],
+                )
+            ):
+                raise ValueError("force_targets_n must be strictly increasing")
+            if any(
+                not np.isclose(
+                    trial.target_force_n,
+                    target_tuple[-1],
+                    rtol=0.0,
+                    atol=1.0e-12,
+                )
+                for trial in trial_tuple
+            ):
+                raise ValueError(
+                    "each trial target_force_n must equal the final force target"
+                )
+
         self.fingertip = fingertip
         self.fingertip_mesh = fingertip_mesh
         self.trials = trial_tuple
         self.sim_frequency = float(sim_frequency)
-        self.force_tolerance_n = float(force_tolerance_n)
+        self.force_tolerance_n = (
+            None if force_tolerance_n is None else float(force_tolerance_n)
+        )
+        self.force_tolerance_fraction = (
+            None
+            if force_tolerance_fraction is None
+            else float(force_tolerance_fraction)
+        )
+        self.force_targets_n = target_tuple
         self.settle_duration_s = float(settle_duration_s)
         self.force_gain_m_s_n = float(force_gain_m_s_n)
         self.element_size_mm = float(element_size_mm)
         self.iterations = iterations
         self.soft_contact_margin_m = float(soft_contact_margin_m)
-        self.carrier_contact_stiffness_n_m = float(
-            carrier_contact_stiffness_n_m
-        )
+        self.carrier_contact_stiffness_n_m = float(carrier_contact_stiffness_n_m)
         self.contact_stiffness_n_m = (
-            None
-            if contact_stiffness_n_m is None
-            else float(contact_stiffness_n_m)
+            None if contact_stiffness_n_m is None else float(contact_stiffness_n_m)
         )
         self.contact_damping_n_s_m = (
-            None
-            if contact_damping_n_s_m is None
-            else float(contact_damping_n_s_m)
+            None if contact_damping_n_s_m is None else float(contact_damping_n_s_m)
         )
         self._has_run = False
 
@@ -189,7 +232,7 @@ class DesignStudy:
         ]
         | None = None,
     ) -> None:
-        """Run and release each trial, optionally inspecting its live result."""
+        """Run and release trials, inspecting every accepted force target."""
         if self._has_run:
             raise RuntimeError("design study has already been run")
         if inspect_trial is not None and not callable(inspect_trial):
@@ -204,9 +247,7 @@ class DesignStudy:
                 trial.motion_direction_W,
                 dtype=np.float64,
             )
-            max_step_count = int(
-                trial.max_sim_time_s * self.sim_frequency
-            )
+            max_step_count = int(trial.max_sim_time_s * self.sim_frequency)
             if max_step_count < 1:
                 raise ValueError(
                     "max_sim_time_s must include at least one simulation tick"
@@ -216,16 +257,12 @@ class DesignStudy:
                 ceil(self.settle_duration_s * self.sim_frequency),
             )
 
-            builder = newton.ModelBuilder(
-                gravity=wp.vec3(0.0, 0.0, 0.0)
-            )
+            builder = newton.ModelBuilder(gravity=wp.vec3(0.0, 0.0, 0.0))
             indenter = Indenter.add_urdf(
                 builder,
                 trial.urdf_path,
                 tf=trial.initial_tf,
-                contact_stiffness_n_m=(
-                    self.contact_stiffness_n_m
-                ),
+                contact_stiffness_n_m=self.contact_stiffness_n_m,
                 contact_damping_n_s_m=self.contact_damping_n_s_m,
             )
             simulation = LumoSimulation(
@@ -238,9 +275,7 @@ class DesignStudy:
                 soft_contact_stiffness_n_m=self.contact_stiffness_n_m,
                 soft_contact_damping_n_s_m=self.contact_damping_n_s_m,
                 element_size_mm=self.element_size_mm,
-                carrier_contact_stiffness_n_m=(
-                    self.carrier_contact_stiffness_n_m
-                ),
+                carrier_contact_stiffness_n_m=self.carrier_contact_stiffness_n_m,
             )
 
             if simulation.soft_contact_count(indenter.body_index):
@@ -254,9 +289,17 @@ class DesignStudy:
             previous_force_n = 0.0
             in_tolerance_ticks = 0
             pose = trial.initial_tf
+            force_targets_n = self.force_targets_n or (trial.target_force_n,)
+            target_index = 0
+            target_force_n = force_targets_n[target_index]
+            force_tolerance_n = (
+                self.force_tolerance_n
+                if self.force_tolerance_n is not None
+                else target_force_n * self.force_tolerance_fraction
+            )
 
             while simulation.step_count < max_step_count:
-                force_error_n = trial.target_force_n - reaction_force_n
+                force_error_n = target_force_n - reaction_force_n
                 velocity_m_s = max(
                     -trial.approach_speed_m_s,
                     min(
@@ -266,8 +309,7 @@ class DesignStudy:
                 )
                 travel_m += velocity_m_s * simulation.time_step_s
                 translation_W_m = (
-                    initial_translation_W_m
-                    + travel_m * motion_direction_W
+                    initial_translation_W_m + travel_m * motion_direction_W
                 )
                 pose = wp.transform(
                     wp.vec3(*translation_W_m),
@@ -283,9 +325,7 @@ class DesignStudy:
                 force_change_n = abs(reaction_force_n - previous_force_n)
                 previous_force_n = reaction_force_n
 
-                if abs(reaction_force_n - trial.target_force_n) <= (
-                    self.force_tolerance_n
-                ):
+                if abs(reaction_force_n - target_force_n) <= force_tolerance_n:
                     in_tolerance_ticks += 1
                 else:
                     in_tolerance_ticks = 0
@@ -304,11 +344,20 @@ class DesignStudy:
                 trial.force_change_n = force_change_n
                 if inspect_trial is not None:
                     inspect_trial(trial, simulation, indenter)
-                break
+                target_index += 1
+                if target_index == len(force_targets_n):
+                    break
+                target_force_n = force_targets_n[target_index]
+                force_tolerance_n = (
+                    self.force_tolerance_n
+                    if self.force_tolerance_n is not None
+                    else target_force_n * self.force_tolerance_fraction
+                )
+                in_tolerance_ticks = 0
             else:
                 raise RuntimeError(
-                    f"{trial.name} did not keep {trial.target_force_n:g} N "
-                    f"within {self.force_tolerance_n:g} N for "
+                    f"{trial.name} did not keep {target_force_n:g} N "
+                    f"within {force_tolerance_n:g} N for "
                     f"{self.settle_duration_s:g} s "
                     f"during {trial.max_sim_time_s:g} s of simulation; last "
                     f"force was {reaction_force_n:.9e} N"

@@ -278,7 +278,9 @@ of the current runtime.
 #### `design_trial.py`
 
 `DesignTrial` is one indentation definition plus lightweight scalar and pose
-results. It never retains its `LumoSimulation` or `Indenter`.
+results. Its optional initial-clearance scalar lets consumers report physical
+indentation rather than total approach travel. It never retains its
+`LumoSimulation` or `Indenter`.
 `DesignStudy` owns one immutable analytic `Fingertip` design and an
 ordered tuple of design trials. It constructs a fresh builder, indenter,
 `LumoSimulation`, and Newton state for each trial, so every trial evaluates the
@@ -295,6 +297,13 @@ velocity. `DesignStudy` applies
 `v = clamp(Kf * (F_target - F), -approach_speed_m_s, approach_speed_m_s)` with
 the default `Kf=1.25e-3 m/(s N)`, then derives each pose increment from the
 simulation timestep.
+
+For the concrete multi-force sensing evaluation, a study may use one strictly
+increasing force-target tuple. The same trial runtime then advances through
+each target without resetting Newton state. Tolerance may be an absolute force
+or a target-relative fraction; the sensing evaluator uses `5, 10, 15, 20 N`
+with `+/- 10%` at every level. The live inspection callback runs immediately
+after every accepted target while the current Newton state still exists.
 
 The study keeps the per-trial force servo direct:
 
@@ -317,8 +326,8 @@ controller.
 Only `LumoSimulation.step()` mutates Newton state or simulation time. The study
 does not share mutable Newton state between trials, run trials in parallel, or
 introduce a generic simulation manager. A synchronous trial-inspection callback
-may validate the live final state; after it returns, the trial runtime is
-released before the next trial is constructed.
+may inspect each accepted live state; after the final callback returns, the
+trial runtime is released before the next trial is constructed.
 
 ### `lumo/benchmark/`
 
@@ -458,7 +467,7 @@ semiellipse center. This is a directional side-view response, not a camera,
 image, projection plane, pixel model, or optimization score.
 
 The scene has no Newton dependency. The optimization evaluator explicitly
-passes one final Newton vertex checkpoint through `update_silicone()`; neither
+passes each final Newton vertex checkpoint through `update_silicone()`; neither
 the optical scene nor the mechanics runtime imports the other. The silicone
 input surface is selected by the caller; the first IAS validation removes
 surface triangles whose three vertices all belong to the perfect bonded
@@ -479,17 +488,23 @@ Current responsibilities include design parameter bounds, feasibility
 constraints, one concrete sensing evaluation, and pure sensing-objective
 evaluation.
 
-`evaluator.py` owns the first production mechanics-to-optics orchestration. It
-builds one `FingertipMesh` and one `OptixScene`, traces the undeformed state,
-runs one supplied `DesignTrial`, updates the existing silicone GAS and IAS from
-the live Newton vertices, and traces the contact state with the exact same
-deterministic emission and bounce samples. It returns the two four-quadrant
-side-view responses and their existing `PathTraceResult` energy ledgers. The
-fixed current mechanics contract is `500 Hz`, `10` VBD iterations, equal
-`ke=3e4 N/m` endpoints, `kd=0.282280175 N s/m`, the proportional force servo,
-and acceptance after `20 +/- 1 N` is maintained for `5 s`. Optical transport
-uses `65,536` paths and `24` bounces. This evaluator does not perform morphology
-optimization or combine sensing objectives.
+`evaluator.py` owns the production mechanics-to-optics orchestration. It builds
+one `FingertipMesh` and one `OptixScene`, generates deterministic samples and
+traces the undeformed state once, then runs supplied `DesignTrial` scenarios in
+independent Newton runtimes. Each live final vertex state updates the same
+silicone GAS and IAS and is traced with the same emission and bounce samples.
+At each accepted `5, 10, 15, 20 N` checkpoint it immediately records actual
+force, indentation, a four-quadrant response, and a compact scalar energy
+ledger. It then releases the full `PathTraceResult` and escaped-ray arrays
+before Newton continues toward the next target. The returned response array is
+shaped `(scenario, force, quadrant)` and the energy array is shaped
+`(scenario, force, energy field)`, with separate no-contact reference vectors
+and per-scenario wall runtime. The fixed current mechanics contract is
+`500 Hz`, `10` VBD iterations, equal `ke=3e4 N/m` endpoints,
+`kd=0.282280175 N s/m`, the proportional force servo, and acceptance after
+each target remains within its `+/- 10%` band for `5 s`. Optical transport
+uses `65,536` paths and `24` bounces. This evaluator does not perform
+morphology optimization or combine sensing objectives.
 
 `sensing_descriptors()` consumes a state array shaped `(contact states, 4)`.
 For the current single optical cell it forms one scalar intensity response from
@@ -704,17 +719,24 @@ and evaluates a fixed 24-bounce cap for low, nominal, and high Solaris and
 Dragon Skin 10 NV optical priors.
 
 `validation/ray-tracing/sensing_evaluator_test.py` runs the production evaluator
-for one centered 15 mm sphere. It reports the no-contact and accepted `20 N`
-four-quadrant side-view responses, the complete energy ledger for each optical
-state, and the final mechanics checkpoint. The evaluator reuses one mesh and
-one OptiX scene, so the loaded trace exercises the silicone GAS/IAS update
-rather than a second scene build. The script does not simulate a camera,
-compute a morphology objective, or start optimization.
+for the Cartesian product of 5, 10, and 20 mm spheres with contact locations
+`X=-7.5, 0, +7.5 mm`. Each of those nine fresh Newton runtimes advances through
+`5, 10, 15, 20 N` without reset. The script reports the shared no-contact
+response, accepted mechanics checkpoints, the nine-by-four-by-four side-view
+response matrix, compact energy ledgers, response deltas, and wall runtimes.
+All scenarios reuse one mesh, one OptiX scene, and one deterministic optical
+sample set while their Newton runtimes remain independent and sequential. The
+script does not simulate a camera, compute a morphology objective, or start
+optimization.
 
 `validation/ray-tracing/sensing_visualization.py` projects a deterministic
 subset of those real 3D segment records onto the LED-center X-Z plane. It plots
 the actual triangle-plane section of unloaded and Newton-deformed silicone,
 the LED, `+Y` escape locations, and the observation quadrants in matched axes.
+The loaded panel uses the current centered 15 mm sphere, `500 Hz / 10 iteration`
+contact configuration and the accepted `20 +/- 1 N` checkpoint after a 5 s
+continuous force-band hold. Both panels reuse the same 4096 deterministic
+diagnostic paths with a 24-bounce cap.
 This Matplotlib-only diagnostic is not a 2D optical simulation or production
 rendering API.
 

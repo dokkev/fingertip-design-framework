@@ -302,7 +302,7 @@ and literature-derived extinction priors remain uncalibrated validation inputs.
 This is an explicit Newton/OptiX study rather than part of the focused unit-test
 suite.
 
-Run the first complete side-view sensing evaluator:
+Run the complete 3-sphere by 3-location side-view sensing matrix:
 
 ```bash
 OPTIX_INCLUDE_DIR=/path/to/NVIDIA-OptiX-SDK-9.1.0/include \
@@ -310,13 +310,16 @@ conda run --no-capture-output -n lit \
 python validation/ray-tracing/sensing_evaluator_test.py
 ```
 
-This runs the production evaluator for one centered 15 mm sphere. It builds one
-fingertip mesh and OptiX scene, traces the no-contact state with `65,536` paths,
-runs the current `500 Hz / 10 iteration` `20 +/- 1 N` force-servo contract,
-updates the existing silicone GAS/IAS, and repeats the 24-bounce optical trace
-with the same deterministic samples. It prints both four-quadrant `+Y`
-side-view responses, both complete path-energy ledgers, and the accepted
-mechanics checkpoint.
+This runs the production evaluator for 5, 10, and 20 mm spheres at
+`X=-7.5, 0, +7.5 mm`. It builds one fingertip mesh and OptiX scene, traces the
+no-contact state once with `65,536` paths, and runs nine independent sequential
+Newton scenarios with the current `500 Hz / 10 iteration` force servo. Each
+scenario advances through `5, 10, 15, 20 N` in one runtime and accepts a level
+after remaining within its `+/- 10%` band for 5 s. Every checkpoint updates the
+existing silicone GAS/IAS and repeats the 24-bounce trace with the same
+deterministic samples, then discards full path arrays. The script prints the
+nine-by-four-by-four response matrix, deltas, compact energy ledgers, actual
+forces and indentations, and per-scenario and total wall runtimes.
 
 Save the one-cell before/after sensing diagnostic without opening a window:
 
@@ -328,8 +331,11 @@ python validation/ray-tracing/sensing_visualization.py \
 
 The two matched X-Z panels are projections of the existing full 3D bounded
 paths at the geometry-derived extrusion center, not a separate 2D ray tracer.
-The loaded panel uses the existing centered `20 ± 1 N` force-servo
-`DesignStudy` checkpoint.
+The loaded panel uses the centered 15 mm sphere with the current
+`500 Hz / 10 iteration` contact configuration and the accepted `20 +/- 1 N`
+`DesignStudy` checkpoint after a 5 s continuous force-band hold. The plot
+reuses the same 4096 deterministic diagnostic paths and 24-bounce cap in both
+states.
 
 Run the CPU-only sampled dielectric branch regression:
 

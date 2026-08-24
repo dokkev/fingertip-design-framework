@@ -10,7 +10,6 @@ import numpy as np
 import warp as wp
 
 from lumo.fingertip import Fingertip, FingertipParameters
-from lumo.fingertip.geometric_param import semiellipse_depth_at_x_mm
 from lumo.mesh import FingertipMesh, make_fingertip_mesh
 from lumo.newton import Indenter
 from lumo.optimization import sensing_descriptors
@@ -30,20 +29,23 @@ _SILICONE_MASK = 0x01
 _CARRIER_MASK = 0x02
 _ALL_MASK = _SILICONE_MASK | _CARRIER_MASK
 
-_SAMPLE_SIDE_COUNT = 32
+_SAMPLE_SIDE_COUNT = 64
 _BOUNCE_CAP = 24
 _RNG_SEED = 20260823
 _CARRIER_ALBEDO = 0.7
 _PLOTTED_PATH_COUNT = 150
 
-_SPHERE_RADIUS_M = 5.0e-3
+_SPHERE_RADIUS_M = 7.5e-3
 _INITIAL_CLEARANCE_M = 1.0e-3
 _APPROACH_SPEED_M_S = 2.5e-2
 _TARGET_FORCE_N = 20.0
 _FORCE_TOLERANCE_N = 1.0
-_SETTLE_DURATION_S = 5.0e-3
-_MAX_SIM_TIME_S = 30.0
-_SIM_FREQUENCY_HZ = 1.0e3
+_SETTLE_DURATION_S = 5.0
+_MAX_SIM_TIME_S = 20.0
+_SIM_FREQUENCY_HZ = 500.0
+_VBD_ITERATIONS = 10
+_CONTACT_STIFFNESS_N_M = 3.0e4
+_CONTACT_DAMPING_N_S_M = 0.28228017516945547
 
 
 def _parse_args() -> argparse.Namespace:
@@ -260,16 +262,8 @@ def _trace_state(
 
 
 def _make_center_trial(fingertip: Fingertip, sphere_urdf_path: Path) -> DesignTrial:
-    surface_z_mm = (
-        fingertip.silicone.ellipse_center_z_mm
-        - semiellipse_depth_at_x_mm(
-            half_width_mm=fingertip.silicone.ellipse_radius_x_mm,
-            height_mm=fingertip.silicone.ellipse_radius_z_mm,
-            x_mm=0.0,
-        )
-    )
     initial_center_z_m = (
-        1.0e-3 * surface_z_mm
+        fingertip.tip_z_m
         - _INITIAL_CLEARANCE_M
         - _SPHERE_RADIUS_M
     )
@@ -570,16 +564,20 @@ def main() -> None:
         "assets",
         "objects",
         "urdf",
-        "sphere_10mm.urdf",
+        "sphere_15mm.urdf",
     )
     with as_file(sphere_resource) as sphere_urdf_path:
         trial = _make_center_trial(fingertip, sphere_urdf_path)
         DesignStudy(
             fingertip,
             (trial,),
+            fingertip_mesh=fingertip_mesh,
             sim_frequency=_SIM_FREQUENCY_HZ,
             force_tolerance_n=_FORCE_TOLERANCE_N,
             settle_duration_s=_SETTLE_DURATION_S,
+            iterations=_VBD_ITERATIONS,
+            contact_stiffness_n_m=_CONTACT_STIFFNESS_N_M,
+            contact_damping_n_s_m=_CONTACT_DAMPING_N_S_M,
         ).run(inspect_trial=inspect_loaded)
 
     if any(
@@ -634,7 +632,7 @@ def main() -> None:
     figure, axes = plt.subplots(1, 2, figsize=(13.5, 6.2), sharex=True, sharey=True)
     _plot_panel(
         axes[0],
-        title="Before load",
+        title="No load",
         section_xz_m=before_section,
         carrier_xz_mm=carrier_xz_mm,
         led=led,
@@ -647,7 +645,7 @@ def main() -> None:
     )
     _plot_panel(
         axes[1],
-        title="After load",
+        title="20 N load",
         section_xz_m=loaded_section,
         carrier_xz_mm=carrier_xz_mm,
         led=led,
@@ -694,12 +692,17 @@ def main() -> None:
     figure.tight_layout()
 
     print(f"LED position W [m]: {led.position_W_m}")
+    print(f"diagnostic optical paths: {len(emission)} ({_BOUNCE_CAP} bounces)")
     print(f"selected original ray IDs: {len(selected_ray_ids)} (same in both panels)")
     print(f"before quadrant power: {before_observation}")
     print(f"loaded quadrant power: {loaded_observation}")
     print(f"loaded normalized intensity response: {float(intensity[1]):+.9e}")
     print(f"loaded contact force: {loaded_force_n:.6f} N")
     print(f"loaded travel: {1.0e3 * loaded_travel_m:.6f} mm")
+    print(
+        "loaded indentation: "
+        f"{1.0e3 * (loaded_travel_m - _INITIAL_CLEARANCE_M):.6f} mm"
+    )
     print(f"maximum silicone displacement: {1.0e3 * maximum_displacement_m:.6f} mm")
 
     if args.output is None:

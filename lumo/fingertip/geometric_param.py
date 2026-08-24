@@ -30,9 +30,9 @@ class FingertipGeometry:
     flat_pad_height_mm: float = 5.0
     semiellipse_height_mm: float = 9.0
 
-    link_thickness_mm: float = 3.5
-    bond_extension_width_mm: float = 4.0
-    bond_extension_height_mm: float = 2.0
+    link_thickness_mm: float = 10
+    bond_extension_width_mm: float = 5.0
+    bond_extension_height_mm: float = 8.0
 
     stem_width_mm: float = 7.6
     stem_height_mm: float = 6.0
