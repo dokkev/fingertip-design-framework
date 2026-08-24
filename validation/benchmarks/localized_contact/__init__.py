@@ -1,1 +1,0 @@
-"""Localized indentation/contact benchmark."""

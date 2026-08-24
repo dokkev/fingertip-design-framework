@@ -7,15 +7,17 @@ from math import isfinite
 from numbers import Real
 from typing import Literal, Mapping
 
-from model import (
+from lumo.finger import (
     Fingertip,
     FingertipParameters,
+    KinematicParameters,
     LED,
-    MINIMUM_SILICONE_LIGAMENT_MM,
-    OpticalMaterial,
-    silicone_ligament_measures,
+    OpticalParameters,
+    PRODUCTION_MINIMUM_SILICONE_THICKNESS_MM,
+    ellipse_depth_at_cutout_mm,
+    silicone_thickness_measures,
 )
-from optimization.design_space import OPTIMIZABLE_PARAMETER_NAMES
+from lumo.optimization.design_space import OPTIMIZABLE_PARAMETER_NAMES
 
 
 DiagnosticSeverity = Literal["INFO", "WARN", "ERROR"]
@@ -35,15 +37,15 @@ class Diagnostic:
 
 
 _PARAMETER_DEFAULTS = {
-    field.name: getattr(FingertipParameters(), field.name)
-    for field in fields(FingertipParameters)
+    field.name: getattr(KinematicParameters(), field.name)
+    for field in fields(KinematicParameters)
 }
 _LED_DEFAULTS = {
     field.name: getattr(LED(), field.name) for field in fields(LED)
 }
 _OPTICAL_DEFAULTS = {
-    field.name: getattr(OpticalMaterial(), field.name)
-    for field in fields(OpticalMaterial)
+    field.name: getattr(OpticalParameters(), field.name)
+    for field in fields(OpticalParameters)
 }
 _PRIMARY_DIMENSIONS = (
     "flat_pad_width",
@@ -174,7 +176,7 @@ def _geometry_corrections(values: Mapping[str, object]) -> list[Diagnostic]:
     flat_width = numeric["flat_pad_width"]
     stem_width = numeric["stem_width"]
     void_width = numeric["void_width"]
-    tolerance = numeric["geometry_tolerance"]
+    tolerance = numeric["geometry_length_tolerance_mm"]
     if (
         flat_width is not None
         and stem_width is not None
@@ -191,9 +193,10 @@ def _geometry_corrections(values: Mapping[str, object]) -> list[Diagnostic]:
                     "GEOMETRY",
                     "The cutout reaches the external half-width. Current values: "
                     f"cutout_half_width={cutout_half_width:g} mm, "
-                    f"flat_pad_width/2 - geometry_tolerance={available_half_width:g} mm.\n"
+                    "flat_pad_width/2 - geometry_length_tolerance_mm="
+                    f"{available_half_width:g} mm.\n"
                     "Constraint: cutout_half_width < "
-                    "flat_pad_width/2 - geometry_tolerance.\n"
+                    "flat_pad_width/2 - geometry_length_tolerance_mm.\n"
                     f"Required: flat_pad_width > {2.0 * (cutout_half_width + tolerance):g} mm "
                     f"or stem_width < {flat_width - 2.0 * void_width - 2.0 * tolerance:g} mm.",
                 )
@@ -225,17 +228,12 @@ def _geometry_corrections(values: Mapping[str, object]) -> list[Diagnostic]:
             cutout_half_width = stem_width / 2.0 + void_width
             normalized_x = cutout_half_width / half_width
             if 0.0 <= normalized_x < 1.0:
-                available_depth = silicone_ligament_measures(
-                    {
-                        "flat_pad_width": flat_width,
-                        "flat_pad_height": flat_height,
-                        "semielliptical_pad_height": ellipse_height,
-                        "stem_width": stem_width,
-                        "stem_height": stem_height,
-                        "void_width": void_width,
-                        "void_height": void_height,
-                    }
-                ).ellipse_depth_at_cutout_mm
+                available_depth = ellipse_depth_at_cutout_mm(
+                    flat_pad_width=flat_width,
+                    semielliptical_pad_height=ellipse_height,
+                    stem_width=stem_width,
+                    void_width=void_width,
+                )
                 penetration = max(0.0, stem_height + void_height - flat_height)
                 if penetration > 0.0 and penetration >= available_depth - tolerance:
                     max_stem_height = (
@@ -257,9 +255,9 @@ def _geometry_corrections(values: Mapping[str, object]) -> list[Diagnostic]:
                             "Cutout bottom exits the semielliptical envelope.\n"
                             f"Current penetration={penetration:g} mm; "
                             f"available ellipse depth={available_depth:g} mm; "
-                            f"geometry_tolerance={tolerance:g} mm.\n"
+                            f"geometry_length_tolerance_mm={tolerance:g} mm.\n"
                             "Constraint: penetration < available ellipse depth "
-                            "- geometry_tolerance.\n"
+                            "- geometry_length_tolerance_mm.\n"
                             f"Possible fixes: stem_height < {max_stem_height:g} mm; "
                             + (
                                 f"semielliptical_pad_height > {required_ellipse_height:g} mm; "
@@ -296,13 +294,10 @@ def _geometry_corrections(values: Mapping[str, object]) -> list[Diagnostic]:
 def diagnose_geometry(
     values: Mapping[str, object],
     *,
-    mechanical: Mapping[str, object] | None = None,
     led: LED | None = None,
 ) -> tuple[Diagnostic, ...]:
     """Validate actual fingertip construction and add known geometry guidance."""
     payload = _merged(_PARAMETER_DEFAULTS, values)
-    if mechanical is not None:
-        payload.update(mechanical)
     result = _geometry_corrections(payload)
     try:
         parameters = FingertipParameters(**payload)
@@ -317,30 +312,27 @@ def diagnose_geometry(
         )
         return tuple(result)
 
-    ligament = silicone_ligament_measures(parameters)
+    thickness = silicone_thickness_measures(parameters)
     result.append(
         _message(
             "INFO",
-            "LIGAMENT",
-            "Conservative silicone ligament measures: "
-            f"side={ligament.side_ligament_mm:g} mm, "
-            f"distal={ligament.distal_ligament_mm:g} mm, "
-            f"minimum={ligament.minimum_silicone_ligament_mm:g} mm. "
-            "These are design-space measures, not an exact minimum Euclidean "
-            "wall thickness.",
+            "GEOMETRY",
+            "Production silicone wall thickness: "
+            f"global_d_min={thickness.minimum_silicone_thickness_mm:g} mm, "
+            f"boundary_pair={thickness.shortest_boundary_pair}.",
         )
     )
-    if (
-        ligament.side_ligament_mm < MINIMUM_SILICONE_LIGAMENT_MM
-        or ligament.distal_ligament_mm < MINIMUM_SILICONE_LIGAMENT_MM
-    ):
+    minimum_thickness_mm = PRODUCTION_MINIMUM_SILICONE_THICKNESS_MM
+    if thickness.minimum_silicone_thickness_mm < minimum_thickness_mm:
         result.append(
             _message(
                 "ERROR",
                 "DESIGN SPACE",
-                "The conservative 2.0 mm silicone ligament rule is violated: "
-                f"side={ligament.side_ligament_mm:g} mm, "
-                f"distal={ligament.distal_ligament_mm:g} mm. "
+                "The production "
+                f"{minimum_thickness_mm:g} mm silicone wall-thickness rule "
+                "is violated: "
+                f"global_d_min={thickness.minimum_silicone_thickness_mm:g} mm, "
+                f"boundary_pair={thickness.shortest_boundary_pair}. "
                 "Increase the surrounding pad dimensions or reduce the cutout; "
                 "no automatic repair was applied.",
             )
@@ -359,63 +351,36 @@ def diagnose_geometry(
                 "repair was applied.",
             )
         )
-        if selected_led.width_mm > parameters.stem_width + parameters.geometry_tolerance:
+        if (
+            selected_led.width_mm
+            > parameters.stem_width + parameters.geometry_length_tolerance_mm
+        ):
             result.append(
                 _message(
                     "ERROR",
                     "LED FIT",
                     f"LED width={selected_led.width_mm:g} mm exceeds stem width="
                     f"{parameters.stem_width:g} mm. Required relation: "
-                    f"LED width <= stem_width + geometry_tolerance="
-                    f"{parameters.stem_width + parameters.geometry_tolerance:g} mm. "
+                    "LED width <= stem_width + geometry_length_tolerance_mm="
+                    f"{parameters.stem_width + parameters.geometry_length_tolerance_mm:g} mm. "
                     "Increase stem_width or reduce LED width.",
                 )
             )
-        if selected_led.height_mm > parameters.stem_height + parameters.geometry_tolerance:
+        if (
+            selected_led.height_mm
+            > parameters.stem_height + parameters.geometry_length_tolerance_mm
+        ):
             result.append(
                 _message(
                     "ERROR",
                     "LED FIT",
                     f"LED height={selected_led.height_mm:g} mm exceeds stem height="
                     f"{parameters.stem_height:g} mm. Required relation: "
-                    f"LED height <= stem_height + geometry_tolerance="
-                    f"{parameters.stem_height + parameters.geometry_tolerance:g} mm. "
+                    "LED height <= stem_height + geometry_length_tolerance_mm="
+                    f"{parameters.stem_height + parameters.geometry_length_tolerance_mm:g} mm. "
                     "Increase stem_height or reduce LED height.",
                 )
             )
-    return tuple(result)
-
-
-def diagnose_mechanical(values: Mapping[str, object]) -> tuple[Diagnostic, ...]:
-    """Report model-supported intervals for mechanical material inputs."""
-    result: list[Diagnostic] = []
-    young = _number(values.get("young_modulus_mpa"))
-    if young is None or young <= 0.0:
-        result.append(
-            _message(
-                "ERROR",
-                "MECHANICAL",
-                f"young_modulus_mpa must be > 0 MPa; current value is "
-                f"{_display(values.get('young_modulus_mpa'), ' MPa')}.",
-            )
-        )
-    poisson = _number(values.get("poisson_ratio"))
-    if poisson is None or not -1.0 < poisson < 0.5:
-        result.append(
-            _message(
-                "ERROR",
-                "MECHANICAL",
-                f"Poisson ratio must satisfy -1 < poisson_ratio < 0.5; "
-                f"current value is {_display(values.get('poisson_ratio'))}.",
-            )
-        )
-    try:
-        FingertipParameters(
-            young_modulus_mpa=values.get("young_modulus_mpa", _PARAMETER_DEFAULTS["young_modulus_mpa"]),
-            poisson_ratio=values.get("poisson_ratio", _PARAMETER_DEFAULTS["poisson_ratio"]),
-        )
-    except Exception as exc:
-        result.append(_message("ERROR", "MECHANICAL", f"{type(exc).__name__}: {exc}"))
     return tuple(result)
 
 
@@ -453,25 +418,6 @@ def diagnose_led(values: Mapping[str, object]) -> tuple[Diagnostic, ...]:
                 f"current value is {_display(payload['emission_half_angle_deg'])} deg.",
             )
         )
-    rgb = payload["emission_rgb"]
-    if not isinstance(rgb, (tuple, list)) or len(rgb) != 3:
-        result.append(_message("ERROR", "LED", "emission_rgb must contain three components."))
-    else:
-        for index, component in enumerate(rgb):
-            number = _number(component)
-            if number is None or number < 0.0:
-                result.append(
-                    _message(
-                        "ERROR",
-                        "LED",
-                        f"emission_rgb[{index}] must be >= 0; current value is "
-                        f"{_display(component)}.",
-                    )
-                )
-        if all((_number(component) or 0.0) <= 0.0 for component in rgb):
-            result.append(
-                _message("ERROR", "LED", "at least one emission_rgb component must be > 0.")
-            )
     try:
         LED(**payload)
     except Exception as exc:
@@ -493,28 +439,18 @@ def diagnose_optical(values: Mapping[str, object]) -> tuple[Diagnostic, ...]:
                     f"{name} must be > 0; current value is {_display(payload[name])}.",
                 )
             )
-    for name in ("absorption_per_mm", "scattering_per_mm"):
-        value = _number(payload[name])
-        if value is None or value < 0.0:
-            result.append(
-                _message(
-                    "ERROR",
-                    "OPTICAL",
-                    f"{name} must be >= 0; current value is {_display(payload[name])}.",
-                )
-            )
-    anisotropy = _number(payload["anisotropy_g"])
-    if anisotropy is None or not -1.0 < anisotropy < 1.0:
+    absorption = _number(payload["absorption_per_mm"])
+    if absorption is None or absorption < 0.0:
         result.append(
             _message(
                 "ERROR",
                 "OPTICAL",
-                "anisotropy_g must satisfy -1 < anisotropy_g < 1; "
-                f"current value is {_display(payload['anisotropy_g'])}.",
+                "absorption_per_mm must be >= 0; current value is "
+                f"{_display(payload['absorption_per_mm'])}.",
             )
         )
     try:
-        OpticalMaterial(**payload)
+        OpticalParameters(**payload)
     except Exception as exc:
         result.append(_message("ERROR", "OPTICAL", f"{type(exc).__name__}: {exc}"))
     return tuple(result)
@@ -522,30 +458,27 @@ def diagnose_optical(values: Mapping[str, object]) -> tuple[Diagnostic, ...]:
 
 def diagnose_physical_state(
     geometry: Mapping[str, object],
-    mechanical: Mapping[str, object],
     led_values: Mapping[str, object],
 ) -> tuple[Diagnostic, ...]:
-    """Validate geometry, mechanical values, and LED fit for one state."""
+    """Validate geometry and LED fit for one state."""
     led_diagnostics = diagnose_led(led_values)
     selected_led: LED | None = None
     if not led_diagnostics:
         selected_led = LED(**_merged(_LED_DEFAULTS, led_values))
     return (
-        *diagnose_geometry(geometry, mechanical=mechanical, led=selected_led),
-        *diagnose_mechanical(mechanical),
+        *diagnose_geometry(geometry, led=selected_led),
         *led_diagnostics,
     )
 
 
 def diagnose_state(
     geometry: Mapping[str, object],
-    mechanical: Mapping[str, object],
     led_values: Mapping[str, object],
     optical: Mapping[str, object],
 ) -> tuple[Diagnostic, ...]:
     """Validate all editable state; optical checks remain separate from shape."""
     return (
-        *diagnose_physical_state(geometry, mechanical, led_values),
+        *diagnose_physical_state(geometry, led_values),
         *diagnose_optical(optical),
     )
 
@@ -630,25 +563,22 @@ def diagnose_design_space(
 def build_led(values: Mapping[str, object]) -> LED:
     """Construct the current LED after callers have handled diagnostics."""
     payload = _merged(_LED_DEFAULTS, values)
-    if isinstance(payload.get("emission_rgb"), list):
-        payload["emission_rgb"] = tuple(payload["emission_rgb"])
     return LED(**payload)
 
 
-def build_optical_material(values: Mapping[str, object]) -> OpticalMaterial:
-    """Construct the current optical material after callers have handled diagnostics."""
-    return OpticalMaterial(**_merged(_OPTICAL_DEFAULTS, values))
+def build_optical_parameters(values: Mapping[str, object]) -> OpticalParameters:
+    """Construct optical parameters after callers have handled diagnostics."""
+    return OpticalParameters(**_merged(_OPTICAL_DEFAULTS, values))
 
 
 __all__ = [
     "Diagnostic",
     "DiagnosticSeverity",
     "build_led",
-    "build_optical_material",
+    "build_optical_parameters",
     "diagnose_design_space",
     "diagnose_geometry",
     "diagnose_led",
-    "diagnose_mechanical",
     "diagnose_optical",
     "diagnose_physical_state",
     "diagnose_state",

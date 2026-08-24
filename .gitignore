@@ -1,6 +1,8 @@
 __pycache__/
 *.py[cod]
+*.egg-info/
 .pytest_cache/
 output/*
 !output/.gitkeep
+lumo-references-legay/output/
 INSTRUCTION.md

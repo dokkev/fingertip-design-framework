@@ -5,20 +5,19 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "fingertip-design-framework"
 version = "0.1.0"
-description = "Parametric fingertip geometry, meshing, Kratos FEM, and scientific validation"
+description = "Parametric fingertip geometry, Newton mechanics, OptiX transport, and scientific optimization"
 requires-python = ">=3.11"
 dependencies = [
   "numpy>=1.26",
+  "PyYAML>=6.0",
   "shapely>=2.0",
 ]
 
 [project.optional-dependencies]
 mesh = ["gmsh>=4.12"]
-visualization = ["matplotlib>=3.8"]
 validation = ["scipy>=1.11"]
-optics = ["mitsuba>=3.8"]
 optix = [
-  "pyoptix",
+  "pyoptix==9.1.0",
   "cupy-cuda13x",
   "cuda-python",
 ]
@@ -30,27 +29,29 @@ test = ["pytest>=8"]
 ax = [
   "ax-platform==1.3.1",
 ]
-
-[tool.setuptools.packages.find]
-include = [
-  "model*",
-  "mesh*",
-  "fem*",
-  "visualization*",
-  "validation*",
-  "optics*",
-  "optimization*",
-  "gui*",
+physics = [
+  "meshio>=5.3",
+  "newton==1.5.0",
+  "warp-lang==1.16.0",
 ]
 
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["lumo*"]
+
 [tool.setuptools.package-data]
-"optics.transport3d" = ["kernels/*.cu"]
+"lumo" = [
+  "assets/objects/*.urdf",
+  "assets/objects/urdf/*.urdf",
+]
+"lumo.ray_tracing.optical_mechanics" = ["kernels/*.cu"]
+"lumo.ray_tracing" = ["kernels/*.cu"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests/unit", "tests/smoke"]
 markers = [
   "smoke: dependency wiring smoke test",
   "gmsh: requires the Gmsh Python API",
-  "kratos: requires the external Kratos 10.3 environment",
   "slow: takes materially longer than a unit test",
+  "physics: requires NVIDIA Warp/Newton and CUDA",
 ]

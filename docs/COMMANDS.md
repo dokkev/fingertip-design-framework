@@ -1,161 +1,594 @@
 # Commands
 
-Activate the Python environment that provides the project dependencies and the
-externally managed Kratos installation. Commands below use that environment's
-active `python`.
-
-## Development setup
-
-Editable installation is the preferred development setup:
+Use the `lit` Conda environment for all repository commands:
 
 ```bash
-cd /path/to/lit_ws
-python -m pip install -e ".[mesh,visualization,validation,test]"
+conda activate lit
 ```
 
-After installation, package and module commands work from any working
-directory.
-
-The optional NiceGUI design-space explorer can be installed and launched with:
+## Install current dependencies
 
 ```bash
-python -m pip install -e ".[gui]"
-python -m gui.design_space_app
+python -m pip install -e ".[mesh,physics,ax,test]"
 ```
 
-For direct development from the application directory, the equivalent command
-is `python design_space_app.py`.
+`mesh` supplies Gmsh, `physics` supplies Newton 1.5/Warp and rigid asset loading,
+and `ax` supplies Ax 1.3.1. CUDA, OptiX, and GPU drivers are externally managed.
+The editable install exposes the sole framework namespace from `lumo/`;
+repository scripts do not insert the checkout into `sys.path`.
 
-It uses the model and existing visualization only; it does not require Kratos,
-Gmsh, or an optical transport backend.
-
-The optional Ax adapter can be installed with:
+Install the NVIDIA OptiX Toolkit source once for its header-only ShaderUtil
+self-intersection implementation. No OTK build is required:
 
 ```bash
-python -m pip install -e ".[ax]"
+git clone --depth 1 \
+  https://github.com/NVIDIA/optix-toolkit.git \
+  /path/to/optix-toolkit
+
+conda env config vars set -n lit \
+  OTK_INCLUDE_DIR=/path/to/optix-toolkit/ShaderUtil/include
 ```
 
-It has no CLI or GUI entry point in this iteration.
+Reactivate the environment after changing its persistent variables. The
+runtime also accepts an explicit `otk_include_dir` when constructing
+`OptixScene`.
 
-## Tests
+## Focused tests
 
 ```bash
-python -m pytest tests/unit -q
-python -m pytest tests/smoke -q -m "smoke and not kratos"
-python -m pytest tests/smoke -q -m kratos
+./scripts/tools/pytest_lit tests/unit/finger tests/unit/mesh -q
+./scripts/tools/pytest_lit tests/unit/contact tests/unit/physics -q
+./scripts/tools/pytest_lit tests/unit/ray_tracing tests/unit/optimization -q
+./scripts/tools/pytest_lit tests/unit/optimization/test_evaluator.py -q
 ```
 
-## Validation
+The Newton smoke tests require the CUDA-capable `lit` environment:
 
 ```bash
-python -m validation.benchmarks.volumetric_locking run \
-  --output output/validation/benchmarks/volumetric_locking.json
-python -m validation.benchmarks.mixed_volumetric run \
-  --output output/validation/benchmarks/mixed_volumetric.json
-python -m validation.fingertip.geometry \
-  --output-directory output/validation/fingertip/geometry
-python -m validation.fingertip.mesh --levels medium fine \
-  --output-directory output/validation/fingertip/mesh
-python -m validation.fingertip.indentation.no_void
-python -m validation.fingertip.transfer_map \
-  --output-dir output/validation/fingertip/transfer_map \
-  --reference-dir output/validation/fingertip/indentation/no_void
-
-# Staged Kratos FEA throughput/fidelity study.  These commands write only to
-# output/validation/fem/throughput/ and leave production defaults unchanged.
-OMP_NUM_THREADS=1 python -m validation.fem.throughput --stage profile
-OMP_NUM_THREADS=1 python -m validation.fem.throughput --stage diagnostics
-OMP_NUM_THREADS=1 python -m validation.fem.throughput --stage mesh
-OMP_NUM_THREADS=1 python -m validation.fem.throughput --stage full
-OMP_NUM_THREADS=1 python -m validation.fem.throughput --stage steps
-OMP_NUM_THREADS=1 python -m validation.fem.throughput --stage continuation
-OMP_NUM_THREADS=1 python -m validation.fem.throughput --stage symmetry
-OMP_NUM_THREADS=1 python -m validation.fem.throughput --stage solver
-OMP_NUM_THREADS=1 python -m validation.fem.throughput --stage parallel
-# Recompute the report from completed staged artifacts without rerunning FEA.
-python -m validation.fem.throughput --stage finalize
+./scripts/tools/pytest_lit tests/smoke/physics -q -m "smoke and physics"
 ```
 
-## Figures
-
-Validation figure workflows read persisted artifacts and save directly:
+Visualize the analytic carrier-silicone bond in the XZ cross-section:
 
 ```bash
-python -m validation.figures.displacement_atlas \
-  --input-dir output/validation/fingertip/indentation/normal_full_field \
-  --output output/figures/displacement_vector_atlas/displacement_vector_atlas.png
+conda run -n lit python validation/fingertip/view_bond_geometry.py
 ```
 
-## Tutorial examples
-
-From the repository root, run:
+Run the procedural flat-plate contact smoke explicitly:
 
 ```bash
-python examples/view_fingertip.py
-python examples/view_fea.py
-python examples/view_light.py
+conda run -n lit python validation/contact-physics/flat_plate_contact.py
 ```
 
-The direct script is also launchable from any working directory:
+The script owns its transient-force stopping threshold and maximum simulation
+time locally.
+
+To render every step and keep the final state open until the window closes:
 
 ```bash
-python /path/to/lit_ws/examples/view_light.py
+conda run -n lit python validation/contact-physics/flat_plate_contact.py --viewer
 ```
 
-`view_fingertip.py` teaches the `Fingertip` → `plot_fingertip` flow.
-`view_fea.py` compares three indentation diameters with a shared displacement
-color scale. `view_light.py` demonstrates the
-`Fingertip` → mesh → `solve()` → `trace()` → `evaluate()` flow with shared
-reference/loaded transport normalization. The solver-backed examples can take
-significant time and do not write artifacts.
-
-The resumable three-radius scientific atlas remains a validation command:
+Run the three-location spherical indentation validation explicitly:
 
 ```bash
-python -m validation.fingertip.indentation.normal_field_atlas --force
+conda run -n lit python validation/contact-physics/sphere_indentation.py
 ```
 
-`examples/bootstrap.py` makes direct example execution independent of the
-current working directory. It cannot affect Python's pre-execution `-m` module
-resolution, so module commands still require the editable installation.
+The 5, 10, and 20 mm diameter URDF spheres each run in independent simulations
+at `X=-7.5`, `0`, and `+7.5 mm`, for nine design trials total. Each kinematic
+indenter uses the proportional force servo, slows near `20 N`, and must remain
+inside `20 ± 1 N` for `5 ms`. This is an explicit multi-simulation validation,
+not part of ordinary focused tests.
 
-## Result-only visualization
-
-The public `visualization` package contains plotting functions only. Persisted
-scientific figures are rendered by validation-specific commands above; they
-validate their own artifact manifests and never start the solver.
-
-The optional Mitsuba camera validator is demonstrated by:
+View one centered 15 mm sphere moving continuously to a transient `20 N`
+reaction force:
 
 ```bash
-python /path/to/lit_ws/examples/camera_render.py
+conda run --no-capture-output -n lit \
+  python -u validation/contact-physics/sphere_15mm_viewer.py
 ```
 
-The focused NVIDIA OptiX transport validator uses the externally managed
-CUDA/OptiX environment documented in `README.md`:
+The viewer renders every Newton tick and prints travel, reaction force, maximum
+active silicone speed, and sphere contact count every 100 ticks. After the first
+transient `20 N` crossing it holds the sphere pose fixed while continuing the
+simulation for `10 s`, then freezes the final held state until the window
+closes. This is an interactive contact diagnostic, not the force-servo
+validation above.
+
+Record the fixed-pose reaction-force trajectory after the same centered 15 mm
+sphere first reaches transient `20 N`:
 
 ```bash
-OptiX_INSTALL_DIR=/external/optix-dev \
-python -m validation.optics.optix_smoke
-
-OptiX_INSTALL_DIR=/external/optix-dev \
-python -m validation.optics.transport3d_validation \
-  --output output/validation/optics/transport3d
+conda run --no-capture-output -n lit \
+  python -u validation/contact-physics/force_traj.py
 ```
 
-The validation command runs the 11 mm single-source cell, the planar
-consistency gate, the four authorized medium-mesh 48-step contact states, and
-the deterministic 4,096/16,384/65,536-ray convergence check. It writes only
-machine-readable generated artifacts below
-`output/validation/optics/transport3d/`.
+The script compares the baseline, a validation-only one-time particle-velocity
+reset, a 30-iteration solve, and a smaller-timestep solve. Each case holds the
+trigger pose for `10 s`, prints early transient checkpoints through `1 s` plus
+`2`, `5`, and `10 s`, and writes combined force, speed, contact, penetration,
+and tetrahedral-volume trajectories to `output/validation/force_traj.csv` and
+`force_traj.png`. It is an explicit GPU validation and is not part of focused
+tests.
 
-The dependency-light focused contracts can be run without the optional GPU
-runtime (the environment here disables unrelated auto-loaded ROS pytest
-plugins):
+Measure the nominal centered 15 mm sphere force-depth curve and direct sphere
+penetration diagnostics without holding or force correction:
 
 ```bash
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
-python -m pytest tests/unit/test_transport3d_contracts.py -q
+conda run --no-capture-output -n lit \
+  python -u validation/contact-physics/sphere_force_depth.py
 ```
 
-All generated validation artifacts and figures are written below `output/`.
+The script continuously pushes to `10 mm` analytic indentation depth and writes
+`output/validation/sphere_force_depth.csv` and `sphere_force_depth.png`. It also
+reports sphere contact count, particle/surface/centroid/tet-center penetration,
+minimum tet `det(F)`, and inverted-tet count. A fresh second simulation reaches
+the first transient `20 N` crossing, holds that exact pose for `1 s`, and
+reports force at `0`, `5`, `100`, and `1000 ms`.
+
+Run the focused centered-sphere rigid-soft contact diagnostic:
+
+```bash
+conda run --no-capture-output -n lit \
+  python -u validation/contact-physics/sphere_contact_tuning.py
+```
+
+The script uses Newton 1.5's full-surface VBD wrench harvest, equalizes the
+rigid-shape and soft-contact `ke/kd` endpoints, and compares `ke=1e4`, `3e4`,
+and `1e5 N/m` with mass-scaled damping at `2 kHz`. It checks two stable cases
+at `4 kHz` and writes `output/validation/sphere_contact_tuning.csv`,
+`sphere_contact_tuning_force_depth.csv`, and `sphere_contact_tuning.png`.
+This explicit GPU diagnostic does not run the larger mechanics or OptiX sweeps.
+
+Run the representative numerical/contact parameter sweep explicitly:
+
+```bash
+conda run --no-capture-output -n lit \
+  python -u -m lumo.benchmark.newton_parameter_sweep
+```
+
+Add the substantially finer `0.5 mm` mesh case with `--fine`. Add the current
+baseline 3-sphere by 3-location robustness matrix with `--matrix`. Parameters
+are varied one family at a time around the current baseline, with the approach
+speed fixed at `25 mm/s` even when simulation frequency changes; neither flag
+creates a Cartesian product across numerical parameters. This is an expensive
+multi-simulation convergence study and is not part of ordinary focused tests.
+After every requested run finishes, it writes strict JSON to
+`output/benchmark/newton_parameter_sweep.json`. Use `--output PATH` to select a
+different result file. An interrupted run does not write a partial result.
+
+Run the full measured optomechanical Newton/OptiX factorial sweep explicitly:
+
+```bash
+conda run --no-capture-output -n lit \
+  python -u validation/optomech/newton_parameter_sweep.py
+```
+
+This runs the fixed 24-configuration Newton sweep at `65,536` rays and `24`
+bounces, measures mechanics and optical wall time, and writes strict JSON to
+`output/validation/newton_parameter_sweep.json`. It selects the fastest
+hard-valid configuration that completes the fixed sensing evaluation.
+
+Run the complete sensing numerical-convergence study overnight:
+
+```bash
+conda run --no-capture-output -n lit \
+  python -u validation/contact-physics/sensing_convergence.py
+```
+
+This one script first compares `5/20/50 ms` fixed-pose settling holds, then runs
+the small one-factor-at-a-time Newton/contact study for carrier stiffness,
+timestep frequency, VBD iterations, and mesh size. It evaluates the selected
+hard-valid deformation with common optical samples at 16384 and 65536 rays,
+using 24 bounces and three fixed seeds. It prints progress and compact final
+tables, including raw per-contact quadrant responses and worst-pair diagnostics
+in the JSON output, then writes strict JSON to
+`output/validation/sensing_convergence.json`. Use `--output PATH` to select a
+different final JSON file. This is an expensive unattended validation and is
+not part of ordinary focused tests. A failed Newton setting is recorded and the
+remaining settings continue; optical comparisons run from the first hard-valid
+reference configuration.
+
+Run the Dragon Skin 10 NV Poisson-ratio contact sweep explicitly:
+
+```bash
+conda run -n lit python validation/contact-physics/poisson_ratio_sweep.py
+```
+
+The sweep compares `0.48`, `0.49`, and `0.495` using one fixed shear modulus
+and reports force-target timing and tetrahedral volume change. It performs
+multiple Newton simulations and is not part of ordinary focused tests.
+
+## OptiX gate before production BO
+
+Run the static multi-instance IAS validation with the OptiX 9.1 SDK include
+directory used by NVRTC:
+
+```bash
+OPTIX_INCLUDE_DIR=/path/to/NVIDIA-OptiX-SDK-9.1.0/include \
+conda run --no-capture-output -n lit \
+python validation/ray-tracing/ias_test.py
+```
+
+This builds silicone and carrier GASes under one IAS and checks closest hits, a
+miss, and visibility masking. Synchronization occurs only when the batched
+results are copied to the host.
+
+Run the CPU-only single-interface dielectric validation:
+
+```bash
+conda run --no-capture-output -n lit \
+python validation/ray-tracing/interface_transport_test.py
+```
+
+This checks deterministic normal-incidence and oblique Fresnel/Snell cases,
+including below-critical refraction, total internal reflection, and scalar or
+per-ray power conservation.
+
+Run the OptiX world-space geometric-normal and interface integration check:
+
+```bash
+OPTIX_INCLUDE_DIR=/path/to/NVIDIA-OptiX-SDK-9.1.0/include \
+conda run --no-capture-output -n lit \
+python validation/ray-tracing/normal_test.py
+```
+
+This checks a planar carrier face, the analytic silicone semiellipse, and one
+OptiX-hit-to-dielectric-interface operation.
+
+Run the single refracted secondary-ray validation:
+
+```bash
+OPTIX_INCLUDE_DIR=/path/to/NVIDIA-OptiX-SDK-9.1.0/include \
+conda run --no-capture-output -n lit \
+python validation/ray-tracing/secondary_ray_test.py
+```
+
+This uses OTK ShaderUtil safe spawn positions to trace exactly one refracted
+ray from exposed silicone to carrier without a numerical self-hit.
+
+Run the single-interface reflected/refracted power-branch validation:
+
+```bash
+OPTIX_INCLUDE_DIR=/path/to/NVIDIA-OptiX-SDK-9.1.0/include \
+conda run --no-capture-output -n lit \
+python validation/ray-tracing/power_branch_test.py
+```
+
+This splits one incident ray's scalar power by Fresnel `R/T`, traces each
+OTK-safe branch once, and stops after the reflected miss and refracted carrier
+hit.
+
+Run the one-event opaque Lambertian carrier validation:
+
+```bash
+OPTIX_INCLUDE_DIR=/path/to/NVIDIA-OptiX-SDK-9.1.0/include \
+conda run --no-capture-output -n lit \
+python validation/ray-tracing/carrier_reflection_test.py
+```
+
+This checks deterministic cosine-weighted sampling and opaque power accounting,
+then traces one `air -> silicone -> carrier -> silicone` path and stops.
+
+Run the complete single-path silicone-exit validation:
+
+```bash
+OPTIX_INCLUDE_DIR=/path/to/NVIDIA-OptiX-SDK-9.1.0/include \
+conda run --no-capture-output -n lit \
+python validation/ray-tracing/silicone_exit_test.py
+```
+
+This composes the validated surface operations into one deterministic
+`air -> silicone -> carrier -> silicone -> air` path, verifies that the final
+transmitted ray misses the scene, and checks complete scalar power accounting.
+
+Run the idealized undeformed/deformed LED-receiver study:
+
+```bash
+OPTIX_INCLUDE_DIR=/path/to/NVIDIA-OptiX-SDK-9.1.0/include \
+conda run --no-capture-output -n lit \
+python validation/ray-tracing/led_sensor_response_test.py
+```
+
+This uses the current Adafruit Green LED Sequin hardware metadata with an ideal
+Lambertian point-source approximation, runs one central 10 mm sphere indentation
+to the existing settled-force checkpoint, and evaluates a fixed 24-bounce
+transport cap for the low/nominal/high Solaris and Dragon Skin 10 NV optical
+sensitivity presets. All six cases use the same 4096 emitted rays, deformation,
+and per-ray/per-bounce random samples before and after the silicone UPDATE.
+Source placement, receiver geometry, carrier albedo, normalized optical power,
+and literature-derived extinction priors remain uncalibrated validation inputs.
+This is an explicit Newton/OptiX study rather than part of the focused unit-test
+suite.
+
+Run the complete 3-sphere by 3-location side-view sensing matrix:
+
+```bash
+OPTIX_INCLUDE_DIR=/path/to/NVIDIA-OptiX-SDK-9.1.0/include \
+conda run --no-capture-output -n lit \
+python validation/ray-tracing/sensing_evaluator_test.py
+```
+
+This runs the production evaluator for 5, 10, and 20 mm spheres at
+`X=-7.5, 0, +7.5 mm`. It builds one fingertip mesh and OptiX scene, traces the
+no-contact state once with `65,536` paths, and runs nine independent sequential
+Newton scenarios with the current `100 Hz / 10 iteration` force servo. Each
+scenario advances through `5, 10, 15, 20 N` in one runtime and accepts a level
+after remaining within its `+/- 10%` band for 5 s. Every checkpoint updates the
+existing silicone GAS/IAS and repeats the 24-bounce trace with the same
+deterministic samples, then discards full path arrays. The script prints the
+nine-by-four-by-four response matrix, deltas, compact energy ledgers, actual
+forces and indentations, and per-scenario and total wall runtimes.
+
+Save the one-cell before/after sensing diagnostic without opening a window:
+
+```bash
+MPLBACKEND=Agg conda run --no-capture-output -n lit \
+python validation/ray-tracing/sensing_visualization.py \
+  --output /tmp/lumo_sensing.png
+```
+
+The two matched X-Z panels are projections of the existing full 3D bounded
+paths at the geometry-derived extrusion center, not a separate 2D ray tracer.
+The loaded panel uses the centered 15 mm sphere with the current
+`500 Hz / 10 iteration` contact configuration and the accepted `20 +/- 1 N`
+`DesignStudy` checkpoint after a 5 s continuous force-band hold. The plot
+reuses the same 4096 deterministic diagnostic paths and 24-bounce cap in both
+states.
+
+Run the CPU-only sampled dielectric branch regression:
+
+```bash
+conda run --no-capture-output -n lit \
+python validation/ray-tracing/dielectric_branch_test.py
+```
+
+This checks Fresnel branch selection, total internal reflection, medium-state
+updates, and the non-double-counted lossless path weight used by bounded
+transport.
+
+Run the silicone GAS and IAS UPDATE/refit validation with the same SDK headers:
+
+```bash
+OPTIX_INCLUDE_DIR=/path/to/NVIDIA-OptiX-SDK-9.1.0/include \
+conda run --no-capture-output -n lit \
+python validation/ray-tracing/refit_test.py
+```
+
+This translates the silicone surface by `+1 mm`, compares UPDATE against a
+fresh scene build, checks that the other instances remain unchanged, and
+reports representative update and full-construction timings.
+
+Run the real Newton-state to OptiX checkpoint validation:
+
+```bash
+OPTIX_INCLUDE_DIR=/path/to/NVIDIA-OptiX-SDK-9.1.0/include \
+conda run --no-capture-output -n lit \
+python validation/ray-tracing/newton_refit_test.py
+```
+
+This drives the centered 15 mm kinematic sphere at the same `25 mm/s` used by
+the interactive viewer, freezes the first transient state at or above `20 N`,
+and compares an in-place silicone UPDATE against a fresh OptiX scene build.
+
+First run the environment diagnosis:
+
+```bash
+conda run -n lit python scripts/tools/optix_doctor.py --json
+```
+
+Immediately before a long production campaign, run the real runtime smoke:
+
+```bash
+conda run -n lit python -m scripts.tools.optix_smoke
+```
+
+The distinction is important:
+
+- `optix_doctor.py` diagnoses dependencies, headers, versions, and device settings;
+- `optix_smoke` uses the production OptiX runtime to compile, build
+  a GAS/SBT, launch real rays, copy results back, and validate hit/miss output;
+- the production BO preflight calls that same underlying smoke function and
+  aborts before Ax creates a candidate when infrastructure is unavailable.
+
+The smoke command is the recommended explicit gate before unattended BO runs.
+
+## Current trajectory validation
+
+```bash
+python -m validation.optimization.lumo3d_trajectory_validation \
+  --execution-config config/lumo_execution.yaml \
+  --output output/validation/lumo3d_trajectory
+```
+
+This evaluates the fixed current protocol: three semantic locations, two
+radii, and three absolute depths. It writes only under `output/`.
+
+To verify exact evaluator reproducibility across fresh Python/Warp processes,
+run the nominal 18-state gate three times:
+
+```bash
+python -m validation.optimization.lumo3d_repeatability \
+  --execution-config config/lumo_execution.yaml \
+  --output output/validation/optimization/lumo3d_repeatability
+```
+
+The gate compares mechanics artifact digests, contact-state fingerprints,
+optical field artifact digests, scalar transport diagnostics, and hexadecimal
+objective values. Any differing bit or incomplete state grid is a failure.
+
+## Bounded 6D Test BO
+
+The bounded test runner is a validation workflow, not a production campaign:
+
+```bash
+python -m validation.optimization.lumo6d_test_bo \
+  --execution-config config/lumo_execution.yaml \
+  --output output/validation/optimization/lumo6d_test_bo
+```
+
+It targets six successful Sobol and four successful model-based observations only after OptiX
+preflight, using the same typed execution YAML as production. Do not use it as
+a substitute for a reviewed production campaign, and do not run it as part of
+ordinary focused test execution.
+
+## Sequential Ax sensing BO
+
+Create the campaign and run one new sequential multi-objective BO evaluation as
+the end-to-end smoke test. The existing 13-row Sobol warm start is attached and
+verified without Newton/OptiX re-evaluation:
+
+```bash
+OPTIX_INCLUDE_DIR=/path/to/NVIDIA-OptiX-SDK-9.1.0/include \
+OTK_INCLUDE_DIR=/path/to/optix-toolkit/ShaderUtil/include \
+conda run --no-capture-output -n lit \
+  python -u -m lumo.optimization.ax_bo \
+  --campaign continuous \
+  --target-bo-trials 1 \
+  --output output/optimization/mobo
+```
+
+The command uses the installed Ax multi-objective MBM and requests one candidate
+at a time. A feasible candidate runs the unchanged production evaluator for
+centered 5, 10, and 20 mm spheres at sequential 5, 10, 15, and 20 N checkpoints.
+Both `J_intensity` and `J_spatial` are maximized without scalarization.
+Analytically invalid candidates are recorded and abandoned before GPU
+evaluation.
+
+If the smoke passes, continue the same checkpoint to the cumulative 120-new-
+trial target:
+
+```bash
+OPTIX_INCLUDE_DIR=/path/to/NVIDIA-OptiX-SDK-9.1.0/include \
+OTK_INCLUDE_DIR=/path/to/optix-toolkit/ShaderUtil/include \
+conda run --no-capture-output -n lit \
+  python -u -m lumo.optimization.ax_bo \
+  --campaign continuous \
+  --target-bo-trials 120 \
+  --output output/optimization/mobo
+```
+
+An existing complete campaign directory resumes automatically. Thus a future
+`--target-bo-trials 200` continues with trial 121 rather than adding 200 more or
+repeating completed morphologies. The 13 warm-start observations never count
+toward this target.
+
+The directory contains `run_config.json`, atomically replaced `ax_state.json`,
+`trials.csv`, `pareto.csv`, one compact `trials/trial_NNNN.npz` per successful
+new trial, plots, and `run_summary.json`. Resume rejects changed scientific
+settings or changed production source instead of mixing incompatible results.
+Use `--target-bo-trials 0` only for a warm-start creation/resume check in a
+separate empty output directory.
+
+### Discrete 0.5 mm campaign
+
+Create the independent integer-lattice campaign and run one fresh evaluation
+as its save/resume smoke test:
+
+```bash
+OPTIX_INCLUDE_DIR=/path/to/NVIDIA-OptiX-SDK-9.1.0/include \
+OTK_INCLUDE_DIR=/path/to/optix-toolkit/ShaderUtil/include \
+conda run --no-capture-output -n lit \
+  python -u -m lumo.optimization.ax_bo \
+  --campaign discrete-05mm \
+  --target-bo-trials 1 \
+  --output output/optimization/mobo_discrete_05mm
+```
+
+On a fresh directory the command first prints the Ax integer search space and
+checks deterministic candidate probes for exact 0.5 mm decoding, fixed
+`flat_pad_width_mm=30`, varied `stem_height_mm`, and the step-space pad-depth
+constraint. Snapped continuous-Pareto geometries are then evaluated as new
+observations; their old objectives are never attached. Resume is cumulative:
+
+```bash
+OPTIX_INCLUDE_DIR=/path/to/NVIDIA-OptiX-SDK-9.1.0/include \
+OTK_INCLUDE_DIR=/path/to/optix-toolkit/ShaderUtil/include \
+conda run --no-capture-output -n lit \
+  python -u -m lumo.optimization.ax_bo \
+  --campaign discrete-05mm \
+  --target-bo-trials 120 \
+  --output output/optimization/mobo_discrete_05mm
+```
+
+Do not point the discrete command at `output/optimization/mobo`; its Ax state
+and observations belong only to the continuous campaign.
+
+## Representative scientific convergence harness
+
+After the implementation gates pass and an expensive validation run is
+explicitly authorized, run the representative Newton/mesh/optical workflow:
+
+```bash
+conda run -n lit python -m validation.optimization.lumo3d_scientific_convergence \
+  --execution-config config/lumo_execution.yaml \
+  --output output/validation/optimization/lumo3d_scientific_convergence
+```
+
+The workflow evaluates five deterministic feasible morphologies. Newton uses
+the preserved displacement thresholds. The production mechanics setting is
+100 VBD iterations with a 0.0125 mm load increment at 0.00025 s; its strict
+reference uses 160 iterations with a 0.00625 mm increment at 0.000125 s, so
+both retain the same 50 mm/s prescribed indentation rate. Mesh and optical objective sensitivity
+remain `INCONCLUSIVE` until evidence-backed thresholds are reviewed. The
+current mechanics artifacts do not expose an approved reaction-force metric,
+so mesh force is recorded as `unsupported`, never fabricated as zero. This is
+an expensive GPU/Newton/OptiX command and is not part of ordinary unit tests.
+
+## Newton viewer helpers
+
+Interactive Newton viewer support is kept in `lumo.physics.newton.viewer` for debugging.
+It is intentionally not a general plotting framework. Production evaluation
+does not open a viewer or alter solver state for display.
+
+## Rigid OBJ asset preparation
+
+Prepare a deterministic parametric sphere asset with:
+
+```bash
+python scripts/assets/prepare_object_mesh.py \
+  --radius-mm 2.0 \
+  --subdivisions 2
+```
+
+The default output is under `assets/objects/`. Runtime code loads an OBJ or STL
+with `lumo.util.mesh_io.load_mesh()`. The loader requires an explicit
+`scale_m_per_unit` and returns a `newton.Mesh` whose vertices are in metres.
+
+## Generated artifacts
+
+Validation, optimization, and benchmark outputs belong under `output/`. Existing
+scientific artifacts are not overwritten by cleanup or documentation commands.
+
+## Sensing-objective trade-off sample
+
+Run the deterministic baseline-plus-Sobol morphology sample with:
+
+```bash
+conda run -n lit python -u \
+  validation/optomech/sensing_objective_tradeoff.py
+```
+
+The expensive validation evaluates center contact for 5, 10, and 20 mm
+spheres at sequential 5, 10, 15, and 20 N force targets. It writes
+`output/validation/sensing_objective_tradeoff.csv` and
+`output/validation/sensing_objective_tradeoff.png`. Its trial horizon is 60 s;
+when the CSV already contains the same deterministic Sobol points, completed
+rows are reused and only incomplete rows are evaluated again.
+
+## Adaptive settling validation
+
+Compare the validation-only `0.2 s` adaptive settling rule against the
+production force-band-only `5 s` dwell for centered 5, 10, and 20 mm spheres:
+
+```bash
+conda run --no-capture-output -n lit \
+  python -u validation/optomech/adaptive_settling.py
+```
+
+The script keeps all mechanics and OptiX settings fixed, ray traces only at
+accepted checkpoints, prints mechanical/optical differences, and writes
+`output/validation/adaptive_settling.csv`.
+The measured adaptive rule changes the sensing objectives materially and is
+therefore not a production default.

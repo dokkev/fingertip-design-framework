@@ -2,37 +2,24 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from itertools import product
 from math import isfinite
 from numbers import Real
-from pathlib import Path
-import sys
 from typing import Mapping
-
-# ``python gui/design_space_app.py`` does not put the repository root on
-# ``sys.path``. Reuse the repository's existing bootstrap convention for
-# directly executed scripts; the normal module entry point needs no path hack.
-if __package__ in {None, ""}:
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "examples"))
-    from bootstrap import ensure_repository_root
-
-    ensure_repository_root(Path(__file__).resolve().parent)
 
 from nicegui import ui
 
-from model import Fingertip, FingertipParameters, LED, OpticalMaterial
-from optimization.design_space import (
+from lumo.finger import Fingertip, FingertipParameters, LED, OpticalParameters
+from lumo.optimization.design_space import (
     OPTIMIZABLE_PARAMETER_NAMES,
     DesignSpace,
     DesignVariable,
 )
-from visualization import plot_fingertip
-
 from gui.diagnostics import (
     Diagnostic,
     build_led,
-    build_optical_material,
+    build_optical_parameters,
     diagnose_design_space,
     diagnose_physical_state,
     diagnose_state,
@@ -58,7 +45,6 @@ _FIXED_GEOMETRY_LABELS = {
     "bond_extension_width": "Connector-pad width (w_cp)",
     "bond_extension_height": "Connector-pad height (h_cp)",
 }
-_MECHANICAL_NAMES = ("young_modulus_mpa", "poisson_ratio")
 _LED_NAMES = (
     "width_mm",
     "height_mm",
@@ -69,8 +55,6 @@ _OPTICAL_NAMES = (
     "refractive_index_air",
     "refractive_index_silicone",
     "absorption_per_mm",
-    "scattering_per_mm",
-    "anisotropy_g",
 )
 _GEOMETRY_PRECISION = {
     name: 2 for name in (*OPTIMIZABLE_PARAMETER_NAMES, *_FIXED_GEOMETRY_NAMES)
@@ -120,7 +104,11 @@ def _initial_state() -> dict[str, object]:
     parameters = asdict(FingertipParameters())
     geometry = {
         name: parameters[name]
-        for name in (*OPTIMIZABLE_PARAMETER_NAMES, *_FIXED_GEOMETRY_NAMES)
+        for name in (
+            "flat_pad_width",
+            *OPTIMIZABLE_PARAMETER_NAMES,
+            *_FIXED_GEOMETRY_NAMES,
+        )
     }
     variables = {
         name: {
@@ -132,41 +120,37 @@ def _initial_state() -> dict[str, object]:
     }
     return {
         "geometry": geometry,
-        "mechanical": {
-            "young_modulus_mpa": parameters["young_modulus_mpa"],
-            "poisson_ratio": parameters["poisson_ratio"],
-        },
-        "led": {**asdict(LED()), "emission_rgb": list(LED().emission_rgb)},
-        "optical": asdict(OpticalMaterial()),
+        "led": asdict(LED()),
+        "optical": asdict(OpticalParameters()),
         "variables": variables,
     }
 
 
 def _parameters(
     geometry: Mapping[str, object],
-    mechanical: Mapping[str, object],
 ) -> FingertipParameters:
     defaults = asdict(FingertipParameters())
     defaults.update(geometry)
-    defaults.update(mechanical)
     return FingertipParameters(**defaults)
 
 
 def _tip_for_preview(
     geometry: Mapping[str, object],
-    mechanical: Mapping[str, object],
     led_values: Mapping[str, object],
     optical_values: Mapping[str, object],
     optical_valid: bool,
 ) -> Fingertip | None:
-    parameters = _parameters(geometry, mechanical)
+    parameters = _parameters(geometry)
     led = build_led(led_values)
     optical = (
-        build_optical_material({})
+        build_optical_parameters({})
         if not optical_valid
-        else build_optical_material(optical_values)
+        else build_optical_parameters(optical_values)
     )
-    return Fingertip(parameters, led=led, optical=optical)
+    return Fingertip(
+        replace(parameters, optical=optical),
+        led=led,
+    )
 
 
 def _corner_values(state: Mapping[str, object]) -> tuple[dict[str, float], ...] | None:
@@ -210,12 +194,11 @@ def _corner_values(state: Mapping[str, object]) -> tuple[dict[str, float], ...] 
 def _state_with_corner(
     state: Mapping[str, object],
     values: Mapping[str, object],
-) -> tuple[dict[str, object], dict[str, object], dict[str, object]]:
+) -> tuple[dict[str, object], dict[str, object]]:
     geometry = dict(state["geometry"])
     geometry.update(values)
-    mechanical = dict(state["mechanical"])
     led = dict(state["led"])
-    return geometry, mechanical, led
+    return geometry, led
 
 
 def _preview(
@@ -226,8 +209,8 @@ def _preview(
     optical_valid: bool,
     missing_bound_message: str | None = None,
 ) -> Preview:
-    geometry, mechanical, led = _state_with_corner(state, values)
-    diagnostics = list(diagnose_physical_state(geometry, mechanical, led))
+    geometry, led = _state_with_corner(state, values)
+    diagnostics = list(diagnose_physical_state(geometry, led))
     if missing_bound_message is not None:
         diagnostics.append(Diagnostic("ERROR", label, missing_bound_message))
     tip = None
@@ -237,7 +220,6 @@ def _preview(
         try:
             tip = _tip_for_preview(
                 geometry,
-                mechanical,
                 led,
                 optical,
                 optical_valid,
@@ -257,7 +239,7 @@ def _preview(
 
 def _build_design_space(state: Mapping[str, object]) -> DesignSpace | None:
     try:
-        nominal_parameters = _parameters(state["geometry"], state["mechanical"])
+        nominal_parameters = _parameters(state["geometry"])
         variables = tuple(
             DesignVariable(
                 name=name,
@@ -274,15 +256,13 @@ def _build_design_space(state: Mapping[str, object]) -> DesignSpace | None:
 
 def _analyze(state: Mapping[str, object]) -> Analysis:
     geometry = state["geometry"]
-    mechanical = state["mechanical"]
     led = state["led"]
     optical = state["optical"]
     assert isinstance(geometry, Mapping)
-    assert isinstance(mechanical, Mapping)
     assert isinstance(led, Mapping)
     assert isinstance(optical, Mapping)
 
-    state_diagnostics = diagnose_state(geometry, mechanical, led, optical)
+    state_diagnostics = diagnose_state(geometry, led, optical)
     variables = state["variables"]
     assert isinstance(variables, Mapping)
     nominal_values = {name: geometry[name] for name in OPTIMIZABLE_PARAMETER_NAMES}
@@ -343,12 +323,11 @@ def _analyze(state: Mapping[str, object]) -> Analysis:
         )
         corner_results: list[bool] = []
         for corner in bounds:
-            corner_geometry, corner_mechanical, corner_led = _state_with_corner(
+            corner_geometry, corner_led = _state_with_corner(
                 state, corner
             )
             diagnostics = diagnose_physical_state(
                 corner_geometry,
-                corner_mechanical,
                 corner_led,
             )
             corner_results.append(
@@ -374,8 +353,8 @@ def _corner_diagnostics(state: Mapping[str, object]) -> tuple[Diagnostic, ...]:
         return ()
     result: list[Diagnostic] = []
     for corner in bounds:
-        geometry, mechanical, led = _state_with_corner(state, corner)
-        diagnostics = diagnose_physical_state(geometry, mechanical, led)
+        geometry, led = _state_with_corner(state, corner)
+        diagnostics = diagnose_physical_state(geometry, led)
         details = tuple(
             item
             for item in diagnostics
@@ -593,30 +572,6 @@ def _render_fixed_geometry(state: dict[str, object]) -> None:
         ).classes("text-caption")
 
 
-def _render_mechanical(state: dict[str, object]) -> None:
-    with ui.expansion(
-        "Mechanical Properties", icon="engineering", value=True
-    ).classes("w-full"):
-        with ui.grid(columns=2).classes("w-full"):
-            _number_input(
-                state,
-                "mechanical",
-                "young_modulus_mpa",
-                label="Young's modulus",
-                suffix="MPa",
-                precision=3,
-                step=0.01,
-            )
-            _number_input(
-                state,
-                "mechanical",
-                "poisson_ratio",
-                label="Poisson ratio",
-                precision=3,
-                step=0.01,
-            )
-
-
 def _render_led(state: dict[str, object]) -> None:
     with ui.expansion("LED PCB Dimension", icon="lightbulb", value=True).classes(
         "w-full"
@@ -641,32 +596,6 @@ def _render_led(state: dict[str, object]) -> None:
                 precision=2,
                 step=1.0,
             )
-        ui.label("Emission RGB").classes("text-subtitle2")
-        rgb = state["led"]["emission_rgb"]
-        assert isinstance(rgb, list)
-        with ui.row():
-            for index in range(3):
-                control = ui.number(
-                    f"RGB {index}",
-                    value=rgb[index],
-                    precision=3,
-                    step=0.05,
-                    on_change=lambda event, index=index: _set_rgb_and_refresh(
-                        state, index, event.value
-                    ),
-                )
-                control.classes("w-28")
-
-
-def _set_rgb_and_refresh(state: dict[str, object], index: int, value: object) -> None:
-    led = state["led"]
-    assert isinstance(led, dict)
-    rgb = list(led["emission_rgb"])
-    rgb[index] = value
-    led["emission_rgb"] = rgb
-    _refresh_state(state)
-
-
 def _render_optical(state: dict[str, object]) -> None:
     with ui.expansion("Optical Properties", icon="blur_on", value=True).classes(
         "w-full"
@@ -676,8 +605,6 @@ def _render_optical(state: dict[str, object]) -> None:
                 "refractive_index_air": "Refractive index (air)",
                 "refractive_index_silicone": "Refractive index (silicone)",
                 "absorption_per_mm": "Absorption / mm",
-                "scattering_per_mm": "Scattering / mm",
-                "anisotropy_g": "Anisotropy g",
             }
             for name in _OPTICAL_NAMES:
                 _number_input(
@@ -691,154 +618,6 @@ def _render_optical(state: dict[str, object]) -> None:
         ui.label("Optical edits validate model settings only; no rays are traced.").classes(
             "text-caption"
         )
-
-
-_FIXED_DIMENSION_COLOR = "#111111"
-_OPTIMIZED_DIMENSION_COLOR = "#0047FF"
-
-
-def _dimension_color(state: Mapping[str, object], name: str) -> str:
-    variables = state["variables"]
-    assert isinstance(variables, Mapping)
-    if name in variables and bool(variables[name]["optimize"]):
-        return _OPTIMIZED_DIMENSION_COLOR
-    return _FIXED_DIMENSION_COLOR
-
-
-def _dimension_label(
-    symbol: str,
-    _value: float,
-    *,
-    relation: str | None = None,
-) -> str:
-    """Return only the variable annotation; values remain in the editor."""
-    return relation or symbol
-
-
-def _horizontal_dimension(
-    axis,
-    x_start: float,
-    x_end: float,
-    y: float,
-    text: str,
-    color: str,
-    *,
-    text_offset: float,
-    guide_y: float | None = None,
-) -> None:
-    if guide_y is not None:
-        axis.plot(
-            [x_start, x_start],
-            [guide_y, y],
-            color=_FIXED_DIMENSION_COLOR,
-            linestyle=(0, (4, 4)),
-            linewidth=1.0,
-            zorder=10,
-        )
-        axis.plot(
-            [x_end, x_end],
-            [guide_y, y],
-            color=_FIXED_DIMENSION_COLOR,
-            linestyle=(0, (4, 4)),
-            linewidth=1.0,
-            zorder=10,
-        )
-    if abs(x_end - x_start) <= 1.0e-12:
-        axis.text(
-            x_start,
-            y + text_offset,
-            text,
-            color=color,
-            ha="center",
-            va="bottom",
-            fontsize=9,
-        )
-        return
-    axis.annotate(
-        "",
-        xy=(x_end, y),
-        xytext=(x_start, y),
-        arrowprops={
-            "arrowstyle": "<->",
-            "color": color,
-            "linewidth": 1.8,
-            "shrinkA": 0.0,
-            "shrinkB": 0.0,
-        },
-    )
-    axis.text(
-        (x_start + x_end) / 2.0,
-        y + text_offset,
-        text,
-        color=color,
-        ha="center",
-        va="bottom",
-        fontsize=9,
-    )
-
-
-def _vertical_dimension(
-    axis,
-    x: float,
-    y_start: float,
-    y_end: float,
-    text: str,
-    color: str,
-    *,
-    text_offset: float,
-    guide_x: float | None = None,
-) -> None:
-    if guide_x is not None:
-        axis.plot(
-            [guide_x, x],
-            [y_start, y_start],
-            color=_FIXED_DIMENSION_COLOR,
-            linestyle=(0, (4, 4)),
-            linewidth=1.0,
-            zorder=10,
-        )
-        axis.plot(
-            [guide_x, x],
-            [y_end, y_end],
-            color=_FIXED_DIMENSION_COLOR,
-            linestyle=(0, (4, 4)),
-            linewidth=1.0,
-            zorder=10,
-        )
-    if abs(y_end - y_start) <= 1.0e-12:
-        axis.text(
-            x + text_offset,
-            y_start,
-            text,
-            color=color,
-            ha="left",
-            va="center",
-            fontsize=9,
-        )
-        return
-    axis.annotate(
-        "",
-        xy=(x, y_end),
-        xytext=(x, y_start),
-        arrowprops={
-            "arrowstyle": "<->",
-            "color": color,
-            "linewidth": 1.8,
-            "shrinkA": 0.0,
-            "shrinkB": 0.0,
-        },
-    )
-    axis.text(
-        x + text_offset,
-        (y_start + y_end) / 2.0,
-        text,
-        color=color,
-        ha="center",
-        va="center",
-        rotation=90,
-        fontsize=9,
-    )
-
 
 def _render_parameter_drawing(
     state: Mapping[str, object],
@@ -867,143 +646,20 @@ def _render_parameter_drawing(
             matplotlib.update()
             return
 
-        tip = preview.tip
-        parameters = tip.parameters
-        plot_fingertip(
-            tip,
-            ax=axis,
-            show_light_source=False,
-            show_interface=False,
-            show_contact_boundaries=False,
-            show_legend=False,
-            show_axes=True,
-            title="Nominal cross-section",
+        axis.text(
+            0.5,
+            0.5,
+            "Geometry preview disabled\n(core GUI remains available)\n"
+            "Use finger/mesh diagnostics for geometry inspection.",
+            ha="center",
+            va="center",
+            transform=axis.transAxes,
         )
-
-        width = parameters.flat_pad_width
-        left = -width / 2.0
-        right = width / 2.0
-        top = parameters.link_thickness
-        flat_bottom = -parameters.flat_pad_height
-        pad_bottom = parameters.pad_tip_y
-        stem_bottom = -parameters.stem_height
-        void_bottom = parameters.void_bottom_y
-        span = max(width, parameters.total_pad_depth + top, 2.0)
-        vertical_offset = 0.025 * span
-
-        _horizontal_dimension(
-            axis,
-            left,
-            right,
-            top + 0.18 * span,
-            _dimension_label(
-                "w_l",
-                width,
-                relation="w_l = w_fp = w_ep",
-            ),
-            _dimension_color(state, "flat_pad_width"),
-            text_offset=vertical_offset,
-            guide_y=top,
-        )
-        _horizontal_dimension(
-            axis,
-            left,
-            left + parameters.bond_extension_width,
-            top + 0.08 * span,
-            _dimension_label("w_cp", parameters.bond_extension_width),
-            _FIXED_DIMENSION_COLOR,
-            text_offset=vertical_offset,
-            guide_y=parameters.bond_extension_height,
-        )
-        _horizontal_dimension(
-            axis,
-            -parameters.stem_width / 2.0,
-            parameters.stem_width / 2.0,
-            pad_bottom - 0.10 * span,
-            _dimension_label("w_s", parameters.stem_width),
-            _dimension_color(state, "stem_width"),
-            text_offset=vertical_offset,
-            guide_y=stem_bottom,
-        )
-        _horizontal_dimension(
-            axis,
-            parameters.stem_width / 2.0,
-            parameters.cutout_half_width,
-            void_bottom - 0.08 * span,
-            _dimension_label("w_v", parameters.void_width),
-            _FIXED_DIMENSION_COLOR,
-            text_offset=vertical_offset,
-            guide_y=void_bottom,
-        )
-
-        _vertical_dimension(
-            axis,
-            left - 0.10 * span,
-            0.0,
-            flat_bottom,
-            _dimension_label("h_fp", parameters.flat_pad_height),
-            _dimension_color(state, "flat_pad_height"),
-            text_offset=-0.045 * span,
-            guide_x=left,
-        )
-        _vertical_dimension(
-            axis,
-            left - 0.21 * span,
-            flat_bottom,
-            pad_bottom,
-            _dimension_label("h_ep", parameters.semielliptical_pad_height),
-            _dimension_color(state, "semielliptical_pad_height"),
-            text_offset=-0.045 * span,
-            guide_x=left,
-        )
-        _vertical_dimension(
-            axis,
-            right + 0.10 * span,
-            0.0,
-            top,
-            _dimension_label("h_l", parameters.link_thickness),
-            _FIXED_DIMENSION_COLOR,
-            text_offset=0.045 * span,
-            guide_x=right,
-        )
-        _vertical_dimension(
-            axis,
-            right + 0.20 * span,
-            0.0,
-            stem_bottom,
-            _dimension_label("h_s", parameters.stem_height),
-            _dimension_color(state, "stem_height"),
-            text_offset=0.045 * span,
-            guide_x=right,
-        )
-        _vertical_dimension(
-            axis,
-            right + 0.30 * span,
-            stem_bottom,
-            void_bottom,
-            _dimension_label("h_v", parameters.void_height),
-            _dimension_color(state, "void_height"),
-            text_offset=0.045 * span,
-            guide_x=parameters.cutout_half_width,
-        )
-        _vertical_dimension(
-            axis,
-            left - 0.04 * span,
-            0.0,
-            parameters.bond_extension_height,
-            _dimension_label("h_cp", parameters.bond_extension_height),
-            _FIXED_DIMENSION_COLOR,
-            text_offset=-0.045 * span,
-            guide_x=left,
-        )
-
-        axis.set_xlim(left - 0.38 * span, right + 0.38 * span)
-        axis.set_ylim(pad_bottom - 0.24 * span, top + 0.28 * span)
-        axis.set_aspect("equal", adjustable="box")
-        axis.grid(True, color="#D9DDE3", linewidth=0.55, alpha=0.7)
-        axis.set_axisbelow(True)
-        figure.subplots_adjust(left=0.12, right=0.96, bottom=0.08, top=0.94)
+        axis.set_title("Nominal geometry diagnostics")
+        axis.set_axis_off()
         matplotlib.update()
+        return
+
 
 
 def _shared_limits(previews: tuple[Preview, Preview, Preview], state: Mapping[str, object]):
@@ -1054,15 +710,19 @@ def _render_previews(state: Mapping[str, object], analysis: Analysis) -> None:
         figure.subplots_adjust(left=0.03, right=0.99, bottom=0.22, top=0.90, wspace=0.24)
         for axis, preview in zip(axes, analysis.previews, strict=True):
             if preview.tip is not None and preview.valid:
-                plot_fingertip(
-                    preview.tip,
-                    ax=axis,
-                    show_legend=False,
-                    title=f"{preview.label} — VALID",
-                )
                 axis.set_xlim(*x_limits)
                 axis.set_ylim(*y_limits)
                 axis.set_aspect("equal", adjustable="box")
+                axis.text(
+                    0.5,
+                    0.5,
+                    f"{preview.label}\nVALID\n"
+                    "Geometry preview disabled",
+                    ha="center",
+                    va="center",
+                    transform=axis.transAxes,
+                )
+                axis.set_title(f"{preview.label} — VALID")
             else:
                 axis.set_xlim(*x_limits)
                 axis.set_ylim(*y_limits)
@@ -1114,7 +774,6 @@ def _render_page(state: dict[str, object]) -> None:
         with ui.column().style("width: 40%; min-width: 0;"):
             _render_geometry_editor(state)
             _render_fixed_geometry(state)
-            _render_mechanical(state)
             _render_led(state)
             _render_optical(state)
             ui.button("Reset to nominal LIT geometry", on_click=lambda: _reset_state(state))

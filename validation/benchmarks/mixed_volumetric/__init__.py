@@ -1,1 +1,0 @@
-"""Mixed volumetric-strain benchmark."""

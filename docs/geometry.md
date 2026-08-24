@@ -120,6 +120,18 @@ void         = cutout - stem
 The stem clearance remains meaningful to both mechanics and optics. The
 extension surfaces are bonded pad material, not contact surfaces.
 
+For the current production morphology search, `h_v = 0` is a fixed physical
+contract, not an optimizer variable. `PadCutoutBottom` and `StemBottom` are
+coincident semantic boundaries forming a mechanically bonded basal
+stem/pad interface. The production solver fixes the displacement DOFs of the
+actual stem-width `PadCutoutBottom` pad nodes together with the already fixed
+carrier and upper pad bonds; it does not create a bottom ALM contact pair.
+The lateral `PadCutoutLeft`/`StemLeft` and `PadCutoutRight`/`StemRight`
+interfaces remain frictionless unilateral contacts. Nonzero `void_height`
+remains supported by `FingertipParameters` for historical, geometry, and
+diagnostic cases, where an explicit bottom-contact configuration may be
+requested.
+
 ## Three-segment bonded interfaces
 
 Each side has one connected, three-segment perfectly bonded interface:
@@ -156,16 +168,24 @@ The external shell tags remain `pad_bond_left`, `pad_outer_left`,
 recess interfaces, the outer sidewalls, and the lower semi-ellipse, remaining
 open only at the cutout mouth for loaded optical-domain closure.
 
-## Mechanical material
+## Mechanics inputs
 
-`FingertipParameters` also owns the compliant-pad material values used by the
-production FEM path:
+`FingertipParameters` combines `FingertipGeometry` for geometry with
+`ViscoelasticParameters` for the fingertip's constitutive and inertial inputs,
+and `SiliconeOptics` for its effective monochromatic optical inputs.
+Production mechanics uses those material values through
+`FingertipParameters.viscoelastic`. The separate
+`lumo.mechanics_contract.MechanicsContract` owns solver execution settings,
+contact coefficients, and checkpoint-acceptance thresholds.
 
-| Parameter | Meaning | Default |
-| --- | --- | --- |
-| `young_modulus_mpa` | pad Young's modulus [MPa] | `0.55` |
-| `poisson_ratio` | pad Poisson ratio [-] | `0.49` |
+The LED package parameters are owned by `FingertipParameters.led`; the
+world-frame source pose and Lambertian emission operation remain in
+`lumo.ray_tracing.LED`. Bulk optical values are owned by
+`FingertipParameters.optical`.
 
-These are the current validated FEM baseline values, not an experimentally
-calibrated silicone characterization. The rigid carrier and indenter remain
-backend-constrained parts.
+The repository does not currently define or calibrate a Young's-modulus and
+Poisson-ratio material model, and therefore does not expose disconnected
+`E, nu` fields on the fingertip morphology. The current Newton coefficients are
+not interpreted as calibrated Young's modulus and Poisson ratio. Adding such
+physical inputs requires an explicit constitutive mapping and scientific
+validation rather than a cleanup-only conversion.
