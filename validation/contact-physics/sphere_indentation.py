@@ -22,9 +22,8 @@ _APPROACH_SPEED_M_S = 2.5e-2
 _INITIAL_CLEARANCE_M = 1.0e-3
 _MAX_SIM_TIME_S = 30.0
 _TARGET_FORCE_N = 20.0
-_FORCE_TOLERANCE_N = 5.0
+_FORCE_TOLERANCE_N = 1.0
 _SETTLE_DURATION_S = 5.0e-3
-_MAX_SEARCH_ITERATIONS = 256
 _MAX_BONDED_DRIFT_M = 1.0e-8
 # Match the established flat-plate carrier-penetration acceptance threshold.
 _MAX_CARRIER_PENETRATION_M = 1.0e-5
@@ -211,7 +210,6 @@ def _validate_and_report(
         f"F={reaction_force_n:.4f} N | error={force_error_n:.4f} N | "
         f"travel={1.0e3 * trial.travel_m:.4f} mm | "
         f"ticks={trial.step_count} | t={trial.simulation_time_s:.3f} s | "
-        f"search={trial.search_iteration_count} | "
         f"vmax={trial.maximum_particle_speed_m_s:.3e} m/s | "
         f"dF={trial.force_change_n:.3e} N | contacts={sphere_contact_count} | "
         f"bond={max_bonded_drift_m:.3e} m | "
@@ -250,7 +248,6 @@ def main() -> None:
             sim_frequency=_SIM_FREQUENCY_HZ,
             force_tolerance_n=_FORCE_TOLERANCE_N,
             settle_duration_s=_SETTLE_DURATION_S,
-            max_search_iterations=_MAX_SEARCH_ITERATIONS,
         )
         study.run(inspect_trial=_validate_and_report)
 

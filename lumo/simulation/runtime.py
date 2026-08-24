@@ -7,7 +7,7 @@ import numpy as np
 import warp as wp
 
 from lumo.fingertip import Fingertip
-from lumo.mesh import make_fingertip_mesh
+from lumo.mesh import FingertipMesh, make_fingertip_mesh
 from lumo.newton.indenter import Indenter
 from lumo.newton.model import build_fingertip_newton_model
 from lumo.util.scalar_validation import require_nonnegative, require_positive
@@ -74,6 +74,7 @@ class LumoSimulation:
         fingertip: Fingertip,
         *,
         builder: newton.ModelBuilder | None = None,
+        fingertip_mesh: FingertipMesh | None = None,
         sim_frequency: float,
         iterations: int = 10,
         soft_contact_margin_m: float = _DEFAULT_SOFT_CONTACT_MARGIN_M,
@@ -91,6 +92,13 @@ class LumoSimulation:
             newton.ModelBuilder,
         ):
             raise TypeError("builder must be a newton.ModelBuilder")
+        if fingertip_mesh is not None:
+            if not isinstance(fingertip_mesh, FingertipMesh):
+                raise TypeError("fingertip_mesh must be a FingertipMesh")
+            if fingertip_mesh.fingertip is not fingertip:
+                raise ValueError(
+                    "fingertip_mesh must belong to the supplied fingertip"
+                )
         if (
             isinstance(iterations, bool)
             or not isinstance(iterations, int)
@@ -119,9 +127,13 @@ class LumoSimulation:
         )
 
         self.fingertip = fingertip
-        self.fingertip_mesh = make_fingertip_mesh(
-            fingertip,
-            element_size_mm=element_size_mm,
+        self.fingertip_mesh = (
+            make_fingertip_mesh(
+                fingertip,
+                element_size_mm=element_size_mm,
+            )
+            if fingertip_mesh is None
+            else fingertip_mesh
         )
         self.fingertip_model = build_fingertip_newton_model(
             self.fingertip_mesh,

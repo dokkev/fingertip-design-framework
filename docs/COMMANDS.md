@@ -76,11 +76,10 @@ conda run -n lit python validation/contact-physics/sphere_indentation.py
 ```
 
 The 5, 10, and 20 mm diameter URDF spheres each run in independent simulations
-at `X=-7.5`, `0`, and `+7.5 mm`, for nine design trials total. Each prescribed
-positive-Z indentation approaches `20 N`, holds the first target pose fixed for
-`5 ms`, and makes at most one-step pose corrections between additional holds.
-This is an explicit multi-simulation validation, not part of ordinary focused
-tests.
+at `X=-7.5`, `0`, and `+7.5 mm`, for nine design trials total. Each kinematic
+indenter uses the proportional force servo, slows near `20 N`, and must remain
+inside `20 ± 1 N` for `5 ms`. This is an explicit multi-simulation validation,
+not part of ordinary focused tests.
 
 View one centered 15 mm sphere moving continuously to a transient `20 N`
 reaction force:
@@ -94,8 +93,8 @@ The viewer renders every Newton tick and prints travel, reaction force, maximum
 active silicone speed, and sphere contact count every 100 ticks. After the first
 transient `20 N` crossing it holds the sphere pose fixed while continuing the
 simulation for `10 s`, then freezes the final held state until the window
-closes. This is an interactive contact diagnostic, not the settled-force
-correction validation above.
+closes. This is an interactive contact diagnostic, not the force-servo
+validation above.
 
 Record the fixed-pose reaction-force trajectory after the same centered 15 mm
 sphere first reaches transient `20 N`:
@@ -311,17 +310,13 @@ conda run --no-capture-output -n lit \
 python validation/ray-tracing/sensing_evaluator_test.py
 ```
 
-This evaluates one approximately 11 mm-wide optical cell with one LED at the
-extrusion-axis center derived from the fingertip mesh. The point source is at
-the carrier stem-bottom center, emits toward the pad (`-Z`), and is not a
-mechanics/contact object. Rays start from an OTK-safe pad-side origin, and the
-study accounts for a load-induced air gap at that carrier boundary. With common
-deterministic samples and nominal Dragon Skin 10 NV optics, it compares no
-contact with independent `20 N` sphere contacts at
-`X=-7.5`, `0`, and `+7.5 mm`. Escaped `+Y` power is reduced to one four-quadrant
-response per state, then to a scalar normalized intensity response and a
-normalized 4D spatial response. The script reports both worst-case pairwise
-separability objectives and their limiting state pairs.
+This runs the production evaluator for one centered 15 mm sphere. It builds one
+fingertip mesh and OptiX scene, traces the no-contact state with `65,536` paths,
+runs the current `500 Hz / 10 iteration` `20 +/- 1 N` force-servo contract,
+updates the existing silicone GAS/IAS, and repeats the 24-bounce optical trace
+with the same deterministic samples. It prints both four-quadrant `+Y`
+side-view responses, both complete path-energy ledgers, and the accepted
+mechanics checkpoint.
 
 Save the one-cell before/after sensing diagnostic without opening a window:
 
@@ -333,7 +328,7 @@ python validation/ray-tracing/sensing_visualization.py \
 
 The two matched X-Z panels are projections of the existing full 3D bounded
 paths at the geometry-derived extrusion center, not a separate 2D ray tracer.
-The loaded panel uses the existing centered `20 ± 5 N` force-stable
+The loaded panel uses the existing centered `20 ± 1 N` force-servo
 `DesignStudy` checkpoint.
 
 Run the CPU-only sampled dielectric branch regression:

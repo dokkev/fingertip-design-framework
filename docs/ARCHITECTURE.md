@@ -235,7 +235,9 @@ is no simulation-configuration abstraction.
 point. It meshes the fingertip, adds it to an optional caller-populated Newton
 builder, and finalizes the one shared Newton model. A caller adds external
 objects such as an `Indenter` to that builder before constructing the
-simulation. Lower-level mesh and Newton-model construction functions remain
+simulation. An optional caller-built `fingertip_mesh` lets the end-to-end
+evaluator give Newton and OptiX the same immutable discretization without
+meshing twice. Lower-level mesh and Newton-model construction functions remain
 available to validations that inspect those stages directly.
 
 The current step order is:
@@ -281,24 +283,36 @@ results. It never retains its `LumoSimulation` or `Indenter`.
 ordered tuple of design trials. It constructs a fresh builder, indenter,
 `LumoSimulation`, and Newton state for each trial, so every trial evaluates the
 same fingertip morphology but starts from an independent reference state.
-The study passes its optional `indenter_contact_stiffness_n_m` into each URDF
-indenter without changing the carrier or silicone contact material. `None`
-preserves the imported Newton shape material.
+An optional immutable `FingertipMesh` is reused by each fresh Newton runtime;
+ordinary callers continue to let `LumoSimulation` mesh internally.
+The optional `contact_stiffness_n_m` and `contact_damping_n_s_m` values apply
+the same rigid-soft contact pair values to the URDF indenter endpoint and the
+Newton soft endpoint. `None` preserves both Newton defaults; the study does not
+freeze provisional contact values as production defaults.
 Each trial specifies a normalized `motion_direction_W` and physical
-`approach_speed_m_s`; the study derives its per-tick displacement from the
-simulation frequency.
+`approach_speed_m_s`, which caps the magnitude of its kinematic force-servo
+velocity. `DesignStudy` applies
+`v = clamp(Kf * (F_target - F), -approach_speed_m_s, approach_speed_m_s)` with
+the default `Kf=1.25e-3 m/(s N)`, then derives each pose increment from the
+simulation timestep.
 
-The study keeps the per-trial settled-force search direct:
+The study keeps the per-trial force servo direct:
 
 ```text
-approach until reaction reaches the target
+last reaction force
         ↓
-hold that pose for the settling duration
+bounded proportional velocity
         ↓
-evaluate the settled force
+update the kinematic indenter pose
         ↓
-apply one translation correction and hold again when needed
+one LumoSimulation step and reaction measurement
+        ↓
+accept after the force remains inside tolerance for the settling duration
 ```
+
+Leaving the tolerance resets its consecutive-tick counter. There is no
+first-crossing stop, fixed-pose correction search, integral term, or PID
+controller.
 
 Only `LumoSimulation.step()` mutates Newton state or simulation time. The study
 does not share mutable Newton state between trials, run trials in parallel, or
@@ -443,11 +457,12 @@ upper-left, lower-left, lower-right around the current analytic silicone
 semiellipse center. This is a directional side-view response, not a camera,
 image, projection plane, pixel model, or optimization score.
 
-The scene has no Newton dependency. A caller may explicitly pass a Newton
-checkpoint through `update_silicone()`, but no production runtime currently
-orchestrates Newton and OptiX. The silicone input surface is selected by the
-caller; the first IAS validation removes surface triangles whose three vertices
-all belong to the perfect bonded interface.
+The scene has no Newton dependency. The optimization evaluator explicitly
+passes one final Newton vertex checkpoint through `update_silicone()`; neither
+the optical scene nor the mechanics runtime imports the other. The silicone
+input surface is selected by the caller; the first IAS validation removes
+surface triangles whose three vertices all belong to the perfect bonded
+interface.
 
 This package should define only the optical semantics required by LUMO and use
 OptiX for generic ray-tracing functionality.
@@ -461,7 +476,20 @@ This layer must not own mechanics evolution.
 Owns design-space and optimization policy.
 
 Current responsibilities include design parameter bounds, feasibility
-constraints, and pure sensing-objective evaluation.
+constraints, one concrete sensing evaluation, and pure sensing-objective
+evaluation.
+
+`evaluator.py` owns the first production mechanics-to-optics orchestration. It
+builds one `FingertipMesh` and one `OptixScene`, traces the undeformed state,
+runs one supplied `DesignTrial`, updates the existing silicone GAS and IAS from
+the live Newton vertices, and traces the contact state with the exact same
+deterministic emission and bounce samples. It returns the two four-quadrant
+side-view responses and their existing `PathTraceResult` energy ledgers. The
+fixed current mechanics contract is `500 Hz`, `10` VBD iterations, equal
+`ke=3e4 N/m` endpoints, `kd=0.282280175 N s/m`, the proportional force servo,
+and acceptance after `20 +/- 1 N` is maintained for `5 s`. Optical transport
+uses `65,536` paths and `24` bounces. This evaluator does not perform morphology
+optimization or combine sensing objectives.
 
 `sensing_descriptors()` consumes a state array shaped `(contact states, 4)`.
 For the current single optical cell it forms one scalar intensity response from
@@ -549,11 +577,10 @@ contacts; it does not advance or mutate the simulation.
 fingertip and uses a `DesignStudy` to run the packaged 5, 10, and 20 mm
 diameter sphere URDFs at `X=-7.5`, `0`, and `+7.5 mm`. It places each sphere
 from the local analytic semiellipse height at that X location. Each of the nine
-independent simulations triggers at `20 N`, corrects the held pose as needed,
-and holds each checkpoint for `5 ms` before evaluating the settled force. If it
-is outside `20 ± 5 N`, one translation correction is applied before the next
-hold. It then checks contact, finite silicone state, perfect-bond drift, and
-carrier penetration before releasing that runtime.
+independent simulations uses the kinematic proportional force servo to approach
+`20 N` and accepts only after remaining inside `20 ± 1 N` for `5 ms`. It then
+checks contact, finite silicone state, perfect-bond drift, and carrier
+penetration before releasing that runtime.
 
 `validation/contact-physics/sphere_15mm_viewer.py` is a focused interactive
 contact diagnostic. It loads the packaged 15 mm sphere, advances that one
@@ -562,7 +589,8 @@ contact set, and holds the sphere pose fixed for `10 s` after the transient
 reaction first reaches `20 N`. It continues advancing and rendering Newton
 during that hold, reports force, active-particle speed, and sphere contact count
 at a throttled interval, and freezes the final held state until the viewer
-closes. It does not run the settled-force correction search.
+closes. It is a fixed-speed diagnostic and does not run the production force
+servo.
 
 `validation/contact-physics/force_traj.py` repeats that centered 15 mm sphere
 approach without a viewer, stops prescribed motion at the first transient
@@ -675,20 +703,13 @@ sphere indentation. It updates the silicone GAS from the live Newton checkpoint
 and evaluates a fixed 24-bounce cap for low, nominal, and high Solaris and
 Dragon Skin 10 NV optical priors.
 
-`validation/ray-tracing/sensing_evaluator_test.py` composes the first complete
-sensing evaluator for one approximately 11 mm-wide optical cell. One LED is
-placed at the carrier stem-bottom center in X-Z and at the extrusion-axis center
-derived from the fingertip mesh. Its Lambertian hemisphere points in the pad
-direction (`-Z`). The physical point remains on the carrier boundary; an OTK
-safe pad-side origin removes coincident-triangle ambiguity. The first oriented
-silicone hit then determines whether a load-induced gap ahead of the fixed
-carrier source is air or silicone. The LED is not a mechanics or contact
-object. The script verifies every emitted primary ray against each deformed
-state. It traces one no-contact state and
-independent `20 N` sphere contacts at `X=-7.5`, `0`, and `+7.5 mm` with common
-optical samples, produces one four-quadrant side-view response per state,
-derives both descriptors, and reports each objective together with its
-worst-case state pair. It does not simulate a camera or optimize morphology.
+`validation/ray-tracing/sensing_evaluator_test.py` runs the production evaluator
+for one centered 15 mm sphere. It reports the no-contact and accepted `20 N`
+four-quadrant side-view responses, the complete energy ledger for each optical
+state, and the final mechanics checkpoint. The evaluator reuses one mesh and
+one OptiX scene, so the loaded trace exercises the silicone GAS/IAS update
+rather than a second scene build. The script does not simulate a camera,
+compute a morphology objective, or start optimization.
 
 `validation/ray-tracing/sensing_visualization.py` projects a deterministic
 subset of those real 3D segment records onto the LED-center X-Z plane. It plots

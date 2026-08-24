@@ -40,13 +40,12 @@ _SPHERE_RADIUS_M = 5.0e-3
 _INITIAL_CLEARANCE_M = 1.0e-3
 _APPROACH_SPEED_M_S = 2.5e-2
 _TARGET_FORCE_N = 20.0
-_FORCE_TOLERANCE_N = 5.0
+_FORCE_TOLERANCE_N = 1.0
 # The settling study keeps 5 ms as the smallest duration that remained
 # hard-valid at all three contact locations in the measured run.
 _SETTLE_DURATION_S = 5.0e-3
 _SETTLE_DURATIONS_S = (5.0e-3, 20.0e-3, 50.0e-3)
 _MAX_SIM_TIME_S = 30.0
-_MAX_SEARCH_ITERATIONS = 256
 _MAX_BONDED_DRIFT_M = 1.0e-8
 _MAX_CARRIER_PENETRATION_M = 1.0e-5
 
@@ -74,7 +73,7 @@ _CARRIER_ALBEDO = 0.7
 _DEFAULT_OUTPUT = Path("output/validation/sensing_convergence.json")
 
 _EXPECTED_NUMERICAL_FAILURES = (
-    "did not hold",
+    "did not keep",
     "soft contacts before prescribed motion",
     "non-finite",
 )
@@ -430,7 +429,6 @@ def _measure_trial(
         ),
         "final_force_change_n": trial.force_change_n,
         "simulation_step_count": trial.step_count,
-        "search_correction_count": trial.search_iteration_count,
         "indenter_contact_count": indenter_contact_count,
         "carrier_contact_count": carrier_contact_count,
         "maximum_carrier_penetration_m": maximum_carrier_penetration_m,
@@ -498,7 +496,6 @@ def _run_newton_configuration(
         sim_frequency=sim_frequency,
         force_tolerance_n=_FORCE_TOLERANCE_N,
         settle_duration_s=settle_duration_s,
-        max_search_iterations=_MAX_SEARCH_ITERATIONS,
         element_size_mm=float(parameters["element_size_mm"]),
         iterations=int(parameters["iterations"]),
         soft_contact_margin_m=float(parameters["soft_contact_margin_m"]),
@@ -1052,7 +1049,7 @@ def _print_newton_tables(configurations: list[dict[str, object]]) -> None:
     print(
         f"{'configuration':44s} {'x[mm]':>7s} {'F[N]':>8s} "
         f"{'travel':>8s} {'disp':>8s} {'vmax':>9s} {'dF':>9s} "
-        f"{'ticks':>7s} {'corr':>5s} {'Ci':>5s} {'Cc':>5s} "
+        f"{'ticks':>7s} {'Ci':>5s} {'Cc':>5s} "
         f"{'hard[um]':>8s} {'surf[um]':>8s} {'status':>8s}"
     )
     for configuration in configurations:
@@ -1073,7 +1070,6 @@ def _print_newton_tables(configurations: list[dict[str, object]]) -> None:
                 f"{float(result['maximum_active_particle_speed_m_s']):9.2e} "
                 f"{float(result['final_force_change_n']):9.2e} "
                 f"{int(result['simulation_step_count']):7d} "
-                f"{int(result['search_correction_count']):5d} "
                 f"{int(result['indenter_contact_count']):5d} "
                 f"{int(result['carrier_contact_count']):5d} "
                 f"{1.0e6 * float(result['maximum_carrier_penetration_m']):8.3f} "
@@ -1601,7 +1597,7 @@ def main() -> None:
     ]
     total_wall_runtime_s = perf_counter() - wall_start
     payload = {
-        "schema_version": 1,
+        "schema_version": 2,
         "study": "sensing_convergence",
         "study_complete": study_complete,
         "blocked_reason": blocked_reason,

@@ -36,14 +36,13 @@ _SPHERE_DIAMETER_MM = 10.0
 _SPHERE_RADIUS_M = 5.0e-3
 _INITIAL_CLEARANCE_M = 1.0e-3
 _TARGET_FORCE_N = 20.0
-_FORCE_TOLERANCE_N = 5.0
+_FORCE_TOLERANCE_N = 1.0
 _APPROACH_SPEED_M_S = 2.5e-2
 _SETTLE_DURATION_S = 1.0
 # The 1 s hold plus approach work fits in this validation-local cap. Keeping
-# failed configurations bounded prevents a correction failure from dominating
+# failed configurations bounded prevents a servo failure from dominating
 # the full factorial throughput measurement.
 _MAX_SIM_TIME_S = 2.0
-_MAX_SEARCH_ITERATIONS = 256
 
 _MAX_BONDED_DRIFT_M = 1.0e-8
 _MAX_CARRIER_PENETRATION_M = 1.0e-5
@@ -338,7 +337,6 @@ def _measure_trial(
         ),
         "force_change_n": trial.force_change_n,
         "simulation_step_count": trial.step_count,
-        "search_correction_count": trial.search_iteration_count,
         "maximum_particle_penetration_m": maximum_particle_penetration_m,
         "maximum_free_tet_penetration_m": maximum_free_tet_penetration_m,
         "maximum_exposed_surface_penetration_m": (
@@ -395,7 +393,6 @@ def _run_mechanics(
                 sim_frequency=sim_frequency,
                 force_tolerance_n=_FORCE_TOLERANCE_N,
                 settle_duration_s=_SETTLE_DURATION_S,
-                max_search_iterations=_MAX_SEARCH_ITERATIONS,
                 element_size_mm=float(parameters["element_size_mm"]),
                 iterations=int(parameters["iterations"]),
                 soft_contact_margin_m=_SOFT_CONTACT_MARGIN_M,
@@ -949,7 +946,7 @@ def main() -> None:
         }
 
     payload = {
-        "schema_version": 1,
+        "schema_version": 2,
         "study": "optomechanical_newton_parameter_sweep",
         "completed_at_utc": datetime.now(timezone.utc).isoformat(),
         "sweep_configuration": {

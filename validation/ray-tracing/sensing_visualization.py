@@ -40,10 +40,9 @@ _SPHERE_RADIUS_M = 5.0e-3
 _INITIAL_CLEARANCE_M = 1.0e-3
 _APPROACH_SPEED_M_S = 2.5e-2
 _TARGET_FORCE_N = 20.0
-_FORCE_TOLERANCE_N = 5.0
+_FORCE_TOLERANCE_N = 1.0
 _SETTLE_DURATION_S = 5.0e-3
 _MAX_SIM_TIME_S = 30.0
-_MAX_SEARCH_ITERATIONS = 256
 _SIM_FREQUENCY_HZ = 1.0e3
 
 
@@ -581,7 +580,6 @@ def main() -> None:
             sim_frequency=_SIM_FREQUENCY_HZ,
             force_tolerance_n=_FORCE_TOLERANCE_N,
             settle_duration_s=_SETTLE_DURATION_S,
-            max_search_iterations=_MAX_SEARCH_ITERATIONS,
         ).run(inspect_trial=inspect_loaded)
 
     if any(

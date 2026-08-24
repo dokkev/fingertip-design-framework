@@ -15,11 +15,11 @@ from lumo.simulation import LumoSimulation
 from lumo.util.viewer_util import configure_fingertip_camera
 
 
-_SIM_FREQUENCY_HZ = 1.0e3
+_SIM_FREQUENCY_HZ = 5.0e2
 _SPHERE_RADIUS_M = 7.5e-3
 _INITIAL_CLEARANCE_M = 1.0e-3
 _APPROACH_SPEED_M_S = 2.5e-2
-_TARGET_FORCE_N = 3.0
+_TARGET_FORCE_N = 29.0
 _HOLD_DURATION_S = 10.0
 _MAX_SIM_TIME_S = 30.0
 _REPORT_INTERVAL_TICKS = 100
@@ -67,7 +67,7 @@ def main() -> None:
         builder=builder,
         sim_frequency=_SIM_FREQUENCY_HZ,
     )
-    viewer = newton.viewer.ViewerGL(vsync=True)
+    viewer = newton.viewer.ViewerGL(vsync=False)
     viewer.set_model(simulation.fingertip_model.model)
     configure_fingertip_camera(viewer)
 

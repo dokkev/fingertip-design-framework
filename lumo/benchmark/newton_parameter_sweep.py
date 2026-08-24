@@ -28,9 +28,8 @@ _INITIAL_CLEARANCE_M = 1.0e-3
 _APPROACH_SPEED_M_S = 2.5e-2
 _MAX_SIM_TIME_S = 30.0
 
-_FORCE_TOLERANCE_N = 5.0
+_FORCE_TOLERANCE_N = 1.0
 _SETTLE_DURATION_S = 5.0e-3
-_MAX_SEARCH_ITERATIONS = 256
 _MAX_BONDED_DRIFT_M = 1.0e-8
 _MAX_CARRIER_PENETRATION_M = 1.0e-5
 
@@ -70,7 +69,6 @@ class _SweepResult:
     indenter_contact_count: int = 0
     travel_from_zero_contact_m: float = float("nan")
     simulation_ticks: int = 0
-    search_iterations: int = 0
     wall_time_s: float = float("nan")
     particle_count: int = 0
     tetrahedron_count: int = 0
@@ -153,7 +151,7 @@ def _write_results(
     matrix_results: list[tuple[float, float, _SweepResult]],
 ) -> None:
     payload = {
-        "schema_version": 2,
+        "schema_version": 3,
         "benchmark": "newton_parameter_sweep",
         "completed_at_utc": datetime.now(timezone.utc).isoformat(),
         "options": {
@@ -167,7 +165,6 @@ def _write_results(
             "initial_clearance_m": _INITIAL_CLEARANCE_M,
             "approach_speed_m_s": _APPROACH_SPEED_M_S,
             "maximum_simulation_time_s": _MAX_SIM_TIME_S,
-            "maximum_search_iterations": _MAX_SEARCH_ITERATIONS,
         },
         "baseline_numerical_parameters": {
             "element_size_mm": _BASELINE_ELEMENT_SIZE_MM,
@@ -318,7 +315,6 @@ def _run_case(
         sim_frequency=sim_frequency_hz,
         force_tolerance_n=_FORCE_TOLERANCE_N,
         settle_duration_s=_SETTLE_DURATION_S,
-        max_search_iterations=_MAX_SEARCH_ITERATIONS,
         element_size_mm=element_size_mm,
         iterations=iterations,
         soft_contact_margin_m=soft_contact_margin_m,
@@ -437,7 +433,6 @@ def _run_case(
                 completed_trial.travel_m - _INITIAL_CLEARANCE_M
             ),
             simulation_ticks=completed_trial.step_count,
-            search_iterations=completed_trial.search_iteration_count,
             particle_count=particle_count,
             tetrahedron_count=int(tet_indices.shape[0]),
         )
@@ -480,7 +475,7 @@ def _print_family(
         f"{'value':>15} {'F[N]':>9} {'Ferr[N]':>10} "
         f"{'travel[mm]':>11} "
         f"{'dtravel[mm]':>12} {'dtravel[%]':>11} {'pen[um]':>9} "
-        f"{'ticks':>7} {'search':>7} {'wall[s]':>9} {'ratio':>7} "
+        f"{'ticks':>7} {'wall[s]':>9} {'ratio':>7} "
         f"{'particles':>10} {'tets':>9} {'status':>7}"
     )
     for value, result in results:
@@ -514,7 +509,6 @@ def _print_family(
             f"{travel_change_percent:+11.3f} "
             f"{1.0e6 * result.maximum_carrier_penetration_m:9.3f} "
             f"{result.simulation_ticks:7d} "
-            f"{result.search_iterations:7d} "
             f"{result.wall_time_s:9.3f} {runtime_ratio:7.2f} "
             f"{result.particle_count:10d} "
             f"{result.tetrahedron_count:9d} "
