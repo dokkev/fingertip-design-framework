@@ -95,6 +95,7 @@ class DesignStudy:
         fingertip_mesh: FingertipMesh | None = None,
         sim_frequency: float,
         settle_duration_s: float,
+        settle_displacement_tolerance_m: float | None = None,
         force_tolerance_n: float | None = None,
         force_tolerance_fraction: float | None = None,
         force_targets_n: Iterable[float] | None = None,
@@ -115,6 +116,11 @@ class DesignStudy:
                 raise ValueError("fingertip_mesh must belong to the supplied fingertip")
         require_positive("sim_frequency", sim_frequency)
         require_positive("settle_duration_s", settle_duration_s)
+        if settle_displacement_tolerance_m is not None:
+            require_nonnegative(
+                "settle_displacement_tolerance_m",
+                settle_displacement_tolerance_m,
+            )
         if (force_tolerance_n is None) == (force_tolerance_fraction is None):
             raise ValueError(
                 "provide exactly one of force_tolerance_n or force_tolerance_fraction"
@@ -210,6 +216,11 @@ class DesignStudy:
         )
         self.force_targets_n = target_tuple
         self.settle_duration_s = float(settle_duration_s)
+        self.settle_displacement_tolerance_m = (
+            None
+            if settle_displacement_tolerance_m is None
+            else float(settle_displacement_tolerance_m)
+        )
         self.force_gain_m_s_n = float(force_gain_m_s_n)
         self.element_size_mm = float(element_size_mm)
         self.iterations = iterations
@@ -307,7 +318,8 @@ class DesignStudy:
                         self.force_gain_m_s_n * force_error_n,
                     ),
                 )
-                travel_m += velocity_m_s * simulation.time_step_s
+                commanded_displacement_m = velocity_m_s * simulation.time_step_s
+                travel_m += commanded_displacement_m
                 translation_W_m = (
                     initial_translation_W_m + travel_m * motion_direction_W
                 )
@@ -325,7 +337,15 @@ class DesignStudy:
                 force_change_n = abs(reaction_force_n - previous_force_n)
                 previous_force_n = reaction_force_n
 
-                if abs(reaction_force_n - target_force_n) <= force_tolerance_n:
+                force_is_settled = (
+                    abs(reaction_force_n - target_force_n) <= force_tolerance_n
+                )
+                displacement_is_settled = (
+                    self.settle_displacement_tolerance_m is None
+                    or abs(commanded_displacement_m)
+                    <= self.settle_displacement_tolerance_m
+                )
+                if force_is_settled and displacement_is_settled:
                     in_tolerance_ticks += 1
                 else:
                     in_tolerance_ticks = 0
@@ -355,10 +375,16 @@ class DesignStudy:
                 )
                 in_tolerance_ticks = 0
             else:
+                displacement_condition = ""
+                if self.settle_displacement_tolerance_m is not None:
+                    displacement_condition = (
+                        " while commanding no more than "
+                        f"{self.settle_displacement_tolerance_m:g} m/tick"
+                    )
                 raise RuntimeError(
                     f"{trial.name} did not keep {target_force_n:g} N "
                     f"within {force_tolerance_n:g} N for "
-                    f"{self.settle_duration_s:g} s "
+                    f"{self.settle_duration_s:g} s{displacement_condition} "
                     f"during {trial.max_sim_time_s:g} s of simulation; last "
                     f"force was {reaction_force_n:.9e} N"
                 )

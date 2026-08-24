@@ -32,10 +32,11 @@ _MAX_BOUNCES = 24
 _RNG_SEED = 20260823
 _CARRIER_ALBEDO = 0.7
 
-_SIM_FREQUENCY_HZ = 500.0
+_SIM_FREQUENCY_HZ = 100.0
 _VBD_ITERATIONS = 10
 _SERVO_SETTLE_DURATION_S = 5.0
-_FORCE_GAIN_M_S_N = 1.25e-3
+_SERVO_SETTLE_DISPLACEMENT_TOLERANCE_M = None
+_FORCE_GAIN_M_S_N = 2.5e-4
 _CONTACT_STIFFNESS_N_M = 3.0e4
 _CONTACT_DAMPING_N_S_M = 0.28228017516945547
 _FORCE_TARGETS_N = (5.0, 10.0, 15.0, 20.0)
@@ -65,6 +66,7 @@ class ContactSensingEvaluation:
     response_matrix: np.ndarray
     energy_fields: tuple[str, ...]
     energy_matrix: np.ndarray
+    checkpoint_times_s: np.ndarray
     scenario_runtime_s: np.ndarray
 
 
@@ -117,16 +119,6 @@ def _source_inside_silicone(
     led: LED,
     emission: np.ndarray,
 ) -> bool:
-    initial_hits = scene.trace_closest(
-        emission["origin_W_m"],
-        emission["direction_W"],
-        mask=_ALL_MASK,
-    )
-    if not np.all(initial_hits["hit"]) or np.any(
-        initial_hits["instance_id"] != _SILICONE_INSTANCE_ID
-    ):
-        raise RuntimeError("an emitted primary ray is obstructed before silicone")
-
     silicone_hit = scene.trace_closest(
         emission["origin_W_m"][:1],
         led.normal_W[None, :],
@@ -193,13 +185,20 @@ def _trace_state(
 def evaluate_contact_sensing(
     fingertip: Fingertip,
     trials: Iterable[DesignTrial],
+    *,
+    settle_duration_s: float = _SERVO_SETTLE_DURATION_S,
+    settle_displacement_tolerance_m: float | None = (
+        _SERVO_SETTLE_DISPLACEMENT_TOLERANCE_M
+    ),
 ) -> ContactSensingEvaluation:
     """Evaluate one no-contact state and force-servo contact scenarios.
 
     The immutable fingertip mesh and OptiX scene are built once. The contact
     trials reuse that mesh in independent Newton runtimes. Each accepted force
     checkpoint updates the existing silicone GAS and IAS before tracing with
-    the same deterministic optical samples.
+    the same deterministic optical samples. Defaults implement the validated
+    five-second force-band dwell; scalar overrides support focused convergence
+    validation without changing the mechanics or optical pipeline.
     """
     if not isinstance(fingertip, Fingertip):
         raise TypeError("fingertip must be a Fingertip")
@@ -260,6 +259,10 @@ def evaluate_contact_sensing(
     )
     actual_forces_n = np.empty((scenario_count, force_count), dtype=np.float64)
     indentations_m = np.empty((scenario_count, force_count), dtype=np.float64)
+    checkpoint_times_s = np.empty(
+        (scenario_count, force_count),
+        dtype=np.float64,
+    )
     scenario_runtime_s = np.empty(scenario_count, dtype=np.float64)
     scenario_indices = {id(trial): index for index, trial in enumerate(trial_tuple)}
     next_force_indices = np.zeros(scenario_count, dtype=np.int64)
@@ -285,7 +288,11 @@ def evaluate_contact_sensing(
         force_index = int(next_force_indices[scenario_index])
         if force_index >= force_count:
             raise RuntimeError(f"{completed_trial.name} produced an extra checkpoint")
-        if completed_trial.reaction_force_n is None or completed_trial.travel_m is None:
+        if (
+            completed_trial.reaction_force_n is None
+            or completed_trial.travel_m is None
+            or completed_trial.simulation_time_s is None
+        ):
             raise RuntimeError(
                 f"{completed_trial.name} checkpoint has no mechanics result"
             )
@@ -306,6 +313,9 @@ def evaluate_contact_sensing(
         indentations_m[scenario_index, force_index] = (
             completed_trial.travel_m - completed_trial.initial_clearance_m
         )
+        checkpoint_times_s[scenario_index, force_index] = (
+            completed_trial.simulation_time_s
+        )
         next_force_indices[scenario_index] += 1
         if next_force_indices[scenario_index] == force_count:
             now_s = perf_counter()
@@ -317,7 +327,8 @@ def evaluate_contact_sensing(
         trial_tuple,
         fingertip_mesh=fingertip_mesh,
         sim_frequency=_SIM_FREQUENCY_HZ,
-        settle_duration_s=_SERVO_SETTLE_DURATION_S,
+        settle_duration_s=settle_duration_s,
+        settle_displacement_tolerance_m=settle_displacement_tolerance_m,
         force_tolerance_fraction=_FORCE_TOLERANCE_FRACTION,
         force_targets_n=_FORCE_TARGETS_N,
         force_gain_m_s_n=_FORCE_GAIN_M_S_N,
@@ -338,6 +349,7 @@ def evaluate_contact_sensing(
         response_matrix=response_matrix,
         energy_fields=_ENERGY_FIELDS,
         energy_matrix=energy_matrix,
+        checkpoint_times_s=checkpoint_times_s,
         scenario_runtime_s=scenario_runtime_s,
     )
 

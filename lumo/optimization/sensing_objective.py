@@ -38,9 +38,10 @@ def sensing_descriptors(
     return intensity, spatial
 
 
-def sensing_objectives(responses: np.ndarray) -> tuple[float, float]:
-    """Return worst-case total-intensity and spatial separability."""
-    intensity, spatial = sensing_descriptors(responses)
+def _minimum_separations(
+    intensity: np.ndarray,
+    spatial: np.ndarray,
+) -> tuple[float, float]:
     minimum_intensity = float("inf")
     minimum_spatial = float("inf")
     for first in range(len(intensity) - 1):
@@ -56,6 +57,53 @@ def sensing_objectives(responses: np.ndarray) -> tuple[float, float]:
     if not np.isfinite(minimum_intensity) or not np.isfinite(minimum_spatial):
         raise ValueError("descriptor distances must be finite")
     return minimum_intensity, minimum_spatial
+
+
+def sensing_objectives(
+    responses: np.ndarray,
+    *,
+    no_contact_response: np.ndarray | None = None,
+) -> tuple[float, float] | tuple[np.ndarray, np.ndarray, float, float]:
+    """Return separate worst-case intensity and spatial separability.
+
+    A two-dimensional input preserves the single state-set calculation. For
+    grouped contact responses shaped ``(groups, states, 4)``, supply the shared
+    no-contact response separately. Each group's contact states are compared
+    only with one another, and the final two scalars are the minima across
+    groups.
+    """
+    values = np.asarray(responses, dtype=np.float64)
+    if no_contact_response is None:
+        intensity, spatial = sensing_descriptors(values)
+        return _minimum_separations(intensity, spatial)
+
+    if values.ndim != 3 or values.shape[1] < 2 or values.shape[2] != 4:
+        raise ValueError(
+            "grouped responses must have shape (groups, at least 2 states, 4)"
+        )
+    if values.shape[0] < 1:
+        raise ValueError("grouped responses must contain at least one group")
+
+    reference = np.asarray(no_contact_response, dtype=np.float64)
+    if reference.shape != (4,):
+        raise ValueError("no_contact_response must have shape (4,)")
+
+    group_intensity = np.empty(values.shape[0], dtype=np.float64)
+    group_spatial = np.empty(values.shape[0], dtype=np.float64)
+    for group_index, group_responses in enumerate(values):
+        intensity, spatial = sensing_descriptors(
+            np.vstack((reference, group_responses))
+        )
+        group_intensity[group_index], group_spatial[group_index] = _minimum_separations(
+            intensity[1:], spatial[1:]
+        )
+
+    return (
+        group_intensity,
+        group_spatial,
+        float(group_intensity.min()),
+        float(group_spatial.min()),
+    )
 
 
 __all__ = ["sensing_descriptors", "sensing_objectives"]

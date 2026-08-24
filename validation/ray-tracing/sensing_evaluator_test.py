@@ -70,7 +70,7 @@ def _make_trial(
             wp.quat_identity(),
         ),
         motion_direction_W=wp.vec3(0.0, 0.0, 1.0),
-        approach_speed_m_s=2.5e-2,
+        approach_speed_m_s=5.0e-3,
         target_force_n=20.0,
         max_sim_time_s=30.0,
         initial_clearance_m=_INITIAL_CLEARANCE_M,

@@ -316,12 +316,18 @@ update the kinematic indenter pose
         ↓
 one LumoSimulation step and reaction measurement
         ↓
-accept after the force remains inside tolerance for the settling duration
+test force and commanded-displacement settling conditions
+        ↓
+accept after both remain true for the settling duration
 ```
 
-Leaving the tolerance resets its consecutive-tick counter. There is no
-first-crossing stop, fixed-pose correction search, integral term, or PID
-controller.
+Leaving the force tolerance or exceeding an optional per-tick commanded
+displacement tolerance resets the single consecutive-tick counter. The
+production sensing evaluation leaves the displacement criterion disabled and
+requires `+/- 10%` target-force agreement continuously for `5 s`. The optional
+displacement criterion remains available only for the focused adaptive-settling
+validation. There is no force-slope or particle-speed criterion, first-crossing
+stop, fixed-pose correction search, integral term, or PID controller.
 
 Only `LumoSimulation.step()` mutates Newton state or simulation time. The study
 does not share mutable Newton state between trials, run trials in parallel, or
@@ -499,12 +505,19 @@ ledger. It then releases the full `PathTraceResult` and escaped-ray arrays
 before Newton continues toward the next target. The returned response array is
 shaped `(scenario, force, quadrant)` and the energy array is shaped
 `(scenario, force, energy field)`, with separate no-contact reference vectors
-and per-scenario wall runtime. The fixed current mechanics contract is
-`500 Hz`, `10` VBD iterations, equal `ke=3e4 N/m` endpoints,
+plus checkpoint simulation times and per-scenario wall runtime. The fixed
+current mechanics contract is
+`100 Hz`, `10` VBD iterations, equal `ke=3e4 N/m` endpoints,
 `kd=0.282280175 N s/m`, the proportional force servo, and acceptance after
-each target remains within its `+/- 10%` band for `5 s`. Optical transport
+force remains within its `+/- 10%` band continuously for `5 s`. The servo uses
+`Kf=2.5e-4 m/(s N)` with a `5 mm/s` trial cap, preserving the validated
+`2.5 um/(N tick)` gain and `50 um/tick` maximum step. Optical transport
 uses `65,536` paths and `24` bounces. This evaluator does not perform
 morphology optimization or combine sensing objectives.
+The LED remains on the carrier stem boundary. If a nonzero geometry void
+places air between that source and silicone, transport starts in air and lets
+OptiX resolve silicone entry, carrier reflection, or escape rather than
+requiring every primary ray to enter silicone immediately.
 
 `sensing_descriptors()` consumes a state array shaped `(contact states, 4)`.
 For the current single optical cell it forms one scalar intensity response from
@@ -512,8 +525,11 @@ total side-visible power relative to no contact, and one normalized four-value
 spatial response per state. It rejects a numerically zero no-contact reference
 or state-visible total instead of adding an objective-changing epsilon.
 `sensing_objectives()` returns the separate worst-case pairwise scalar-intensity
-and Euclidean spatial separations. It does not know about LEDs, Newton, OptiX,
-ray tracing, morphology, or objective weights.
+and Euclidean spatial separations. With grouped responses shaped
+`(sphere diameter, force state, quadrant)`, it compares force states only
+within each sphere diameter and returns both the per-diameter values and their
+diameter-wise minima. It does not know about LEDs, Newton, OptiX, ray tracing,
+morphology, or objective weights.
 
 Future optimization code should consume validated simulation outputs rather
 than implementing mechanics or optical transport itself.

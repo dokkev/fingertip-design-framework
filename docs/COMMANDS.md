@@ -552,3 +552,35 @@ with `lumo.util.mesh_io.load_mesh()`. The loader requires an explicit
 
 Validation, optimization, and benchmark outputs belong under `output/`. Existing
 scientific artifacts are not overwritten by cleanup or documentation commands.
+
+## Sensing-objective trade-off sample
+
+Run the deterministic baseline-plus-Sobol morphology sample with:
+
+```bash
+conda run -n lit python -u \
+  validation/optomech/sensing_objective_tradeoff.py
+```
+
+The expensive validation evaluates center contact for 5, 10, and 20 mm
+spheres at sequential 5, 10, 15, and 20 N force targets. It writes
+`output/validation/sensing_objective_tradeoff.csv` and
+`output/validation/sensing_objective_tradeoff.png`. Its trial horizon is 60 s;
+when the CSV already contains the same deterministic Sobol points, completed
+rows are reused and only incomplete rows are evaluated again.
+
+## Adaptive settling validation
+
+Compare the validation-only `0.2 s` adaptive settling rule against the
+production force-band-only `5 s` dwell for centered 5, 10, and 20 mm spheres:
+
+```bash
+conda run --no-capture-output -n lit \
+  python -u validation/optomech/adaptive_settling.py
+```
+
+The script keeps all mechanics and OptiX settings fixed, ray traces only at
+accepted checkpoints, prints mechanical/optical differences, and writes
+`output/validation/adaptive_settling.csv`.
+The measured adaptive rule changes the sensing objectives materially and is
+therefore not a production default.
