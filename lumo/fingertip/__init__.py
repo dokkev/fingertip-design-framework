@@ -12,15 +12,21 @@ from .optical_param import (
     SOLARIS_OPTICS_LOW,
     SOLARIS_OPTICS_NOMINAL,
     LEDParameters,
+    OPTICAL_PRESETS,
     SiliconeOptics,
 )
-from .viscoelastic_param import ViscoelasticParameters
+from .viscoelastic_param import (
+    SILICONE_VISCOELASTIC,
+    VISCOELASTIC_PRESETS,
+    ViscoelasticParameters,
+)
 
 __all__ = [
     "Fingertip",
     "Silicone",
     "Carrier",
     "BondingInterface",
+    "SILICONE_VISCOELASTIC",
     "FingertipParameters",
     "FingertipGeometry",
     "InvalidFingertipParameters",
@@ -28,9 +34,11 @@ __all__ = [
     "DRAGON_SKIN_10_NV_OPTICS_LOW",
     "DRAGON_SKIN_10_NV_OPTICS_NOMINAL",
     "LEDParameters",
+    "OPTICAL_PRESETS",
     "SOLARIS_OPTICS_HIGH",
     "SOLARIS_OPTICS_LOW",
     "SOLARIS_OPTICS_NOMINAL",
     "SiliconeOptics",
+    "VISCOELASTIC_PRESETS",
     "ViscoelasticParameters",
 ]

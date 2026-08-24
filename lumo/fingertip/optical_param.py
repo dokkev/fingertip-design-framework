@@ -129,6 +129,15 @@ DRAGON_SKIN_10_NV_OPTICS_HIGH = SiliconeOptics(
     extinction_coefficient_m_inv=110.52408446371422,
 )
 
+OPTICAL_PRESETS = {
+    "solaris_low": SOLARIS_OPTICS_LOW,
+    "solaris_nominal": SOLARIS_OPTICS_NOMINAL,
+    "solaris_high": SOLARIS_OPTICS_HIGH,
+    "dragon_skin_10_nv_low": DRAGON_SKIN_10_NV_OPTICS_LOW,
+    "dragon_skin_10_nv_nominal": DRAGON_SKIN_10_NV_OPTICS_NOMINAL,
+    "dragon_skin_10_nv_high": DRAGON_SKIN_10_NV_OPTICS_HIGH,
+}
+
 
 @dataclass(frozen=True)
 class LEDParameters:
@@ -180,9 +189,7 @@ class LEDParameters:
             )
 
         if not 0.0 < self.viewing_half_angle_deg < 90.0:
-            raise error_type(
-                "viewing_half_angle_deg must be between 0 and 90 degrees"
-            )
+            raise error_type("viewing_half_angle_deg must be between 0 and 90 degrees")
 
 
 __all__ = [
@@ -190,6 +197,7 @@ __all__ = [
     "DRAGON_SKIN_10_NV_OPTICS_LOW",
     "DRAGON_SKIN_10_NV_OPTICS_NOMINAL",
     "LEDParameters",
+    "OPTICAL_PRESETS",
     "SOLARIS_OPTICS_HIGH",
     "SOLARIS_OPTICS_LOW",
     "SOLARIS_OPTICS_NOMINAL",

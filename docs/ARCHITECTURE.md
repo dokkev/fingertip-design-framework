@@ -542,17 +542,24 @@ to physical millimeters only at the evaluator boundary. Ax directly enforces
 `FingertipGeometry` and `DesignSpace` checks remain the sole owners of nonlinear
 geometry validity.
 `scripts/run_mobo.py` is the user-edited entry point for the discrete campaign.
-It exposes the physical parameter bounds, indenter URDF list, sequential force
-targets, fixed force-band dwell, relative tolerance, output directory, and
+It exposes separate viscoelastic and optical presets, physical parameter
+bounds, indenter URDF list, sequential force targets, initial clearance, fixed
+force-band dwell, relative tolerance, output directory, and
 successful-morphology target. The optimizer validates these inputs and records
 them in `run_config.json`; mechanics and optical algorithms remain owned by
-their production modules. All configured indenters share one initial center
-pose derived from a 20 mm reference indenter; smaller packaged spheres simply
-approach from farther away. URDF filenames identify result groups but do not
-encode placement dimensions. For these common-pose trials, `DesignTrial`
-records the first positive contact-force travel as the clearance so reported
-indentation excludes object-dependent free approach. Callers that already know
-their geometric clearance can continue supplying it directly.
+their production modules. `silicone` is the current mechanics preset.
+Optical selection independently exposes the existing Solaris and Dragon Skin
+10 NV low/nominal/high sensitivity presets, without claiming that Solaris uses
+Dragon Skin mechanics. All configured indenters share one initial center pose
+derived from a 20 mm reference indenter and the configured clearance; smaller
+packaged spheres simply approach from farther away. URDF filenames identify
+result groups but do not encode placement dimensions. For these common-pose
+trials, `DesignTrial` records the first positive contact-force travel as the
+clearance so reported indentation excludes object-dependent free approach.
+Callers that already know their geometric clearance can continue supplying it
+directly. The entry script supplies its sibling `optix-toolkit/ShaderUtil/include`
+as the default `OTK_INCLUDE_DIR`; an explicitly exported environment value
+still takes precedence.
 
 The discrete campaign records both integer steps and decoded millimeters in
 its CSV. Its six snapped continuous-Pareto designs are only ordered design

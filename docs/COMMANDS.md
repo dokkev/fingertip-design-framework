@@ -504,21 +504,27 @@ observations; their old objectives are never attached. Resume is cumulative:
 
 ```bash
 OPTIX_INCLUDE_DIR=/path/to/NVIDIA-OptiX-SDK-9.1.0/include \
-OTK_INCLUDE_DIR=/path/to/optix-toolkit/ShaderUtil/include \
 conda run --no-capture-output -n lit \
   python -u scripts/run_mobo.py
 ```
 
+`scripts/run_mobo.py` resolves the default OTK include directory from the
+sibling `optix-toolkit` checkout. Export `OTK_INCLUDE_DIR` only to override that
+default.
+
 The script writes and resumes only
 `output/optimization/mobo_discrete_05mm_clean`; the earlier interrupted
 campaign remains untouched. Edit the user-settings block at the top of
-`scripts/run_mobo.py` to change the 0.5 mm physical bounds, packaged indenter
-URDFs,
-sequential force targets, settle duration, relative force tolerance, or
-successful-morphology target. All listed indenters use the same initial center
-pose based on a 20 mm reference indenter, so the filename does not need to
-encode a diameter. Changing scientific settings requires a new empty output
-directory; resume rejects a settings mismatch.
+`scripts/run_mobo.py` to select viscoelastic and optical presets or change the
+0.5 mm physical bounds, packaged indenter URDFs, initial clearance, sequential
+force targets, settle duration, relative force tolerance, or
+successful-morphology target. The current mechanics preset is `silicone`.
+Optical choices are `solaris_low`, `solaris_nominal`,
+`solaris_high`, `dragon_skin_10_nv_low`, `dragon_skin_10_nv_nominal`, and
+`dragon_skin_10_nv_high`. All listed indenters use the same initial center pose
+based on a 20 mm reference indenter, so the filename does not need to encode a
+diameter. Changing scientific settings requires a new empty output directory;
+resume rejects a settings mismatch.
 
 Do not point the discrete command at `output/optimization/mobo`; its Ax state
 and observations belong only to the continuous campaign.

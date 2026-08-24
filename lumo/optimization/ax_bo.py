@@ -22,7 +22,11 @@ import numpy as np
 from ax.api.client import Client
 from ax.api.configs import RangeParameterConfig
 
-from lumo.fingertip import FingertipParameters
+from lumo.fingertip import (
+    OPTICAL_PRESETS,
+    VISCOELASTIC_PRESETS,
+    FingertipParameters,
+)
 
 from .design_param_bound import DesignParameterBounds, ParameterBound
 from .design_space import DesignSpace, LinearConstraint
@@ -71,6 +75,9 @@ _DEFAULT_INDENTER_URDFS = (
 _DEFAULT_FORCE_TARGETS_N = (5.0, 10.0, 15.0, 20.0)
 _DEFAULT_SETTLE_DURATION_S = 5.0
 _DEFAULT_FORCE_TOLERANCE_FRACTION = 0.1
+_DEFAULT_INITIAL_CLEARANCE_M = 1.0e-3
+_DEFAULT_VISCOELASTIC_PRESET = "silicone"
+_DEFAULT_OPTICAL_PRESET = "dragon_skin_10_nv_nominal"
 _INITIAL_INDENTER_REFERENCE_DIAMETER_MM = 20.0
 _CONTINUOUS_WARM_START_RESULT_FIELDS = (
     ("sphere_5mm", "J_intensity_5mm", "J_spatial_5mm"),
@@ -100,12 +107,11 @@ _SUMMARY_FILENAME = "run_summary.json"
 _TRIAL_RESULT_DIRECTORY = "trials"
 _RANDOM_SEED = 20260823
 _CONTINUOUS_WARM_START_COUNT = 13
-_INITIAL_CLEARANCE_M = 1.0e-3
 _APPROACH_SPEED_M_S = 5.0e-3
 _MAX_SIM_TIME_S = 60.0
 _MAX_PROPOSALS_PER_COMPLETED_TRIAL = 50
 _OBJECTIVE_DEFINITION = "indenter-wise-force-pair-min-v1"
-_RUN_CONFIG_SCHEMA = 2
+_RUN_CONFIG_SCHEMA = 3
 
 
 @dataclass(frozen=True)
@@ -130,6 +136,9 @@ class CampaignDefinition:
     force_targets_n: tuple[float, ...] = _DEFAULT_FORCE_TARGETS_N
     settle_duration_s: float = _DEFAULT_SETTLE_DURATION_S
     force_tolerance_fraction: float = _DEFAULT_FORCE_TOLERANCE_FRACTION
+    initial_clearance_m: float = _DEFAULT_INITIAL_CLEARANCE_M
+    viscoelastic_preset: str = _DEFAULT_VISCOELASTIC_PRESET
+    optical_preset: str = _DEFAULT_OPTICAL_PRESET
 
     @property
     def ax_parameter_names(self) -> tuple[str, ...]:
@@ -274,8 +283,8 @@ def _force_targets(force_targets_n: Iterable[float]) -> tuple[float, ...]:
 
 def _discrete_design_space(
     parameter_bounds: Mapping[str, tuple[float, float]],
+    parameters: FingertipParameters,
 ) -> DesignSpace:
-    parameters = FingertipParameters()
     parameters = replace(
         parameters,
         geometry=replace(
@@ -313,11 +322,15 @@ def _campaign_definition(
     force_targets_n: Iterable[float] = _DEFAULT_FORCE_TARGETS_N,
     settle_duration_s: float = _DEFAULT_SETTLE_DURATION_S,
     force_tolerance_fraction: float = _DEFAULT_FORCE_TOLERANCE_FRACTION,
+    initial_clearance_m: float = _DEFAULT_INITIAL_CLEARANCE_M,
+    viscoelastic_preset: str = _DEFAULT_VISCOELASTIC_PRESET,
+    optical_preset: str = _DEFAULT_OPTICAL_PRESET,
 ) -> CampaignDefinition:
     indenters = _indenter_definitions(indenter_urdfs)
     targets = _force_targets(force_targets_n)
     settle_duration_s = float(settle_duration_s)
     force_tolerance_fraction = float(force_tolerance_fraction)
+    initial_clearance_m = float(initial_clearance_m)
     if not isfinite(settle_duration_s) or settle_duration_s <= 0.0:
         raise ValueError("settle_duration_s must be finite and positive")
     if (
@@ -326,6 +339,21 @@ def _campaign_definition(
         or force_tolerance_fraction >= 1.0
     ):
         raise ValueError("force_tolerance_fraction must lie between zero and one")
+    if not isfinite(initial_clearance_m) or initial_clearance_m < 0.0:
+        raise ValueError("initial_clearance_m must be finite and nonnegative")
+    if (
+        not isinstance(viscoelastic_preset, str)
+        or viscoelastic_preset not in VISCOELASTIC_PRESETS
+    ):
+        raise ValueError(
+            f"viscoelastic_preset must be one of {sorted(VISCOELASTIC_PRESETS)!r}"
+        )
+    if not isinstance(optical_preset, str) or optical_preset not in OPTICAL_PRESETS:
+        raise ValueError(f"optical_preset must be one of {sorted(OPTICAL_PRESETS)!r}")
+    fingertip_parameters = FingertipParameters(
+        viscoelastic=VISCOELASTIC_PRESETS[viscoelastic_preset],
+        optical=OPTICAL_PRESETS[optical_preset],
+    )
     if name == "continuous":
         if parameter_bounds_mm is not None:
             raise ValueError(
@@ -336,6 +364,9 @@ def _campaign_definition(
             or targets != _DEFAULT_FORCE_TARGETS_N
             or settle_duration_s != _DEFAULT_SETTLE_DURATION_S
             or force_tolerance_fraction != _DEFAULT_FORCE_TOLERANCE_FRACTION
+            or initial_clearance_m != _DEFAULT_INITIAL_CLEARANCE_M
+            or viscoelastic_preset != _DEFAULT_VISCOELASTIC_PRESET
+            or optical_preset != _DEFAULT_OPTICAL_PRESET
         ):
             raise ValueError("custom evaluation settings require discrete-05mm")
         space = _continuous_design_space()
@@ -371,12 +402,15 @@ def _campaign_definition(
             force_targets_n=targets,
             settle_duration_s=settle_duration_s,
             force_tolerance_fraction=force_tolerance_fraction,
+            initial_clearance_m=initial_clearance_m,
+            viscoelastic_preset=viscoelastic_preset,
+            optical_preset=optical_preset,
         )
     if name == "discrete-05mm":
         parameter_bounds, step_to_physical = _discrete_parameter_bounds(
             parameter_bounds_mm
         )
-        space = _discrete_design_space(parameter_bounds)
+        space = _discrete_design_space(parameter_bounds, fingertip_parameters)
         seed_steps = tuple(
             (source_design, steps)
             for source_design, steps in _DISCRETE_SEED_STEPS
@@ -431,6 +465,9 @@ def _campaign_definition(
             force_targets_n=targets,
             settle_duration_s=settle_duration_s,
             force_tolerance_fraction=force_tolerance_fraction,
+            initial_clearance_m=initial_clearance_m,
+            viscoelastic_preset=viscoelastic_preset,
+            optical_preset=optical_preset,
         )
     raise ValueError(f"unknown campaign {name!r}")
 
@@ -922,6 +959,8 @@ def _run_config(campaign: CampaignDefinition) -> dict[str, object]:
             },
         },
         "scientific_contract": {
+            "viscoelastic_preset": campaign.viscoelastic_preset,
+            "optical_preset": campaign.optical_preset,
             "fingertip_parameters": asdict(campaign.space.parameter_bounds.parameters),
             "mechanics": {
                 "sim_frequency_hz": evaluator._SIM_FREQUENCY_HZ,
@@ -952,6 +991,7 @@ def _run_config(campaign: CampaignDefinition) -> dict[str, object]:
                 "initial_pose_reference_diameter_mm": (
                     _INITIAL_INDENTER_REFERENCE_DIAMETER_MM
                 ),
+                "initial_clearance_m": campaign.initial_clearance_m,
                 "contact_x_mm": 0.0,
             },
             "optics": {
@@ -1064,7 +1104,7 @@ def _evaluate_candidate(
         )
         initial_z_m = (
             fingertip.tip_z_m
-            - _INITIAL_CLEARANCE_M
+            - campaign.initial_clearance_m
             - 0.5e-3 * _INITIAL_INDENTER_REFERENCE_DIAMETER_MM
         )
         trials = tuple(
@@ -1666,6 +1706,9 @@ def run(
     force_targets_n: Iterable[float] = _DEFAULT_FORCE_TARGETS_N,
     settle_duration_s: float = _DEFAULT_SETTLE_DURATION_S,
     force_tolerance_fraction: float = _DEFAULT_FORCE_TOLERANCE_FRACTION,
+    initial_clearance_m: float = _DEFAULT_INITIAL_CLEARANCE_M,
+    viscoelastic_preset: str = _DEFAULT_VISCOELASTIC_PRESET,
+    optical_preset: str = _DEFAULT_OPTICAL_PRESET,
 ) -> list[dict[str, object]]:
     """Create or resume the concrete cumulative center-contact campaign."""
     if target_bo_trials < 0:
@@ -1679,6 +1722,9 @@ def run(
         force_targets_n=force_targets_n,
         settle_duration_s=settle_duration_s,
         force_tolerance_fraction=force_tolerance_fraction,
+        initial_clearance_m=initial_clearance_m,
+        viscoelastic_preset=viscoelastic_preset,
+        optical_preset=optical_preset,
     )
     if (
         campaign.is_discrete

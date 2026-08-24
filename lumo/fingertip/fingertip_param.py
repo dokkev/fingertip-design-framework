@@ -18,9 +18,7 @@ class FingertipParameters:
     """Physical parameters defining one complete fingertip."""
 
     geometry: FingertipGeometry = field(default_factory=FingertipGeometry)
-    viscoelastic: ViscoelasticParameters = field(
-        default_factory=ViscoelasticParameters
-    )
+    viscoelastic: ViscoelasticParameters = field(default_factory=ViscoelasticParameters)
     optical: SiliconeOptics = DRAGON_SKIN_10_NV_OPTICS_NOMINAL
     led: LEDParameters = field(default_factory=LEDParameters)
 

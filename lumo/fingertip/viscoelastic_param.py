@@ -41,4 +41,15 @@ class ViscoelasticParameters:
         )
 
 
-__all__ = ["ViscoelasticParameters"]
+SILICONE_VISCOELASTIC = ViscoelasticParameters()
+
+VISCOELASTIC_PRESETS = {
+    "silicone": SILICONE_VISCOELASTIC,
+}
+
+
+__all__ = [
+    "SILICONE_VISCOELASTIC",
+    "VISCOELASTIC_PRESETS",
+    "ViscoelasticParameters",
+]
