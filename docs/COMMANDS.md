@@ -54,6 +54,40 @@ Visualize the analytic carrier-silicone bond in the XZ cross-section:
 conda run -n lit python validation/fingertip/view_bond_geometry.py
 ```
 
+Run the focused full five-LED mesh regressions:
+
+```bash
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 conda run --no-capture-output -n lit \
+  pytest -q tests/unit/mesh/test_fingertip_5led_mesh.py
+```
+
+Generate the longitudinal, local XZ, and 3D material views of the actual full
+mesh:
+
+```bash
+conda run --no-capture-output -n lit \
+  python -u validation/fingertip/view_fingertip_5led.py
+```
+
+The figure is saved to `output/validation/fingertip_5led_mesh.png`.
+
+Open the same full five-LED mesh as a static Newton model in ViewerGL. The
+green markers are the five LED reference positions below the continuous stem
+rail:
+
+```bash
+conda run --no-capture-output -n lit \
+  python -u validation/fingertip/view_fingertip_5led_newton.py
+```
+
+Run the short central 10 mm sphere Newton compatibility smoke without the full
+force protocol:
+
+```bash
+conda run --no-capture-output -n lit \
+  python -u validation/contact-physics/fingertip_5led_smoke.py
+```
+
 Compare the six selected Dragon Skin/Solaris physical-validation morphologies
 in one common-scale 2x3 XZ cross-section figure:
 

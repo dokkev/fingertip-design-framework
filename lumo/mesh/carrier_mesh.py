@@ -155,6 +155,150 @@ def _make_carrier_mesh(
     )
 
 
+def _make_carrier_5led_mesh(
+    carrier: Carrier,
+    *,
+    main_length_mm: float,
+    distal_end_cap_length_mm: float,
+) -> "newton.Mesh":
+    """Build the main rail plus a dorsal plate over the distal end-cap."""
+    if not isinstance(carrier, Carrier):
+        raise TypeError("carrier must be a Carrier geometry")
+
+    boundary = tuple(
+        (float(x_mm), float(z_mm))
+        for x_mm, z_mm in carrier.cross_section
+    )
+    half_width_mm = max(abs(x_mm) for x_mm, _ in boundary)
+    outer_edge_z_mm = tuple(
+        z_mm
+        for x_mm, z_mm in boundary
+        if isclose(abs(x_mm), half_width_mm, abs_tol=1.0e-12)
+    )
+    if len(set(outer_edge_z_mm)) != 2:
+        raise ValueError("carrier must have one dorsal plate at its outer edge")
+    dorsal_bottom_z_mm = min(outer_edge_z_mm)
+    dorsal_top_z_mm = max(outer_edge_z_mm)
+    dorsal_boundary = (
+        (-half_width_mm, dorsal_bottom_z_mm),
+        (half_width_mm, dorsal_bottom_z_mm),
+        (half_width_mm, dorsal_top_z_mm),
+        (-half_width_mm, dorsal_top_z_mm),
+    )
+
+    carrier_polygon = Polygon(boundary)
+    dorsal_polygon = Polygon(dorsal_boundary)
+    if not carrier_polygon.covers(dorsal_polygon):
+        raise ValueError("dorsal plate must remain inside the carrier section")
+
+    proximal_y_mm = -0.5 * main_length_mm
+    rail_end_y_mm = 0.5 * main_length_mm
+    distal_y_mm = rail_end_y_mm + distal_end_cap_length_mm
+    vertices_mm: list[tuple[float, float, float]] = []
+    faces: list[tuple[int, int, int]] = []
+    vertex_indices: dict[tuple[float, float, float], int] = {}
+
+    def vertex_index(x_mm: float, y_mm: float, z_mm: float) -> int:
+        key = (
+            round(float(x_mm), 12),
+            round(float(y_mm), 12),
+            round(float(z_mm), 12),
+        )
+        if key not in vertex_indices:
+            vertex_indices[key] = len(vertices_mm)
+            vertices_mm.append(key)
+        return vertex_indices[key]
+
+    def add_sides(
+        side_boundary: tuple[tuple[float, float], ...],
+        lower_y_mm: float,
+        upper_y_mm: float,
+    ) -> None:
+        lower = [
+            vertex_index(x_mm, lower_y_mm, z_mm)
+            for x_mm, z_mm in side_boundary
+        ]
+        upper = [
+            vertex_index(x_mm, upper_y_mm, z_mm)
+            for x_mm, z_mm in side_boundary
+        ]
+        for index in range(len(side_boundary)):
+            next_index = (index + 1) % len(side_boundary)
+            faces.extend(
+                (
+                    (lower[index], upper[index], upper[next_index]),
+                    (lower[index], upper[next_index], lower[next_index]),
+                )
+            )
+
+    def add_cap(polygon: Polygon, y_mm: float, *, positive_y: bool) -> None:
+        cap_triangles = tuple(
+            triangle
+            for triangle in triangulate(polygon)
+            if polygon.covers(triangle)
+        )
+        covered_area = sum(triangle.area for triangle in cap_triangles)
+        if not cap_triangles or not isclose(
+            covered_area,
+            polygon.area,
+            rel_tol=1.0e-9,
+            abs_tol=1.0e-10,
+        ):
+            raise ValueError("carrier cap triangulation is incomplete")
+
+        for triangle in cap_triangles:
+            coordinates = tuple(
+                (float(x_mm), float(z_mm))
+                for x_mm, z_mm, *_ in triangle.exterior.coords[:-1]
+            )
+            if _signed_area(coordinates) < 0.0:
+                coordinates = (
+                    coordinates[0],
+                    coordinates[2],
+                    coordinates[1],
+                )
+            face = tuple(
+                vertex_index(x_mm, y_mm, z_mm)
+                for x_mm, z_mm in coordinates
+            )
+            if positive_y:
+                face = (face[0], face[2], face[1])
+            faces.append(face)
+
+    add_sides(boundary, proximal_y_mm, rail_end_y_mm)
+    add_sides(dorsal_boundary, rail_end_y_mm, distal_y_mm)
+    add_cap(carrier_polygon, proximal_y_mm, positive_y=False)
+
+    rail_end_geometry = carrier_polygon.difference(dorsal_polygon)
+    rail_end_polygons = (
+        (rail_end_geometry,)
+        if isinstance(rail_end_geometry, Polygon)
+        else tuple(
+            geometry
+            for geometry in rail_end_geometry.geoms
+            if isinstance(geometry, Polygon)
+        )
+    )
+    if not rail_end_polygons:
+        raise ValueError("carrier rail end must contain a closed surface")
+    for rail_end_polygon in rail_end_polygons:
+        add_cap(rail_end_polygon, rail_end_y_mm, positive_y=True)
+
+    add_cap(dorsal_polygon, distal_y_mm, positive_y=True)
+
+    try:
+        import newton
+    except ImportError as exc:
+        raise RuntimeError("carrier meshing requires newton") from exc
+
+    return newton.Mesh(
+        vertices=np.asarray(vertices_mm, dtype=np.float32) * _MM_TO_M,
+        indices=np.asarray(faces, dtype=np.int32).reshape(-1),
+        compute_inertia=False,
+        is_solid=True,
+    )
+
+
 def _make_carrier_collision_mesh(
     carrier: Carrier,
     silicone: Silicone,
@@ -162,6 +306,38 @@ def _make_carrier_collision_mesh(
     extrusion_depth_mm: float = 11.0,
 ) -> "newton.Mesh":
     """Build a closed proxy whose reachable boundary faces the cavity."""
+    boundary = _carrier_collision_boundary(carrier, silicone)
+
+    # Put the signed-query closure caps one silicone half-depth beyond the
+    # silicone mesh on each side. Only the cavity-facing side wall remains
+    # reachable within the representative single-section extrusion.
+    return _extrude_closed_polygon(
+        boundary,
+        extrusion_depth_mm=2.0 * extrusion_depth_mm,
+        compute_inertia=False,
+    )
+
+
+def _make_carrier_5led_collision_mesh(
+    carrier: Carrier,
+    silicone: Silicone,
+    *,
+    main_length_mm: float,
+) -> "newton.Mesh":
+    """Build the 55 mm rail proxy with physical proximal/distal end faces."""
+    boundary = _carrier_collision_boundary(carrier, silicone)
+    return _extrude_closed_polygon(
+        boundary,
+        extrusion_depth_mm=main_length_mm,
+        compute_inertia=False,
+    )
+
+
+def _carrier_collision_boundary(
+    carrier: Carrier,
+    silicone: Silicone,
+) -> tuple[tuple[float, float], ...]:
+    """Return the closed XZ proxy section shared by both mesh paths."""
     if not isinstance(carrier, Carrier):
         raise TypeError("carrier must be a Carrier geometry")
     if not isinstance(silicone, Silicone):
@@ -230,14 +406,7 @@ def _make_carrier_collision_mesh(
             "carrier collision closure must remain inside the carrier"
         )
 
-    # Put the signed-query closure caps one silicone half-depth beyond the
-    # silicone mesh on each side. Only the cavity-facing side wall remains
-    # reachable within the physical silicone extrusion.
-    return _extrude_closed_polygon(
-        boundary,
-        extrusion_depth_mm=2.0 * extrusion_depth_mm,
-        compute_inertia=False,
-    )
+    return boundary
 
 
 __all__ = []

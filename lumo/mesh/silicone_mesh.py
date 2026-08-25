@@ -3,7 +3,7 @@
 Coordinate convention of the returned Newton mesh:
 
     X: cross-section lateral direction
-    Y: fingertip width / extrusion direction
+    Y: fingertip longitudinal / extrusion direction
     Z: contact-normal direction
 
 Gmsh uses a temporary XY-profile/Z-extrusion frame internally. The
@@ -44,6 +44,8 @@ def _to_lumo_frame(vertices: np.ndarray) -> np.ndarray:
 def _find_bonded_vertex_indices(
     bonding_interface: BondingInterface,
     vertices_mm: np.ndarray,
+    *,
+    y_bounds_mm: tuple[float, float] | None = None,
 ) -> np.ndarray:
     """Find silicone vertices on the analytic carrier-bond interfaces."""
     if vertices_mm.ndim != 2 or vertices_mm.shape[1] != 3:
@@ -84,6 +86,15 @@ def _find_bonded_vertex_indices(
         matches = np.flatnonzero(
             distances_squared <= _BOND_VERTEX_TOLERANCE_MM**2
         )
+        if y_bounds_mm is not None:
+            lower_y_mm, upper_y_mm = y_bounds_mm
+            matches = matches[
+                (vertices_mm[matches, 1] >= lower_y_mm - _BOND_VERTEX_TOLERANCE_MM)
+                & (
+                    vertices_mm[matches, 1]
+                    <= upper_y_mm + _BOND_VERTEX_TOLERANCE_MM
+                )
+            ]
         if matches.size == 0:
             raise RuntimeError(
                 "silicone mesh contains no vertices on a carrier-bond "
@@ -147,31 +158,11 @@ def _make_silicone_mesh(
                 "silicone extrusion must create exactly one volume"
             )
 
-        gmsh.option.setNumber(
-            "Mesh.MeshSizeMin",
-            element_size_mm,
-        )
-        gmsh.option.setNumber(
-            "Mesh.MeshSizeMax",
-            element_size_mm,
-        )
-        gmsh.option.setNumber(
-            "Mesh.ElementOrder",
-            1,
-        )
-
-        gmsh.model.mesh.generate(3)
-
-        vertices_mm, node_index = _extract_vertices(gmsh)
-        tetrahedra = _extract_tetrahedra(
+        vertices_mm, tetrahedra, bonded_vertex_indices = _mesh_volume(
             gmsh,
             volume_tags[0],
-            node_index,
-        )
-        vertices_mm = _to_lumo_frame(vertices_mm)
-        bonded_vertex_indices = _find_bonded_vertex_indices(
             bonding_interface,
-            vertices_mm,
+            element_size_mm=element_size_mm,
         )
 
     finally:
@@ -190,6 +181,157 @@ def _make_silicone_mesh(
     )
 
 
+def _make_silicone_5led_mesh(
+    silicone: Silicone,
+    bonding_interface: BondingInterface,
+    *,
+    main_y_bounds_mm: tuple[float, float],
+    distal_end_cap_length_mm: float,
+    element_size_mm: float = 1.0,
+) -> tuple["newton.TetMesh", np.ndarray]:
+    """Mesh one continuous 55 mm active body plus a solid distal end-cap."""
+    if not isinstance(silicone, Silicone):
+        raise TypeError("silicone must be a Silicone geometry")
+    if not isinstance(bonding_interface, BondingInterface):
+        raise TypeError("bonding_interface must be a BondingInterface")
+    lower_y_mm, upper_y_mm = main_y_bounds_mm
+    if not lower_y_mm < upper_y_mm:
+        raise ValueError("main_y_bounds_mm must be strictly increasing")
+    if distal_end_cap_length_mm <= 0.0:
+        raise ValueError("distal_end_cap_length_mm must be positive")
+
+    try:
+        import gmsh
+        import newton
+    except ImportError as exc:
+        raise RuntimeError(
+            "silicone meshing requires gmsh and newton"
+        ) from exc
+
+    # Gmsh extrusion Z maps to negative LUMO Y. The main section therefore
+    # starts at its distal +Y face and extrudes toward the proximal -Y face;
+    # the solid closure extrudes in the opposite direction from that interface.
+    distal_gmsh_z_mm = -upper_y_mm
+    main_depth_mm = upper_y_mm - lower_y_mm
+
+    gmsh.initialize()
+    try:
+        gmsh.option.setNumber("General.Terminal", 0)
+        gmsh.model.add("lumo_silicone_5led")
+
+        main_surface = _build_cross_section(
+            gmsh,
+            silicone,
+            z_mm=distal_gmsh_z_mm,
+        )
+        main_extrusion = gmsh.model.occ.extrude(
+            [(2, main_surface)],
+            0.0,
+            0.0,
+            main_depth_mm,
+        )
+        main_volumes = [
+            tag for dimension, tag in main_extrusion if dimension == 3
+        ]
+        if len(main_volumes) != 1:
+            raise RuntimeError("5-LED main silicone must create one volume")
+
+        end_cap_surface = _build_solid_end_cap_cross_section(
+            gmsh,
+            silicone,
+            z_mm=distal_gmsh_z_mm,
+        )
+        end_cap_extrusion = gmsh.model.occ.extrude(
+            [(2, end_cap_surface)],
+            0.0,
+            0.0,
+            -distal_end_cap_length_mm,
+        )
+        end_cap_volumes = [
+            tag for dimension, tag in end_cap_extrusion if dimension == 3
+        ]
+        if len(end_cap_volumes) != 1:
+            raise RuntimeError("5-LED distal end-cap must create one volume")
+
+        fused, _ = gmsh.model.occ.fuse(
+            [(3, main_volumes[0])],
+            [(3, end_cap_volumes[0])],
+        )
+        gmsh.model.occ.removeAllDuplicates()
+        gmsh.model.occ.synchronize()
+        volume_tags = [tag for dimension, tag in fused if dimension == 3]
+        if len(volume_tags) != 1:
+            raise RuntimeError(
+                "5-LED silicone main section and end-cap must fuse into one volume"
+            )
+
+        vertices_mm, tetrahedra, bonded_vertex_indices = _mesh_volume(
+            gmsh,
+            volume_tags[0],
+            bonding_interface,
+            element_size_mm=element_size_mm,
+            bonded_y_bounds_mm=main_y_bounds_mm,
+        )
+        dorsal_bond_indices = np.flatnonzero(
+            (
+                vertices_mm[:, 1]
+                >= upper_y_mm - _BOND_VERTEX_TOLERANCE_MM
+            )
+            & (
+                vertices_mm[:, 1]
+                <= upper_y_mm
+                + distal_end_cap_length_mm
+                + _BOND_VERTEX_TOLERANCE_MM
+            )
+            & (
+                np.abs(vertices_mm[:, 2] - silicone.bond_top_z_mm)
+                <= _BOND_VERTEX_TOLERANCE_MM
+            )
+        )
+        if dorsal_bond_indices.size == 0:
+            raise RuntimeError(
+                "5-LED distal end-cap contains no dorsal bond vertices"
+            )
+        bonded_vertex_indices = np.unique(
+            np.concatenate((bonded_vertex_indices, dorsal_bond_indices))
+        ).astype(np.int32)
+    finally:
+        gmsh.finalize()
+
+    return (
+        newton.TetMesh(
+            vertices=vertices_mm * _MM_TO_M,
+            tet_indices=tetrahedra.reshape(-1),
+        ),
+        bonded_vertex_indices,
+    )
+
+
+def _mesh_volume(
+    gmsh,
+    volume_tag: int,
+    bonding_interface: BondingInterface,
+    *,
+    element_size_mm: float,
+    bonded_y_bounds_mm: tuple[float, float] | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Generate one TET4 volume and recover its kinematic bond vertices."""
+    gmsh.option.setNumber("Mesh.MeshSizeMin", element_size_mm)
+    gmsh.option.setNumber("Mesh.MeshSizeMax", element_size_mm)
+    gmsh.option.setNumber("Mesh.ElementOrder", 1)
+    gmsh.model.mesh.generate(3)
+
+    vertices_mm, node_index = _extract_vertices(gmsh)
+    tetrahedra = _extract_tetrahedra(gmsh, volume_tag, node_index)
+    vertices_mm = _to_lumo_frame(vertices_mm)
+    bonded_vertex_indices = _find_bonded_vertex_indices(
+        bonding_interface,
+        vertices_mm,
+        y_bounds_mm=bonded_y_bounds_mm,
+    )
+    return vertices_mm, tetrahedra, bonded_vertex_indices
+
+
 def _build_cross_section(
     gmsh,
     silicone: Silicone,
@@ -199,16 +341,54 @@ def _build_cross_section(
     """Construct the analytic 2D silicone section in Gmsh OCC."""
 
     occ = gmsh.model.occ
-
-    half_width = silicone.half_width_mm
-    ellipse_center_z = silicone.ellipse_center_z_mm
-    horizontal_axis, vertical_axis = silicone.semiellipse_axes_mm
     void_left = silicone.void_left
     void_right = silicone.void_right
     void_bottom = silicone.void_bottom
     cutout_left_x = void_left[0][0]
     cutout_right_x = void_right[0][0]
     cutout_bottom_y = void_bottom[0][1]
+
+    pad = _build_outer_cross_section(gmsh, silicone, z_mm=z_mm)
+
+    # Remove the internal stem clearance.
+    cutout = occ.addRectangle(
+        cutout_left_x,
+        cutout_bottom_y,
+        z_mm,
+        cutout_right_x - cutout_left_x,
+        -cutout_bottom_y,
+    )
+
+    pad, _ = occ.cut(
+        [(2, pad)],
+        [(2, cutout)],
+    )
+
+    surfaces = [
+        tag
+        for dimension, tag in pad
+        if dimension == 2
+    ]
+
+    if len(surfaces) != 1:
+        raise RuntimeError(
+            "silicone cross-section must form one connected surface"
+        )
+
+    return surfaces[0]
+
+
+def _build_outer_cross_section(
+    gmsh,
+    silicone: Silicone,
+    *,
+    z_mm: float,
+) -> int:
+    """Construct the silicone outer profile without the stem/void cutout."""
+    occ = gmsh.model.occ
+    half_width = silicone.half_width_mm
+    ellipse_center_z = silicone.ellipse_center_z_mm
+    horizontal_axis, vertical_axis = silicone.semiellipse_axes_mm
 
     # Flat compliant region.
     flat = occ.addRectangle(
@@ -267,20 +447,6 @@ def _build_cross_section(
         [(2, left_bond), (2, right_bond)],
     )
 
-    # Remove the internal stem clearance.
-    cutout = occ.addRectangle(
-        cutout_left_x,
-        cutout_bottom_y,
-        z_mm,
-        cutout_right_x - cutout_left_x,
-        -cutout_bottom_y,
-    )
-
-    pad, _ = occ.cut(
-        pad,
-        [(2, cutout)],
-    )
-
     surfaces = [
         tag
         for dimension, tag in pad
@@ -289,9 +455,37 @@ def _build_cross_section(
 
     if len(surfaces) != 1:
         raise RuntimeError(
-            "silicone cross-section must form one connected surface"
+            "silicone outer cross-section must form one connected surface"
         )
 
+    return surfaces[0]
+
+
+def _build_solid_end_cap_cross_section(
+    gmsh,
+    silicone: Silicone,
+    *,
+    z_mm: float,
+) -> int:
+    """Construct the distal silicone fill below the dorsal carrier plate."""
+    occ = gmsh.model.occ
+    outer = _build_outer_cross_section(gmsh, silicone, z_mm=z_mm)
+    upper_fill = occ.addRectangle(
+        -silicone.half_width_mm,
+        0.0,
+        z_mm,
+        2.0 * silicone.half_width_mm,
+        silicone.bond_top_z_mm,
+    )
+    fused, _ = occ.fuse(
+        [(2, outer)],
+        [(2, upper_fill)],
+    )
+    surfaces = [tag for dimension, tag in fused if dimension == 2]
+    if len(surfaces) != 1:
+        raise RuntimeError(
+            "5-LED solid end-cap cross-section must form one surface"
+        )
     return surfaces[0]
 
 

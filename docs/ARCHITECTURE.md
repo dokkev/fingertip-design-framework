@@ -138,6 +138,37 @@ would otherwise pass between particle vertices.
 `Fingertip.bonding_interface`. The mesh layer consumes its left and right
 polylines directly rather than deriving bond ownership from `Silicone`.
 
+The existing `make_fingertip_mesh()` path remains the 11 mm representative
+single-section mesh. `make_fingertip_5led_mesh()` is the separate simplified
+full-finger path and returns a `Fingertip5LEDMesh`, which remains directly
+consumable anywhere a `FingertipMesh` is accepted. It adds only the fixed
+longitudinal metadata required by the physical layout: five LED reference
+centers, the active-section bounds, the total bounds, and inter-LED midpoints.
+
+The full-finger longitudinal construction is:
+
+```text
+Y = [-27.5, +27.5] mm  55 mm active section
+    continuous silicone outer body with the existing XZ cutout
+    continuous rigid carrier/stem rail
+    LED centers at [-22, -11, 0, +11, +22] mm
+
+Y = [+27.5, +32.5] mm  5 mm distal solid-silicone end-cap
+    silicone fills the complete section below the dorsal carrier plate
+    no stem/void subtraction
+    rigid dorsal plate continues over the cap like a fingernail
+```
+
+Gmsh fuses the cutout active volume and solid distal volume before meshing and
+requires exactly one silicone volume. The proximal cavity remains open. The
+carrier stem rail ends with the 55 mm active section, while only its dorsal
+plate extends across the 5 mm solid end-cap. Silicone vertices under that
+distal dorsal plate belong to the carrier's perfect kinematic bond. The
+single-section collision proxy still puts closure caps outside its silicone
+slice; the full-finger proxy instead ends with the physical 55 mm stem rail.
+The local XZ morphology and the constructed 30 mm height contract are
+unchanged.
+
 Mesh code may use Gmsh and geometry libraries internally.
 
 This package does not own:
@@ -924,7 +955,7 @@ The canonical LUMO frame is:
 
 ```text
 X = cross-section lateral direction
-Y = fingertip width / extrusion direction
+Y = fingertip longitudinal / extrusion direction
 Z = contact-normal direction
 ```
 
