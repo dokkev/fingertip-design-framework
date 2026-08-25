@@ -164,6 +164,18 @@ class Fingertip:
             - self.silicone.ellipse_radius_z_mm
         )
 
+    @property
+    def full_height_mm(self) -> float:
+        """Return the complete carrier-to-silicone Z extent in millimetres."""
+        carrier_z = tuple(z_mm for _, z_mm in self.carrier.cross_section)
+        top_z_mm = max(self.silicone.bond_top_z_mm, *carrier_z)
+        bottom_z_mm = min(
+            self.silicone.ellipse_center_z_mm
+            - self.silicone.ellipse_radius_z_mm,
+            *carrier_z,
+        )
+        return top_z_mm - bottom_z_mm
+
     def __post_init__(self) -> None:
         geometry = self.parameters.geometry
         half_width = 0.5 * geometry.flat_pad_width_mm

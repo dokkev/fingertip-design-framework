@@ -50,7 +50,19 @@ total_pad_depth = flat_pad_height + semielliptical_pad_height
 ```
 
 `total_pad_depth` measures only the distal pad depth from `y = 0`; it does not
-include the proximal bond-extension height.
+include the proximal carrier/link height.
+
+The complete fingertip height is measured along the repository's `Z` axis
+from the carrier top to the silicone ellipse tip. With the current fixed
+`link_thickness_mm = 10`, the constructed analytic geometry gives:
+
+```text
+full_fingertip_height_mm
+  = link_thickness_mm + flat_pad_height_mm + semiellipse_height_mm
+```
+
+Optimization limits this complete physical extent to `30 mm`. The constructed
+`Fingertip.full_height_mm` extent is the final feasibility authority.
 
 ## Compliant outer pad
 

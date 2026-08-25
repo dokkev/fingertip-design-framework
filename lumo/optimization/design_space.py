@@ -15,6 +15,9 @@ from lumo.util.scalar_validation import require_finite
 from .design_param_bound import DesignParameterBounds
 
 
+MAX_FINGERTIP_HEIGHT_MM = 30.0
+
+
 @dataclass(frozen=True)
 class LinearConstraint:
     """Linear constraint over fingertip design parameters.
@@ -306,9 +309,11 @@ class DesignSpace:
         ):
             return False
 
-        if self.minimum_silicone_thickness_mm is not None:
-            fingertip = Fingertip(parameters)
+        fingertip = Fingertip(parameters)
+        if fingertip.full_height_mm > MAX_FINGERTIP_HEIGHT_MM:
+            return False
 
+        if self.minimum_silicone_thickness_mm is not None:
             if (
                 fingertip.silicone.minimum_silicone_thickness_mm
                 < self.minimum_silicone_thickness_mm
@@ -321,4 +326,5 @@ class DesignSpace:
 __all__ = [
     "DesignSpace",
     "LinearConstraint",
+    "MAX_FINGERTIP_HEIGHT_MM",
 ]

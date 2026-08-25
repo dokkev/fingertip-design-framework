@@ -29,7 +29,11 @@ from lumo.fingertip import (
 )
 
 from .design_param_bound import DesignParameterBounds, ParameterBound
-from .design_space import DesignSpace, LinearConstraint
+from .design_space import (
+    MAX_FINGERTIP_HEIGHT_MM,
+    DesignSpace,
+    LinearConstraint,
+)
 
 
 _CONTINUOUS_PARAMETER_NAMES = (
@@ -50,6 +54,11 @@ _DISCRETE_STEP_TO_PHYSICAL_NAMES = (
 )
 _DISCRETE_RESOLUTION_MM = 0.5
 _DISCRETE_FIXED_FLAT_PAD_WIDTH_MM = 30.0
+_FIXED_UPPER_HEIGHT_MM = FingertipParameters().geometry.link_thickness_mm
+_MAX_PAD_DEPTH_MM = MAX_FINGERTIP_HEIGHT_MM - _FIXED_UPPER_HEIGHT_MM
+_DISCRETE_MAX_PAD_DEPTH_STEPS = round(
+    _MAX_PAD_DEPTH_MM / _DISCRETE_RESOLUTION_MM
+)
 _DEFAULT_DISCRETE_PARAMETER_BOUNDS_MM = {
     "geometry.flat_pad_height_mm": (2.0, 29.0),
     "geometry.semiellipse_height_mm": (1.0, 20.0),
@@ -190,7 +199,7 @@ def _continuous_design_space() -> DesignSpace:
                     "geometry.flat_pad_height_mm": 1.0,
                     "geometry.semiellipse_height_mm": 1.0,
                 },
-                upper=30.0,
+                upper=_MAX_PAD_DEPTH_MM,
             ),
         ),
         minimum_silicone_thickness_mm=5.0,
@@ -307,7 +316,7 @@ def _discrete_design_space(
                     "geometry.flat_pad_height_mm": 1.0,
                     "geometry.semiellipse_height_mm": 1.0,
                 },
-                upper=30.0,
+                upper=_MAX_PAD_DEPTH_MM,
             ),
         ),
         minimum_silicone_thickness_mm=5.0,
@@ -393,7 +402,8 @@ def _campaign_definition(
             physical_parameter_names=_CONTINUOUS_PARAMETER_NAMES,
             ax_parameters=parameters,
             ax_parameter_constraints=(
-                "geometry.flat_pad_height_mm + geometry.semiellipse_height_mm <= 30",
+                "geometry.flat_pad_height_mm + geometry.semiellipse_height_mm "
+                f"<= {_MAX_PAD_DEPTH_MM:g}",
             ),
             initialization_budget=_CONTINUOUS_WARM_START_COUNT,
             warm_start_path=_CONTINUOUS_WARM_START_PATH,
@@ -422,7 +432,7 @@ def _campaign_definition(
                     strict=True,
                 )
             )
-            and steps[0] + steps[1] <= 60
+            and steps[0] + steps[1] <= _DISCRETE_MAX_PAD_DEPTH_STEPS
             and space.is_feasible(
                 {
                     physical_name: _DISCRETE_RESOLUTION_MM * step
@@ -449,7 +459,8 @@ def _campaign_definition(
                 for step_name, _, lower, upper in step_to_physical
             ),
             ax_parameter_constraints=(
-                "flat_pad_height_step + semiellipse_height_step <= 60",
+                "flat_pad_height_step + semiellipse_height_step "
+                f"<= {_DISCRETE_MAX_PAD_DEPTH_STEPS}",
             ),
             initialization_budget=13,
             resolution_mm=_DISCRETE_RESOLUTION_MM,
@@ -628,9 +639,9 @@ def _validate_campaign_parameters(
         if (
             int(raw_parameters["flat_pad_height_step"])
             + int(raw_parameters["semiellipse_height_step"])
-            > 60
+            > _DISCRETE_MAX_PAD_DEPTH_STEPS
         ):
-            raise ValueError("Ax candidate violates the pad-depth constraint")
+            raise ValueError("Ax candidate violates the full-height constraint")
 
 
 def _verify_discrete_search_space(campaign: CampaignDefinition) -> None:
@@ -661,7 +672,7 @@ def _verify_discrete_search_space(campaign: CampaignDefinition) -> None:
         raise RuntimeError("Ax probes did not vary stem_height_step")
     print(
         "discrete search-space PASS: 0.5 mm grid, fixed width=30 mm, "
-        "pad-depth steps<=60, stem_height_steps="
+        "full-height pad steps<=40, stem_height_steps="
         f"{sorted(stem_height_steps)}",
         flush=True,
     )

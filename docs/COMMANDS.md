@@ -54,6 +54,31 @@ Visualize the analytic carrier-silicone bond in the XZ cross-section:
 conda run -n lit python validation/fingertip/view_bond_geometry.py
 ```
 
+Compare the six selected Dragon Skin/Solaris physical-validation morphologies
+in one common-scale 2x3 XZ cross-section figure:
+
+```bash
+conda run --no-capture-output -n lit \
+  python validation/fingertip/view_physical_validation_morphologies.py
+```
+
+The figure is also saved to
+`output/validation/physical_validation_morphologies.png`.
+
+Run the focused cross-material validation for the five selected morphologies:
+
+```bash
+OPTIX_INCLUDE_DIR=/home/dk/workspace/optix-dev/include \
+OTK_INCLUDE_DIR=/home/dk/workspace/optix-toolkit/ShaderUtil/include \
+conda run --no-capture-output -n lit \
+  python -u validation/optomech/cross_material_morphology_validation.py
+```
+
+The script reuses six existing Dragon Skin/Solaris raw evaluations, runs only
+the four missing optical cross-evaluations, and does not modify either Ax
+campaign. It writes the raw cross-results, comparison CSV/report, and three
+plots to `output/optimization/cross_material_validation/`.
+
 Run the procedural flat-plate contact smoke explicitly:
 
 ```bash
@@ -483,6 +508,23 @@ separate empty output directory.
 
 ### Discrete 0.5 mm campaign
 
+Before creating a corrected discrete campaign, validate the complete physical
+30 mm height envelope, integer encoding, Sobol/MBM proposals, and reusable
+historical observations without running Newton or OptiX:
+
+```bash
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 conda run --no-capture-output -n lit \
+  pytest -q tests/unit/optimization/test_height_constraint.py
+
+conda run --no-capture-output -n lit \
+  python -u validation/optomech/corrected_height_constraint.py
+```
+
+The report is written to
+`output/optimization/corrected_height_constraint_validation.md`. The procedure
+reads but does not modify the old Dragon Skin or Solaris Ax campaign states and
+does not start a corrected production campaign.
+
 Create the independent integer-lattice campaign and run one fresh evaluation
 as its save/resume smoke test:
 
@@ -498,8 +540,9 @@ conda run --no-capture-output -n lit \
 
 On a fresh directory the command first prints the Ax integer search space and
 checks deterministic candidate probes for exact 0.5 mm decoding, fixed
-`flat_pad_width_mm=30`, varied `stem_height_mm`, and the step-space pad-depth
-constraint. Snapped continuous-Pareto geometries are then evaluated as new
+`flat_pad_width_mm=30`, varied `stem_height_mm`, and the step-space full-height
+constraint derived from the complete 30 mm fingertip height. Snapped
+continuous-Pareto geometries are then evaluated as new
 observations; their old objectives are never attached. Resume is cumulative:
 
 ```bash

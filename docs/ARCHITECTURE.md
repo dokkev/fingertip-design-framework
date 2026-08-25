@@ -537,8 +537,12 @@ verifies the 13 completed Sobol observations from the sensing trade-off
 validation. The `discrete-05mm` campaign starts a separate Ax state with no
 reused objective values. It fixes `flat_pad_width_mm=30`, exposes the other six
 geometry dimensions as integer half-millimeter steps, and decodes those steps
-to physical millimeters only at the evaluator boundary. Ax directly enforces
-`flat_pad_height_step + semiellipse_height_step <= 60`; the existing
+to physical millimeters only at the evaluator boundary. The complete physical
+height runs from the carrier top at `+10 mm` to the silicone ellipse tip at
+`-flat_pad_height_mm-semiellipse_height_mm`. `Fingertip.full_height_mm` derives
+that extent from the constructed geometry, and `DesignSpace` authoritatively
+requires it to be at most `30 mm`. Ax equivalently enforces
+`flat_pad_height_step + semiellipse_height_step <= 40`; the existing
 `FingertipGeometry` and `DesignSpace` checks remain the sole owners of nonlinear
 geometry validity.
 `scripts/run_mobo.py` is the user-edited entry point for the discrete campaign.
@@ -612,7 +616,7 @@ The discrete campaign follows the same persistence and evaluator flow, but its
 initialization begins with freshly evaluated snapped design seeds instead of
 completed warm-start observations. Its `run_config.json` additionally freezes
 the 0.5 mm resolution, integer step bounds, decoded physical bounds, fixed pad
-width, and step-space pad-depth constraint. Continuous and discrete campaigns
+width, and step-space full-height constraint. Continuous and discrete campaigns
 use different output directories and cannot share Ax state or observations.
 
 ### `lumo/util/`
