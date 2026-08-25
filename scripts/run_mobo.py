@@ -10,7 +10,7 @@ from lumo.optimization.ax_bo import run
 # Available optics: solaris_{low,nominal,high} and
 # dragon_skin_10_nv_{low,nominal,high}.
 VISCOELASTIC_PRESET = "silicone"
-OPTICAL_PRESET = "dragon_skin_10_nv_nominal"
+OPTICAL_PRESET = "solaris_nominal"
 OTK_INCLUDE_DIR = (
     Path(__file__).resolve().parents[2] / "optix-toolkit" / "ShaderUtil" / "include"
 )
@@ -38,7 +38,7 @@ OUTPUT_DIRECTORY = (
     Path(__file__).resolve().parents[1]
     / "output"
     / "optimization"
-    / "mobo_discrete_05mm_clean"
+    / "mobo_discrete_05mm_solaris_nominal"
 )
 
 
