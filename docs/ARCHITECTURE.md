@@ -296,29 +296,29 @@ state swap
 advance global step count and time
 ```
 
-`LumoSimulation` also owns the accelerated GPU-resident force-servo path used
+`LumoSimulation` also owns the accelerated GPU-resident checkpoint path used
 by the production full-finger evaluator. The first tick remains uncaptured so
 Newton can finish lazy full-surface contact-state and rigid-history allocation.
 After that warm-up, the runtime verifies the fixed contact capacities and
 captures two even-length graphs for the state ping-pong parities:
 
 ```text
-graph_A: servo -> A-to-B physics -> wrench -> checkpoint
-         servo -> B-to-A physics -> wrench -> checkpoint
+graph_A: prescribed motion -> A-to-B physics -> wrench -> threshold checkpoint
+         prescribed motion -> B-to-A physics -> wrench -> threshold checkpoint
 
-graph_B: servo -> B-to-A physics -> wrench -> checkpoint
-         servo -> A-to-B physics -> wrench -> checkpoint
+graph_B: prescribed motion -> B-to-A physics -> wrench -> threshold checkpoint
+         prescribed motion -> A-to-B physics -> wrench -> threshold checkpoint
 ```
 
-The proportional force measurement, servo update, kinematic indenter pose,
-collision, complete fixed-iteration VBD solve, proxy wrench harvest, force-band
-dwell counter, and target transition all remain on the device. Ten graph
-replays advance twenty physics ticks before one coarse host status readback.
-When a force checkpoint completes inside that block, device kernels copy the
-particle state and full soft-contact record into its exact checkpoint slot;
-the existing synchronous evaluator callback later inspects that saved tick,
-not the newer live state. The four production checkpoints therefore preserve
-their original scientific meaning without a per-tick `.numpy()` boundary.
+The production mode applies the constant positive approach speed, kinematic
+indenter pose, collision, complete fixed-iteration VBD solve, proxy wrench
+harvest, ordered threshold test, and target transition on the device. It has no
+force feedback and no dwell counter. Ten graph replays advance twenty physics
+ticks before one coarse host status readback. At the first tick whose measured
+reaction force meets or exceeds the current threshold, device kernels copy the
+particle state and full soft-contact record into that threshold's exact slot;
+the synchronous evaluator callback later inspects that saved tick, not a newer
+live state.
 
 `evaluate_full_finger()` selects this GPU-resident path by default after the
 direct-times-five versus graph-times-five scientific-equivalence gate passed.
@@ -326,7 +326,7 @@ The direct backend remains explicit through `use_cuda_graph=False` for
 conservative reference and debugging. Bitwise equality is not an acceptance
 contract because Newton full-surface contact emission and wrench accumulation
 are intrinsically atomic-order nondeterministic after contact onset. The gate
-instead checks force/dwell meaning, deformation, canonical patch support,
+instead checks force/checkpoint meaning, deformation, canonical patch support,
 contact objectives, finite-area optical response, inversion, and contact-buffer
 safety. A graph-captured fingertip pose is immutable after capture; callers
 that need to move the whole fingertip must use the direct path.
@@ -365,21 +365,35 @@ the same rigid-soft contact pair values to the URDF indenter endpoint and the
 Newton soft endpoint. `None` preserves both Newton defaults; the study does not
 freeze provisional contact values as production defaults.
 Each trial specifies a normalized `motion_direction_W` and physical
-`approach_speed_m_s`, which caps the magnitude of its kinematic force-servo
-velocity. `DesignStudy` applies
-`v = clamp(Kf * (F_target - F), -approach_speed_m_s, approach_speed_m_s)` with
-the default `Kf=1.25e-3 m/(s N)`, then derives each pose increment from the
-simulation timestep.
+`approach_speed_m_s`. Production first-crossing loading derives the positive
+pose increment directly from that speed and the simulation timestep. The
+historical `reference_dwell` mode retains the bounded proportional force servo
+for validation comparisons.
 
 For the concrete multi-force sensing evaluation, a study may use one strictly
 increasing force-target tuple. The same trial runtime then advances through
-each target without resetting Newton state. Tolerance may be an absolute force
-or a target-relative fraction; the sensing evaluator uses `5, 10, 15, 20 N`
-with `+/- 10%` at every level. The inspection callback receives the exact
-accepted state, either live in direct mode or from its device checkpoint slot
+each target without resetting Newton state. The production evaluator captures
+the first measured state at or above each of `5, 10, 15, 20 N`; target
+tolerance is not an acceptance condition. The inspection callback receives
+that exact state, either live in direct mode or from its device checkpoint slot
 in accelerated mode.
 
-The direct/reference study path keeps the per-trial force servo on the host:
+The production first-crossing path is simply:
+
+```text
+move at fixed physical speed
+        ↓
+one LumoSimulation step and reaction measurement
+        ↓
+reaction force >= current ordered threshold?
+        ↓ yes
+copy that tick immediately, then continue toward the next threshold
+```
+
+There is no pause, pose correction, force-band dwell, or settled-state claim.
+The saved states are explicitly dynamic threshold-crossing snapshots.
+
+The validation-only `reference_dwell` path keeps the proportional force servo:
 
 ```text
 last reaction force
@@ -397,24 +411,21 @@ accept after both remain true for the settling duration
 
 Leaving the force tolerance or exceeding an optional per-tick commanded
 displacement tolerance resets the single consecutive-tick counter. The
-production sensing evaluation leaves the displacement criterion disabled and
-requires `+/- 10%` target-force agreement continuously for `5 s`. The optional
-displacement criterion remains available only for the focused adaptive-settling
-validation. There is no force-slope or particle-speed criterion, first-crossing
-stop, fixed-pose correction search, integral term, or PID controller.
+optional displacement criterion remains available only for focused
+adaptive-settling validation. This historical mode is not the Ax default.
 
-With `use_cuda_graph=True`, `DesignStudy` configures the same proportional
-equation, velocity bounds, force tolerances, consecutive dwell ticks, and
-ordered targets in `LumoSimulation` device buffers. It polls only every twenty
-physics ticks and invokes the unchanged callback against exact device-saved
-checkpoint states. This is an execution backend for the same protocol, not a
-second controller.
+With `use_cuda_graph=True`, `DesignStudy` configures production fixed motion
+and ordered first-crossing thresholds in `LumoSimulation` device buffers. It
+polls only every twenty physics ticks and invokes the unchanged callback
+against exact device-saved checkpoint states. The same internal buffers also
+support the historical servo validation mode; that does not change production
+semantics.
 
 Only `LumoSimulation` mutates Newton state or simulation time. Trials never
 share mutable Newton state. For the production full-finger path, `DesignStudy`
 may execute up to four independent trials concurrently in one Python process
 and CUDA context. Each world owns its state pair, solver, contacts,
-servo/checkpoint buffers, graphs, and CUDA stream; worlds with one sphere
+motion/checkpoint buffers, graphs, and CUDA stream; worlds with one sphere
 diameter share only the finalized immutable model and coloring. Checkpoint
 callbacks remain synchronous after the corresponding stream reaches an exact
 device-saved checkpoint. Serial execution remains available by setting
@@ -637,23 +648,29 @@ after evaluation.
 
 The fixed current mechanics contract is
 `100 Hz`, `10` VBD iterations, equal `ke=3e4 N/m` endpoints,
-`kd=0.282280175 N s/m`, the proportional force servo, and acceptance after
-force remains within its `+/- 10%` band continuously for `5 s`. The servo uses
-`Kf=2.5e-4 m/(s N)` with a `5 mm/s` trial cap, preserving the validated
-`2.5 um/(N tick)` gain and `50 um/tick` maximum step. Optical transport
+`kd=0.282280175 N s/m`, and a monotonic `5 mm/s` approach. Each ordered force
+threshold is copied on the first Newton tick at or above it, with no force
+feedback and zero dwell. At 100 Hz the prescribed displacement is
+`50 um/tick`. These outputs are threshold-crossing states, not quasi-static
+equilibria. Optical transport
 uses a uniform finite-area `1.8 x 1.6 mm` LED emitting window, `65,536` paths
 per LED, `24` bounces, and hard 11-bin observation. This evaluator does not perform
 morphology optimization. `objective.py` is the pure numerical reduction layer
 between this rich result and Ax.
 
+The post-Phase 4 fixed-pose studies remain validation-only. They showed that
+holding the first-crossing pose changes reaction force and geometry over time,
+while longer dwell materially increases campaign cost. Production therefore
+uses the explicitly different instantaneous threshold-crossing experiment;
+the historical force-servo dwell and fixed-pose relaxation protocols remain
+available only when a validation selects them by name.
+
 `DesignStudy.run()` also exposes an explicit `quasistatic_ramp` mode for the
 procedural loading-protocol study. It increases a force reference continuously
 and captures the first actual-force crossing of each checkpoint without
-retracting the kinematic indenter. This mode does not replace
-`reference_dwell`. The full 1/2/4/8 N/s validation found large non-limiting
-optical-response differences from the dwell reference even at the slowest
-ramp, so Ax remains serialized and executed with
-`loading_mode=reference_dwell`.
+retracting the kinematic indenter. The full 1/2/4/8 N/s validation found large
+optical-response differences from the historical dwell reference. It remains
+a procedural comparison rather than the production Ax loading mode.
 
 Each full-finger LED remains on its carrier recess floor. The nominal 0.19 mm
 hardware cavity places air between that source and unloaded silicone even when
@@ -697,9 +714,8 @@ geometry validity.
 `scripts/run_mobo.py` records the intended new full-finger campaign inputs,
 including explicit sphere diameters and longitudinal contact locations.
 It exposes separate viscoelastic and optical presets, physical parameter
-bounds, indenter URDF list, sequential force targets, initial clearance, fixed
-force-band dwell, relative tolerance, output directory, and cumulative target
-morphology count. Mechanics and optical algorithms remain owned by their
+bounds, indenter URDF list, sequential force thresholds, initial clearance,
+output directory, and cumulative target morphology count. Mechanics and optical algorithms remain owned by their
 production modules. `silicone` is the current mechanics preset.
 Optical selection independently exposes the existing Solaris and Dragon Skin
 10 NV low/nominal/high sensitivity presets, without claiming that Solaris uses
@@ -708,6 +724,14 @@ diameter and places its center one radius plus the configured clearance below
 the undeformed pad. The entry script supplies its sibling
 `optix-toolkit/ShaderUtil/include` as the default `OTK_INCLUDE_DIR`; an
 explicitly exported environment value still takes precedence.
+The prepared production entry selects nominal Dragon Skin 10 NV optics, uses
+the accepted four-world evaluator explicitly, and targets 120 cumulative
+successful morphologies in the fresh
+`mobo_full_finger_instantaneous_05mm` directory. Its
+run config records the finite `1.8 x 1.6 mm` package-window source, the
+four-world backend, and dependency/source hashes. Resume is refused if the
+scientific source, optimizer source, dependency versions, or serialized
+scientific contract differ.
 
 The previous continuous and six-dimensional discrete Ax campaigns remain
 historical artifacts and cannot be resumed through the production entry point.
@@ -722,25 +746,28 @@ scenario it computes finite 5 N patch formation, reference-area-weighted
 The mean-normal score remains diagnostic only. `J_obs` first sums the LED axis,
 subtracts the no-contact simultaneous field, divides by total emitted power
 five, and takes the minimum 11D Euclidean separation over sphere diameter,
-force, and distinct contact-Y pairs. Contact onset is diagnostic only; force
+force threshold, and distinct contact-Y pairs. Contact onset is diagnostic only; force
 variation is not penalized. Both reducers accept saved raw NPZ arrays and know
 nothing about Newton, OptiX, or Ax.
 
 The production Ax contract evaluates the exact Cartesian product of sphere
 diameters `5/10/20 mm` and contact Y positions
-`[-22,-11,-5.5,0,5.5,11,22] mm`, with sequential `5/10/15/20 N` checkpoints.
+`[-22,-11,-5.5,0,5.5,11,22] mm`, with sequential instantaneous
+`5/10/15/20 N` threshold snapshots.
 It maximizes only `J_contact` and `J_obs`, without scalarization or objective
 thresholds. Trial NPZ files retain raw mechanics, optical responses, component
 scores, limiting conditions, same-force separation matrices, onset and ROI
-diagnostics. The nominal end-to-end freeze validation passed before this Ax
-execution gate was enabled; no campaign was launched by that validation.
+diagnostics. The focused four-world first-crossing validation passed with 16
+saved checkpoints, no inversion or contact-buffer overflow, and closed optical
+energy. The previous 21-scenario dwell artifact is historical and is not
+reused as an observation in this fresh Ax campaign.
 
 `validation/optomech/objective_prototype.py` is the read-only numerical
 prototype for those equations. It reconstructs a Lagrangian contact patch from
 the saved vertex/edge/triangle Newton records, evaluates the proposed contact
-components, and evaluates force-conditioned contact-location separation using
+components, and evaluates threshold-conditioned contact-location separation using
 the simultaneous +X 11-bin longitudinal response. `J_obs` is the worst
-same-force location separation. Contact-onset distance and within-location
+same-threshold location separation. Contact-onset distance and within-location
 force variation remain diagnostics because QDD proprioception owns contact
 detection and force magnitude. Old +Y Q and labeled per-emitter responses are
 diagnostic only. The script does not register an objective or call Newton,

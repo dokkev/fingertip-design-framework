@@ -23,6 +23,7 @@ from lumo.optimization.objective import (
     compute_objectives_from_raw,
     compute_observation_objective,
 )
+from lumo.simulation import FIRST_CROSSING_LOADING
 
 
 _OUTPUT_DIRECTORY = Path(
@@ -63,10 +64,8 @@ def _verify_raw(
         raise RuntimeError("saved scenarios do not retain every sphere diameter")
 
     targets = data["force_targets_n"]
-    tolerance = 0.1 * targets[None, :]
-    force_error = np.abs(data["actual_forces_n"] - targets[None, :])
-    if np.any(force_error > tolerance):
-        raise RuntimeError("an accepted force lies outside its +/-10% band")
+    if np.any(data["actual_forces_n"] < targets[None, :]):
+        raise RuntimeError("a checkpoint force is below its trigger threshold")
     if np.any(data["contact_buffer_overflow"] != 0):
         raise RuntimeError("a checkpoint overflowed the contact buffer")
     if np.any(data["inverted_tet_counts"] != 0):
@@ -195,7 +194,7 @@ def _write_report(
         f"- sphere diameters: {list(_SPHERE_DIAMETERS_MM)} mm",
         f"- contact Y positions: {list(_CONTACT_Y_MM)} mm",
         f"- force checkpoints: {list(_FORCE_TARGETS_N)} N",
-        "- Newton: 100 Hz, 10 VBD iterations, 5 s force-band dwell, +/-10% tolerance",
+        "- Newton: 100 Hz, 10 VBD iterations, 5 mm/s monotonic approach, instantaneous first-crossing snapshots",
         "- optics: five simultaneous unit-power LEDs at Y=[-22,-11,0,11,22] mm, 65,536 paths/LED, 24 bounces",
         "- observation: +X side, Y=[-27.5,+27.5] mm, 11 x 5 mm longitudinal bins",
         "- J_contact = min_s cbrt(q_form_s q_stable_s q_stiff_s); q_normal is diagnostic only",
@@ -277,11 +276,11 @@ def main() -> None:
             _SPHERE_DIAMETERS_MM,
             _CONTACT_Y_MM,
             force_targets_n=_FORCE_TARGETS_N,
-            settle_duration_s=5.0,
-            force_tolerance_fraction=0.1,
+            settle_duration_s=0.0,
             initial_clearance_m=1.0e-3,
             approach_speed_m_s=5.0e-3,
             max_sim_time_s=60.0,
+            loading_mode=FIRST_CROSSING_LOADING,
         )
     runtime_s = perf_counter() - start_s
     details = _objective_details(evaluation)

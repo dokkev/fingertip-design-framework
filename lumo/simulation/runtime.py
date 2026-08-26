@@ -78,6 +78,7 @@ def _force_servo_before_step(
     indenter_body_index: int,
     approach_speed_m_s: float,
     force_gain_m_s_n: float,
+    capture_on_first_crossing: bool,
     time_step_s: float,
     target_forces_n: wp.array(dtype=float),
     servo_float: wp.array(dtype=float),
@@ -85,23 +86,25 @@ def _force_servo_before_step(
     body_q_a: wp.array(dtype=wp.transform),
     body_q_b: wp.array(dtype=wp.transform),
 ):
-    """Apply the production proportional servo before one physics tick."""
+    """Apply prescribed motion or the proportional servo before one tick."""
     if servo_int[_SERVO_FINISHED] != 0 or servo_int[_SERVO_ERROR] != 0:
         servo_float[_SERVO_COMMANDED_DISPLACEMENT] = 0.0
         servo_float[_SERVO_VELOCITY] = 0.0
     else:
-        target_index = servo_int[_SERVO_TARGET_INDEX]
-        force_error_n = (
-            target_forces_n[target_index]
-            - servo_float[_SERVO_REACTION_FORCE]
-        )
-        velocity_m_s = wp.max(
-            -approach_speed_m_s,
-            wp.min(
-                approach_speed_m_s,
-                force_gain_m_s_n * force_error_n,
-            ),
-        )
+        velocity_m_s = approach_speed_m_s
+        if not capture_on_first_crossing:
+            target_index = servo_int[_SERVO_TARGET_INDEX]
+            force_error_n = (
+                target_forces_n[target_index]
+                - servo_float[_SERVO_REACTION_FORCE]
+            )
+            velocity_m_s = wp.max(
+                -approach_speed_m_s,
+                wp.min(
+                    approach_speed_m_s,
+                    force_gain_m_s_n * force_error_n,
+                ),
+            )
         commanded_displacement_m = velocity_m_s * time_step_s
         servo_float[_SERVO_VELOCITY] = velocity_m_s
         servo_float[_SERVO_COMMANDED_DISPLACEMENT] = commanded_displacement_m
@@ -125,6 +128,7 @@ def _force_servo_after_step(
     settle_window_ticks: int,
     target_count: int,
     displacement_tolerance_m: float,
+    capture_on_first_crossing: bool,
     target_forces_n: wp.array(dtype=float),
     force_tolerances_n: wp.array(dtype=float),
     servo_float: wp.array(dtype=float),
@@ -148,35 +152,45 @@ def _force_servo_after_step(
 
     target_index = servo_int[_SERVO_TARGET_INDEX]
     target_force_n = target_forces_n[target_index]
-    force_tolerance_n = force_tolerances_n[target_index]
-    commanded_displacement_m = servo_float[_SERVO_COMMANDED_DISPLACEMENT]
-    force_is_settled = wp.abs(reaction_force_n - target_force_n) <= force_tolerance_n
-    displacement_is_settled = (
-        displacement_tolerance_m < 0.0
-        or wp.abs(commanded_displacement_m) <= displacement_tolerance_m
-    )
-    if force_is_settled and displacement_is_settled:
-        servo_int[_SERVO_DWELL_COUNT] = servo_int[_SERVO_DWELL_COUNT] + 1
-    else:
-        servo_int[_SERVO_DWELL_COUNT] = 0
-
-    window_start_count = wp.max(1, settle_ticks - settle_window_ticks)
-    if servo_int[_SERVO_DWELL_COUNT] == window_start_count:
-        checkpoint_slot = servo_int[_SERVO_CHECKPOINT_COUNT]
+    checkpoint_slot = servo_int[_SERVO_CHECKPOINT_COUNT]
+    if checkpoint_slot >= target_count:
+        servo_int[_SERVO_ERROR] = 2
+        return
+    if capture_on_first_crossing:
+        if reaction_force_n < target_force_n:
+            return
         checkpoint_float[checkpoint_slot, _CHECKPOINT_WINDOW_START_FORCE] = (
             reaction_force_n
         )
         checkpoint_float[checkpoint_slot, _CHECKPOINT_WINDOW_START_TRAVEL] = (
             servo_float[_SERVO_TRAVEL]
         )
+    else:
+        force_tolerance_n = force_tolerances_n[target_index]
+        commanded_displacement_m = servo_float[_SERVO_COMMANDED_DISPLACEMENT]
+        force_is_settled = (
+            wp.abs(reaction_force_n - target_force_n) <= force_tolerance_n
+        )
+        displacement_is_settled = (
+            displacement_tolerance_m < 0.0
+            or wp.abs(commanded_displacement_m) <= displacement_tolerance_m
+        )
+        if force_is_settled and displacement_is_settled:
+            servo_int[_SERVO_DWELL_COUNT] = servo_int[_SERVO_DWELL_COUNT] + 1
+        else:
+            servo_int[_SERVO_DWELL_COUNT] = 0
 
-    if servo_int[_SERVO_DWELL_COUNT] < settle_ticks:
-        return
+        window_start_count = wp.max(1, settle_ticks - settle_window_ticks)
+        if servo_int[_SERVO_DWELL_COUNT] == window_start_count:
+            checkpoint_float[checkpoint_slot, _CHECKPOINT_WINDOW_START_FORCE] = (
+                reaction_force_n
+            )
+            checkpoint_float[checkpoint_slot, _CHECKPOINT_WINDOW_START_TRAVEL] = (
+                servo_float[_SERVO_TRAVEL]
+            )
 
-    checkpoint_slot = servo_int[_SERVO_CHECKPOINT_COUNT]
-    if checkpoint_slot >= target_count:
-        servo_int[_SERVO_ERROR] = 2
-        return
+        if servo_int[_SERVO_DWELL_COUNT] < settle_ticks:
+            return
 
     signed_force_change_n = reaction_force_n - previous_force_n
     checkpoint_float[checkpoint_slot, _CHECKPOINT_FORCE] = reaction_force_n
@@ -503,6 +517,7 @@ class LumoSimulation:
         self._servo_indenter_body_index: int | None = None
         self._servo_approach_speed_m_s: float | None = None
         self._servo_force_gain_m_s_n: float | None = None
+        self._servo_capture_on_first_crossing: bool | None = None
         self._servo_settle_ticks: int | None = None
         self._servo_settle_window_ticks: int | None = None
         self._servo_displacement_tolerance_m: float | None = None
@@ -631,8 +646,9 @@ class LumoSimulation:
         force_tolerances_n: tuple[float, ...],
         settle_ticks: int,
         displacement_tolerance_m: float | None,
+        capture_on_first_crossing: bool = False,
     ) -> None:
-        """Prepare the production force servo for GPU graph replay."""
+        """Prepare device-resident motion and force checkpoints."""
         if not self._use_cuda_graph:
             raise RuntimeError("GPU force servo requires use_cuda_graph=True")
         if self._servo_float is not None:
@@ -667,6 +683,9 @@ class LumoSimulation:
         self._servo_indenter_body_index = indenter.body_index
         self._servo_approach_speed_m_s = float(approach_speed_m_s)
         self._servo_force_gain_m_s_n = float(force_gain_m_s_n)
+        self._servo_capture_on_first_crossing = bool(
+            capture_on_first_crossing
+        )
         self._servo_settle_ticks = int(settle_ticks)
         self._servo_settle_window_ticks = min(
             int(settle_ticks),
@@ -802,6 +821,7 @@ class LumoSimulation:
             or self._servo_indenter_body_index is None
             or self._servo_approach_speed_m_s is None
             or self._servo_force_gain_m_s_n is None
+            or self._servo_capture_on_first_crossing is None
             or self._servo_settle_ticks is None
             or self._servo_settle_window_ticks is None
             or self._servo_displacement_tolerance_m is None
@@ -884,6 +904,7 @@ class LumoSimulation:
                 self._servo_indenter_body_index,
                 self._servo_approach_speed_m_s,
                 self._servo_force_gain_m_s_n,
+                self._servo_capture_on_first_crossing,
                 self.time_step_s,
                 self._servo_target_forces_n,
                 self._servo_float,
@@ -915,6 +936,7 @@ class LumoSimulation:
                 self._servo_settle_window_ticks,
                 self._servo_target_count,
                 self._servo_displacement_tolerance_m,
+                self._servo_capture_on_first_crossing,
                 self._servo_target_forces_n,
                 self._servo_force_tolerances_n,
                 self._servo_float,

@@ -20,6 +20,7 @@ from lumo.optimization.objective import (
     _triangle_areas,
     compute_objectives_from_raw,
 )
+from lumo.simulation import REFERENCE_DWELL_LOADING
 
 
 _ROOT = Path(__file__).resolve().parents[2]
@@ -87,6 +88,7 @@ def _run(use_cuda_graph: bool, sphere_path: Path) -> dict[str, object]:
         initial_clearance_m=1.0e-3,
         approach_speed_m_s=5.0e-3,
         max_sim_time_s=60.0,
+        loading_mode=REFERENCE_DWELL_LOADING,
         use_cuda_graph=use_cuda_graph,
     )
     wp.synchronize()

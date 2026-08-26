@@ -16,6 +16,7 @@ from importlib.metadata import PackageNotFoundError, version
 from importlib.resources import as_file, files
 from math import isfinite
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from time import perf_counter
 
 import numpy as np
@@ -81,8 +82,6 @@ _DEFAULT_INDENTER_URDFS = (
 )
 _DEFAULT_SPHERE_DIAMETERS_MM = (5.0, 10.0, 20.0)
 _DEFAULT_FORCE_TARGETS_N = (5.0, 10.0, 15.0, 20.0)
-_DEFAULT_SETTLE_DURATION_S = 5.0
-_DEFAULT_FORCE_TOLERANCE_FRACTION = 0.1
 _DEFAULT_INITIAL_CLEARANCE_M = 1.0e-3
 _DEFAULT_CONTACT_Y_MM = (-22.0, -11.0, -5.5, 0.0, 5.5, 11.0, 22.0)
 _DEFAULT_VISCOELASTIC_PRESET = "silicone"
@@ -105,7 +104,7 @@ _DISCRETE_OUTPUT_DIRECTORY = (
     Path(__file__).resolve().parents[2]
     / "output"
     / "optimization"
-    / "mobo_discrete_05mm"
+    / "mobo_full_finger_instantaneous_05mm"
 )
 _RUN_CONFIG_FILENAME = "run_config.json"
 _AX_STATE_FILENAME = "ax_state.json"
@@ -118,8 +117,10 @@ _CONTINUOUS_WARM_START_COUNT = 13
 _APPROACH_SPEED_M_S = 5.0e-3
 _MAX_SIM_TIME_S = 60.0
 _MAX_PROPOSALS_PER_COMPLETED_TRIAL = 50
-_OBJECTIVE_DEFINITION = "full-finger-contact-and-force-conditioned-observation-v1"
-_RUN_CONFIG_SCHEMA = 5
+_OBJECTIVE_DEFINITION = (
+    "full-finger-contact-and-threshold-conditioned-observation-v2"
+)
+_RUN_CONFIG_SCHEMA = 7
 
 
 @dataclass(frozen=True)
@@ -143,8 +144,6 @@ class CampaignDefinition:
     indenters: tuple[tuple[str, str], ...] = ()
     sphere_diameters_mm: tuple[float, ...] = _DEFAULT_SPHERE_DIAMETERS_MM
     force_targets_n: tuple[float, ...] = _DEFAULT_FORCE_TARGETS_N
-    settle_duration_s: float = _DEFAULT_SETTLE_DURATION_S
-    force_tolerance_fraction: float = _DEFAULT_FORCE_TOLERANCE_FRACTION
     initial_clearance_m: float = _DEFAULT_INITIAL_CLEARANCE_M
     contact_y_mm: tuple[float, ...] = _DEFAULT_CONTACT_Y_MM
     viscoelastic_preset: str = _DEFAULT_VISCOELASTIC_PRESET
@@ -325,8 +324,6 @@ def _campaign_definition(
     indenter_urdfs: Iterable[str] = _DEFAULT_INDENTER_URDFS,
     sphere_diameters_mm: Iterable[float] = _DEFAULT_SPHERE_DIAMETERS_MM,
     force_targets_n: Iterable[float] = _DEFAULT_FORCE_TARGETS_N,
-    settle_duration_s: float = _DEFAULT_SETTLE_DURATION_S,
-    force_tolerance_fraction: float = _DEFAULT_FORCE_TOLERANCE_FRACTION,
     initial_clearance_m: float = _DEFAULT_INITIAL_CLEARANCE_M,
     contact_y_mm: Iterable[float] = _DEFAULT_CONTACT_Y_MM,
     viscoelastic_preset: str = _DEFAULT_VISCOELASTIC_PRESET,
@@ -343,18 +340,8 @@ def _campaign_definition(
     if len(set(sphere_diameters)) != len(sphere_diameters):
         raise ValueError("sphere_diameters_mm must be unique")
     targets = _force_targets(force_targets_n)
-    settle_duration_s = float(settle_duration_s)
-    force_tolerance_fraction = float(force_tolerance_fraction)
     initial_clearance_m = float(initial_clearance_m)
     contact_locations_y_mm = tuple(float(value) for value in contact_y_mm)
-    if not isfinite(settle_duration_s) or settle_duration_s <= 0.0:
-        raise ValueError("settle_duration_s must be finite and positive")
-    if (
-        not isfinite(force_tolerance_fraction)
-        or force_tolerance_fraction <= 0.0
-        or force_tolerance_fraction >= 1.0
-    ):
-        raise ValueError("force_tolerance_fraction must lie between zero and one")
     if not isfinite(initial_clearance_m) or initial_clearance_m < 0.0:
         raise ValueError("initial_clearance_m must be finite and nonnegative")
     if not contact_locations_y_mm or any(
@@ -444,8 +431,6 @@ def _campaign_definition(
             indenters=indenters,
             sphere_diameters_mm=sphere_diameters,
             force_targets_n=targets,
-            settle_duration_s=settle_duration_s,
-            force_tolerance_fraction=force_tolerance_fraction,
             initial_clearance_m=initial_clearance_m,
             contact_y_mm=contact_locations_y_mm,
             viscoelastic_preset=viscoelastic_preset,
@@ -642,9 +627,15 @@ def _verify_discrete_search_space(campaign: CampaignDefinition) -> None:
         )
     if len(stem_height_steps) < 2:
         raise RuntimeError("Ax probes did not vary stem_height_step")
+    with TemporaryDirectory(prefix="lumo_ax_preflight_") as temporary_directory:
+        state_path = Path(temporary_directory) / _AX_STATE_FILENAME
+        _atomic_save_ax(client, state_path)
+        restored = Client.load_from_json_file(filepath=str(state_path))
+        if _ax_statuses(restored) != _ax_statuses(client):
+            raise RuntimeError("Ax save/load preflight changed trial statuses")
     print(
         "discrete search-space PASS: 0.5 mm grid, fixed width=30 mm, "
-        "full-height pad steps<=40, stem_height_steps="
+        "full-height pad steps<=40, Ax save/load, stem_height_steps="
         f"{sorted(stem_height_steps)}",
         flush=True,
     )
@@ -882,7 +873,6 @@ def _run_config(campaign: CampaignDefinition) -> dict[str, object]:
         led_centers_y_mm,
     )
     from lumo.ray_tracing import LONGITUDINAL_SIDE_BIN_COUNT
-    from lumo.simulation import REFERENCE_DWELL_LOADING
 
     repository_root = Path(__file__).resolve().parents[2]
     parameter_bounds = {
@@ -972,22 +962,25 @@ def _run_config(campaign: CampaignDefinition) -> dict[str, object]:
             "optical_preset": campaign.optical_preset,
             "fingertip_parameters": asdict(campaign.space.parameter_bounds.parameters),
             "mechanics": {
-                "loading_mode": REFERENCE_DWELL_LOADING,
-            "backend": "gpu_resident_graph_runtime_reuse",
+                "loading_mode": "first_crossing",
+                "capture_rule": "first reaction-force sample >= threshold",
+                "backend": (
+                    f"gpu_first_crossing_graph_parallel_"
+                    f"{evaluator._PRODUCTION_PARALLEL_WORLD_COUNT}"
+                ),
+                "parallel_world_count": (
+                    evaluator._PRODUCTION_PARALLEL_WORLD_COUNT
+                ),
                 "direct_reference_available": True,
                 "sim_frequency_hz": evaluator._SIM_FREQUENCY_HZ,
                 "vbd_iterations": evaluator._VBD_ITERATIONS,
-                "force_gain_m_s_n": evaluator._FORCE_GAIN_M_S_N,
-                "position_gain_m_n_tick": (
-                    evaluator._FORCE_GAIN_M_S_N / evaluator._SIM_FREQUENCY_HZ
-                ),
-                "max_indenter_speed_m_s": _APPROACH_SPEED_M_S,
-                "max_displacement_m_tick": (
+                "approach_speed_m_s": _APPROACH_SPEED_M_S,
+                "displacement_m_tick": (
                     _APPROACH_SPEED_M_S / evaluator._SIM_FREQUENCY_HZ
                 ),
                 "force_targets_n": list(campaign.force_targets_n),
-                "force_tolerance_fraction": campaign.force_tolerance_fraction,
-                "fixed_servo_dwell_s": campaign.settle_duration_s,
+                "snapshot_dwell_s": 0.0,
+                "force_feedback": False,
                 "max_sim_time_s": _MAX_SIM_TIME_S,
                 "element_size_mm": evaluator._ELEMENT_SIZE_MM,
                 "soft_contact_margin_m": evaluator._SOFT_CONTACT_MARGIN_M,
@@ -1010,6 +1003,12 @@ def _run_config(campaign: CampaignDefinition) -> dict[str, object]:
                 "ray_count": evaluator._SAMPLE_SIDE_COUNT**2,
                 "max_bounces": evaluator._MAX_BOUNCES,
                 "deterministic_seed": evaluator._RNG_SEED,
+                "source_seed": evaluator._SOURCE_RNG_SEED,
+                "source_model": "uniform_finite_package_window",
+                "source_window_mm": [
+                    campaign.space.parameter_bounds.parameters.led.emitting_window_x_mm,
+                    campaign.space.parameter_bounds.parameters.led.emitting_window_y_mm,
+                ],
                 "carrier_albedo": evaluator._CARRIER_ALBEDO,
                 "source_medium": "resolved per geometry from LED air-gap boundary",
                 "led_centers_y_mm": list(led_centers_y_mm()),
@@ -1038,7 +1037,8 @@ def _run_config(campaign: CampaignDefinition) -> dict[str, object]:
                     "cuberoot(q_form*q_stable*q_stiff)"
                 ),
                 "J_obs": (
-                    "min over diameter, force, and distinct contact-Y pairs of "
+                    "min over diameter, force threshold, and distinct contact-Y "
+                    "pairs of "
                     "L2((y-y0)/P_emit); d_onset is diagnostic only"
                 ),
             },
@@ -1070,6 +1070,18 @@ def _validate_run_config(
         raise RuntimeError(
             "LUMO scientific source differs from the saved run contract; "
             "resume with the original source snapshot"
+        )
+    if stored_provenance.get("optimizer_source_sha256") != current_provenance.get(
+        "optimizer_source_sha256"
+    ):
+        raise RuntimeError(
+            "Ax campaign code differs from the saved run contract; "
+            "resume with the original optimizer source snapshot"
+        )
+    if stored_provenance.get("versions") != current_provenance.get("versions"):
+        raise RuntimeError(
+            "dependency versions differ from the saved run contract; "
+            "resume with the original environment"
         )
 
 
@@ -1118,7 +1130,11 @@ def _evaluate_candidate(
 ):
     from lumo.fingertip import Fingertip
 
-    from .evaluator import evaluate_full_finger
+    from .evaluator import (
+        _PRODUCTION_PARALLEL_WORLD_COUNT,
+        evaluate_full_finger,
+    )
+    from lumo.simulation import FIRST_CROSSING_LOADING
 
     fingertip = Fingertip(campaign.space.to_parameters(parameters))
     resource_root = files("lumo").joinpath("assets", "objects", "urdf")
@@ -1133,12 +1149,13 @@ def _evaluate_candidate(
             campaign.sphere_diameters_mm,
             campaign.contact_y_mm,
             force_targets_n=campaign.force_targets_n,
-            settle_duration_s=campaign.settle_duration_s,
-            force_tolerance_fraction=campaign.force_tolerance_fraction,
+            settle_duration_s=0.0,
             initial_clearance_m=campaign.initial_clearance_m,
             approach_speed_m_s=_APPROACH_SPEED_M_S,
             max_sim_time_s=_MAX_SIM_TIME_S,
+            loading_mode=FIRST_CROSSING_LOADING,
             use_cuda_graph=True,
+            parallel_world_count=_PRODUCTION_PARALLEL_WORLD_COUNT,
         )
 
 
@@ -1791,8 +1808,6 @@ def run(
     indenter_urdfs: Iterable[str] = _DEFAULT_INDENTER_URDFS,
     sphere_diameters_mm: Iterable[float] = _DEFAULT_SPHERE_DIAMETERS_MM,
     force_targets_n: Iterable[float] = _DEFAULT_FORCE_TARGETS_N,
-    settle_duration_s: float = _DEFAULT_SETTLE_DURATION_S,
-    force_tolerance_fraction: float = _DEFAULT_FORCE_TOLERANCE_FRACTION,
     initial_clearance_m: float = _DEFAULT_INITIAL_CLEARANCE_M,
     contact_y_mm: Iterable[float] = _DEFAULT_CONTACT_Y_MM,
     viscoelastic_preset: str = _DEFAULT_VISCOELASTIC_PRESET,
@@ -1809,8 +1824,6 @@ def run(
         indenter_urdfs=indenter_urdfs,
         sphere_diameters_mm=sphere_diameters_mm,
         force_targets_n=force_targets_n,
-        settle_duration_s=settle_duration_s,
-        force_tolerance_fraction=force_tolerance_fraction,
         initial_clearance_m=initial_clearance_m,
         contact_y_mm=contact_y_mm,
         viscoelastic_preset=viscoelastic_preset,
@@ -1953,10 +1966,13 @@ def run(
                 client.mark_trial_abandoned(trial_index)
             _persist_ax_and_tables(client, rows, output_directory, campaign)
             print(f"trial {trial_index} failed: {row['failure']}", flush=True)
-            if smoke_pending or _is_infrastructure_failure(error):
+            if _is_infrastructure_failure(error):
                 raise RuntimeError(
                     f"trial {trial_index} evaluation failed; campaign was saved"
                 ) from error
+            # A mechanics failure is a valid observation about the design
+            # space, including before the first successful morphology.  Keep
+            # the resume smoke pending until a complete raw result exists.
             continue
 
         print(

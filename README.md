@@ -1,86 +1,65 @@
-# Fingertip design framework
+# LUMO fingertip design
 
-LUMO is a parametric fingertip design framework whose production path is:
+LUMO evaluates parametric optical fingertips with one concrete production
+pipeline:
 
 ```text
-fingertip morphology
-  -> semantic mesh and first contact
-  -> Newton/Warp mechanics
-  -> deformed geometry
-  -> FULL_3D OptiX transport
-  -> trajectory objective
-  -> Ax morphology search
+FingertipParameters
+  -> full five-LED FingertipMesh
+  -> Newton deformation at instantaneous force-threshold crossings
+  -> OptiX transport through the deformed silicone
+  -> J_contact and J_obs
+  -> sequential Ax multi-objective search
 ```
 
-The current morphology space has six active variables:
+The production morphology has five variables on a `0.5 mm` lattice:
 
-`flat_pad_height`, `semielliptical_pad_height`, `stem_width`, `stem_height`,
-`void_width`, and `void_height`.
+```text
+flat-pad height
+semiellipse height
+stem width
+stem height
+void width
+```
 
-The default evaluation protocol uses contact locations `u=(.25,.50,.75)`,
-sphere radii `(4,5) mm`, and absolute post-contact depths `(0.5,1.0,1.5) mm`.
-That is six continuous Newton trajectories and eighteen FULL_3D optical states
-per morphology.
+Flat-pad width is fixed at `30 mm`, void height is fixed at zero, and the
+`5.1 x 0.19 mm` LED recess is a hardware feature rather than an optimization
+variable. One evaluation uses 5/10/20 mm spheres, seven longitudinal contact
+locations, and sequential 5/10/15/20 N first-crossing snapshots.
 
 ## Repository map
 
-- `lumo/`: the only installable framework namespace;
-- `lumo/finger/`: parametric morphology and optical source/material records;
-- `lumo/mesh/`: semantic geometry and volume/rigid meshes;
-- `lumo/contact/`: geometry-derived alignment and first-contact search;
-- `lumo/physics/`: the single Newton/Warp mechanics implementation;
-- `lumo/ray_tracing/`: FULL_3D OptiX transport and production runtime;
-- `lumo/optimization/`: design space, protocol, objective, registry, and Ax;
-- `visualization/config/`: repository-only plot and persisted-field display configuration;
-- `validation/`: repository-only scientific runners and reference workflows;
-- `gui/`: repository-only deferred design-space diagnostics;
-- `scripts/`: executable user and developer workflows.
+- `lumo/fingertip/`: physical parameters and analytic geometry;
+- `lumo/mesh/`: single-section and full five-LED meshes;
+- `lumo/newton/`: Newton model construction and indenters;
+- `lumo/simulation/`: Newton runtime and indentation workflow;
+- `lumo/ray_tracing/`: OptiX scene, emission, transport, and observation;
+- `lumo/optimization/`: design space, raw evaluator, objectives, and Ax BO;
+- `validation/`: procedural scientific and engineering checks;
+- `scripts/run_mobo.py`: the explicit production-campaign entry point.
 
-Framework imports therefore use one unambiguous namespace, for example
-`from lumo.finger import FingertipParameters` and
-`from lumo.optimization import DesignSpace`. Scripts assume the project has
-been installed and do not modify `sys.path`.
+## Environment and checks
 
-The old 2D FEM, case, examples, and generic plotting layers are intentionally
-not part of this branch.
-
-## Environment
-
-Run repository commands in the `lit` Conda environment:
+Use the `lit` Conda environment:
 
 ```bash
 conda activate lit
 python -m pip install -e ".[mesh,physics,ax,test]"
 ```
 
-OptiX, CUDA, Warp/Newton, and any reference solver installations remain
-externally managed runtime dependencies.
+CUDA, OptiX, and the header-only OptiX Toolkit are external dependencies. Set
+`OPTIX_INCLUDE_DIR` and `OTK_INCLUDE_DIR` as described in
+[docs/COMMANDS.md](docs/COMMANDS.md).
 
-## First checks
-
-```bash
-conda run -n lit ./scripts/tools/pytest_lit tests/unit/finger tests/unit/mesh -q
-conda run -n lit ./scripts/tools/pytest_lit tests/unit/physics -q
-conda run -n lit python scripts/tools/optix_doctor.py --json
-conda run -n lit python -m scripts.tools.optix_smoke
-```
-
-The doctor diagnoses the environment. The validation smoke command performs a
-real OptiX initialization and launch. Both should pass before an unattended
-campaign.
-
-## Scientific validation
-
-The current trajectory validation entry point is:
+Run the focused repository checks with:
 
 ```bash
-conda run -n lit python -m validation.optimization.lumo3d_trajectory_validation \
-  --output output/validation/lumo3d_trajectory
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 conda run --no-capture-output -n lit \
+  pytest -q tests/unit
 ```
 
-It is validation-only and writes generated artifacts below `output/`.
-Do not use it to start a BO campaign; the repository's expensive optimization
-commands are intentionally separate from the focused regression path.
+The production BO is expensive and is never started by the focused checks.
+Review the settings in `scripts/run_mobo.py` before launching it explicitly.
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for ownership and
-[docs/COMMANDS.md](docs/COMMANDS.md) for supported commands.
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for ownership and scientific
+dataflow, and [docs/COMMANDS.md](docs/COMMANDS.md) for supported commands.

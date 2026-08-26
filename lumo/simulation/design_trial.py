@@ -21,6 +21,7 @@ from lumo.util.scalar_validation import require_nonnegative, require_positive
 _DEFAULT_FORCE_GAIN_M_S_N = 1.25e-3
 REFERENCE_DWELL_LOADING = "reference_dwell"
 QUASISTATIC_RAMP_LOADING = "quasistatic_ramp"
+FIRST_CROSSING_LOADING = "first_crossing"
 
 
 class DesignTrial:
@@ -321,6 +322,7 @@ class DesignStudy:
 
     def _run_parallel_graph(
         self,
+        loading_mode: str,
         inspect_trial: Callable[[DesignTrial, LumoSimulation, Indenter], None]
         | None,
     ) -> None:
@@ -334,9 +336,11 @@ class DesignStudy:
             else target_force_n * self.force_tolerance_fraction
             for target_force_n in force_targets_n
         )
-        settle_ticks = max(
-            1,
-            ceil(self.settle_duration_s * self.sim_frequency),
+        first_crossing = loading_mode == FIRST_CROSSING_LOADING
+        settle_ticks = (
+            1
+            if first_crossing
+            else max(1, ceil(self.settle_duration_s * self.sim_frequency))
         )
         host_poll_ticks = max(2, 2 * ceil(0.1 * self.sim_frequency))
         grouped_trials: dict[Path, list[DesignTrial]] = {}
@@ -437,6 +441,7 @@ class DesignStudy:
                         displacement_tolerance_m=(
                             self.settle_displacement_tolerance_m
                         ),
+                        capture_on_first_crossing=first_crossing,
                     )
                     worlds.append(
                         {
@@ -499,6 +504,13 @@ class DesignStudy:
                         ):
                             last_force_n = simulation.force_servo_current_force_n()
                             missing_index = int(world["processed"])
+                            if first_crossing:
+                                raise RuntimeError(
+                                    f"{trial.name} did not cross "
+                                    f"{force_targets_n[missing_index]:g} N during "
+                                    f"{trial.max_sim_time_s:g} s of simulation; "
+                                    f"last force was {last_force_n:.9e} N"
+                                )
                             raise RuntimeError(
                                 f"{trial.name} did not keep "
                                 f"{force_targets_n[missing_index]:g} N within "
@@ -527,9 +539,14 @@ class DesignStudy:
             raise RuntimeError("design study has already been run")
         if inspect_trial is not None and not callable(inspect_trial):
             raise TypeError("inspect_trial must be callable")
-        if loading_mode not in {REFERENCE_DWELL_LOADING, QUASISTATIC_RAMP_LOADING}:
+        if loading_mode not in {
+            REFERENCE_DWELL_LOADING,
+            QUASISTATIC_RAMP_LOADING,
+            FIRST_CROSSING_LOADING,
+        }:
             raise ValueError(
-                "loading_mode must be 'reference_dwell' or 'quasistatic_ramp'"
+                "loading_mode must be 'reference_dwell', 'quasistatic_ramp', "
+                "or 'first_crossing'"
             )
         if loading_mode == REFERENCE_DWELL_LOADING:
             require_positive("settle_duration_s", self.settle_duration_s)
@@ -537,17 +554,26 @@ class DesignStudy:
                 raise ValueError(
                     "force_ramp_rate_n_s is only valid for quasistatic_ramp"
                 )
-        else:
+        elif loading_mode == QUASISTATIC_RAMP_LOADING:
             if force_ramp_rate_n_s is None:
                 raise ValueError(
                     "quasistatic_ramp requires force_ramp_rate_n_s"
                 )
             require_positive("force_ramp_rate_n_s", force_ramp_rate_n_s)
+        else:
+            if self.settle_duration_s != 0.0:
+                raise ValueError("first_crossing requires settle_duration_s=0")
+            if force_ramp_rate_n_s is not None:
+                raise ValueError(
+                    "force_ramp_rate_n_s is only valid for quasistatic_ramp"
+                )
         self._has_run = True
         if self.parallel_world_count > 1:
-            if loading_mode != REFERENCE_DWELL_LOADING:
-                raise ValueError("parallel worlds support reference_dwell only")
-            self._run_parallel_graph(inspect_trial)
+            if loading_mode == QUASISTATIC_RAMP_LOADING:
+                raise ValueError(
+                    "parallel worlds do not support quasistatic_ramp"
+                )
+            self._run_parallel_graph(loading_mode, inspect_trial)
             return
 
         finalized_models: dict[
@@ -568,9 +594,11 @@ class DesignStudy:
                 raise ValueError(
                     "max_sim_time_s must include at least one simulation tick"
                 )
-            settle_ticks = max(
-                1,
-                ceil(self.settle_duration_s * self.sim_frequency),
+            first_crossing = loading_mode == FIRST_CROSSING_LOADING
+            settle_ticks = (
+                1
+                if first_crossing
+                else max(1, ceil(self.settle_duration_s * self.sim_frequency))
             )
 
             model_key = trial.urdf_path.resolve()
@@ -655,9 +683,9 @@ class DesignStudy:
                 for target_force_n in force_targets_n
             )
             if self.use_cuda_graph:
-                if loading_mode != REFERENCE_DWELL_LOADING:
+                if loading_mode == QUASISTATIC_RAMP_LOADING:
                     raise ValueError(
-                        "GPU-resident force servo supports reference_dwell only"
+                        "GPU-resident checkpoints do not support quasistatic_ramp"
                     )
                 if trial.initial_clearance_m is None:
                     raise ValueError(
@@ -676,6 +704,7 @@ class DesignStudy:
                         displacement_tolerance_m=(
                             self.settle_displacement_tolerance_m
                         ),
+                        capture_on_first_crossing=first_crossing,
                     )
                 processed_checkpoint_count = 0
                 finished = False
@@ -714,6 +743,12 @@ class DesignStudy:
                     missing_target_n = force_targets_n[
                         processed_checkpoint_count
                     ]
+                    if first_crossing:
+                        raise RuntimeError(
+                            f"{trial.name} did not cross {missing_target_n:g} N "
+                            f"during {trial.max_sim_time_s:g} s of simulation; "
+                            f"last force was {last_force_n:.9e} N"
+                        )
                     missing_tolerance_n = force_tolerances_n[
                         processed_checkpoint_count
                     ]
@@ -744,19 +779,22 @@ class DesignStudy:
                         force_targets_n[-1],
                         force_ramp_rate_n_s * simulation.time_s,
                     )
-                force_error_n = force_reference_n - reaction_force_n
-                minimum_velocity_m_s = (
-                    0.0
-                    if loading_mode == QUASISTATIC_RAMP_LOADING
-                    else -trial.approach_speed_m_s
-                )
-                velocity_m_s = max(
-                    minimum_velocity_m_s,
-                    min(
-                        trial.approach_speed_m_s,
-                        self.force_gain_m_s_n * force_error_n,
-                    ),
-                )
+                if first_crossing:
+                    velocity_m_s = trial.approach_speed_m_s
+                else:
+                    force_error_n = force_reference_n - reaction_force_n
+                    minimum_velocity_m_s = (
+                        0.0
+                        if loading_mode == QUASISTATIC_RAMP_LOADING
+                        else -trial.approach_speed_m_s
+                    )
+                    velocity_m_s = max(
+                        minimum_velocity_m_s,
+                        min(
+                            trial.approach_speed_m_s,
+                            self.force_gain_m_s_n * force_error_n,
+                        ),
+                    )
                 commanded_displacement_m = velocity_m_s * simulation.time_step_s
                 travel_m += commanded_displacement_m
                 translation_W_m = (
@@ -782,7 +820,10 @@ class DesignStudy:
                 )
                 previous_force_n = reaction_force_n
 
-                if loading_mode == QUASISTATIC_RAMP_LOADING:
+                if first_crossing:
+                    if reaction_force_n < target_force_n:
+                        continue
+                elif loading_mode == QUASISTATIC_RAMP_LOADING:
                     if reaction_force_n < target_force_n:
                         continue
                     if abs(reaction_force_n - target_force_n) > force_tolerance_n:
@@ -832,6 +873,12 @@ class DesignStudy:
                 force_tolerance_n = force_tolerances_n[target_index]
                 in_tolerance_ticks = 0
             else:
+                if first_crossing:
+                    raise RuntimeError(
+                        f"{trial.name} did not cross {target_force_n:g} N "
+                        f"during {trial.max_sim_time_s:g} s of simulation; "
+                        f"last force was {reaction_force_n:.9e} N"
+                    )
                 if loading_mode == QUASISTATIC_RAMP_LOADING:
                     raise RuntimeError(
                         f"{trial.name} did not cross {target_force_n:g} N "
@@ -859,6 +906,7 @@ class DesignStudy:
 __all__ = [
     "DesignStudy",
     "DesignTrial",
+    "FIRST_CROSSING_LOADING",
     "QUASISTATIC_RAMP_LOADING",
     "REFERENCE_DWELL_LOADING",
 ]

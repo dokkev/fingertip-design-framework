@@ -17,6 +17,7 @@ from lumo.optimization.objective import (
     compute_contact_objective,
     compute_objectives_from_raw,
 )
+from lumo.simulation import REFERENCE_DWELL_LOADING
 
 
 _ROOT = Path(__file__).resolve().parents[2]
@@ -74,6 +75,7 @@ def _run_dwell(
                     (diameter_mm,),
                     locations_y_mm,
                     settle_duration_s=dwell_s,
+                    loading_mode=REFERENCE_DWELL_LOADING,
                 )
             data = _save_evaluation(output_path, evaluation)
         result["groups"][name] = data

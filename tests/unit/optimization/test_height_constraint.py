@@ -3,16 +3,19 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from types import SimpleNamespace
 
 import pytest
 
 from lumo.fingertip import Fingertip, FingertipParameters
+from lumo.optimization import ax_bo
 from lumo.optimization.ax_bo import (
     _DEFAULT_CONTACT_Y_MM,
     _DISCRETE_MAX_PAD_DEPTH_STEPS,
     _OBJECTIVE_NAMES,
     _campaign_definition,
     _decode_ax_parameters,
+    _evaluate_candidate,
     _new_client,
     _run_config,
     _validate_campaign_parameters,
@@ -93,19 +96,98 @@ def test_production_scientific_contract_is_explicitly_serialized() -> None:
     assert campaign.contact_y_mm == _DEFAULT_CONTACT_Y_MM
     assert config["scenarios"]["contact_y_mm"] == list(campaign.contact_y_mm)
     assert config["mechanics"]["force_targets_n"] == [5.0, 10.0, 15.0, 20.0]
-    assert config["mechanics"]["loading_mode"] == "reference_dwell"
+    assert config["mechanics"]["loading_mode"] == "first_crossing"
+    assert config["mechanics"]["backend"] == (
+        "gpu_first_crossing_graph_parallel_4"
+    )
+    assert config["mechanics"]["parallel_world_count"] == 4
     assert config["mechanics"]["sim_frequency_hz"] == 100.0
     assert config["mechanics"]["vbd_iterations"] == 10
-    assert config["mechanics"]["fixed_servo_dwell_s"] == 5.0
-    assert config["mechanics"]["force_tolerance_fraction"] == 0.1
+    assert config["mechanics"]["snapshot_dwell_s"] == 0.0
+    assert config["mechanics"]["force_feedback"] is False
+    assert config["mechanics"]["approach_speed_m_s"] == 5.0e-3
+    assert config["mechanics"]["displacement_m_tick"] == 5.0e-5
     assert config["optics"]["led_centers_y_mm"] == [-22.0, -11.0, 0.0, 11.0, 22.0]
     assert config["optics"]["observation_view_direction"] == "+X"
     assert config["optics"]["spatial_roi_y_mm"] == [-27.5, 27.5]
     assert config["optics"]["spatial_bin_count"] == 11
     assert config["optics"]["spatial_bin_width_mm"] == 5.0
+    assert config["optics"]["source_model"] == "uniform_finite_package_window"
+    assert config["optics"]["source_window_mm"] == [1.8, 1.6]
     assert config["design_space"]["fixed"]["geometry.void_height_mm"] == 0.0
     assert config["design_space"]["full_fingertip_height_max_mm"] == 30.0
     assert tuple(config["objectives"]["names"]) == _OBJECTIVE_NAMES
+
+
+def test_ax_candidate_uses_the_parallel_production_evaluator(monkeypatch) -> None:
+    captured = {}
+
+    def fake_evaluate(*args, **kwargs):
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(
+        "lumo.optimization.evaluator.evaluate_full_finger",
+        fake_evaluate,
+    )
+    _evaluate_candidate(_campaign(), _candidate(5.0, 9.0))
+
+    assert captured["use_cuda_graph"] is True
+    assert captured["parallel_world_count"] == 4
+    assert captured["loading_mode"] == "first_crossing"
+    assert captured["settle_duration_s"] == 0.0
+
+
+def test_campaign_continues_past_initial_mechanics_failure(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    attempts = 0
+
+    def fake_evaluate(*args, **kwargs):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("morphology did not keep 20 N in band")
+        return object()
+
+    contact = SimpleNamespace(limiting_scenario="scenario")
+    observation = SimpleNamespace(
+        limiting_sphere_diameter_mm=10.0,
+        limiting_force_n=5.0,
+        limiting_contact_y_pair_mm=(0.0, 5.5),
+        d_onset=0.001,
+    )
+
+    def fake_save(path, **kwargs):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"test raw result")
+
+    monkeypatch.setattr(ax_bo, "_verify_discrete_search_space", lambda campaign: None)
+    monkeypatch.setattr(ax_bo, "_validate_optix_environment", lambda: None)
+    monkeypatch.setattr(ax_bo, "_evaluate_candidate", fake_evaluate)
+    monkeypatch.setattr(
+        ax_bo,
+        "_objective_details",
+        lambda evaluation: {
+            "J_contact": 0.4,
+            "J_obs": 0.002,
+            "contact": contact,
+            "observation": observation,
+            "max_outside_roi_power_fraction": 0.03,
+        },
+    )
+    monkeypatch.setattr(ax_bo, "_save_trial_result", fake_save)
+
+    rows = ax_bo.run(
+        output_directory=tmp_path / "campaign",
+        target_bo_trials=1,
+        parameter_bounds_mm=_PRODUCTION_BOUNDS_MM,
+    )
+
+    assert attempts >= 2
+    assert sum(row["status"] == "FAILED" for row in rows) == 1
+    assert sum(row["status"] == "COMPLETED" for row in rows) == 1
 
 
 def test_ax_uses_only_the_frozen_full_finger_objectives() -> None:

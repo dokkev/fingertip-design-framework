@@ -14,18 +14,17 @@ from lumo.optimization.objective import (
     compute_observation_objective,
 )
 from lumo.ray_tracing import longitudinal_side_view_power
-from lumo.simulation import DesignStudy, REFERENCE_DWELL_LOADING
+from lumo.simulation import FIRST_CROSSING_LOADING
 
 
-def test_production_loading_default_remains_reference_dwell() -> None:
+def test_production_loading_default_is_instantaneous_first_crossing() -> None:
     assert (
         signature(evaluate_full_finger).parameters["loading_mode"].default
-        == REFERENCE_DWELL_LOADING
+        == FIRST_CROSSING_LOADING
     )
-    assert (
-        signature(DesignStudy.run).parameters["loading_mode"].default
-        == REFERENCE_DWELL_LOADING
-    )
+    assert signature(evaluate_full_finger).parameters[
+        "settle_duration_s"
+    ].default == 0.0
 
 
 def _observation_inputs() -> dict[str, object]:

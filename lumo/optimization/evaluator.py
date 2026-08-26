@@ -35,6 +35,7 @@ from lumo.ray_tracing import (
 from lumo.simulation import (
     DesignStudy,
     DesignTrial,
+    FIRST_CROSSING_LOADING,
     LumoSimulation,
     QUASISTATIC_RAMP_LOADING,
     REFERENCE_DWELL_LOADING,
@@ -661,12 +662,12 @@ def evaluate_full_finger(
     contact_y_mm: Iterable[float],
     *,
     force_targets_n: Iterable[float] = _FORCE_TARGETS_N,
-    settle_duration_s: float = _SERVO_SETTLE_DURATION_S,
+    settle_duration_s: float = 0.0,
     force_tolerance_fraction: float = _FORCE_TOLERANCE_FRACTION,
     initial_clearance_m: float = 1.0e-3,
     approach_speed_m_s: float = 5.0e-3,
     max_sim_time_s: float = 60.0,
-    loading_mode: str = REFERENCE_DWELL_LOADING,
+    loading_mode: str = FIRST_CROSSING_LOADING,
     force_ramp_rate_n_s: float | None = None,
     use_cuda_graph: bool = True,
     reuse_finalized_models: bool = False,
@@ -767,9 +768,17 @@ def evaluate_full_finger(
             raise ValueError(
                 "quasistatic_ramp requires a positive force_ramp_rate_n_s"
             )
+    elif loading_mode == FIRST_CROSSING_LOADING:
+        if settle_duration_s != 0.0:
+            raise ValueError("first_crossing requires settle_duration_s=0")
+        if force_ramp_rate_n_s is not None:
+            raise ValueError(
+                "force_ramp_rate_n_s is only valid for quasistatic_ramp"
+            )
     else:
         raise ValueError(
-            "loading_mode must be 'reference_dwell' or 'quasistatic_ramp'"
+            "loading_mode must be 'reference_dwell', 'quasistatic_ramp', "
+            "or 'first_crossing'"
         )
     if (
         not np.isfinite(force_tolerance_fraction)
@@ -965,10 +974,12 @@ def evaluate_full_finger(
             or completed_trial.servo_error_n is None
             or (
                 use_cuda_graph
+                and loading_mode == REFERENCE_DWELL_LOADING
                 and completed_trial.settle_window_force_drift_n is None
             )
             or (
                 use_cuda_graph
+                and loading_mode == REFERENCE_DWELL_LOADING
                 and completed_trial.settle_window_indentation_drift_m is None
             )
         ):
@@ -1232,7 +1243,21 @@ def evaluate_full_finger(
         checkpoint_optics_runtime_s=checkpoint_optics_runtime_s,
         no_contact_optics_runtime_s=no_contact_optics_runtime_s,
         mechanics_backend=(
-            f"gpu_resident_graph_parallel_{parallel_world_count}"
+            f"gpu_first_crossing_graph_parallel_{parallel_world_count}"
+            if loading_mode == FIRST_CROSSING_LOADING
+            and parallel_world_count > 1
+            else "gpu_first_crossing_graph_runtime_reuse"
+            if loading_mode == FIRST_CROSSING_LOADING
+            and resolved_reuse_runtimes
+            else "gpu_first_crossing_graph_model_reuse"
+            if loading_mode == FIRST_CROSSING_LOADING
+            and use_cuda_graph
+            and reuse_finalized_models
+            else "gpu_first_crossing_graph"
+            if loading_mode == FIRST_CROSSING_LOADING and use_cuda_graph
+            else "direct_first_crossing"
+            if loading_mode == FIRST_CROSSING_LOADING
+            else f"gpu_resident_graph_parallel_{parallel_world_count}"
             if parallel_world_count > 1
             else
             "gpu_resident_graph_runtime_reuse"

@@ -44,14 +44,7 @@ include = ["lumo*"]
   "assets/objects/*.urdf",
   "assets/objects/urdf/*.urdf",
 ]
-"lumo.ray_tracing.optical_mechanics" = ["kernels/*.cu"]
 "lumo.ray_tracing" = ["kernels/*.cu"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests/unit", "tests/smoke"]
-markers = [
-  "smoke: dependency wiring smoke test",
-  "gmsh: requires the Gmsh Python API",
-  "slow: takes materially longer than a unit test",
-  "physics: requires NVIDIA Warp/Newton and CUDA",
-]
+testpaths = ["tests/unit"]

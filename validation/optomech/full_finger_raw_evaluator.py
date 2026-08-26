@@ -11,6 +11,7 @@ import numpy as np
 from lumo.fingertip import Fingertip, FingertipParameters
 from lumo.optimization.evaluator import FullFingerEvaluation, evaluate_full_finger
 from lumo.ray_tracing import LONGITUDINAL_SIDE_BIN_COUNT
+from lumo.simulation import FIRST_CROSSING_LOADING
 
 
 _OUTPUT_DIRECTORY = Path("output/validation/full_finger_raw_evaluator")
@@ -19,8 +20,6 @@ _REPORT_PATH = _OUTPUT_DIRECTORY / "report.md"
 _SPHERE_DIAMETER_MM = 15.0
 _CONTACT_Y_MM = (0.0, 5.5, 22.0)
 _FORCE_TARGETS_N = (5.0, 10.0, 15.0, 20.0)
-_SETTLE_DURATION_S = 5.0
-_FORCE_TOLERANCE_FRACTION = 0.10
 
 
 def _six_tet_volumes(
@@ -153,10 +152,8 @@ def _reload_and_verify() -> dict[str, float | int]:
             raise RuntimeError("indentation is not increasing with target force")
         for force_index, target_force_n in enumerate(arrays["force_targets_n"]):
             actual_force_n = arrays["actual_forces_n"][scenario_index, force_index]
-            if abs(actual_force_n - target_force_n) > (
-                _FORCE_TOLERANCE_FRACTION * target_force_n
-            ):
-                raise RuntimeError("accepted force lies outside its tolerance band")
+            if actual_force_n < target_force_n:
+                raise RuntimeError("checkpoint force is below its trigger threshold")
 
             start, count = offsets[scenario_index, force_index]
             contact_slice = positions[start : start + count]
@@ -273,8 +270,8 @@ def main() -> None:
             (_SPHERE_DIAMETER_MM,),
             _CONTACT_Y_MM,
             force_targets_n=_FORCE_TARGETS_N,
-            settle_duration_s=_SETTLE_DURATION_S,
-            force_tolerance_fraction=_FORCE_TOLERANCE_FRACTION,
+            settle_duration_s=0.0,
+            loading_mode=FIRST_CROSSING_LOADING,
         )
     _save(evaluation)
     verification = _reload_and_verify()

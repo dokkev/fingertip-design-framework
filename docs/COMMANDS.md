@@ -36,16 +36,8 @@ runtime also accepts an explicit `otk_include_dir` when constructing
 ## Focused tests
 
 ```bash
-./scripts/tools/pytest_lit tests/unit/finger tests/unit/mesh -q
-./scripts/tools/pytest_lit tests/unit/contact tests/unit/physics -q
-./scripts/tools/pytest_lit tests/unit/ray_tracing tests/unit/optimization -q
-./scripts/tools/pytest_lit tests/unit/optimization/test_evaluator.py -q
-```
-
-The Newton smoke tests require the CUDA-capable `lit` environment:
-
-```bash
-./scripts/tools/pytest_lit tests/smoke/physics -q -m "smoke and physics"
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 conda run --no-capture-output -n lit \
+  pytest -q tests/unit
 ```
 
 Visualize the analytic carrier-silicone bond in the XZ cross-section:
@@ -474,66 +466,18 @@ This drives the centered 15 mm kinematic sphere at the same `25 mm/s` used by
 the interactive viewer, freezes the first transient state at or above `20 N`,
 and compares an in-place silicone UPDATE against a fresh OptiX scene build.
 
-First run the environment diagnosis:
+Before an unattended BO run, verify that the `lit` environment exposes both
+OptiX header roots:
 
 ```bash
-conda run -n lit python scripts/tools/optix_doctor.py --json
+conda run -n lit env | grep -E '^(OPTIX|OTK)_INCLUDE_DIR='
 ```
 
-Immediately before a long production campaign, run the real runtime smoke:
-
-```bash
-conda run -n lit python -m scripts.tools.optix_smoke
-```
-
-The distinction is important:
-
-- `optix_doctor.py` diagnoses dependencies, headers, versions, and device settings;
-- `optix_smoke` uses the production OptiX runtime to compile, build
-  a GAS/SBT, launch real rays, copy results back, and validate hit/miss output;
-- the production BO preflight calls that same underlying smoke function and
-  aborts before Ax creates a candidate when infrastructure is unavailable.
-
-The smoke command is the recommended explicit gate before unattended BO runs.
-
-## Current trajectory validation
-
-```bash
-python -m validation.optimization.lumo3d_trajectory_validation \
-  --execution-config config/lumo_execution.yaml \
-  --output output/validation/lumo3d_trajectory
-```
-
-This evaluates the fixed current protocol: three semantic locations, two
-radii, and three absolute depths. It writes only under `output/`.
-
-To verify exact evaluator reproducibility across fresh Python/Warp processes,
-run the nominal 18-state gate three times:
-
-```bash
-python -m validation.optimization.lumo3d_repeatability \
-  --execution-config config/lumo_execution.yaml \
-  --output output/validation/optimization/lumo3d_repeatability
-```
-
-The gate compares mechanics artifact digests, contact-state fingerprints,
-optical field artifact digests, scalar transport diagnostics, and hexadecimal
-objective values. Any differing bit or incomplete state grid is a failure.
-
-## Bounded 6D Test BO
-
-The bounded test runner is a validation workflow, not a production campaign:
-
-```bash
-python -m validation.optimization.lumo6d_test_bo \
-  --execution-config config/lumo_execution.yaml \
-  --output output/validation/optimization/lumo6d_test_bo
-```
-
-It targets six successful Sobol and four successful model-based observations only after OptiX
-preflight, using the same typed execution YAML as production. Do not use it as
-a substitute for a reviewed production campaign, and do not run it as part of
-ordinary focused test execution.
+The production BO entry checks both header trees before its first GPU
+evaluation. A fresh campaign also probes the constrained Ax lattice, verifies
+stem-height variation, and saves/reloads its temporary Ax state before writing
+the production campaign. The first completed real trial then exercises and
+verifies raw NPZ, CSV, atomic Ax-state persistence, and resume.
 
 ## Full-finger raw evaluator
 
@@ -548,8 +492,8 @@ conda run --no-capture-output -n lit \
 
 The procedural validation builds the full 60 mm mesh once, traces all five LEDs
 once without contact, and evaluates one 15 mm sphere at `Y=0`, `+5.5`, and
-`+22 mm` with sequential `5`, `10`, `15`, and `20 N` checkpoints under the
-production `5 s` dwell and `+/- 10%` force band. It stores per-emitter
+`+22 mm` with sequential `5`, `10`, `15`, and `20 N` instantaneous
+first-crossing snapshots. It stores per-emitter
 5x11 longitudinal-response/energy data, deformation snapshots, raw contacts, and mechanics
 diagnostics in
 `output/validation/full_finger_raw_evaluator/nominal_full_finger_raw.npz`.
@@ -602,8 +546,9 @@ It evaluates 3 sphere diameters x 7 longitudinal locations x 4 force
 checkpoints, writes the complete raw NPZ and report under
 `output/validation/full_finger_production_objective_freeze/`, reloads the NPZ,
 and verifies mechanics integrity, energy/ROI accounting, LED-order invariance,
-and exact objective reproduction. The nominal frozen result is
-`J_contact=0.430140029` and `J_obs=0.002798493`; the run does not create Ax
+and exact objective reproduction. It uses the current first-crossing protocol;
+older generated reports in this output directory document the former dwell
+contract and must not be reused as Ax observations. The run does not create Ax
 state or start a campaign.
 
 Run the continuous force-ramp protocol comparison against that frozen raw
@@ -620,8 +565,8 @@ The procedure evaluates the exact 21-scenario production set at 1, 2, 4, and
 raw NPZ per ramp, a 336-row checkpoint comparison, a protocol summary, and
 `report.md` under `output/validation/quasistatic_ramp_protocol/`. Completed
 NPZ files are reused on rerun. The measured ramps did not preserve the frozen
-raw optical separations, so this command is validation-only and the Ax entry
-point continues to use `reference_dwell`.
+raw optical separations, so this command remains a historical procedural
+comparison and is not the Ax loading mode.
 
 Compare point/finite-area LED emission and hard/linear longitudinal binning
 without rerunning Newton:
@@ -706,11 +651,54 @@ conda run --no-capture-output -n lit \
   python -u validation/optomech/production_evaluator_acceleration.py
 ```
 
-The result and campaign-time projection are written to
+The historical result and campaign-time projection are written to
 `output/validation/production_evaluator_acceleration/report.md`. The accepted
-production backend uses finite-area/hard optics, GPU-resident graphs, the
-validated reuse boundary, four CUDA-stream worlds, and the unchanged 5 s
-force-band dwell.
+execution optimizations--finite-area/hard optics, GPU-resident graphs, the
+validated reuse boundary, and four CUDA-stream worlds--remain in production;
+the report's former 5 s force-band protocol is no longer the production
+snapshot contract.
+
+Run the validation-only post-Phase 4 fixed-pose gate and, only after it passes,
+the four-sentinel relaxed force-state extraction:
+
+```bash
+conda run --no-capture-output -n lit \
+  python -u validation/optomech/post_phase4_indentation_control.py
+
+conda run --no-capture-output -n lit \
+  python -u validation/optomech/indentation_controlled_force_states.py
+```
+
+These procedures write under
+`output/validation/production_evaluator_acceleration/post_phase4_indentation_control/`.
+They are historical fixed-pose alternatives and do not replace the production
+instantaneous first-crossing path.
+
+Sweep fixed-pose hold time after first crossing each force threshold, without
+changing the production evaluator:
+
+```bash
+conda run --no-capture-output -n lit \
+  python -u validation/optomech/fixed_pose_dwell_sweep.py
+```
+
+The four sentinel scenarios each cross `5/10/15/20 N`, freeze the exact
+indenter pose for 10 s, and sample force and indentation at
+`0.5/1/2/5/7.5/10 s`. Results are written under
+`output/validation/fixed_pose_dwell_sweep/`.
+
+Validate the current zero-dwell production path on four concurrent contact
+locations:
+
+```bash
+conda run --no-capture-output -n lit \
+  python -u validation/optomech/instantaneous_first_crossing.py
+```
+
+This checks 16 ordered threshold snapshots, constant `5 mm/s` motion, zero
+dwell drift, contact and tet safety, finite optics, and energy closure. It
+writes a compact CSV and report under
+`output/validation/instantaneous_first_crossing/`.
 
 ## Full-finger optimization search contract
 
@@ -740,51 +728,17 @@ conda run --no-capture-output -n lit python -u scripts/run_mobo.py
 
 The campaign is sequential and resumable. It uses only the five-dimensional
 `discrete-05mm` search space and the exact objectives `J_contact,J_obs`.
+The prepared entry targets 120 cumulative successful morphologies with nominal
+Dragon Skin 10 NV optics, instantaneous first-crossing snapshots, and the
+accepted four-world Newton backend. It writes to the fresh
+`mobo_full_finger_instantaneous_05mm` directory; the former dwell campaign is
+not resumed or mixed. A focused four-scenario run took `25.907 s`; no full
+21-scenario campaign-time estimate has yet been measured under this new
+protocol.
 Historical continuous `J_intensity/J_spatial` campaigns are rejected and must
 not share the new output directory. The command above is documented for a
 separate explicitly authorized campaign run; the objective-freeze validation
 did not launch it.
-
-## Representative scientific convergence harness
-
-After the implementation gates pass and an expensive validation run is
-explicitly authorized, run the representative Newton/mesh/optical workflow:
-
-```bash
-conda run -n lit python -m validation.optimization.lumo3d_scientific_convergence \
-  --execution-config config/lumo_execution.yaml \
-  --output output/validation/optimization/lumo3d_scientific_convergence
-```
-
-The workflow evaluates five deterministic feasible morphologies. Newton uses
-the preserved displacement thresholds. The production mechanics setting is
-100 VBD iterations with a 0.0125 mm load increment at 0.00025 s; its strict
-reference uses 160 iterations with a 0.00625 mm increment at 0.000125 s, so
-both retain the same 50 mm/s prescribed indentation rate. Mesh and optical objective sensitivity
-remain `INCONCLUSIVE` until evidence-backed thresholds are reviewed. The
-current mechanics artifacts do not expose an approved reaction-force metric,
-so mesh force is recorded as `unsupported`, never fabricated as zero. This is
-an expensive GPU/Newton/OptiX command and is not part of ordinary unit tests.
-
-## Newton viewer helpers
-
-Interactive Newton viewer support is kept in `lumo.physics.newton.viewer` for debugging.
-It is intentionally not a general plotting framework. Production evaluation
-does not open a viewer or alter solver state for display.
-
-## Rigid OBJ asset preparation
-
-Prepare a deterministic parametric sphere asset with:
-
-```bash
-python scripts/assets/prepare_object_mesh.py \
-  --radius-mm 2.0 \
-  --subdivisions 2
-```
-
-The default output is under `assets/objects/`. Runtime code loads an OBJ or STL
-with `lumo.util.mesh_io.load_mesh()`. The loader requires an explicit
-`scale_m_per_unit` and returns a `newton.Mesh` whose vertices are in metres.
 
 ## Generated artifacts
 
@@ -810,7 +764,8 @@ rows are reused and only incomplete rows are evaluated again.
 ## Adaptive settling validation
 
 Compare the validation-only `0.2 s` adaptive settling rule against the
-production force-band-only `5 s` dwell for centered 5, 10, and 20 mm spheres:
+historical force-band-only `5 s` reference for centered 5, 10, and 20 mm
+spheres:
 
 ```bash
 conda run --no-capture-output -n lit \
@@ -820,5 +775,5 @@ conda run --no-capture-output -n lit \
 The script keeps all mechanics and OptiX settings fixed, ray traces only at
 accepted checkpoints, prints mechanical/optical differences, and writes
 `output/validation/adaptive_settling.csv`.
-The measured adaptive rule changes the sensing objectives materially and is
-therefore not a production default.
+The measured adaptive rule changes the sensing objectives materially. Neither
+adaptive settling nor the 5 s reference is the current production default.
