@@ -22,12 +22,11 @@ def make_design_space() -> DesignSpace:
     parameter_bounds = DesignParameterBounds(
         parameters=FingertipParameters(),
         geometry={
-            "flat_pad_width_mm": ParameterBound(25.0, 35.0),
-            "flat_pad_height_mm": ParameterBound(3.0, 8.0),
-            "semiellipse_height_mm": ParameterBound(6.0, 20.0),
-            "stem_width_mm": ParameterBound(7.0, 10.0),
-            "void_width_mm": ParameterBound(0.0, 3.0),
-            "void_height_mm": ParameterBound(0.0, 3.0),
+            "flat_pad_height_mm": ParameterBound(2.0, 19.0),
+            "semiellipse_height_mm": ParameterBound(1.0, 18.0),
+            "stem_width_mm": ParameterBound(6.0, 10.0),
+            "stem_height_mm": ParameterBound(4.0, 10.0),
+            "void_width_mm": ParameterBound(0.0, 4.0),
         },
     )
 
@@ -39,7 +38,7 @@ def make_design_space() -> DesignSpace:
                     "geometry.flat_pad_height_mm": 1.0,
                     "geometry.semiellipse_height_mm": 1.0,
                 },
-                upper=30.0,
+                upper=20.0,
             ),
         ),
         minimum_silicone_thickness_mm=5.0,
@@ -176,7 +175,6 @@ def main() -> None:
     target_meshes = 50
     max_attempts = 10_000
 
-    extrusion_depth_mm = 11.0
     element_size_mm = 1.0
 
     vertex_counts: list[int] = []
@@ -205,7 +203,6 @@ def main() -> None:
         try:
             mesh = make_fingertip_mesh(
                 fingertip,
-                extrusion_depth_mm=extrusion_depth_mm,
                 element_size_mm=element_size_mm,
             )
         except Exception as exc:

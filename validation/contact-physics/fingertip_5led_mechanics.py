@@ -13,16 +13,15 @@ import newton
 import numpy as np
 import warp as wp
 
-from lumo.fingertip import Fingertip, FingertipParameters
-from lumo.mesh import (
-    LED_PITCH_MM,
+from lumo.fingertip import (
+    ACTIVE_Y_BOUNDS_MM,
     LED_RECESS_DEPTH_MM,
     LED_RECESS_WIDTH_MM,
-    MAIN_Y_BOUNDS_MM,
     TOTAL_Y_BOUNDS_MM,
-    make_fingertip_5led_mesh,
-    make_fingertip_mesh,
+    Fingertip,
+    FingertipParameters,
 )
+from lumo.mesh import make_fingertip_mesh
 from lumo.newton import Indenter
 from lumo.simulation import DesignStudy, DesignTrial, LumoSimulation
 
@@ -131,7 +130,7 @@ def _verify_geometry(fingertip_mesh) -> dict[str, float | int | list[float]]:
         atol=1.0e-12,
     ):
         raise RuntimeError("LED centers do not match the five-position contract")
-    if not np.allclose(np.diff(led_y_mm), LED_PITCH_MM, rtol=0.0, atol=1.0e-12):
+    if not np.allclose(np.diff(led_y_mm), 11.0, rtol=0.0, atol=1.0e-12):
         raise RuntimeError("LED centers do not use an exact 11 mm pitch")
     led_gap_mm = led_z_mm - fingertip_mesh.fingertip.silicone.cavity_bottom_z_mm
     if not np.allclose(
@@ -177,15 +176,15 @@ def _verify_geometry(fingertip_mesh) -> dict[str, float | int | list[float]]:
         & (centroids_mm[:, 2] < -0.25)
     )
     active_void_tets = inside_cutout_x & inside_cutout_z & (
-        (centroids_mm[:, 1] > MAIN_Y_BOUNDS_MM[0] + 1.0)
-        & (centroids_mm[:, 1] < MAIN_Y_BOUNDS_MM[1] - 1.0)
+        (centroids_mm[:, 1] > ACTIVE_Y_BOUNDS_MM[0] + 1.0)
+        & (centroids_mm[:, 1] < ACTIVE_Y_BOUNDS_MM[1] - 1.0)
     )
     distal_fill_tets = inside_cutout_x & inside_cutout_z & (
-        centroids_mm[:, 1] > MAIN_Y_BOUNDS_MM[1] + 0.5
+        centroids_mm[:, 1] > ACTIVE_Y_BOUNDS_MM[1] + 0.5
     )
     distal_upper_fill_tets = (
         (np.abs(centroids_mm[:, 0]) < 2.0)
-        & (centroids_mm[:, 1] > MAIN_Y_BOUNDS_MM[1] + 0.5)
+        & (centroids_mm[:, 1] > ACTIVE_Y_BOUNDS_MM[1] + 0.5)
         & (centroids_mm[:, 2] > 0.5)
         & (
             centroids_mm[:, 2]
@@ -1030,7 +1029,6 @@ def _write_report(
     initialization_time_s: float,
     results: list[dict[str, object]],
     failures: list[dict[str, str | float]],
-    single_section: dict[str, object] | None,
 ) -> None:
     by_name = {str(result["name"]): result for result in results}
     lines = [
@@ -1040,7 +1038,7 @@ def _write_report(
         "",
         f"- morphology: hand-designed nominal, full height "
         f"{geometry['full_height_mm']:.3f} mm",
-        f"- main section: `Y=[{MAIN_Y_BOUNDS_MM[0]}, {MAIN_Y_BOUNDS_MM[1]}] mm`",
+        f"- active section: `Y=[{ACTIVE_Y_BOUNDS_MM[0]}, {ACTIVE_Y_BOUNDS_MM[1]}] mm`",
         f"- total silicone: `Y=[{TOTAL_Y_BOUNDS_MM[0]}, {TOTAL_Y_BOUNDS_MM[1]}] mm`",
         f"- LED centers: `{geometry['led_centers_y_mm']} mm`",
         f"- Newton: {_SIM_FREQUENCY_HZ:g} Hz, {_VBD_ITERATIONS} VBD iterations",
@@ -1150,11 +1148,6 @@ def _write_report(
         distal_indent_change = (
             distal["indentation_m"] / center["indentation_m"] - 1.0
         )
-        runtime_multiplier = None
-        if single_section is not None:
-            runtime_multiplier = (
-                center["wall_runtime_s"] / single_section["wall_runtime_s"]
-            )
         secondary_force_n = _FORCE_TARGETS_N[-1]
         secondary_names = {
             name: f"{name}_{secondary_force_n:g}n"
@@ -1205,23 +1198,8 @@ def _write_report(
                 f"versus {center['local_stiffness_n_mm']:.3f} N/mm at center. "
                 f"Its one-sided 10% influence span is {distal['influence_10_span_mm']:.1f} mm.",
                 f"5. {nonlinear_summary}",
-                (
-                    "6. Single-section comparison was not run."
-                    if single_section is None
-                    else f"6. Single-section center indentation was "
-                    f"{1.0e3 * single_section['indentation_m']:.4f} mm versus "
-                    f"{1.0e3 * center['indentation_m']:.4f} mm for the full finger; "
-                    f"peak displacement was "
-                    f"{1.0e3 * single_section['maximum_nodal_displacement_m']:.4f} mm "
-                    f"versus {1.0e3 * center['maximum_nodal_displacement_m']:.4f} mm."
-                ),
-                (
-                    "7. A full/single runtime multiplier is unavailable."
-                    if runtime_multiplier is None
-                    else f"7. Approximate full/single center runtime multiplier: "
-                    f"{runtime_multiplier:.2f}×. Full-finger contact cases consumed "
-                    f"{full_runtime_s:.1f} s total wall time."
-                ),
+                f"6. Full-finger contact cases consumed "
+                f"{full_runtime_s:.1f} s total wall time.",
             )
         )
         mechanically_valid = all(
@@ -1231,14 +1209,14 @@ def _write_report(
             for result in results
         )
         lines.append(
-            "8. No inversion/contact-buffer issue was observed."
+            "7. No inversion/contact-buffer issue was observed."
             if mechanically_valid
-            else "8. At least one inversion or contact-buffer issue remains; see `cases.csv`."
+            else "7. At least one inversion or contact-buffer issue remains; see `cases.csv`."
         )
         lines.append(
-            "9. The full geometry is ready for optical validation."
+            "8. The full geometry is ready for optical validation."
             if mechanically_valid and not failures
-            else "9. The full geometry is not yet cleared for optical validation."
+            else "8. The full geometry is not yet cleared for optical validation."
         )
     else:
         lines.append(
@@ -1274,7 +1252,7 @@ def main() -> None:
         raise RuntimeError("nominal fingertip violates the 30 mm height contract")
 
     mesh_start_s = perf_counter()
-    fingertip_mesh = make_fingertip_5led_mesh(
+    fingertip_mesh = make_fingertip_mesh(
         fingertip,
         element_size_mm=_ELEMENT_SIZE_MM,
     )
@@ -1314,7 +1292,6 @@ def main() -> None:
     )
     results: list[dict[str, object]] = []
     failures: list[dict[str, str | float]] = []
-    single_section: dict[str, object] | None = None
     with as_file(sphere_resource) as sphere_path:
         initialization_time_s = _measure_initialization(
             fingertip,
@@ -1344,28 +1321,6 @@ def main() -> None:
                     failures.append(failure)
                     print(f"FAILED {name}: {failure['error']}", flush=True)
 
-        if not failures:
-            single_mesh = make_fingertip_mesh(
-                fingertip,
-                extrusion_depth_mm=11.0,
-                element_size_mm=_ELEMENT_SIZE_MM,
-            )
-            try:
-                single_section = _run_case(
-                    fingertip,
-                    single_mesh,
-                    sphere_path,
-                    name="single_section_center_10n",
-                    contact_y_mm=0.0,
-                    target_force_n=_FORCE_TARGETS_N[0],
-                )
-            except Exception as exc:
-                print(
-                    "single-section comparison skipped after failure: "
-                    f"{type(exc).__name__}: {exc}",
-                    flush=True,
-                )
-
     _write_tables(results, failures)
     for target_force_n in _FORCE_TARGETS_N:
         force_results = [
@@ -1380,14 +1335,9 @@ def main() -> None:
         ]
         if force_results:
             _plot_profiles(force_results, target_force_n=target_force_n)
-    full_results = [
-        result
-        for result in results
-        if not str(result["name"]).startswith("single_section_center")
-    ]
     primary_results = [
         result
-        for result in full_results
+        for result in results
         if np.isclose(
             result["target_force_n"],
             _FORCE_TARGETS_N[0],
@@ -1407,9 +1357,8 @@ def main() -> None:
         geometry,
         mesh_build_time_s,
         initialization_time_s,
-        full_results,
+        results,
         failures,
-        single_section,
     )
 
     print(f"report: {_REPORT_PATH}", flush=True)

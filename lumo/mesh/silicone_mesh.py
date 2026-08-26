@@ -109,94 +109,18 @@ def _make_silicone_mesh(
     silicone: Silicone,
     bonding_interface: BondingInterface,
     *,
-    extrusion_depth_mm: float = 11.0,
-    element_size_mm: float = 1.0,
-) -> tuple["newton.TetMesh", np.ndarray]:
-    """Extrude silicone geometry and preserve its bonded vertex indices."""
-    if not isinstance(silicone, Silicone):
-        raise TypeError("silicone must be a Silicone geometry")
-    if not isinstance(bonding_interface, BondingInterface):
-        raise TypeError("bonding_interface must be a BondingInterface")
-
-    try:
-        import gmsh
-        import newton
-    except ImportError as exc:
-        raise RuntimeError(
-            "silicone meshing requires gmsh and newton"
-        ) from exc
-
-    gmsh.initialize()
-
-    try:
-        gmsh.option.setNumber("General.Terminal", 0)
-        gmsh.model.add("lumo_silicone")
-
-        surface_tag = _build_cross_section(
-            gmsh,
-            silicone,
-            z_mm=-0.5 * extrusion_depth_mm,
-        )
-
-        extrusion = gmsh.model.occ.extrude(
-            [(2, surface_tag)],
-            0.0,
-            0.0,
-            extrusion_depth_mm,
-        )
-
-        gmsh.model.occ.synchronize()
-
-        volume_tags = [
-            tag
-            for dimension, tag in extrusion
-            if dimension == 3
-        ]
-
-        if len(volume_tags) != 1:
-            raise RuntimeError(
-                "silicone extrusion must create exactly one volume"
-            )
-
-        vertices_mm, tetrahedra, bonded_vertex_indices = _mesh_volume(
-            gmsh,
-            volume_tags[0],
-            bonding_interface,
-            element_size_mm=element_size_mm,
-        )
-
-    finally:
-        gmsh.finalize()
-
-    # Silicone/Gmsh geometry is expressed in mm.
-    # Newton TetMesh uses SI units.
-    vertices_m = vertices_mm * _MM_TO_M
-
-    return (
-        newton.TetMesh(
-            vertices=vertices_m,
-            tet_indices=tetrahedra.reshape(-1),
-        ),
-        bonded_vertex_indices,
-    )
-
-
-def _make_silicone_5led_mesh(
-    silicone: Silicone,
-    bonding_interface: BondingInterface,
-    *,
-    main_y_bounds_mm: tuple[float, float],
+    active_y_bounds_mm: tuple[float, float],
     distal_end_cap_length_mm: float,
     element_size_mm: float = 1.0,
 ) -> tuple["newton.TetMesh", np.ndarray]:
-    """Mesh one continuous 55 mm active body plus a solid distal end-cap."""
+    """Mesh the active body and solid distal end-cap as one volume."""
     if not isinstance(silicone, Silicone):
         raise TypeError("silicone must be a Silicone geometry")
     if not isinstance(bonding_interface, BondingInterface):
         raise TypeError("bonding_interface must be a BondingInterface")
-    lower_y_mm, upper_y_mm = main_y_bounds_mm
+    lower_y_mm, upper_y_mm = active_y_bounds_mm
     if not lower_y_mm < upper_y_mm:
-        raise ValueError("main_y_bounds_mm must be strictly increasing")
+        raise ValueError("active_y_bounds_mm must be strictly increasing")
     if distal_end_cap_length_mm <= 0.0:
         raise ValueError("distal_end_cap_length_mm must be positive")
 
@@ -208,33 +132,33 @@ def _make_silicone_5led_mesh(
             "silicone meshing requires gmsh and newton"
         ) from exc
 
-    # Gmsh extrusion Z maps to negative LUMO Y. The main section therefore
+    # Gmsh extrusion Z maps to negative LUMO Y. The active section therefore
     # starts at its distal +Y face and extrudes toward the proximal -Y face;
     # the solid closure extrudes in the opposite direction from that interface.
     distal_gmsh_z_mm = -upper_y_mm
-    main_depth_mm = upper_y_mm - lower_y_mm
+    active_depth_mm = upper_y_mm - lower_y_mm
 
     gmsh.initialize()
     try:
         gmsh.option.setNumber("General.Terminal", 0)
-        gmsh.model.add("lumo_silicone_5led")
+        gmsh.model.add("lumo_silicone")
 
-        main_surface = _build_cross_section(
+        active_surface = _build_cross_section(
             gmsh,
             silicone,
             z_mm=distal_gmsh_z_mm,
         )
-        main_extrusion = gmsh.model.occ.extrude(
-            [(2, main_surface)],
+        active_extrusion = gmsh.model.occ.extrude(
+            [(2, active_surface)],
             0.0,
             0.0,
-            main_depth_mm,
+            active_depth_mm,
         )
-        main_volumes = [
-            tag for dimension, tag in main_extrusion if dimension == 3
+        active_volumes = [
+            tag for dimension, tag in active_extrusion if dimension == 3
         ]
-        if len(main_volumes) != 1:
-            raise RuntimeError("5-LED main silicone must create one volume")
+        if len(active_volumes) != 1:
+            raise RuntimeError("active silicone must create one volume")
 
         end_cap_surface = _build_solid_end_cap_cross_section(
             gmsh,
@@ -251,10 +175,10 @@ def _make_silicone_5led_mesh(
             tag for dimension, tag in end_cap_extrusion if dimension == 3
         ]
         if len(end_cap_volumes) != 1:
-            raise RuntimeError("5-LED distal end-cap must create one volume")
+            raise RuntimeError("distal silicone end-cap must create one volume")
 
         fused, _ = gmsh.model.occ.fuse(
-            [(3, main_volumes[0])],
+            [(3, active_volumes[0])],
             [(3, end_cap_volumes[0])],
         )
         gmsh.model.occ.removeAllDuplicates()
@@ -262,7 +186,7 @@ def _make_silicone_5led_mesh(
         volume_tags = [tag for dimension, tag in fused if dimension == 3]
         if len(volume_tags) != 1:
             raise RuntimeError(
-                "5-LED silicone main section and end-cap must fuse into one volume"
+                "active silicone and distal end-cap must fuse into one volume"
             )
 
         vertices_mm, tetrahedra, bonded_vertex_indices = _mesh_volume(
@@ -270,7 +194,7 @@ def _make_silicone_5led_mesh(
             volume_tags[0],
             bonding_interface,
             element_size_mm=element_size_mm,
-            bonded_y_bounds_mm=main_y_bounds_mm,
+            bonded_y_bounds_mm=active_y_bounds_mm,
         )
         dorsal_bond_indices = np.flatnonzero(
             (
@@ -290,7 +214,7 @@ def _make_silicone_5led_mesh(
         )
         if dorsal_bond_indices.size == 0:
             raise RuntimeError(
-                "5-LED distal end-cap contains no dorsal bond vertices"
+                "distal end-cap contains no dorsal bond vertices"
             )
         bonded_vertex_indices = np.unique(
             np.concatenate((bonded_vertex_indices, dorsal_bond_indices))

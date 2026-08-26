@@ -866,11 +866,11 @@ def _git_output(repository_root: Path, arguments: list[str]) -> str:
 
 def _run_config(campaign: CampaignDefinition) -> dict[str, object]:
     from . import evaluator
-    from lumo.mesh import (
+    from lumo.fingertip import (
+        ACTIVE_Y_BOUNDS_MM,
+        LED_CENTERS_Y_MM,
         LED_RECESS_DEPTH_MM,
         LED_RECESS_WIDTH_MM,
-        MAIN_Y_BOUNDS_MM,
-        led_centers_y_mm,
     )
     from lumo.ray_tracing import LONGITUDINAL_SIDE_BIN_COUNT
 
@@ -1009,19 +1009,19 @@ def _run_config(campaign: CampaignDefinition) -> dict[str, object]:
                 ],
                 "carrier_albedo": evaluator._CARRIER_ALBEDO,
                 "source_medium": "resolved per geometry from LED air-gap boundary",
-                "led_centers_y_mm": list(led_centers_y_mm()),
-                "led_count": len(led_centers_y_mm()),
+                "led_centers_y_mm": list(LED_CENTERS_Y_MM),
+                "led_count": len(LED_CENTERS_Y_MM),
                 "led_recess_width_mm": LED_RECESS_WIDTH_MM,
                 "led_recess_depth_mm": LED_RECESS_DEPTH_MM,
                 "observation_view_direction": "+X",
                 "longitudinal_coordinate": "Y",
-                "spatial_roi_y_mm": list(MAIN_Y_BOUNDS_MM),
+                "spatial_roi_y_mm": list(ACTIVE_Y_BOUNDS_MM),
                 "spatial_bin_count": LONGITUDINAL_SIDE_BIN_COUNT,
                 "spatial_bin_width_mm": (
-                    (MAIN_Y_BOUNDS_MM[1] - MAIN_Y_BOUNDS_MM[0])
+                    (ACTIVE_Y_BOUNDS_MM[1] - ACTIVE_Y_BOUNDS_MM[0])
                     / LONGITUDINAL_SIDE_BIN_COUNT
                 ),
-                "simultaneous_emitted_power": float(len(led_centers_y_mm())),
+                "simultaneous_emitted_power": float(len(LED_CENTERS_Y_MM)),
             },
             "design_space": {
                 **design_space_contract,

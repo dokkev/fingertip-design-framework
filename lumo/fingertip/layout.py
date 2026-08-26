@@ -1,0 +1,21 @@
+"""Fixed longitudinal hardware layout of the current LUMO fingertip."""
+
+LED_CENTERS_Y_MM = (-22.0, -11.0, 0.0, 11.0, 22.0)
+ACTIVE_Y_BOUNDS_MM = (-27.5, 27.5)
+DISTAL_END_CAP_LENGTH_MM = 5.0
+TOTAL_Y_BOUNDS_MM = (
+    ACTIVE_Y_BOUNDS_MM[0],
+    ACTIVE_Y_BOUNDS_MM[1] + DISTAL_END_CAP_LENGTH_MM,
+)
+LED_RECESS_WIDTH_MM = 5.1
+LED_RECESS_DEPTH_MM = 0.19
+
+
+__all__ = [
+    "ACTIVE_Y_BOUNDS_MM",
+    "DISTAL_END_CAP_LENGTH_MM",
+    "LED_CENTERS_Y_MM",
+    "LED_RECESS_DEPTH_MM",
+    "LED_RECESS_WIDTH_MM",
+    "TOTAL_Y_BOUNDS_MM",
+]

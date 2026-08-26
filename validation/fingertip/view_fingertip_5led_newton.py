@@ -8,7 +8,7 @@ import numpy as np
 import warp as wp
 
 from lumo.fingertip import Fingertip
-from lumo.mesh import make_fingertip_5led_mesh
+from lumo.mesh import make_fingertip_mesh
 from lumo.newton import FingertipNewtonModel, build_fingertip_newton_model
 from lumo.util.viewer_util import make_reference_lines
 
@@ -19,7 +19,7 @@ _LED_COLOR = wp.vec3(0.15, 0.95, 0.25)
 
 
 def main() -> None:
-    fingertip_mesh = make_fingertip_5led_mesh(
+    fingertip_mesh = make_fingertip_mesh(
         Fingertip(),
         element_size_mm=1.0,
     )

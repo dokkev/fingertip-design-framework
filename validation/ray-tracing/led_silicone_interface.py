@@ -10,12 +10,15 @@ from time import perf_counter
 import matplotlib
 import numpy as np
 
-from lumo.fingertip import Fingertip, FingertipParameters
-from lumo.mesh import (
+from lumo.fingertip import (
     LED_RECESS_DEPTH_MM,
     LED_RECESS_WIDTH_MM,
-    Fingertip5LEDMesh,
-    make_fingertip_5led_mesh,
+    Fingertip,
+    FingertipParameters,
+)
+from lumo.mesh import (
+    FingertipMesh,
+    make_fingertip_mesh,
 )
 from lumo.ray_tracing import (
     LED,
@@ -91,7 +94,7 @@ _ENERGY_FIELDS = (
 
 def _load_geometry() -> tuple[
     Fingertip,
-    Fingertip5LEDMesh,
+    FingertipMesh,
     np.ndarray,
     dict[str, np.ndarray],
 ]:
@@ -100,7 +103,7 @@ def _load_geometry() -> tuple[
         raise FileNotFoundError(reference_path)
 
     fingertip = Fingertip(FingertipParameters())
-    mesh = make_fingertip_5led_mesh(fingertip, element_size_mm=1.0)
+    mesh = make_fingertip_mesh(fingertip, element_size_mm=1.0)
     with np.load(reference_path) as saved:
         reference_vertices = np.asarray(
             saved["silicone_vertices_m"],
@@ -149,7 +152,7 @@ def _load_geometry() -> tuple[
 
 def _make_leds(
     fingertip: Fingertip,
-    mesh: Fingertip5LEDMesh,
+    mesh: FingertipMesh,
 ) -> tuple[LED, ...]:
     return tuple(
         LED(

@@ -8,7 +8,7 @@ from time import perf_counter
 import numpy as np
 
 from lumo.fingertip import Fingertip, FingertipParameters
-from lumo.mesh import make_fingertip_5led_mesh
+from lumo.mesh import make_fingertip_mesh
 from lumo.optimization.evaluator import (
     _CARRIER_INSTANCE_ID,
     _CARRIER_MASK,
@@ -50,7 +50,7 @@ def main() -> None:
         reference = {name: saved[name] for name in saved.files}
 
     fingertip = Fingertip(FingertipParameters())
-    mesh = make_fingertip_5led_mesh(fingertip)
+    mesh = make_fingertip_mesh(fingertip)
     if not np.allclose(
         mesh.silicone.vertices,
         reference["reference_vertices_m"],

@@ -14,7 +14,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from lumo.fingertip import Fingertip, FingertipParameters
-from lumo.mesh import make_fingertip_5led_mesh
+from lumo.mesh import make_fingertip_mesh
 from lumo.optimization.objective import compute_observation_objective
 from lumo.ray_tracing import (
     LED,
@@ -656,7 +656,7 @@ def main() -> None:
         _validate_saved_contract(candidate, reference)
 
     fingertip = Fingertip(FingertipParameters())
-    mesh = make_fingertip_5led_mesh(fingertip)
+    mesh = make_fingertip_mesh(fingertip)
     if not np.allclose(
         mesh.silicone.vertices,
         reference["reference_vertices_m"],

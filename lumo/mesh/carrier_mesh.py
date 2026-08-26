@@ -26,145 +26,16 @@ def _signed_area(points: tuple[tuple[float, float], ...]) -> float:
     )
 
 
-def _extrude_closed_polygon(
-    boundary: tuple[tuple[float, float], ...],
-    *,
-    extrusion_depth_mm: float,
-    compute_inertia: bool,
-) -> "newton.Mesh":
-    """Extrude one counter-clockwise XZ polygon along Y."""
-    if _signed_area(boundary) <= 0.0:
-        raise ValueError("extrusion boundary must be counter-clockwise")
-
-    polygon = Polygon(boundary)
-    if polygon.is_empty or not polygon.is_valid:
-        raise ValueError("extrusion boundary must define a valid polygon")
-
-    cap_triangles = tuple(
-        triangle
-        for triangle in triangulate(polygon)
-        if polygon.covers(triangle)
-    )
-    covered_area = sum(triangle.area for triangle in cap_triangles)
-    if not cap_triangles or not isclose(
-        covered_area,
-        polygon.area,
-        rel_tol=1.0e-9,
-        abs_tol=1.0e-10,
-    ):
-        raise ValueError(
-            "cap triangulation does not cover the extrusion boundary"
-        )
-
-    half_depth_mm = 0.5 * extrusion_depth_mm
-    vertices_mm: list[tuple[float, float, float]] = []
-    faces: list[tuple[int, int, int]] = []
-    vertex_indices: dict[tuple[float, float, float], int] = {}
-
-    def vertex_index(x_mm: float, y_mm: float, z_mm: float) -> int:
-        key = (
-            round(float(x_mm), 12),
-            round(float(y_mm), 12),
-            round(float(z_mm), 12),
-        )
-        if key not in vertex_indices:
-            vertex_indices[key] = len(vertices_mm)
-            vertices_mm.append(key)
-        return vertex_indices[key]
-
-    bottom = [
-        vertex_index(x_mm, -half_depth_mm, z_mm)
-        for x_mm, z_mm in boundary
-    ]
-    top = [
-        vertex_index(x_mm, half_depth_mm, z_mm)
-        for x_mm, z_mm in boundary
-    ]
-
-    for index, next_index in enumerate(range(1, len(boundary) + 1)):
-        next_index %= len(boundary)
-        faces.extend(
-            (
-                (bottom[index], top[index], top[next_index]),
-                (bottom[index], top[next_index], bottom[next_index]),
-            )
-        )
-
-    for triangle in cap_triangles:
-        coordinates = tuple(
-            (float(x_mm), float(z_mm))
-            for x_mm, z_mm, *_ in triangle.exterior.coords[:-1]
-        )
-        if len(coordinates) != 3:
-            raise ValueError("cap triangulation produced a non-triangle")
-        if _signed_area(coordinates) < 0.0:
-            coordinates = (
-                coordinates[0],
-                coordinates[2],
-                coordinates[1],
-            )
-
-        bottom_triangle = tuple(
-            vertex_index(x_mm, -half_depth_mm, z_mm)
-            for x_mm, z_mm in coordinates
-        )
-        top_triangle = tuple(
-            vertex_index(x_mm, half_depth_mm, z_mm)
-            for x_mm, z_mm in coordinates
-        )
-        faces.extend(
-            (
-                bottom_triangle,
-                (top_triangle[0], top_triangle[2], top_triangle[1]),
-            )
-        )
-
-    vertices_m = np.asarray(vertices_mm, dtype=np.float32) * _MM_TO_M
-    indices = np.asarray(faces, dtype=np.int32).reshape(-1)
-
-    try:
-        import newton
-    except ImportError as exc:
-        raise RuntimeError("carrier meshing requires newton") from exc
-
-    return newton.Mesh(
-        vertices=vertices_m,
-        indices=indices,
-        compute_inertia=compute_inertia,
-        is_solid=True,
-    )
-
-
 def _make_carrier_mesh(
     carrier: Carrier,
     *,
-    extrusion_depth_mm: float = 11.0,
-) -> "newton.Mesh":
-    """Extrude analytic carrier geometry into a Newton surface mesh."""
-    if not isinstance(carrier, Carrier):
-        raise TypeError("carrier must be a Carrier geometry")
-
-    boundary = tuple(
-        (float(x_mm), float(z_mm))
-        for x_mm, z_mm in carrier.cross_section
-    )
-    return _extrude_closed_polygon(
-        boundary,
-        extrusion_depth_mm=extrusion_depth_mm,
-        compute_inertia=True,
-    )
-
-
-def _make_carrier_5led_mesh(
-    carrier: Carrier,
-    *,
-    main_length_mm: float,
+    active_length_mm: float,
     distal_end_cap_length_mm: float,
     led_centers_y_mm: tuple[float, ...],
     led_recess_width_mm: float,
     led_recess_depth_mm: float,
 ) -> "newton.Mesh":
-    """Build the recessed main rail and distal dorsal reinforcement."""
+    """Build the recessed active rail and distal dorsal reinforcement."""
     if not isinstance(carrier, Carrier):
         raise TypeError("carrier must be a Carrier geometry")
 
@@ -195,7 +66,7 @@ def _make_carrier_5led_mesh(
 
     return _extrude_recessed_rail(
         boundary,
-        main_length_mm=main_length_mm,
+        active_length_mm=active_length_mm,
         led_centers_y_mm=led_centers_y_mm,
         led_recess_width_mm=led_recess_width_mm,
         led_recess_depth_mm=led_recess_depth_mm,
@@ -207,7 +78,7 @@ def _make_carrier_5led_mesh(
 def _extrude_recessed_rail(
     boundary: tuple[tuple[float, float], ...],
     *,
-    main_length_mm: float,
+    active_length_mm: float,
     led_centers_y_mm: tuple[float, ...],
     led_recess_width_mm: float,
     led_recess_depth_mm: float,
@@ -217,8 +88,8 @@ def _extrude_recessed_rail(
     """Extrude one rail with a shallow bottom recess at every LED station."""
     if _signed_area(boundary) <= 0.0:
         raise ValueError("carrier rail boundary must be counter-clockwise")
-    if main_length_mm <= 0.0:
-        raise ValueError("main_length_mm must be positive")
+    if active_length_mm <= 0.0:
+        raise ValueError("active_length_mm must be positive")
     if led_recess_width_mm <= 0.0 or led_recess_depth_mm <= 0.0:
         raise ValueError("LED recess dimensions must be positive")
 
@@ -281,8 +152,8 @@ def _extrude_recessed_rail(
         return points
 
     recessed_boundary = polygon_boundary(recessed_polygon)
-    proximal_y_mm = -0.5 * main_length_mm
-    rail_end_y_mm = 0.5 * main_length_mm
+    proximal_y_mm = -0.5 * active_length_mm
+    rail_end_y_mm = 0.5 * active_length_mm
     half_recess_width_mm = 0.5 * led_recess_width_mm
     recess_intervals = tuple(
         (center_y_mm - half_recess_width_mm, center_y_mm + half_recess_width_mm)
@@ -291,7 +162,7 @@ def _extrude_recessed_rail(
     previous_upper_y_mm = proximal_y_mm
     for lower_y_mm, upper_y_mm in recess_intervals:
         if lower_y_mm < proximal_y_mm or upper_y_mm > rail_end_y_mm:
-            raise ValueError("LED recess lies outside the main carrier rail")
+            raise ValueError("LED recess lies outside the active carrier rail")
         if lower_y_mm < previous_upper_y_mm:
             raise ValueError("LED recesses must not overlap")
         previous_upper_y_mm = upper_y_mm
@@ -430,35 +301,16 @@ def _make_carrier_collision_mesh(
     carrier: Carrier,
     silicone: Silicone,
     *,
-    extrusion_depth_mm: float = 11.0,
-) -> "newton.Mesh":
-    """Build a closed proxy whose reachable boundary faces the cavity."""
-    boundary = _carrier_collision_boundary(carrier, silicone)
-
-    # Put the signed-query closure caps one silicone half-depth beyond the
-    # silicone mesh on each side. Only the cavity-facing side wall remains
-    # reachable within the representative single-section extrusion.
-    return _extrude_closed_polygon(
-        boundary,
-        extrusion_depth_mm=2.0 * extrusion_depth_mm,
-        compute_inertia=False,
-    )
-
-
-def _make_carrier_5led_collision_mesh(
-    carrier: Carrier,
-    silicone: Silicone,
-    *,
-    main_length_mm: float,
+    active_length_mm: float,
     led_centers_y_mm: tuple[float, ...],
     led_recess_width_mm: float,
     led_recess_depth_mm: float,
 ) -> "newton.Mesh":
-    """Build the recessed 55 mm rail collision proxy."""
+    """Build the recessed active-rail collision proxy."""
     boundary = _carrier_collision_boundary(carrier, silicone)
     return _extrude_recessed_rail(
         boundary,
-        main_length_mm=main_length_mm,
+        active_length_mm=active_length_mm,
         led_centers_y_mm=led_centers_y_mm,
         led_recess_width_mm=led_recess_width_mm,
         led_recess_depth_mm=led_recess_depth_mm,
@@ -469,7 +321,7 @@ def _carrier_collision_boundary(
     carrier: Carrier,
     silicone: Silicone,
 ) -> tuple[tuple[float, float], ...]:
-    """Return the closed XZ proxy section shared by both mesh paths."""
+    """Return the closed XZ carrier collision-proxy section."""
     if not isinstance(carrier, Carrier):
         raise TypeError("carrier must be a Carrier geometry")
     if not isinstance(silicone, Silicone):

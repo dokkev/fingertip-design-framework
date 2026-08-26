@@ -5,22 +5,22 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from lumo.fingertip import Fingertip, FingertipGeometry, FingertipParameters
-from lumo.mesh import (
-    LED_PITCH_MM,
+from lumo.fingertip import (
+    ACTIVE_Y_BOUNDS_MM,
+    LED_CENTERS_Y_MM,
     LED_RECESS_DEPTH_MM,
     LED_RECESS_WIDTH_MM,
-    MAIN_Y_BOUNDS_MM,
-    NUM_LEDS,
     TOTAL_Y_BOUNDS_MM,
-    led_centers_y_mm,
-    make_fingertip_5led_mesh,
+    Fingertip,
+    FingertipGeometry,
+    FingertipParameters,
 )
+from lumo.mesh import make_fingertip_mesh
 
 
 @pytest.fixture(scope="module")
 def full_mesh():
-    return make_fingertip_5led_mesh(Fingertip(), element_size_mm=1.0)
+    return make_fingertip_mesh(Fingertip(), element_size_mm=1.0)
 
 
 def _connected_vertex_components(
@@ -47,13 +47,12 @@ def _connected_vertex_components(
 
 
 def test_five_led_longitudinal_layout() -> None:
-    centers = np.asarray(led_centers_y_mm())
-    assert centers.shape == (NUM_LEDS,)
-    assert NUM_LEDS == 5
+    centers = np.asarray(LED_CENTERS_Y_MM)
+    assert centers.shape == (5,)
     assert np.array_equal(centers, np.array((-22.0, -11.0, 0.0, 11.0, 22.0)))
-    assert np.allclose(np.diff(centers), LED_PITCH_MM, rtol=0.0, atol=1.0e-12)
+    assert np.allclose(np.diff(centers), 11.0, rtol=0.0, atol=1.0e-12)
     assert centers[-1] - centers[0] == 44.0
-    assert MAIN_Y_BOUNDS_MM == (-27.5, 27.5)
+    assert ACTIVE_Y_BOUNDS_MM == (-27.5, 27.5)
     assert TOTAL_Y_BOUNDS_MM == (-27.5, 32.5)
 
 
@@ -132,11 +131,10 @@ def test_carrier_has_55_mm_stem_and_distal_dorsal_reinforcement(full_mesh) -> No
     assert full_mesh.led_centers_m.shape == (5, 3)
     assert np.allclose(
         full_mesh.led_centers_m[:, 1],
-        1.0e-3 * np.asarray(led_centers_y_mm()),
+        1.0e-3 * np.asarray(LED_CENTERS_Y_MM),
         rtol=0.0,
         atol=1.0e-12,
     )
-    assert full_mesh.inter_led_midpoints_m.shape == (4, 3)
 
 
 def test_each_led_has_explicit_stem_recess_and_air_gap(full_mesh) -> None:
@@ -163,8 +161,8 @@ def test_each_led_has_explicit_stem_recess_and_air_gap(full_mesh) -> None:
     expected_edges_mm = np.sort(
         np.concatenate(
             (
-                np.asarray(led_centers_y_mm()) - 0.5 * LED_RECESS_WIDTH_MM,
-                np.asarray(led_centers_y_mm()) + 0.5 * LED_RECESS_WIDTH_MM,
+                np.asarray(LED_CENTERS_Y_MM) - 0.5 * LED_RECESS_WIDTH_MM,
+                np.asarray(LED_CENTERS_Y_MM) + 0.5 * LED_RECESS_WIDTH_MM,
             )
         )
     )
@@ -182,7 +180,7 @@ def test_each_led_has_explicit_stem_recess_and_air_gap(full_mesh) -> None:
             axis=1,
         ) & (np.ptp(points_mm[:, :, 1], axis=1) > 1.0)
         recess_floor_points_mm = points_mm[is_recess_floor]
-        assert len(recess_floor_points_mm) == 2 * NUM_LEDS
+        assert len(recess_floor_points_mm) == 2 * len(LED_CENTERS_Y_MM)
         actual_edges_mm = np.unique(
             np.round(recess_floor_points_mm[:, :, 1], decimals=5)
         )
@@ -219,4 +217,4 @@ def test_full_mesh_does_not_use_void_height_for_led_clearance() -> None:
         )
     )
     with pytest.raises(ValueError, match="requires void_height_mm=0"):
-        make_fingertip_5led_mesh(fingertip, element_size_mm=1.0)
+        make_fingertip_mesh(fingertip, element_size_mm=1.0)

@@ -16,17 +16,16 @@ The actual first-contact transforms may differ between morphologies. What is sha
 
 This separation is important because geometric contact onset can itself depend on fingertip morphology, object geometry, object orientation, and approach direction. Collision-RT therefore separates **geometric contact initialization** from **post-contact mechanics**.
 
-The current LUMO 3D scene is an 11 mm representative cell, corresponding to
-
-one LED pitch. The first-contact query is therefore currently defined over:
+The current LUMO 3D scene is the complete 60 mm fingertip. The first-contact
+query is therefore defined over:
 
 ```text
 
-11 mm compliant sensing cell
+60 mm continuous compliant fingertip
 
     \+
 
-11 mm representative rigid-carrier slice
+55 mm active rigid carrier plus distal dorsal reinforcement
 
     \+
 
@@ -34,13 +33,9 @@ object geometry
 
 ```
 
-The compliant TET geometry and the rigid-carrier visualization/geometry slice
-
-use the existing `z = [-5.5, +5.5] mm` extrusion. A future full-width fingertip
-
-can use the same contact-normalization API with a different geometry input;
-
-the current 11 mm cell is the scope of the present query contract.
+The compliant TET geometry spans `Y = [-27.5, +32.5] mm`. The continuous
+carrier rail occupies the 55 mm active section and its dorsal reinforcement
+continues across the 5 mm distal silicone end-cap.
 
 ---
 

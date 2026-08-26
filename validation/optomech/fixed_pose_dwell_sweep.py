@@ -13,7 +13,7 @@ import numpy as np
 import warp as wp
 
 from lumo.fingertip import Fingertip, FingertipParameters
-from lumo.mesh import make_fingertip_5led_mesh
+from lumo.mesh import make_fingertip_mesh
 from lumo.newton import Indenter
 from lumo.optimization.evaluator import _six_tet_volumes
 from lumo.simulation import LumoSimulation
@@ -405,7 +405,7 @@ def _write_outputs(
 def main() -> None:
     _OUTPUT_DIRECTORY.mkdir(parents=True, exist_ok=True)
     fingertip = Fingertip(FingertipParameters())
-    fingertip_mesh = make_fingertip_5led_mesh(fingertip, element_size_mm=1.0)
+    fingertip_mesh = make_fingertip_mesh(fingertip, element_size_mm=1.0)
     reference_vertices_m = np.asarray(
         fingertip_mesh.silicone.vertices,
         dtype=np.float64,

@@ -11,12 +11,15 @@ from time import perf_counter
 import matplotlib
 import numpy as np
 
-from lumo.fingertip import Fingertip, FingertipParameters
-from lumo.mesh import (
+from lumo.fingertip import (
     LED_RECESS_DEPTH_MM,
     LED_RECESS_WIDTH_MM,
-    Fingertip5LEDMesh,
-    make_fingertip_5led_mesh,
+    Fingertip,
+    FingertipParameters,
+)
+from lumo.mesh import (
+    FingertipMesh,
+    make_fingertip_mesh,
 )
 from lumo.ray_tracing import (
     LED,
@@ -76,7 +79,7 @@ _CLOSURE_TOLERANCE = 1.0e-12
 
 def _load_mesh_and_states() -> tuple[
     Fingertip,
-    Fingertip5LEDMesh,
+    FingertipMesh,
     dict[str, np.ndarray],
     float,
 ]:
@@ -88,7 +91,7 @@ def _load_mesh_and_states() -> tuple[
 
     mesh_start_s = perf_counter()
     fingertip = Fingertip(FingertipParameters())
-    mesh = make_fingertip_5led_mesh(fingertip, element_size_mm=1.0)
+    mesh = make_fingertip_mesh(fingertip, element_size_mm=1.0)
     mesh_build_time_s = perf_counter() - mesh_start_s
 
     with np.load(reference_path) as saved:
@@ -151,7 +154,7 @@ def _load_mesh_and_states() -> tuple[
 
 def _make_leds(
     fingertip: Fingertip,
-    mesh: Fingertip5LEDMesh,
+    mesh: FingertipMesh,
 ) -> tuple[LED, ...]:
     centers = np.asarray(mesh.led_centers_m, dtype=np.float64)
     expected_y_m = 1.0e-3 * np.array((-22.0, -11.0, 0.0, 11.0, 22.0))
@@ -518,7 +521,7 @@ def _write_tables(
             writer.writerows(rows)
 
 
-def _plot_geometry(mesh: Fingertip5LEDMesh) -> None:
+def _plot_geometry(mesh: FingertipMesh) -> None:
     fingertip = mesh.fingertip
     silicone_vertices_mm = 1.0e3 * np.asarray(mesh.silicone.vertices)
     silicone_triangles = np.asarray(
@@ -791,7 +794,7 @@ def _plot_responses(
 
 def _write_report(
     fingertip: Fingertip,
-    mesh: Fingertip5LEDMesh,
+    mesh: FingertipMesh,
     state_names: tuple[str, ...],
     results: dict[str, dict[str, object]],
     pairwise_rows: list[dict[str, float | str]],
@@ -869,7 +872,7 @@ def _write_report(
         f"- OptiX consumes the same {len(mesh.silicone.vertices)}-vertex silicone and "
         f"{len(mesh.carrier.vertices)}-vertex carrier meshes stored by Newton.",
         "- Saved reference vertices/topology, carrier, bond indices, and LED centers "
-        "match the current `Fingertip5LEDMesh` exactly.",
+        "match the current `FingertipMesh` exactly.",
         "- Five unique emitters use exact 11 mm pitch and spawn from their carrier "
         "recess floors; every emitter contributes finite unit power.",
         f"- With nominal `void_height_mm=0`, the unloaded LED-to-silicone "

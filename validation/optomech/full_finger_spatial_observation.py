@@ -7,8 +7,8 @@ from time import perf_counter
 
 import numpy as np
 
-from lumo.fingertip import Fingertip, FingertipParameters
-from lumo.mesh import MAIN_Y_BOUNDS_MM, make_fingertip_5led_mesh
+from lumo.fingertip import ACTIVE_Y_BOUNDS_MM, Fingertip, FingertipParameters
+from lumo.mesh import make_fingertip_mesh
 from lumo.ray_tracing import (
     LED,
     OptixScene,
@@ -61,7 +61,7 @@ def main() -> None:
         data = {name: np.asarray(saved[name]) for name in saved.files}
 
     fingertip = Fingertip(FingertipParameters())
-    mesh = make_fingertip_5led_mesh(fingertip)
+    mesh = make_fingertip_mesh(fingertip)
     reference_vertices_m = np.asarray(mesh.silicone.vertices, dtype=np.float32)
     if reference_vertices_m.shape != data["reference_vertices_m"].shape or not np.allclose(
         reference_vertices_m,
@@ -129,7 +129,7 @@ def main() -> None:
         dtype=np.float64,
     )
     outside_active_power = np.empty_like(total_camera_power)
-    y_min_m, y_max_m = (1.0e-3 * value for value in MAIN_Y_BOUNDS_MM)
+    y_min_m, y_max_m = (1.0e-3 * value for value in ACTIVE_Y_BOUNDS_MM)
 
     def trace_state(
         vertices_m: np.ndarray,

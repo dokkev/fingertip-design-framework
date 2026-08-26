@@ -11,11 +11,8 @@ import newton
 import numpy as np
 import warp as wp
 
-from lumo.fingertip import Fingertip
-from lumo.mesh import (
-    Fingertip5LEDMesh,
-    make_fingertip_5led_mesh,
-)
+from lumo.fingertip import ACTIVE_Y_BOUNDS_MM, Fingertip
+from lumo.mesh import FingertipMesh, make_fingertip_mesh
 from lumo.newton import Indenter
 from lumo.ray_tracing import (
     LED,
@@ -183,7 +180,7 @@ def _path_energy(paths: PathTraceResult) -> np.ndarray:
 
 def _make_full_finger_leds(
     fingertip: Fingertip,
-    fingertip_mesh: Fingertip5LEDMesh,
+    fingertip_mesh: FingertipMesh,
 ) -> tuple[LED, ...]:
     normal_W = np.array((0.0, 0.0, -1.0), dtype=np.float64)
     return tuple(
@@ -460,15 +457,13 @@ def evaluate_full_finger(
     ):
         if not np.isfinite(value) or value <= 0.0:
             raise ValueError(f"{name} must be finite and positive")
-    fingertip_mesh = make_fingertip_5led_mesh(
+    fingertip_mesh = make_fingertip_mesh(
         fingertip,
         element_size_mm=_ELEMENT_SIZE_MM,
     )
-    main_y_min_mm, main_y_max_mm = (
-        1.0e3 * value for value in fingertip_mesh.main_y_bounds_m
-    )
+    active_y_min_mm, active_y_max_mm = ACTIVE_Y_BOUNDS_MM
     if any(
-        value < main_y_min_mm or value > main_y_max_mm
+        value < active_y_min_mm or value > active_y_max_mm
         for value in locations_y_mm
     ):
         raise ValueError("contact_y_mm must lie inside the 55 mm active section")

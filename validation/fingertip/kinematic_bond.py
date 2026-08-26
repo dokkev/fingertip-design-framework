@@ -14,7 +14,6 @@ from lumo.mesh import make_fingertip_mesh
 def main() -> None:
     mesh = make_fingertip_mesh(
         Fingertip(FingertipParameters()),
-        extrusion_depth_mm=11.0,
         element_size_mm=1.0,
     )
     fingertip_newton = build_fingertip_newton_model(mesh)

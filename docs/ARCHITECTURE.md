@@ -93,6 +93,12 @@ The type and its single `silicone` preset live in `mechanical_param.py`.
 exposes the reference silicone tip coordinate in Newton-compatible metres so
 callers do not repeat the semiellipse endpoint calculation and unit conversion.
 
+`layout.py` owns the fixed longitudinal hardware definition: the five LED
+centers, 55 mm active-section bounds, 5 mm distal end-cap, and physical LED
+recess dimensions. These are properties of the current fingertip hardware,
+not mesh-resolution parameters. Downstream mesh, observation, and campaign
+code consume this one definition.
+
 `Silicone` and `Carrier` are constructed geometry objects, not separate
 parameter systems. `BondingInterface` is the derived pair of left and right
 carrier-silicone polylines that receive the perfect kinematic bond. It does not
@@ -119,7 +125,8 @@ FingertipMesh
 ├── silicone
 ├── carrier
 ├── carrier_collision
-└── bonded_vertex_indices
+├── bonded_vertex_indices
+└── led_centers_m
 ```
 
 The silicone is discretized as a Newton-compatible tetrahedral mesh.
@@ -128,22 +135,23 @@ The silicone is discretized as a Newton-compatible tetrahedral mesh.
 `carrier_collision` is a closed Newton collision proxy on the same carrier
 body. Its silicone-reachable boundary contains only the cavity-facing lips,
 stem sides, and stem bottom. Its cross-section closes through the carrier
-interior, and its end caps lie outside the silicone extrusion, so Newton's
-signed mesh query remains well-defined without exposing closure faces to
-silicone particles. The proxy has a cached volume SDF and uses Newton's
-full-surface rigid/soft contact path, which catches tetrahedral faces that
-would otherwise pass between particle vertices.
+interior, and its longitudinal caps close the physical 55 mm rail at its
+proximal and distal ends so Newton's signed mesh query remains well-defined.
+The proxy has a cached volume SDF and uses Newton's full-surface rigid/soft
+contact path, which catches tetrahedral faces that would otherwise pass
+between particle vertices.
 
 `bonded_vertex_indices` identifies silicone vertices lying on
 `Fingertip.bonding_interface`. The mesh layer consumes its left and right
 polylines directly rather than deriving bond ownership from `Silicone`.
 
-The existing `make_fingertip_mesh()` path remains the 11 mm representative
-single-section mesh. `make_fingertip_5led_mesh()` is the separate simplified
-full-finger path and returns a `Fingertip5LEDMesh`, which remains directly
-consumable anywhere a `FingertipMesh` is accepted. It adds only the fixed
-longitudinal metadata required by the physical layout: five LED reference
-centers, the active-section bounds, the total bounds, and inter-LED midpoints.
+`make_fingertip_mesh()` is the only public construction path and always
+discretizes the complete current 60 mm, five-LED fingertip. The returned
+`FingertipMesh` stores the derived three-dimensional LED centers because their
+Z coordinate depends on the carrier recess geometry. Fixed active and total Y
+bounds remain in `lumo.fingertip.layout`; they are not repeated as
+mutable-looking mesh fields. Representative 11 mm slices are not production
+objects or design parameters.
 
 The full-finger longitudinal construction is:
 
@@ -165,16 +173,15 @@ requires exactly one silicone volume. The proximal cavity remains open. The
 carrier stem rail ends with the 55 mm active section, while only its dorsal
 plate extends across the 5 mm solid end-cap. Silicone vertices under that
 distal dorsal plate belong to the carrier's perfect kinematic bond. The
-single-section collision proxy still puts closure caps outside its silicone
-slice; the full-finger proxy instead ends with the physical 55 mm stem rail.
-The five recesses are present in both the visible carrier and its Newton
-collision proxy. With nominal `void_height_mm=0`, silicone keeps the existing
-stem-bottom plane while each LED emitting top lies on its recess floor,
-producing a geometry-derived 0.19 mm unloaded air cavity. No optical offset or
-displaced silicone surface manufactures that gap. `void_height_mm` remains
-fixed at zero for the initial full-finger morphology study; the hardware
-recess, not `void_height_mm`, owns this interface dimension. The local XZ
-morphology and the constructed 30 mm height contract are otherwise unchanged.
+collision proxy ends with the physical 55 mm stem rail. The five recesses are
+present in both the visible carrier and its Newton collision proxy. With
+nominal `void_height_mm=0`, silicone keeps the existing stem-bottom plane while
+each LED emitting top lies on its recess floor, producing a geometry-derived
+0.19 mm unloaded air cavity. No optical offset or displaced silicone surface
+manufactures that gap. `void_height_mm` remains fixed at zero for the initial
+full-finger morphology study; the hardware recess, not `void_height_mm`, owns
+this interface dimension. The local XZ morphology and the constructed 30 mm
+height contract are otherwise unchanged.
 
 Mesh code may use Gmsh and geometry libraries internally.
 
@@ -525,13 +532,11 @@ operations remain source-local primitives: a caller that needs several LEDs
 traces their independent linear contributions and sums modeled power without a
 multi-LED scene abstraction.
 
-`side_view_observation()` in `observation.py` reduces escaped paths from the one
-current optical-cell LED to one raw four-quadrant response. It keeps only rays
-traveling toward `+Y` and bins their power by the escape origin in the X-Z
-cross section. Quadrants are ordered upper-right, upper-left, lower-left,
-lower-right around the current analytic silicone semiellipse center. In the
-full 60 mm finger, `+Y` is an end-facing view because Y is longitudinal; this
-four-bin reducer remains only for the representative single-section studies.
+`side_view_observation()` in `observation.py` is a validation-oriented reducer
+that keeps rays traveling toward `+Y` and bins power by escape origin in the
+X-Z cross section. Quadrants are ordered upper-right, upper-left, lower-left,
+lower-right around the analytic silicone semiellipse center. It is not the
+production full-finger camera representation.
 
 `longitudinal_side_view_observation()` is the full-finger receiver. It selects
 escaped power traveling toward the canonical camera-facing `+X` side and sums
@@ -568,7 +573,7 @@ constraints, one concrete sensing evaluation, and pure sensing-objective
 evaluation.
 
 `evaluator.py` owns the production mechanics-to-optics orchestration. Its
-`evaluate_full_finger()` entry builds one `Fingertip5LEDMesh` and one
+`evaluate_full_finger()` entry builds one canonical `FingertipMesh` and one
 `OptixScene`, generates deterministic samples and traces the undeformed state
 once for each of the five LEDs, then evaluates the Cartesian product of
 explicit sphere diameters and longitudinal contact-Y locations. Each location

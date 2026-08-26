@@ -9,13 +9,12 @@ import numpy as np
 from matplotlib.patches import Polygon, Rectangle
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
-from lumo.fingertip import Fingertip
-from lumo.mesh import (
-    MAIN_Y_BOUNDS_MM,
+from lumo.fingertip import (
+    ACTIVE_Y_BOUNDS_MM,
     TOTAL_Y_BOUNDS_MM,
-    make_fingertip_5led_mesh,
-    make_fingertip_mesh,
+    Fingertip,
 )
+from lumo.mesh import make_fingertip_mesh
 
 
 _OUTPUT_PATH = (
@@ -71,7 +70,7 @@ def _draw_longitudinal(axes: plt.Axes, mesh) -> None:
     fingertip = mesh.fingertip
     silicone = fingertip.silicone
     geometry = fingertip.parameters.geometry
-    proximal_y, main_distal_y = MAIN_Y_BOUNDS_MM
+    proximal_y, active_distal_y = ACTIVE_Y_BOUNDS_MM
     total_distal_y = TOTAL_Y_BOUNDS_MM[1]
     tip_z = silicone.ellipse_center_z_mm - silicone.ellipse_radius_z_mm
     cavity_bottom_z = silicone.cavity_bottom_z_mm
@@ -79,7 +78,7 @@ def _draw_longitudinal(axes: plt.Axes, mesh) -> None:
     axes.add_patch(
         Rectangle(
             (proximal_y, tip_z),
-            main_distal_y - proximal_y,
+            active_distal_y - proximal_y,
             cavity_bottom_z - tip_z,
             facecolor=_SILICONE_COLOR,
             edgecolor=_SILICONE_EDGE,
@@ -89,7 +88,7 @@ def _draw_longitudinal(axes: plt.Axes, mesh) -> None:
     axes.add_patch(
         Rectangle(
             (proximal_y, cavity_bottom_z),
-            main_distal_y - proximal_y,
+            active_distal_y - proximal_y,
             -cavity_bottom_z,
             facecolor=_VOID_COLOR,
             edgecolor="#e67700",
@@ -100,7 +99,7 @@ def _draw_longitudinal(axes: plt.Axes, mesh) -> None:
     axes.add_patch(
         Rectangle(
             (proximal_y, 0.0),
-            main_distal_y - proximal_y,
+            active_distal_y - proximal_y,
             geometry.link_thickness_mm,
             facecolor=_CARRIER_COLOR,
             edgecolor="#343a40",
@@ -110,7 +109,7 @@ def _draw_longitudinal(axes: plt.Axes, mesh) -> None:
     axes.add_patch(
         Rectangle(
             (proximal_y, -geometry.stem_height_mm),
-            main_distal_y - proximal_y,
+            active_distal_y - proximal_y,
             geometry.stem_height_mm,
             facecolor="#495057",
             edgecolor="#212529",
@@ -119,8 +118,8 @@ def _draw_longitudinal(axes: plt.Axes, mesh) -> None:
     )
     axes.add_patch(
         Rectangle(
-            (main_distal_y, tip_z),
-            total_distal_y - main_distal_y,
+            (active_distal_y, tip_z),
+            total_distal_y - active_distal_y,
             silicone.bond_top_z_mm - tip_z,
             facecolor=_SILICONE_COLOR,
             edgecolor=_SILICONE_EDGE,
@@ -130,8 +129,8 @@ def _draw_longitudinal(axes: plt.Axes, mesh) -> None:
     )
     axes.add_patch(
         Rectangle(
-            (main_distal_y, silicone.bond_top_z_mm),
-            total_distal_y - main_distal_y,
+            (active_distal_y, silicone.bond_top_z_mm),
+            total_distal_y - active_distal_y,
             geometry.link_thickness_mm - silicone.bond_top_z_mm,
             facecolor=_CARRIER_COLOR,
             edgecolor="#343a40",
@@ -158,9 +157,9 @@ def _draw_longitudinal(axes: plt.Axes, mesh) -> None:
             ha="center",
             fontsize=8,
         )
-    axes.axvline(main_distal_y, color="#d00000", linestyle="--", linewidth=1.2)
+    axes.axvline(active_distal_y, color="#d00000", linestyle="--", linewidth=1.2)
     axes.text(
-        main_distal_y + 0.2,
+        active_distal_y + 0.2,
         geometry.link_thickness_mm + 0.5,
         "solid closure begins",
         color="#d00000",
@@ -264,44 +263,29 @@ def _draw_material_mesh(axes, mesh) -> None:
 
 def main() -> None:
     fingertip = Fingertip()
-    full_mesh = make_fingertip_5led_mesh(fingertip, element_size_mm=1.0)
-    cell_mesh = make_fingertip_mesh(
-        fingertip,
-        extrusion_depth_mm=11.0,
-        element_size_mm=1.0,
-    )
+    mesh = make_fingertip_mesh(fingertip, element_size_mm=1.0)
 
     figure = plt.figure(figsize=(18.0, 6.5), constrained_layout=True)
     longitudinal_axes = figure.add_subplot(1, 3, 1)
     cross_section_axes = figure.add_subplot(1, 3, 2)
     material_axes = figure.add_subplot(1, 3, 3, projection="3d")
-    _draw_longitudinal(longitudinal_axes, full_mesh)
+    _draw_longitudinal(longitudinal_axes, mesh)
     _draw_cross_section(cross_section_axes, fingertip)
-    _draw_material_mesh(material_axes, full_mesh)
+    _draw_material_mesh(material_axes, mesh)
     figure.suptitle("Full five-LED LUMO fingertip mesh", fontsize=15)
 
-    full_counts = (
-        full_mesh.silicone.vertex_count,
-        full_mesh.silicone.tet_count,
-        len(full_mesh.silicone.surface_tri_indices) // 3,
-    )
-    cell_counts = (
-        cell_mesh.silicone.vertex_count,
-        cell_mesh.silicone.tet_count,
-        len(cell_mesh.silicone.surface_tri_indices) // 3,
+    counts = (
+        mesh.silicone.vertex_count,
+        mesh.silicone.tet_count,
+        len(mesh.silicone.surface_tri_indices) // 3,
     )
     labels = ("vertices", "tetrahedra", "surface triangles")
     print("five-LED mesh")
-    for label, full_count, cell_count in zip(
-        labels,
-        full_counts,
-        cell_counts,
-        strict=True,
-    ):
-        print(f"{label}: {full_count} (single cell {cell_count}, {full_count / cell_count:.2f}x)")
+    for label, count in zip(labels, counts, strict=True):
+        print(f"{label}: {count}")
     print(
         "LED centers Y [mm]: "
-        f"{(1.0e3 * full_mesh.led_centers_m[:, 1]).tolist()}"
+        f"{(1.0e3 * mesh.led_centers_m[:, 1]).tolist()}"
     )
 
     _OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)

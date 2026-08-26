@@ -30,7 +30,7 @@ locations, and sequential 5/10/15/20 N first-crossing snapshots.
 ## Repository map
 
 - `lumo/fingertip/`: physical parameters and analytic geometry;
-- `lumo/mesh/`: single-section and full five-LED meshes;
+- `lumo/mesh/`: discretization of the complete five-LED fingertip;
 - `lumo/newton/`: Newton model construction and indenters;
 - `lumo/simulation/`: Newton runtime and indentation workflow;
 - `lumo/ray_tracing/`: OptiX scene, emission, transport, and observation;

@@ -9,7 +9,7 @@ import numpy as np
 import warp as wp
 
 from lumo.fingertip import Fingertip
-from lumo.mesh import make_fingertip_5led_mesh
+from lumo.mesh import make_fingertip_mesh
 from lumo.newton import Indenter
 from lumo.simulation import LumoSimulation
 
@@ -27,7 +27,7 @@ _POST_CONTACT_STEPS = 10
 
 def main() -> None:
     fingertip = Fingertip()
-    fingertip_mesh = make_fingertip_5led_mesh(
+    fingertip_mesh = make_fingertip_mesh(
         fingertip,
         element_size_mm=1.0,
     )

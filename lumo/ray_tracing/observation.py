@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from lumo.fingertip import Fingertip
-from lumo.mesh import MAIN_Y_BOUNDS_MM
+from lumo.fingertip import ACTIVE_Y_BOUNDS_MM, Fingertip
 
 
 LONGITUDINAL_SIDE_BIN_COUNT = 11
@@ -120,7 +119,7 @@ def longitudinal_side_view_power(
         return response, 0.0, 0.0
 
     y_min_m, y_max_m = (
-        _MM_TO_M * value for value in MAIN_Y_BOUNDS_MM
+        _MM_TO_M * value for value in ACTIVE_Y_BOUNDS_MM
     )
     edges_m = np.linspace(
         y_min_m,
