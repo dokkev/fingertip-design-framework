@@ -183,9 +183,7 @@ class Fingertip:
             0.5 * geometry.stem_width_mm + geometry.void_width_mm
         )
         ellipse_center_z = -geometry.flat_pad_height_mm
-        cavity_bottom_z = -(
-            geometry.stem_height_mm + geometry.void_height_mm
-        )
+        cavity_bottom_z = -geometry.stem_height_mm
         bond_left_inner_x = (
             -half_width + geometry.bond_extension_width_mm
         )

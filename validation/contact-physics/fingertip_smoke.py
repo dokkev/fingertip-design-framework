@@ -1,4 +1,4 @@
-"""Run a short central-contact Newton smoke on the full five-LED mesh."""
+"""Run a short central-contact Newton smoke on the complete fingertip mesh."""
 
 from __future__ import annotations
 

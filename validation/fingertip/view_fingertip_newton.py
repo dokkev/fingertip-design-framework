@@ -1,4 +1,4 @@
-"""Visualize the full five-LED fingertip in Newton ViewerGL."""
+"""Visualize the complete fingertip in Newton ViewerGL."""
 
 from __future__ import annotations
 
@@ -14,7 +14,6 @@ from lumo.util.viewer_util import make_reference_lines
 
 
 _SILICONE_COLOR = (0.72, 0.92, 0.68)
-_ALUMINUM_COLOR = wp.vec3(0.36, 0.39, 0.43)
 _LED_COLOR = wp.vec3(0.15, 0.95, 0.25)
 
 
@@ -25,8 +24,6 @@ def main() -> None:
     )
     fingertip_newton: FingertipNewtonModel = build_fingertip_newton_model(
         fingertip_mesh,
-        gravity=0.0,
-        carrier_color=_ALUMINUM_COLOR,
     )
     model = fingertip_newton.model
     state = model.state()

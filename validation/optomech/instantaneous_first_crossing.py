@@ -10,7 +10,7 @@ from time import perf_counter
 import numpy as np
 
 from lumo.fingertip import Fingertip, FingertipParameters
-from lumo.optimization.evaluator import evaluate_full_finger
+from lumo.optimization.evaluator import evaluate_fingertip
 from lumo.optimization.objective import compute_objectives_from_raw
 
 
@@ -27,12 +27,10 @@ _APPROACH_SPEED_M_S = 5.0e-3
 
 def main() -> None:
     _OUTPUT_DIRECTORY.mkdir(parents=True, exist_ok=True)
-    sphere_resource = files("lumo.assets.objects.urdf").joinpath(
-        "sphere_10mm.urdf"
-    )
+    sphere_resource = files("lumo.assets.objects.urdf").joinpath("sphere_10mm.urdf")
     start_s = perf_counter()
     with as_file(sphere_resource) as sphere_path:
-        evaluation = evaluate_full_finger(
+        evaluation = evaluate_fingertip(
             Fingertip(FingertipParameters()),
             (sphere_path,),
             (10.0,),
@@ -41,13 +39,10 @@ def main() -> None:
             initial_clearance_m=1.0e-3,
             approach_speed_m_s=_APPROACH_SPEED_M_S,
             max_sim_time_s=60.0,
-            parallel_world_count=4,
         )
     runtime_s = perf_counter() - start_s
 
     targets = np.asarray(_FORCE_TARGETS_N, dtype=np.float64)[None, :]
-    if evaluation.mechanics_backend != "cuda_graph_parallel_4":
-        raise RuntimeError("production evaluator used an unexpected backend")
     if np.any(evaluation.actual_forces_n < targets):
         raise RuntimeError("a saved checkpoint precedes its force crossing")
     if np.any(np.diff(evaluation.indentations_m, axis=1) <= 0.0):
@@ -99,9 +94,7 @@ def main() -> None:
                 "min_det_f",
             )
         )
-        for scenario_index, scenario_name in enumerate(
-            evaluation.scenario_names
-        ):
+        for scenario_index, scenario_name in enumerate(evaluation.scenario_names):
             for force_index, target_force_n in enumerate(_FORCE_TARGETS_N):
                 writer.writerow(
                     (
@@ -109,15 +102,10 @@ def main() -> None:
                         target_force_n,
                         evaluation.actual_forces_n[scenario_index, force_index],
                         overshoot_n[scenario_index, force_index],
-                        1.0e3
-                        * evaluation.indentations_m[
-                            scenario_index, force_index
-                        ],
+                        1.0e3 * evaluation.indentations_m[scenario_index, force_index],
                         evaluation.checkpoint_steps[scenario_index, force_index],
                         evaluation.checkpoint_times_s[scenario_index, force_index],
-                        evaluation.indenter_contact_counts[
-                            scenario_index, force_index
-                        ],
+                        evaluation.indenter_contact_counts[scenario_index, force_index],
                         evaluation.minimum_det_f[scenario_index, force_index],
                     )
                 )
@@ -130,7 +118,6 @@ def main() -> None:
                 "",
                 "Result: PASS",
                 "",
-                f"- backend: `{evaluation.mechanics_backend}`",
                 "- loading protocol: `constant_speed_force_thresholds`",
                 f"- approach speed: `{_APPROACH_SPEED_M_S:g} m/s`",
                 f"- scenarios: `{len(evaluation.scenario_names)}`",
@@ -152,7 +139,6 @@ def main() -> None:
     )
 
     print("Instantaneous first-crossing production validation: PASS")
-    print(f"backend={evaluation.mechanics_backend}")
     print(f"maximum overshoot={float(overshoot_n.max()):.6f} N")
     print(f"J_contact={contact.J_contact:.9f}")
     print(f"J_obs={observation.J_obs:.9f}")

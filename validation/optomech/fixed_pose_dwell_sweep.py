@@ -80,7 +80,6 @@ def _run_scenario(
             soft_contact_damping_n_s_m=0.28228017516945547,
             element_size_mm=1.0,
             carrier_contact_stiffness_n_m=1.0e6,
-            use_cuda_graph=True,
         )
 
         travel_m = 0.0

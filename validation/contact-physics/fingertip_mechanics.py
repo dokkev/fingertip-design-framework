@@ -1,4 +1,4 @@
-"""Validate full five-LED fingertip mechanics at three Y locations."""
+"""Validate complete fingertip mechanics at three Y locations."""
 
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ from lumo.fingertip import (
 )
 from lumo.mesh import make_fingertip_mesh
 from lumo.newton import Indenter
-from lumo.simulation import DesignStudy, DesignTrial, LumoSimulation
+from lumo.simulation import IndentationStudy, IndentationTrial, LumoSimulation
 
 
 matplotlib.use("Agg")
@@ -33,8 +33,8 @@ from matplotlib.colors import Normalize  # noqa: E402
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection  # noqa: E402
 
 
-_OUTPUT_DIRECTORY = Path("output/validation/5led_newton")
-_REPORT_PATH = Path("output/validation/5led_newton_mechanics_validation.md")
+_OUTPUT_DIRECTORY = Path("output/validation/fingertip_newton")
+_REPORT_PATH = Path("output/validation/fingertip_mechanics_validation.md")
 _SIM_FREQUENCY_HZ = 100.0
 _VBD_ITERATIONS = 10
 _APPROACH_SPEED_M_S = 5.0e-3
@@ -236,12 +236,11 @@ def _make_trial(
     *,
     name: str,
     contact_y_mm: float,
-    target_force_n: float,
-) -> DesignTrial:
+) -> IndentationTrial:
     initial_center_z_m = (
         fingertip.tip_z_m - _SPHERE_RADIUS_M - _INITIAL_CLEARANCE_M
     )
-    return DesignTrial(
+    return IndentationTrial(
         name=name,
         urdf_path=sphere_path,
         initial_tf=wp.transform(
@@ -250,7 +249,6 @@ def _make_trial(
         ),
         motion_direction_W=wp.vec3(0.0, 0.0, 1.0),
         approach_speed_m_s=_APPROACH_SPEED_M_S,
-        target_force_n=target_force_n,
         max_sim_time_s=_MAX_SIM_TIME_S,
         initial_clearance_m=_INITIAL_CLEARANCE_M,
     )
@@ -326,7 +324,7 @@ def _contact_records(
 
 
 def _collect_checkpoint(
-    trial: DesignTrial,
+    trial: IndentationTrial,
     simulation: LumoSimulation,
     indenter: Indenter,
     *,
@@ -544,12 +542,11 @@ def _run_case(
         sphere_path,
         name=name,
         contact_y_mm=contact_y_mm,
-        target_force_n=target_force_n,
     )
     checkpoints: list[dict[str, object]] = []
 
     def inspect(
-        completed_trial: DesignTrial,
+        completed_trial: IndentationTrial,
         simulation: LumoSimulation,
         indenter: Indenter,
     ) -> None:
@@ -574,18 +571,19 @@ def _run_case(
         flush=True,
     )
     wall_start_s = perf_counter()
-    DesignStudy(
+    IndentationStudy(
         fingertip,
         (trial,),
         fingertip_mesh=fingertip_mesh,
         sim_frequency=_SIM_FREQUENCY_HZ,
+        force_targets_n=(target_force_n,),
         element_size_mm=_ELEMENT_SIZE_MM,
         iterations=_VBD_ITERATIONS,
         soft_contact_margin_m=_SOFT_CONTACT_MARGIN_M,
         carrier_contact_stiffness_n_m=_CARRIER_CONTACT_STIFFNESS_N_M,
         contact_stiffness_n_m=_CONTACT_STIFFNESS_N_M,
         contact_damping_n_s_m=_CONTACT_DAMPING_N_S_M,
-    ).run(inspect_trial=inspect)
+    ).run(inspect_checkpoint=inspect)
     wp.synchronize()
     if len(checkpoints) != 1:
         raise RuntimeError(f"{name} produced {len(checkpoints)} checkpoints")
@@ -612,7 +610,6 @@ def _measure_initialization(
         sphere_path,
         name="initialization_probe",
         contact_y_mm=0.0,
-        target_force_n=_FORCE_TARGETS_N[0],
     )
     wall_start_s = perf_counter()
     builder = newton.ModelBuilder(gravity=wp.vec3(0.0, 0.0, 0.0))
@@ -1228,14 +1225,14 @@ def _write_report(
             "",
             "## Artifacts",
             "",
-            "- `5led_newton/reference_mesh.npz`: immutable mesh and reference state",
-            "- `5led_newton/<case>.npz`: deformed vertices and raw Newton contact records",
-            "- `5led_newton/cases.csv`: scalar mechanics diagnostics",
-            "- `5led_newton/station_displacements.csv`: fixed-station coupling",
-            "- `5led_newton/longitudinal_profiles.csv`: dense 1 mm profile",
-            "- `5led_newton/deformation_comparison.png`: common-view deformation fields",
-            "- `5led_newton/between_led_deformation.png`: focused midpoint contact",
-            "- `5led_newton/longitudinal_displacement_profiles_<force>n.png`: propagation curves",
+            "- `fingertip_newton/reference_mesh.npz`: immutable mesh and reference state",
+            "- `fingertip_newton/<case>.npz`: deformed vertices and raw Newton contact records",
+            "- `fingertip_newton/cases.csv`: scalar mechanics diagnostics",
+            "- `fingertip_newton/station_displacements.csv`: fixed-station coupling",
+            "- `fingertip_newton/longitudinal_profiles.csv`: dense 1 mm profile",
+            "- `fingertip_newton/deformation_comparison.png`: common-view deformation fields",
+            "- `fingertip_newton/between_led_deformation.png`: focused midpoint contact",
+            "- `fingertip_newton/longitudinal_displacement_profiles_<force>n.png`: propagation curves",
             "",
             "Exact contact patch area is intentionally not reported. Raw soft-contact feature "
             "indices, barycentric weights, reconstructed soft-side points, body positions, "

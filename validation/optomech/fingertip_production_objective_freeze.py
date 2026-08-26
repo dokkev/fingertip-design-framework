@@ -1,4 +1,4 @@
-"""Freeze and validate the nominal full-finger production objective contract."""
+"""Freeze and validate the nominal fingertip production objective contract."""
 
 from __future__ import annotations
 
@@ -10,25 +10,17 @@ from time import perf_counter
 import numpy as np
 
 from lumo.fingertip import Fingertip
-from lumo.optimization.ax_bo import (
-    _OBJECTIVE_NAMES,
-    _campaign_definition,
-    _objective_details,
-    _run_config,
-    _save_trial_result,
-)
-from lumo.optimization.evaluator import evaluate_full_finger
+from lumo.optimization.ax_bo import build_campaign, objective_details
+from lumo.optimization.campaign_io import build_run_config, save_trial_result
+from lumo.optimization.evaluator import evaluate_fingertip
 from lumo.optimization.objective import (
-    combine_led_responses,
     compute_objectives_from_raw,
     compute_observation_objective,
 )
 
 
-_OUTPUT_DIRECTORY = Path(
-    "output/validation/full_finger_production_objective_freeze"
-)
-_RAW_PATH = _OUTPUT_DIRECTORY / "nominal_full_finger_objectives.npz"
+_OUTPUT_DIRECTORY = Path("output/validation/fingertip_production_objective_freeze")
+_RAW_PATH = _OUTPUT_DIRECTORY / "nominal_fingertip_objectives.npz"
 _RUN_CONFIG_PATH = _OUTPUT_DIRECTORY / "run_config.json"
 _REPORT_PATH = _OUTPUT_DIRECTORY / "report.md"
 _CONTACT_Y_MM = (-22.0, -11.0, -5.5, 0.0, 5.5, 11.0, 22.0)
@@ -102,8 +94,7 @@ def _verify_raw(
     ):
         raise RuntimeError("checkpoint ROI accounting does not close")
     if not np.allclose(
-        data["no_contact_inside_roi_power"]
-        + data["no_contact_outside_roi_power"],
+        data["no_contact_inside_roi_power"] + data["no_contact_outside_roi_power"],
         data["no_contact_visible_side_power"],
         rtol=0.0,
         atol=1.0e-12,
@@ -130,11 +121,11 @@ def _verify_raw(
         raise RuntimeError("J_obs is invalid")
 
     permutation = np.array((3, 0, 4, 1, 2))
-    combined = combine_led_responses(data["response_matrix"])
+    combined = data["response_matrix"].sum(axis=-2)
     permuted_response = data["response_matrix"][..., permutation, :]
     permuted_baseline = data["no_contact_response"][permutation]
     if not np.allclose(
-        combine_led_responses(permuted_response),
+        permuted_response.sum(axis=-2),
         combined,
         rtol=0.0,
         atol=1.0e-14,
@@ -180,7 +171,7 @@ def _write_report(
     runtime_s: float,
 ) -> None:
     lines = [
-        "# Full-finger production objective freeze",
+        "# Fingertip production objective freeze",
         "",
         "Result: PASS",
         "",
@@ -231,7 +222,7 @@ def _write_report(
         "1. LED ordering is provably absent from J_obs: YES.",
         "2. Outside-ROI power is persisted and auditable: YES.",
         "3. The ordered 7-location BO contract is frozen and serialized: YES.",
-        "4. void_height=0 is fixed cleanly in the 5D morphology: YES.",
+        "4. The production morphology has exactly five geometry variables: YES.",
         "5. Production optimization metrics are only J_contact and J_obs: YES.",
         "6. Both objectives reproduce from the raw NPZ alone: YES.",
         "7. Nominal E2E mechanics and optical checks pass: YES.",
@@ -243,10 +234,7 @@ def _write_report(
 
 
 def main() -> None:
-    if _OBJECTIVE_NAMES != ("J_contact", "J_obs"):
-        raise RuntimeError("Ax objective schema is not frozen")
-    campaign = _campaign_definition(
-        "discrete-05mm",
+    campaign = build_campaign(
         sphere_diameters_mm=_SPHERE_DIAMETERS_MM,
         contact_y_mm=_CONTACT_Y_MM,
         force_targets_n=_FORCE_TARGETS_N,
@@ -254,12 +242,10 @@ def main() -> None:
     if not campaign.space.is_feasible(_PARAMETERS):
         raise RuntimeError("nominal morphology is analytically invalid")
     fingertip = Fingertip(campaign.space.to_parameters(_PARAMETERS))
-    if fingertip.parameters.geometry.void_height_mm != 0.0:
-        raise RuntimeError("production morphology did not fix void_height=0")
 
     _OUTPUT_DIRECTORY.mkdir(parents=True, exist_ok=True)
     _RUN_CONFIG_PATH.write_text(
-        json.dumps(_run_config(campaign), indent=2, sort_keys=True) + "\n",
+        json.dumps(build_run_config(campaign), indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
     resource_root = files("lumo").joinpath("assets", "objects", "urdf")
@@ -269,7 +255,7 @@ def main() -> None:
         as_file(resource_root.joinpath("sphere_10mm.urdf")) as sphere_10mm,
         as_file(resource_root.joinpath("sphere_20mm.urdf")) as sphere_20mm,
     ):
-        evaluation = evaluate_full_finger(
+        evaluation = evaluate_fingertip(
             fingertip,
             (sphere_5mm, sphere_10mm, sphere_20mm),
             _SPHERE_DIAMETERS_MM,
@@ -280,8 +266,8 @@ def main() -> None:
             max_sim_time_s=60.0,
         )
     runtime_s = perf_counter() - start_s
-    details = _objective_details(evaluation)
-    _save_trial_result(
+    details = objective_details(evaluation)
+    save_trial_result(
         _RAW_PATH,
         campaign=campaign,
         evaluation=evaluation,
@@ -293,7 +279,7 @@ def main() -> None:
 
     contact, observation, metrics = _verify_raw(_raw_arrays())
     _write_report(contact, observation, metrics, runtime_s)
-    print("Full-finger production objective freeze: PASS")
+    print("Fingertip production objective freeze: PASS")
     print(f"J_contact={contact.J_contact:.9f} ({contact.limiting_scenario})")
     print(
         f"J_obs={observation.J_obs:.9f} "

@@ -1,4 +1,4 @@
-"""Validate one full-finger raw Newton-to-OptiX evaluation artifact."""
+"""Validate one raw fingertip Newton-to-OptiX evaluation artifact."""
 
 from __future__ import annotations
 
@@ -9,12 +9,12 @@ from time import perf_counter
 import numpy as np
 
 from lumo.fingertip import Fingertip, FingertipParameters
-from lumo.optimization.evaluator import FullFingerEvaluation, evaluate_full_finger
+from lumo.optimization.evaluator import FingertipEvaluation, evaluate_fingertip
 from lumo.ray_tracing import LONGITUDINAL_SIDE_BIN_COUNT
 
 
-_OUTPUT_DIRECTORY = Path("output/validation/full_finger_raw_evaluator")
-_ARTIFACT_PATH = _OUTPUT_DIRECTORY / "nominal_full_finger_raw.npz"
+_OUTPUT_DIRECTORY = Path("output/validation/fingertip_raw_evaluator")
+_ARTIFACT_PATH = _OUTPUT_DIRECTORY / "nominal_fingertip_raw.npz"
 _REPORT_PATH = _OUTPUT_DIRECTORY / "report.md"
 _SPHERE_DIAMETER_MM = 15.0
 _CONTACT_Y_MM = (0.0, 5.5, 22.0)
@@ -36,7 +36,7 @@ def _six_tet_volumes(
     )
 
 
-def _save(evaluation: FullFingerEvaluation) -> None:
+def _save(evaluation: FingertipEvaluation) -> None:
     _OUTPUT_DIRECTORY.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(
         _ARTIFACT_PATH,
@@ -132,8 +132,7 @@ def _reload_and_verify() -> dict[str, float | int]:
     ):
         raise RuntimeError("reloaded checkpoint ROI accounting does not close")
     if not np.allclose(
-        arrays["no_contact_inside_roi_power"]
-        + arrays["no_contact_outside_roi_power"],
+        arrays["no_contact_inside_roi_power"] + arrays["no_contact_outside_roi_power"],
         arrays["no_contact_visible_side_power"],
         rtol=0.0,
         atol=1.0e-12,
@@ -165,10 +164,13 @@ def _reload_and_verify() -> dict[str, float | int]:
                 atol=1.0e-12,
             ):
                 raise RuntimeError("contact centroid cannot be reconstructed")
-            if count != arrays["indenter_contact_counts"][
-                scenario_index,
-                force_index,
-            ]:
+            if (
+                count
+                != arrays["indenter_contact_counts"][
+                    scenario_index,
+                    force_index,
+                ]
+            ):
                 raise RuntimeError("raw and scalar indenter contact counts differ")
 
             current_volumes = _six_tet_volumes(
@@ -183,10 +185,13 @@ def _reload_and_verify() -> dict[str, float | int]:
                 atol=1.0e-6,
             ):
                 raise RuntimeError("minimum det(F) cannot be reconstructed")
-            if np.count_nonzero(det_f <= 0.0) != arrays["inverted_tet_counts"][
-                scenario_index,
-                force_index,
-            ]:
+            if (
+                np.count_nonzero(det_f <= 0.0)
+                != arrays["inverted_tet_counts"][
+                    scenario_index,
+                    force_index,
+                ]
+            ):
                 raise RuntimeError("inversion count cannot be reconstructed")
 
     particle_indices = arrays["contact_particle_indices"]
@@ -206,12 +211,12 @@ def _reload_and_verify() -> dict[str, float | int]:
 
 
 def _write_report(
-    evaluation: FullFingerEvaluation,
+    evaluation: FingertipEvaluation,
     verification: dict[str, float | int],
     wall_runtime_s: float,
 ) -> None:
     lines = [
-        "# Full-finger raw evaluator validation",
+        "# Fingertip raw evaluator validation",
         "",
         "Result: PASS",
         "",
@@ -263,7 +268,7 @@ def main() -> None:
         "sphere_15mm.urdf",
     )
     with as_file(sphere_resource) as sphere_path:
-        evaluation = evaluate_full_finger(
+        evaluation = evaluate_fingertip(
             fingertip,
             (sphere_path,),
             (_SPHERE_DIAMETER_MM,),
@@ -275,7 +280,7 @@ def main() -> None:
     wall_runtime_s = perf_counter() - wall_start_s
     _write_report(evaluation, verification, wall_runtime_s)
 
-    print("Full-finger raw evaluator PASS")
+    print("Fingertip raw evaluator PASS")
     print(f"response shape: {evaluation.response_matrix.shape}")
     print(f"contact records: {verification['contact_record_count']}")
     print(f"artifact: {_ARTIFACT_PATH}")

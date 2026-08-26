@@ -34,6 +34,16 @@ def test_default_fingertip_derives_its_physical_assembly() -> None:
     assert not bonding_field.init
 
 
+def test_stem_height_is_the_only_cavity_depth() -> None:
+    geometry = FingertipGeometry(stem_height_mm=7.0)
+    fingertip = Fingertip(FingertipParameters(geometry=geometry))
+
+    assert "void_height_mm" not in {
+        field.name for field in fields(FingertipGeometry)
+    }
+    assert fingertip.silicone.cavity_bottom_z_mm == -7.0
+
+
 def test_invalid_geometry_raises_value_error() -> None:
     with pytest.raises(ValueError, match="flat_pad_height_mm"):
         FingertipGeometry(flat_pad_height_mm=0.0)

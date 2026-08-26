@@ -1,4 +1,4 @@
-"""Visualize the full five-LED mesh and its simplified material layout."""
+"""Visualize the complete fingertip mesh and simplified material layout."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ _OUTPUT_PATH = (
     Path(__file__).resolve().parents[2]
     / "output"
     / "validation"
-    / "fingertip_5led_mesh.png"
+    / "fingertip_mesh.png"
 )
 _SILICONE_COLOR = "#8ecae6"
 _SILICONE_EDGE = "#126782"

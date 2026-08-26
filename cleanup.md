@@ -35,7 +35,6 @@ FingertipGeometry가 frozen dataclass이고, 모든 물리 치수에 _mm suffix�
 
 total_pad_depth_mm
 cutout_width_mm
-cutout_height_mm
 
 가 있어서 downstream에서 식을 복붙하지 않게 한 것도 좋고.
 

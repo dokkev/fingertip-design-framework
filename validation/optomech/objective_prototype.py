@@ -11,10 +11,7 @@ import numpy as np
 
 
 _INPUT_PATH = Path(
-    "output/validation/full_finger_raw_evaluator/nominal_full_finger_raw.npz"
-)
-_SPATIAL_INPUT_PATH = Path(
-    "output/validation/full_finger_spatial_observation/spatial_response.npz"
+    "output/validation/fingertip_raw_evaluator/nominal_fingertip_raw.npz"
 )
 _OUTPUT_DIRECTORY = Path("output/validation/full_finger_objective_prototype")
 _CONTACT_CSV = _OUTPUT_DIRECTORY / "contact_components.csv"
@@ -323,7 +320,6 @@ def force_conditioned_observation(
 
 def _observation_components(
     data: dict[str, np.ndarray],
-    spatial_data: dict[str, np.ndarray] | None,
 ) -> tuple[
     list[dict[str, object]],
     list[dict[str, object]],
@@ -350,30 +346,6 @@ def _observation_components(
         )
     else:
         raise RuntimeError("raw response must have 4 or 11 observation channels")
-    if spatial_data is not None:
-        for name in ("scenario_names", "contact_y_mm", "force_targets_n"):
-            if not np.array_equal(spatial_data[name], data[name]):
-                raise RuntimeError(f"spatial artifact has mismatched {name}")
-        spatial_response = spatial_data["response_matrix"]
-        spatial_baseline = spatial_data["no_contact_response"]
-        spatial_values = spatial_response.sum(axis=2)
-        spatial_no_contact = spatial_baseline.sum(axis=0)
-        if "camera_spatial_11d_observable" in representations:
-            existing_values, existing_baseline, _ = representations[
-                "camera_spatial_11d_observable"
-            ]
-            if not np.allclose(existing_values, spatial_values, atol=1.0e-12) or not np.allclose(
-                existing_baseline,
-                spatial_no_contact,
-                atol=1.0e-12,
-            ):
-                raise RuntimeError("raw and reprojected spatial responses differ")
-        else:
-            representations["camera_spatial_11d_observable"] = (
-                spatial_values,
-                spatial_no_contact,
-                True,
-            )
     diagnostic_name = f"per_emitter_{5 * response.shape[-1]}d_diagnostic"
     representations[diagnostic_name] = (
         response.reshape(*response.shape[:2], -1),
@@ -781,14 +753,8 @@ def _write_report(
 def main() -> None:
     if not _INPUT_PATH.is_file():
         raise FileNotFoundError(_INPUT_PATH)
-    if not _SPATIAL_INPUT_PATH.is_file():
-        raise FileNotFoundError(
-            f"{_SPATIAL_INPUT_PATH}; run full_finger_spatial_observation.py first"
-        )
     with np.load(_INPUT_PATH) as saved:
         data = {name: np.asarray(saved[name]) for name in saved.files}
-    with np.load(_SPATIAL_INPUT_PATH) as saved:
-        spatial_data = {name: np.asarray(saved[name]) for name in saved.files}
     required = {
         "reference_vertices_m",
         "surface_triangles",
@@ -817,7 +783,6 @@ def main() -> None:
     contact_rows = _contact_components(data)
     onset_rows, distance_rows, trajectory_rows, summaries = _observation_components(
         data,
-        spatial_data,
     )
     _write_csv(_CONTACT_CSV, contact_rows)
     _write_csv(_OBSERVATION_ONSET_CSV, onset_rows)

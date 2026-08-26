@@ -13,17 +13,21 @@ from time import perf_counter
 import matplotlib.pyplot as plt
 import numpy as np
 
-from lumo.fingertip import Fingertip, FingertipParameters
+from lumo.fingertip import ACTIVE_Y_BOUNDS_MM, Fingertip, FingertipParameters
 from lumo.mesh import make_fingertip_mesh
 from lumo.optimization.objective import compute_observation_objective
 from lumo.ray_tracing import (
     LED,
     OptixScene,
     longitudinal_side_view_power,
-    safe_secondary_origins,
-    source_inside_silicone,
     trace_bounded_paths,
 )
+from lumo.ray_tracing.scene import (
+    _CARRIER_MASK,
+    _SILICONE_MASK,
+    safe_secondary_origins,
+)
+from lumo.ray_tracing.transport import lambertian_emission
 
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
@@ -31,8 +35,8 @@ _REFERENCE_PATH = (
     _REPOSITORY_ROOT
     / "output"
     / "validation"
-    / "full_finger_production_objective_freeze"
-    / "nominal_full_finger_objectives.npz"
+    / "fingertip_production_objective_freeze"
+    / "nominal_fingertip_objectives.npz"
 )
 _RAMP_DIRECTORY = (
     _REPOSITORY_ROOT / "output" / "validation" / "quasistatic_ramp_protocol"
@@ -67,11 +71,6 @@ _BINNING_NAMES = ("hard", "linear")
 _MODEL_SOURCE_INDEX = np.array((0, 0, 1, 1), dtype=np.int64)
 _MODEL_LINEAR_SPLAT = (False, True, False, True)
 
-_SILICONE_INSTANCE_ID = 1
-_CARRIER_INSTANCE_ID = 2
-_SILICONE_MASK = 0x01
-_CARRIER_MASK = 0x02
-_ALL_MASK = _SILICONE_MASK | _CARRIER_MASK
 _SAMPLE_SIDE_COUNT = 256
 _MAX_BOUNCES = 24
 _PATH_RNG_SEED = 20260823
@@ -80,6 +79,13 @@ _CARRIER_ALBEDO = 0.7
 _EMITTING_WINDOW_X_M = 1.8e-3
 _EMITTING_WINDOW_Y_M = 1.6e-3
 _EMITTED_POWER = 5.0
+_EMISSION_DTYPE = np.dtype(
+    [
+        ("origin_W_m", np.float64, (3,)),
+        ("direction_W", np.float64, (3,)),
+        ("power", np.float64),
+    ]
+)
 _ENERGY_FIELDS = (
     "emitted_power",
     "escaped_power",
@@ -127,6 +133,24 @@ def _make_leds(fingertip: Fingertip, led_centers_m: np.ndarray) -> tuple[LED, ..
     )
 
 
+def _sample_emission(
+    led: LED,
+    angular_u1: np.ndarray,
+    angular_u2: np.ndarray,
+) -> np.ndarray:
+    sampled = lambertian_emission(
+        np.repeat(led.normal_W[None, :], len(angular_u1), axis=0),
+        total_power=led.parameters.normalized_power,
+        u1=angular_u1,
+        u2=angular_u2,
+    )
+    emission = np.empty(len(angular_u1), dtype=_EMISSION_DTYPE)
+    emission["origin_W_m"] = led.position_W_m
+    emission["direction_W"] = sampled["direction"]
+    emission["power"] = sampled["ray_power"]
+    return emission
+
+
 def _point_emission(
     scene: OptixScene,
     led: LED,
@@ -142,7 +166,7 @@ def _point_emission(
     hit_position = probe_origin[0] + hit["t"][0] * led.normal_W
     if not np.allclose(hit_position, led.position_W_m, rtol=0.0, atol=1.0e-7):
         raise RuntimeError("point-source carrier probe found the wrong surface")
-    emission = led.emit(angular_u1, angular_u2)
+    emission = _sample_emission(led, angular_u1, angular_u2)
     emission["origin_W_m"] = safe_secondary_origins(hit, direction)[0]
     return emission
 
@@ -155,7 +179,7 @@ def _area_emission(
     area_u_x: np.ndarray,
     area_u_y: np.ndarray,
 ) -> np.ndarray:
-    emission = led.emit(angular_u1, angular_u2)
+    emission = _sample_emission(led, angular_u1, angular_u2)
     source_positions = np.repeat(led.position_W_m[None, :], len(emission), axis=0)
     source_positions[:, 0] += _EMITTING_WINDOW_X_M * (area_u_x - 0.5)
     source_positions[:, 1] += _EMITTING_WINDOW_Y_M * (area_u_y - 0.5)
@@ -184,15 +208,6 @@ def _source_media(
     *,
     finite_area: bool,
 ) -> np.ndarray:
-    if not finite_area:
-        inside = source_inside_silicone(
-            scene,
-            led,
-            emission,
-            silicone_mask=_SILICONE_MASK,
-        )
-        return np.full(len(emission), inside, dtype=np.bool_)
-
     directions = np.repeat(led.normal_W[None, :], len(emission), axis=0)
     hits = scene.trace_closest(
         emission["origin_W_m"],
@@ -204,7 +219,49 @@ def _source_media(
     projections = np.einsum("ij,ij->i", hits["normal_W"], directions)
     if np.any(np.abs(projections) <= 1.0e-6):
         raise RuntimeError("finite-area source interface is geometrically ambiguous")
-    return projections > 0.0
+    inside = projections > 0.0
+    if not finite_area and np.any(inside != inside[0]):
+        raise RuntimeError("coincident point-source media disagree")
+    return inside
+
+
+def _linear_side_view_power(
+    escaped_rays: np.ndarray,
+) -> tuple[np.ndarray, float, float]:
+    """Reproduce the historical linear-splat comparison locally."""
+    rays = np.asarray(escaped_rays)
+    origins = np.asarray(rays["origin_W_m"], dtype=np.float64)
+    directions = np.asarray(rays["direction_W"], dtype=np.float64)
+    power = np.asarray(rays["power"], dtype=np.float64)
+    response = np.zeros(11, dtype=np.float64)
+    y_min_m, y_max_m = (1.0e-3 * value for value in ACTIVE_Y_BOUNDS_MM)
+    visible = directions[:, 0] > 0.0
+    active = visible & (origins[:, 1] >= y_min_m) & (origins[:, 1] <= y_max_m)
+    active_y_m = origins[active, 1]
+    active_power = power[active]
+    if len(active_y_m):
+        bin_width_m = (y_max_m - y_min_m) / len(response)
+        center_coordinate = (active_y_m - y_min_m) / bin_width_m - 0.5
+        lower_bin = np.floor(center_coordinate).astype(np.int64)
+        upper_weight = center_coordinate - lower_bin
+        below = lower_bin < 0
+        above = lower_bin >= len(response) - 1
+        interior = ~(below | above)
+        response[0] += float(active_power[below].sum())
+        response[-1] += float(active_power[above].sum())
+        np.add.at(
+            response,
+            lower_bin[interior],
+            active_power[interior] * (1.0 - upper_weight[interior]),
+        )
+        np.add.at(
+            response,
+            lower_bin[interior] + 1,
+            active_power[interior] * upper_weight[interior],
+        )
+    visible_power = float(power[visible].sum())
+    outside_power = max(0.0, visible_power - float(response.sum()))
+    return response, outside_power, visible_power
 
 
 def _path_energy(paths: object) -> np.ndarray:
@@ -261,9 +318,6 @@ def _trace_state(
             dielectric_branch_u=dielectric_branch_u,
             carrier_u1=carrier_u1,
             carrier_u2=carrier_u2,
-            silicone_instance_id=_SILICONE_INSTANCE_ID,
-            carrier_instance_id=_CARRIER_INSTANCE_ID,
-            mask=_ALL_MASK,
         )
         hard[led_index], hard_outside, hard_visible = longitudinal_side_view_power(
             paths.escaped_rays,
@@ -272,10 +326,7 @@ def _trace_state(
             linear[led_index],
             linear_outside,
             linear_visible,
-        ) = longitudinal_side_view_power(
-            paths.escaped_rays,
-            linear_splat=True,
-        )
+        ) = _linear_side_view_power(paths.escaped_rays)
         if not np.isclose(hard_outside, linear_outside, rtol=0.0, atol=1.0e-12):
             raise RuntimeError("hard and linear binning changed outside-ROI power")
         if not np.isclose(hard_visible, linear_visible, rtol=0.0, atol=1.0e-12):
@@ -664,13 +715,7 @@ def main() -> None:
         atol=1.0e-7,
     ):
         raise RuntimeError("saved deformation states do not match the current mesh")
-    scene = OptixScene(
-        mesh,
-        silicone_instance_id=_SILICONE_INSTANCE_ID,
-        carrier_instance_id=_CARRIER_INSTANCE_ID,
-        silicone_visibility_mask=_SILICONE_MASK,
-        carrier_visibility_mask=_CARRIER_MASK,
-    )
+    scene = OptixScene(mesh)
     leds = _make_leds(fingertip, reference["led_centers_m"])
 
     coordinate = (

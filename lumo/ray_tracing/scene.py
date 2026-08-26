@@ -17,6 +17,11 @@ if TYPE_CHECKING:
 
 _PAYLOAD_WORD_COUNT = 6
 _RESULT_WORD_COUNT = 15
+_SILICONE_INSTANCE_ID = 1
+_CARRIER_INSTANCE_ID = 2
+_SILICONE_MASK = 0x01
+_CARRIER_MASK = 0x02
+_ALL_MASK = _SILICONE_MASK | _CARRIER_MASK
 _RESULT_DTYPE = np.dtype(
     [
         ("hit", np.bool_),
@@ -59,13 +64,6 @@ def _triangles(
     if int(triangle_indices.max()) >= vertex_count:
         raise ValueError(f"{name} contains an out-of-range vertex index")
     return np.ascontiguousarray(triangle_indices, dtype=np.uint32)
-
-
-def _instance_id(value: int, *, name: str) -> int:
-    value = int(value)
-    if not 0 <= value <= 0xFFFFFF:
-        raise ValueError(f"{name} must be in [0, 0xFFFFFF]")
-    return value
 
 
 def _visibility_mask(value: int, *, name: str) -> int:
@@ -191,11 +189,6 @@ class OptixScene:
         self,
         fingertip_mesh: FingertipMesh,
         *,
-        silicone_instance_id: int,
-        carrier_instance_id: int,
-        silicone_visibility_mask: int,
-        carrier_visibility_mask: int,
-        silicone_vertices: np.ndarray | None = None,
         optix_include_dir: str | Path | None = None,
         otk_include_dir: str | Path | None = None,
     ) -> None:
@@ -203,21 +196,10 @@ class OptixScene:
 
         if not isinstance(fingertip_mesh, FingertipMesh):
             raise TypeError("fingertip_mesh must be a FingertipMesh")
-        mesh_silicone_vertices = _vertices(
+        silicone_vertices = _vertices(
             fingertip_mesh.silicone.vertices,
             name="fingertip_mesh.silicone.vertices",
         )
-        if silicone_vertices is None:
-            silicone_vertices = mesh_silicone_vertices
-        silicone_vertices = _vertices(
-            silicone_vertices,
-            name="silicone_vertices",
-        )
-        if len(silicone_vertices) != len(mesh_silicone_vertices):
-            raise ValueError(
-                "silicone_vertices must preserve the fingertip mesh vertex count"
-            )
-
         silicone_triangles = _triangles(
             fingertip_mesh.silicone.surface_tri_indices,
             vertex_count=len(silicone_vertices),
@@ -248,29 +230,6 @@ class OptixScene:
             vertex_count=len(carrier_vertices),
             name="fingertip_mesh.carrier.indices",
         )
-        instance_ids = (
-            _instance_id(
-                silicone_instance_id,
-                name="silicone_instance_id",
-            ),
-            _instance_id(
-                carrier_instance_id,
-                name="carrier_instance_id",
-            ),
-        )
-        if len(set(instance_ids)) != len(instance_ids):
-            raise ValueError("OptiX instance IDs must be distinct")
-        visibility_masks = (
-            _visibility_mask(
-                silicone_visibility_mask,
-                name="silicone_visibility_mask",
-            ),
-            _visibility_mask(
-                carrier_visibility_mask,
-                name="carrier_visibility_mask",
-            ),
-        )
-
         try:
             import cupy as cp
             import optix
@@ -319,9 +278,6 @@ class OptixScene:
         self._sbt_buffers: list[object] = []
         self._launch_buffers: list[object] = []
         self._log_messages: list[str] = []
-        self._instance_ids = instance_ids
-        self._visibility_masks = visibility_masks
-
         cp.cuda.runtime.free(0)
         context_options = optix.DeviceContextOptions(
             logCallbackFunction=self._log,
@@ -487,20 +443,28 @@ class OptixScene:
             1.0,
             0.0,
         ]
-        handles = (
-            self._silicone_gas_handle,
-            self._carrier_gas_handle,
+        instance_specs = (
+            (
+                self._silicone_gas_handle,
+                _SILICONE_INSTANCE_ID,
+                _SILICONE_MASK,
+            ),
+            (
+                self._carrier_gas_handle,
+                _CARRIER_INSTANCE_ID,
+                _CARRIER_MASK,
+            ),
         )
         instances = [
             optix.Instance(
                 transform=identity,
-                instanceId=self._instance_ids[index],
+                instanceId=instance_id,
                 sbtOffset=0,
-                visibilityMask=self._visibility_masks[index],
+                visibilityMask=visibility_mask,
                 flags=int(optix.INSTANCE_FLAG_NONE),
                 traversableHandle=handle,
             )
-            for index, handle in enumerate(handles)
+            for handle, instance_id, visibility_mask in instance_specs
         ]
         return np.frombuffer(
             optix.getDeviceRepresentation(instances),

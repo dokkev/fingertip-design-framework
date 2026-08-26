@@ -37,17 +37,8 @@ _BARYCENTRIC_TOLERANCE = 2.0e-5
 
 def _make_scene(
     fingertip_mesh: FingertipMesh,
-    *,
-    silicone_vertices: np.ndarray | None = None,
 ) -> OptixScene:
-    return OptixScene(
-        fingertip_mesh,
-        silicone_instance_id=SILICONE_INSTANCE_ID,
-        carrier_instance_id=CARRIER_INSTANCE_ID,
-        silicone_visibility_mask=SILICONE_MASK,
-        carrier_visibility_mask=CARRIER_MASK,
-        silicone_vertices=silicone_vertices,
-    )
+    return OptixScene(fingertip_mesh)
 
 
 def _assert_expected_hits(results: np.ndarray) -> None:
@@ -284,10 +275,8 @@ def main() -> None:
             mask=ALL_MASK,
         )
         _assert_expected_hits(updated_results)
-        fresh_scene = _make_scene(
-            simulation.fingertip_mesh,
-            silicone_vertices=final_vertices,
-        )
+        fresh_scene = _make_scene(simulation.fingertip_mesh)
+        fresh_scene.update_silicone(final_vertices)
         fresh_results = fresh_scene.trace_closest(
             origins,
             directions,

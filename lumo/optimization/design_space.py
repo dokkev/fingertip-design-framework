@@ -1,4 +1,4 @@
-"""Feasible design space for fingertip optimization."""
+"""Five-dimensional feasible design space for fingertip optimization."""
 
 from __future__ import annotations
 
@@ -11,319 +11,121 @@ from lumo.fingertip.fingertip import Fingertip
 from lumo.fingertip.fingertip_param import FingertipParameters
 from lumo.util.scalar_validation import require_finite
 
-from .design_param_bound import DesignParameterBounds
-
 
 MAX_FINGERTIP_HEIGHT_MM = 30.0
+MINIMUM_SILICONE_THICKNESS_MM = 5.0
+_GEOMETRY_PARAMETER_NAMES = (
+    "flat_pad_height_mm",
+    "semiellipse_height_mm",
+    "stem_width_mm",
+    "stem_height_mm",
+    "void_width_mm",
+)
 
 
 @dataclass(frozen=True)
-class LinearConstraint:
-    """Linear constraint over fingertip design parameters.
+class ParameterBound:
+    """Inclusive lower and upper bounds for one geometry parameter."""
 
-    The constraint represents
-
-        lower <= sum(a_i * x_i) <= upper
-
-    Parameter names use qualified paths such as
-
-        geometry.flat_pad_height_mm
-        led.width_mm
-    """
-
-    coefficients: Mapping[str, float]
-    lower: float | None = None
-    upper: float | None = None
+    lower: float
+    upper: float
 
     def __post_init__(self) -> None:
-        coefficients = {}
-        for name, raw_value in self.coefficients.items():
-            require_finite(
-                f"coefficient for {name!r}",
-                raw_value,
-            )
-            value = float(raw_value)
-            if value != 0.0:
-                coefficients[name] = value
-
-        if not coefficients:
-            raise ValueError(
-                "linear constraint requires at least one nonzero coefficient"
-            )
-
-        for name, coefficient in coefficients.items():
-            if not isinstance(name, str) or "." not in name:
-                raise ValueError(
-                    "constraint parameter names must use '<group>.<parameter>'"
-                )
-
-        if self.lower is None:
-            lower = None
-        else:
-            require_finite("constraint lower bound", self.lower)
-            lower = float(self.lower)
-
-        if self.upper is None:
-            upper = None
-        else:
-            require_finite("constraint upper bound", self.upper)
-            upper = float(self.upper)
-
-        if lower is None and upper is None:
-            raise ValueError(
-                "linear constraint requires lower or upper"
-            )
-
-        if (
-            lower is not None
-            and upper is not None
-            and lower > upper
-        ):
-            raise ValueError(
-                "constraint must satisfy lower <= upper"
-            )
-
-        object.__setattr__(
-            self,
-            "coefficients",
-            MappingProxyType(coefficients),
-        )
+        require_finite("lower", self.lower)
+        require_finite("upper", self.upper)
+        lower = float(self.lower)
+        upper = float(self.upper)
+        if lower >= upper:
+            raise ValueError("parameter bound must satisfy lower < upper")
         object.__setattr__(self, "lower", lower)
         object.__setattr__(self, "upper", upper)
-
-    def is_satisfied(
-        self,
-        values: Mapping[str, float],
-    ) -> bool:
-        """Return whether the supplied parameter values satisfy the constraint."""
-
-        try:
-            value = sum(
-                coefficient * values[name]
-                for name, coefficient in self.coefficients.items()
-            )
-        except KeyError as exc:
-            raise ValueError(
-                f"constraint references unknown parameter {exc.args[0]!r}"
-            ) from exc
-
-        if self.lower is not None and value < self.lower:
-            return False
-
-        if self.upper is not None and value > self.upper:
-            return False
-
-        return True
 
 
 @dataclass(frozen=True)
 class DesignSpace:
-    """Feasible fingertip design space.
+    """Current five-parameter fingertip morphology domain.
 
-    ``parameter_bounds`` defines the raw optimization domain. Linear and
-    geometric constraints restrict that domain to the feasible subset.
+    ``base_parameters`` owns every fixed physical input. ``geometry_bounds``
+    names only the geometry fields varied by Ax. Constructing ``Fingertip`` is
+    the authoritative nonlinear geometry check; the complete height and minimum
+    silicone thickness are the two optimization-level feasibility limits.
     """
 
-    parameter_bounds: DesignParameterBounds = field(
-        default_factory=DesignParameterBounds
-    )
-
-    linear_constraints: tuple[LinearConstraint, ...] = ()
-
-    minimum_silicone_thickness_mm: float | None = None
+    base_parameters: FingertipParameters = field(default_factory=FingertipParameters)
+    geometry_bounds: Mapping[str, ParameterBound] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        if not isinstance(
-            self.parameter_bounds,
-            DesignParameterBounds,
-        ):
-            raise TypeError(
-                "parameter_bounds must be DesignParameterBounds"
+        if not isinstance(self.base_parameters, FingertipParameters):
+            raise TypeError("base_parameters must be FingertipParameters")
+        if not isinstance(self.geometry_bounds, Mapping):
+            raise TypeError("geometry_bounds must be a mapping")
+
+        bounds = dict(self.geometry_bounds)
+        if set(bounds) != set(_GEOMETRY_PARAMETER_NAMES):
+            raise ValueError(
+                "geometry_bounds must define exactly the current five design "
+                f"parameters: {_GEOMETRY_PARAMETER_NAMES!r}"
             )
-
-        constraints = tuple(self.linear_constraints)
-
-        if not all(
-            isinstance(constraint, LinearConstraint)
-            for constraint in constraints
-        ):
-            raise TypeError(
-                "linear_constraints must contain LinearConstraint objects"
-            )
-
-        minimum_thickness = self.minimum_silicone_thickness_mm
-
-        if minimum_thickness is not None:
-            minimum_thickness = float(minimum_thickness)
-
-            if (
-                not isfinite(minimum_thickness)
-                or minimum_thickness < 0.0
-            ):
-                raise ValueError(
-                    "minimum_silicone_thickness_mm must be "
-                    "finite and non-negative"
-                )
-
+        for name, bound in bounds.items():
+            if not isinstance(bound, ParameterBound):
+                raise TypeError(f"geometry bound for {name!r} must be ParameterBound")
         object.__setattr__(
             self,
-            "linear_constraints",
-            constraints,
-        )
-        object.__setattr__(
-            self,
-            "minimum_silicone_thickness_mm",
-            minimum_thickness,
+            "geometry_bounds",
+            MappingProxyType(
+                {name: bounds[name] for name in _GEOMETRY_PARAMETER_NAMES}
+            ),
         )
 
     @property
     def variable_names(self) -> tuple[str, ...]:
-        """Return all free optimization parameter names."""
+        """Return qualified optimization parameter names in declared order."""
+        return tuple(f"geometry.{name}" for name in self.geometry_bounds)
 
-        geometry = tuple(
-            f"geometry.{name}"
-            for name in self.parameter_bounds.geometry
-        )
-
-        led = tuple(
-            f"led.{name}"
-            for name in self.parameter_bounds.led
-        )
-
-        return geometry + led
-
-    def to_parameters(
-        self,
-        candidate: Mapping[str, float],
-    ) -> FingertipParameters:
+    def to_parameters(self, candidate: Mapping[str, float]) -> FingertipParameters:
         """Construct complete fingertip parameters from one candidate."""
-
         expected = set(self.variable_names)
         received = set(candidate)
-
         if received != expected:
-            missing = expected - received
-            extra = received - expected
-
             details = []
-
-            if missing:
+            if missing := expected - received:
                 details.append(f"missing={sorted(missing)!r}")
-
-            if extra:
+            if extra := received - expected:
                 details.append(f"unexpected={sorted(extra)!r}")
-
             raise ValueError(
                 "candidate must define exactly the free parameters: "
                 + ", ".join(details)
             )
 
         geometry_values = {}
-        led_values = {}
-
-        for name, bound in self.parameter_bounds.geometry.items():
+        for name, bound in self.geometry_bounds.items():
             key = f"geometry.{name}"
             value = float(candidate[key])
-
             if not isfinite(value):
-                raise ValueError(
-                    f"{key!r} must be finite"
-                )
-
+                raise ValueError(f"{key!r} must be finite")
             if not bound.lower <= value <= bound.upper:
-                raise ValueError(
-                    f"{key!r} lies outside its parameter bounds"
-                )
-
+                raise ValueError(f"{key!r} lies outside its parameter bounds")
             geometry_values[name] = value
 
-        for name, bound in self.parameter_bounds.led.items():
-            key = f"led.{name}"
-            value = float(candidate[key])
+        geometry = replace(self.base_parameters.geometry, **geometry_values)
+        return replace(self.base_parameters, geometry=geometry)
 
-            if not isfinite(value):
-                raise ValueError(
-                    f"{key!r} must be finite"
-                )
-
-            if not bound.lower <= value <= bound.upper:
-                raise ValueError(
-                    f"{key!r} lies outside its parameter bounds"
-                )
-
-            led_values[name] = value
-
-        base = self.parameter_bounds.parameters
-
-        geometry = replace(
-            base.geometry,
-            **geometry_values,
-        )
-
-        led = replace(
-            base.led,
-            **led_values,
-        )
-
-        return replace(
-            base,
-            geometry=geometry,
-            led=led,
-        )
-
-    def parameter_values(
-        self,
-        parameters: FingertipParameters,
-    ) -> dict[str, float]:
-        """Return qualified scalar parameter values used by constraints."""
-
-        geometry = {
-            f"geometry.{name}": float(value)
-            for name, value in vars(parameters.geometry).items()
-        }
-
-        led = {
-            f"led.{name}": float(value)
-            for name, value in vars(parameters.led).items()
-        }
-
-        return geometry | led
-
-    def is_feasible(
-        self,
-        candidate: Mapping[str, float],
-    ) -> bool:
-        """Return whether a candidate belongs to the feasible design space."""
-
+    def is_feasible(self, candidate: Mapping[str, float]) -> bool:
+        """Return whether a candidate belongs to the physical design domain."""
         try:
-            parameters = self.to_parameters(candidate)
-        except (ValueError, TypeError):
+            fingertip = Fingertip(self.to_parameters(candidate))
+        except (TypeError, ValueError):
             return False
-
-        values = self.parameter_values(parameters)
-
-        if any(
-            not constraint.is_satisfied(values)
-            for constraint in self.linear_constraints
-        ):
-            return False
-
-        fingertip = Fingertip(parameters)
-        if fingertip.full_height_mm > MAX_FINGERTIP_HEIGHT_MM:
-            return False
-
-        if self.minimum_silicone_thickness_mm is not None:
-            if (
-                fingertip.silicone.minimum_silicone_thickness_mm
-                < self.minimum_silicone_thickness_mm
-            ):
-                return False
-
-        return True
+        return (
+            fingertip.full_height_mm <= MAX_FINGERTIP_HEIGHT_MM
+            and fingertip.silicone.minimum_silicone_thickness_mm
+            >= MINIMUM_SILICONE_THICKNESS_MM
+        )
 
 
 __all__ = [
     "DesignSpace",
-    "LinearConstraint",
     "MAX_FINGERTIP_HEIGHT_MM",
+    "MINIMUM_SILICONE_THICKNESS_MM",
+    "ParameterBound",
 ]

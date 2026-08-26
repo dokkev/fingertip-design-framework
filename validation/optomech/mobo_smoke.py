@@ -20,7 +20,6 @@ def _run(output_directory: Path) -> list[dict[str, object]]:
     return run(
         output_directory=output_directory,
         target_bo_trials=1,
-        campaign_name="discrete-05mm",
         mechanics_preset=production.MECHANICS_PRESET,
         optical_preset=production.OPTICAL_PRESET,
         parameter_bounds_mm=production.PARAMETER_BOUNDS_MM,
@@ -34,9 +33,7 @@ def _run(output_directory: Path) -> list[dict[str, object]]:
 
 def _completed_trial_indices(rows: list[dict[str, object]]) -> tuple[int, ...]:
     return tuple(
-        int(row["ax_trial_index"])
-        for row in rows
-        if row["source"] == "bo" and row["status"] == "COMPLETED"
+        int(row["ax_trial_index"]) for row in rows if row["status"] == "COMPLETED"
     )
 
 
@@ -44,24 +41,17 @@ def main() -> None:
     os.environ.setdefault("OTK_INCLUDE_DIR", str(production.OTK_INCLUDE_DIR))
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
     output_directory = (
-        _REPOSITORY_ROOT
-        / "output"
-        / "validation"
-        / "mobo_smoke"
-        / timestamp
+        _REPOSITORY_ROOT / "output" / "validation" / "mobo_smoke" / timestamp
     )
     print(
-        "Production BO smoke: one full morphology evaluation; "
-        f"output={output_directory}",
+        f"Production BO smoke: one morphology evaluation; output={output_directory}",
         flush=True,
     )
 
     rows = _run(output_directory)
     completed_before_resume = _completed_trial_indices(rows)
     if len(completed_before_resume) != 1:
-        raise RuntimeError(
-            "smoke did not produce exactly one completed BO morphology"
-        )
+        raise RuntimeError("smoke did not produce exactly one completed BO morphology")
 
     resumed_rows = _run(output_directory)
     completed_after_resume = _completed_trial_indices(resumed_rows)

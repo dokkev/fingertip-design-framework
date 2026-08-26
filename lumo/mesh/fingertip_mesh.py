@@ -84,11 +84,6 @@ def make_fingertip_mesh(
     if not isinstance(fingertip, Fingertip):
         raise TypeError("fingertip must be a Fingertip")
     require_positive("element_size_mm", element_size_mm)
-    if fingertip.parameters.geometry.void_height_mm != 0.0:
-        raise ValueError(
-            "the production geometry requires "
-            "void_height_mm=0; LED clearance comes from the stem recesses"
-        )
 
     silicone, bonded_vertex_indices = _make_silicone_mesh(
         fingertip.silicone,

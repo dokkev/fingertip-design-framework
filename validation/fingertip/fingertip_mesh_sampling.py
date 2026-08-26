@@ -8,40 +8,21 @@ import numpy as np
 
 from lumo.fingertip import Fingertip, FingertipParameters
 from lumo.mesh import make_fingertip_mesh
-from lumo.optimization import (
-    DesignParameterBounds,
-    DesignSpace,
-    LinearConstraint,
-    ParameterBound,
-)
+from lumo.optimization.design_space import DesignSpace, ParameterBound
 
 
 def make_design_space() -> DesignSpace:
     """Return the fingertip design space used by this validation."""
 
-    parameter_bounds = DesignParameterBounds(
-        parameters=FingertipParameters(),
-        geometry={
+    return DesignSpace(
+        base_parameters=FingertipParameters(),
+        geometry_bounds={
             "flat_pad_height_mm": ParameterBound(2.0, 19.0),
             "semiellipse_height_mm": ParameterBound(1.0, 18.0),
             "stem_width_mm": ParameterBound(6.0, 10.0),
             "stem_height_mm": ParameterBound(4.0, 10.0),
             "void_width_mm": ParameterBound(0.0, 4.0),
         },
-    )
-
-    return DesignSpace(
-        parameter_bounds=parameter_bounds,
-        linear_constraints=(
-            LinearConstraint(
-                coefficients={
-                    "geometry.flat_pad_height_mm": 1.0,
-                    "geometry.semiellipse_height_mm": 1.0,
-                },
-                upper=20.0,
-            ),
-        ),
-        minimum_silicone_thickness_mm=5.0,
     )
 
 
@@ -53,15 +34,8 @@ def sample_candidate(
 
     candidate: dict[str, float] = {}
 
-    for name, bound in space.parameter_bounds.geometry.items():
-        candidate[f"geometry.{name}"] = float(
-            rng.uniform(bound.lower, bound.upper)
-        )
-
-    for name, bound in space.parameter_bounds.led.items():
-        candidate[f"led.{name}"] = float(
-            rng.uniform(bound.lower, bound.upper)
-        )
+    for name, bound in space.geometry_bounds.items():
+        candidate[f"geometry.{name}"] = float(rng.uniform(bound.lower, bound.upper))
 
     return candidate
 
@@ -76,11 +50,14 @@ def signed_tet_volumes(mesh) -> np.ndarray:
     x2 = vertices[tetrahedra[:, 2]]
     x3 = vertices[tetrahedra[:, 3]]
 
-    return np.einsum(
-        "ij,ij->i",
-        x1 - x0,
-        np.cross(x2 - x0, x3 - x0),
-    ) / 6.0
+    return (
+        np.einsum(
+            "ij,ij->i",
+            x1 - x0,
+            np.cross(x2 - x0, x3 - x0),
+        )
+        / 6.0
+    )
 
 
 def validate_tet_orientation(mesh) -> int:
@@ -134,17 +111,19 @@ def validate_carrier_surface(mesh) -> int:
         raise RuntimeError("carrier mesh is not a closed surface")
 
     if any(
-        directed_edges[(start, end)] != 1
-        or directed_edges[(end, start)] != 1
+        directed_edges[(start, end)] != 1 or directed_edges[(end, start)] != 1
         for start, end in undirected_edges
     ):
         raise RuntimeError("carrier mesh has inconsistent triangle winding")
 
-    signed_volume = np.einsum(
-        "ij,ij->i",
-        points[:, 0],
-        np.cross(points[:, 1], points[:, 2]),
-    ).sum() / 6.0
+    signed_volume = (
+        np.einsum(
+            "ij,ij->i",
+            points[:, 0],
+            np.cross(points[:, 1], points[:, 2]),
+        ).sum()
+        / 6.0
+    )
 
     if not np.isfinite(signed_volume) or signed_volume <= 0.0:
         raise RuntimeError("carrier mesh does not have outward winding")
@@ -216,12 +195,8 @@ def main() -> None:
             continue
 
         try:
-            tet_orientation_signs.append(
-                validate_tet_orientation(mesh.silicone)
-            )
-            carrier_orientation_signs.append(
-                validate_carrier_surface(mesh.carrier)
-            )
+            tet_orientation_signs.append(validate_tet_orientation(mesh.silicone))
+            carrier_orientation_signs.append(validate_carrier_surface(mesh.carrier))
             bonded_vertex_counts.append(validate_bonded_vertices(mesh))
         except Exception as exc:
             mesh_failures += 1
@@ -235,12 +210,8 @@ def main() -> None:
 
         vertex_counts.append(mesh.silicone.vertex_count)
         tet_counts.append(mesh.silicone.tet_count)
-        surface_triangle_counts.append(
-            len(mesh.silicone.surface_tri_indices) // 3
-        )
-        carrier_triangle_counts.append(
-            len(np.asarray(mesh.carrier.indices)) // 3
-        )
+        surface_triangle_counts.append(len(mesh.silicone.surface_tri_indices) // 3)
+        carrier_triangle_counts.append(len(np.asarray(mesh.carrier.indices)) // 3)
 
         if len(tet_counts) >= target_meshes:
             break
@@ -254,15 +225,10 @@ def main() -> None:
     print(f"Mesh failures:      {mesh_failures}")
 
     if feasible_count > 0:
-        print(
-            f"Mesh success rate:  "
-            f"{len(tet_counts) / feasible_count:.1%}"
-        )
+        print(f"Mesh success rate:  {len(tet_counts) / feasible_count:.1%}")
 
     if not tet_counts:
-        raise RuntimeError(
-            "no feasible fingertip produced a valid tetrahedral mesh"
-        )
+        raise RuntimeError("no feasible fingertip produced a valid tetrahedral mesh")
 
     if len(set(tet_orientation_signs)) != 1:
         raise RuntimeError(
@@ -270,9 +236,7 @@ def main() -> None:
         )
 
     if len(set(carrier_orientation_signs)) != 1:
-        raise RuntimeError(
-            "successful meshes use inconsistent carrier orientations"
-        )
+        raise RuntimeError("successful meshes use inconsistent carrier orientations")
 
     orientation = "positive" if tet_orientation_signs[0] > 0 else "negative"
     print(f"Tet volume orientation: {orientation}")
@@ -305,10 +269,7 @@ def _print_statistics(
     array = np.asarray(values)
 
     print(
-        f"{name:18s}"
-        f" min={array.min():6d}"
-        f" mean={array.mean():8.1f}"
-        f" max={array.max():6d}"
+        f"{name:18s} min={array.min():6d} mean={array.mean():8.1f} max={array.max():6d}"
     )
 
 

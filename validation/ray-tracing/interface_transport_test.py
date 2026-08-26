@@ -6,7 +6,7 @@ from math import cos, radians, sin
 
 import numpy as np
 
-from lumo.ray_tracing import interface_transport
+from lumo.ray_tracing.transport import interface_transport
 
 
 _NORMAL = np.array((0.0, 0.0, 1.0))

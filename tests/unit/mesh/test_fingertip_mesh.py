@@ -1,4 +1,4 @@
-"""Regression tests for the full five-LED fingertip mesh."""
+"""Regression tests for the complete fingertip mesh."""
 
 from __future__ import annotations
 
@@ -12,8 +12,6 @@ from lumo.fingertip import (
     LED_RECESS_WIDTH_MM,
     TOTAL_Y_BOUNDS_MM,
     Fingertip,
-    FingertipGeometry,
-    FingertipParameters,
 )
 from lumo.mesh import make_fingertip_mesh
 
@@ -138,7 +136,6 @@ def test_carrier_has_55_mm_stem_and_distal_dorsal_reinforcement(full_mesh) -> No
 
 
 def test_each_led_has_explicit_stem_recess_and_air_gap(full_mesh) -> None:
-    assert full_mesh.fingertip.parameters.geometry.void_height_mm == 0.0
     stem_bottom_z_mm = min(
         z_mm for _, z_mm in full_mesh.fingertip.carrier.cross_section
     )
@@ -208,13 +205,3 @@ def test_each_led_has_explicit_stem_recess_and_air_gap(full_mesh) -> None:
 def test_full_mesh_preserves_local_height_contract(full_mesh) -> None:
     assert full_mesh.fingertip.full_height_mm == 24.0
     assert full_mesh.fingertip.full_height_mm <= 30.0
-
-
-def test_full_mesh_does_not_use_void_height_for_led_clearance() -> None:
-    fingertip = Fingertip(
-        FingertipParameters(
-            geometry=FingertipGeometry(void_height_mm=0.5),
-        )
-    )
-    with pytest.raises(ValueError, match="requires void_height_mm=0"):
-        make_fingertip_mesh(fingertip, element_size_mm=1.0)

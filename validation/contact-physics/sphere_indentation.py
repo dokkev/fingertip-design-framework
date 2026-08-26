@@ -14,7 +14,7 @@ from shapely.geometry import Polygon
 from lumo.fingertip import Fingertip, FingertipParameters
 from lumo.fingertip.geometric_param import semiellipse_depth_at_x_mm
 from lumo.newton import Indenter
-from lumo.simulation import DesignStudy, DesignTrial, LumoSimulation
+from lumo.simulation import IndentationStudy, IndentationTrial, LumoSimulation
 
 
 _SIM_FREQUENCY_HZ = 1.0e3
@@ -42,7 +42,7 @@ def _make_trial(
     *,
     sphere_diameter_mm: float,
     contact_x_mm: float,
-) -> DesignTrial:
+) -> IndentationTrial:
     local_surface_z_mm = (
         fingertip.silicone.ellipse_center_z_mm
         - semiellipse_depth_at_x_mm(
@@ -63,13 +63,12 @@ def _make_trial(
         wp.quat_identity(),
     )
 
-    return DesignTrial(
+    return IndentationTrial(
         name=f"{Path(urdf_filename).stem}_x{contact_x_mm:+g}mm",
         urdf_path=urdf_path,
         initial_tf=initial_pose,
         motion_direction_W=wp.vec3(0.0, 0.0, 1.0),
         approach_speed_m_s=_APPROACH_SPEED_M_S,
-        target_force_n=_TARGET_FORCE_N,
         max_sim_time_s=_MAX_SIM_TIME_S,
     )
 
@@ -104,7 +103,7 @@ def _carrier_interior_depths_m(
 
 
 def _validate_and_report(
-    trial: DesignTrial,
+    trial: IndentationTrial,
     simulation: LumoSimulation,
     indenter: Indenter,
 ) -> None:
@@ -119,7 +118,7 @@ def _validate_and_report(
         raise RuntimeError(f"{trial.name} has not completed")
 
     contact_x_mm = 1.0e3 * float(np.asarray(trial.initial_tf)[0])
-    force_error_n = abs(reaction_force_n - trial.target_force_n)
+    force_error_n = abs(reaction_force_n - _TARGET_FORCE_N)
     if force_error_n > _FORCE_TOLERANCE_N:
         raise RuntimeError(
             f"{trial.name} missed the held-force tolerance"
@@ -242,12 +241,13 @@ def main() -> None:
                     )
                 )
 
-        study = DesignStudy(
+        study = IndentationStudy(
             fingertip,
             trials,
             sim_frequency=_SIM_FREQUENCY_HZ,
+            force_targets_n=(_TARGET_FORCE_N,),
         )
-        study.run(inspect_trial=_validate_and_report)
+        study.run(inspect_checkpoint=_validate_and_report)
 
     print("nine-trial spherical indentation matrix: PASS")
 

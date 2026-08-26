@@ -34,7 +34,6 @@ class FingertipGeometry:
     stem_height_mm: float = 6.0
 
     void_width_mm: float = 2.0
-    void_height_mm: float = 0.0
 
     def __post_init__(self) -> None:
         self._validate_positive_dimensions()
@@ -51,11 +50,6 @@ class FingertipGeometry:
     def cutout_width_mm(self) -> float:
         """Return the total internal cutout width."""
         return self.stem_width_mm + 2.0 * self.void_width_mm
-
-    @property
-    def cutout_height_mm(self) -> float:
-        """Return the total internal cutout depth."""
-        return self.stem_height_mm + self.void_height_mm
 
     def _validate_positive_dimensions(self) -> None:
         for name in (
@@ -74,11 +68,7 @@ class FingertipGeometry:
             )
 
     def _validate_clearance(self) -> None:
-        for name in ("void_width_mm", "void_height_mm"):
-            require_nonnegative(
-                name,
-                getattr(self, name),
-            )
+        require_nonnegative("void_width_mm", self.void_width_mm)
 
     def _validate_link_geometry(self) -> None:
         if self.bond_extension_height_mm >= self.link_thickness_mm:
@@ -113,7 +103,7 @@ class FingertipGeometry:
 
         penetration_into_semiellipse = max(
             0.0,
-            self.cutout_height_mm - self.flat_pad_height_mm,
+            self.stem_height_mm - self.flat_pad_height_mm,
         )
 
         if penetration_into_semiellipse == 0.0:

@@ -36,7 +36,7 @@ OUTPUT_DIRECTORY = (
     Path(__file__).resolve().parents[1]
     / "output"
     / "optimization"
-    / "mobo_full_finger_instantaneous_05mm"
+    / "mobo_fingertip_instantaneous_05mm"
 )
 
 
@@ -45,7 +45,6 @@ def main() -> None:
     run(
         output_directory=OUTPUT_DIRECTORY,
         target_bo_trials=TARGET_MORPHOLOGIES,
-        campaign_name="discrete-05mm",
         mechanics_preset=MECHANICS_PRESET,
         optical_preset=OPTICAL_PRESET,
         parameter_bounds_mm=PARAMETER_BOUNDS_MM,

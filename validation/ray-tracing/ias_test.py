@@ -74,13 +74,7 @@ def main() -> None:
         fingertip_mesh.carrier.indices,
     ).size // 3
 
-    scene = OptixScene(
-        fingertip_mesh,
-        silicone_instance_id=SILICONE_INSTANCE_ID,
-        carrier_instance_id=CARRIER_INSTANCE_ID,
-        silicone_visibility_mask=SILICONE_MASK,
-        carrier_visibility_mask=CARRIER_MASK,
-    )
+    scene = OptixScene(fingertip_mesh)
 
     silicone_x_m = -0.0065
     silicone_origin = np.array(

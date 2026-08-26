@@ -10,14 +10,10 @@ import numpy as np
 from lumo.fingertip import Fingertip, FingertipParameters
 from lumo.mesh import make_fingertip_mesh
 from lumo.optimization.evaluator import (
-    _CARRIER_INSTANCE_ID,
-    _CARRIER_MASK,
-    _SILICONE_INSTANCE_ID,
-    _SILICONE_MASK,
-    _full_finger_emissions,
-    _full_finger_optical_samples,
-    _make_full_finger_leds,
-    _trace_full_finger_state,
+    _emissions,
+    _make_leds,
+    _optical_samples,
+    _trace_state,
 )
 from lumo.optimization.objective import compute_objectives_from_raw
 from lumo.ray_tracing import OptixScene
@@ -28,8 +24,8 @@ _REFERENCE_PATH = (
     _ROOT
     / "output"
     / "validation"
-    / "full_finger_production_objective_freeze"
-    / "nominal_full_finger_objectives.npz"
+    / "fingertip_production_objective_freeze"
+    / "nominal_fingertip_objectives.npz"
 )
 _OUTPUT_DIRECTORY = (
     _ROOT
@@ -58,18 +54,10 @@ def main() -> None:
         atol=1.0e-7,
     ):
         raise RuntimeError("saved Newton states do not match the current mesh")
-    scene = OptixScene(
-        mesh,
-        silicone_instance_id=_SILICONE_INSTANCE_ID,
-        carrier_instance_id=_CARRIER_INSTANCE_ID,
-        silicone_visibility_mask=_SILICONE_MASK,
-        carrier_visibility_mask=_CARRIER_MASK,
-    )
-    leds = _make_full_finger_leds(fingertip, mesh)
-    emissions = _full_finger_emissions(scene, leds)
-    branch_u, carrier_u1, carrier_u2 = _full_finger_optical_samples(
-        len(emissions[0])
-    )
+    scene = OptixScene(mesh)
+    leds = _make_leds(fingertip, mesh)
+    emissions = _emissions(scene, leds)
+    branch_u, carrier_u1, carrier_u2 = _optical_samples(len(emissions[0]))
 
     scenario_count, force_count = reference["actual_forces_n"].shape
     response = np.empty((scenario_count, force_count, 5, 11), dtype=np.float64)
@@ -79,7 +67,7 @@ def main() -> None:
     trace_start_s = perf_counter()
     scene.update_silicone(reference["reference_vertices_m"])
     no_contact_response, no_contact_energy, no_contact_outside, no_contact_visible = (
-        _trace_full_finger_state(
+        _trace_state(
             scene,
             fingertip,
             leds,
@@ -100,7 +88,7 @@ def main() -> None:
                 energy[scenario_index, force_index],
                 outside[scenario_index, force_index],
                 visible[scenario_index, force_index],
-            ) = _trace_full_finger_state(
+            ) = _trace_state(
                 scene,
                 fingertip,
                 leds,
@@ -156,13 +144,9 @@ def main() -> None:
         outside_roi_power_fraction=outside_fraction,
         J_contact=np.asarray(contact.J_contact),
         J_obs=np.asarray(observation.J_obs),
-        limiting_sphere_diameter_mm=np.asarray(
-            observation.limiting_sphere_diameter_mm
-        ),
+        limiting_sphere_diameter_mm=np.asarray(observation.limiting_sphere_diameter_mm),
         limiting_force_n=np.asarray(observation.limiting_force_n),
-        limiting_contact_y_pair_mm=np.asarray(
-            observation.limiting_contact_y_pair_mm
-        ),
+        limiting_contact_y_pair_mm=np.asarray(observation.limiting_contact_y_pair_mm),
         optical_runtime_s=np.asarray(runtime_s),
     )
     _REPORT_PATH.write_text(

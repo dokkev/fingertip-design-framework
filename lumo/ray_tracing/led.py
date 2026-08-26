@@ -1,4 +1,4 @@
-"""Current Green Sequin LED source models."""
+"""Finite-window Green Sequin LED emission."""
 
 from __future__ import annotations
 
@@ -9,7 +9,12 @@ import numpy as np
 
 from lumo.fingertip import LEDParameters
 
-from .scene import OptixScene, safe_secondary_origins
+from .scene import (
+    OptixScene,
+    _CARRIER_MASK,
+    _SILICONE_MASK,
+    safe_secondary_origins,
+)
 from .transport import lambertian_emission
 
 
@@ -24,7 +29,7 @@ _EMISSION_DTYPE = np.dtype(
 
 @dataclass(frozen=True)
 class LED:
-    """One Adafruit Green LED Sequin modeled as a Lambertian point source.
+    """One physical LED source mounted on a carrier recess.
 
     ``parameters.normalized_power`` is modeled optical power. It is not a
     datasheet optical-watt value and remains uncalibrated.
@@ -55,59 +60,28 @@ class LED:
         object.__setattr__(self, "position_W_m", position)
         object.__setattr__(self, "normal_W", normal)
 
-    def emit(self, u1: np.ndarray, u2: np.ndarray) -> np.ndarray:
-        """Emit deterministic equal-power rays using caller-supplied samples."""
-        u1 = np.asarray(u1, dtype=np.float64)
-        u2 = np.asarray(u2, dtype=np.float64)
-        if u1.ndim != 1 or u2.shape != u1.shape or not len(u1):
-            raise ValueError("u1 and u2 must be nonempty arrays of equal shape")
 
-        sampled = lambertian_emission(
-            np.repeat(self.normal_W[None, :], len(u1), axis=0),
-            total_power=self.parameters.normalized_power,
-            u1=u1,
-            u2=u2,
-        )
-        emission = np.empty(len(u1), dtype=_EMISSION_DTYPE)
-        emission["origin_W_m"] = self.position_W_m
-        emission["direction_W"] = sampled["direction"]
-        emission["power"] = sampled["ray_power"]
-        return emission
-
-
-def emit_from_stem_boundary(
-    scene: OptixScene,
+def _sample_lambertian_emission(
     led: LED,
     u1: np.ndarray,
     u2: np.ndarray,
-    *,
-    carrier_mask: int,
 ) -> np.ndarray:
-    """Emit one LED from its resolved carrier stem boundary."""
-    probe_distance_m = 0.5e-3 * led.parameters.height_mm
-    probe_origin = (led.position_W_m - probe_distance_m * led.normal_W)[None, :]
-    direction = led.normal_W[None, :]
-    carrier_hit = scene.trace_closest(
-        probe_origin,
-        direction,
-        mask=carrier_mask,
-    )
-    if not carrier_hit["hit"][0]:
-        raise RuntimeError("carrier probe did not find the LED stem boundary")
-    hit_position = probe_origin[0] + carrier_hit["t"][0] * led.normal_W
-    if not np.allclose(
-        hit_position,
-        led.position_W_m,
-        rtol=0.0,
-        atol=1.0e-7,
-    ):
-        raise RuntimeError("carrier probe found the wrong LED stem boundary")
+    """Sample deterministic equal-power directions for one LED window."""
+    u1 = np.asarray(u1, dtype=np.float64)
+    u2 = np.asarray(u2, dtype=np.float64)
+    if u1.ndim != 1 or u2.shape != u1.shape or not len(u1):
+        raise ValueError("u1 and u2 must be nonempty arrays of equal shape")
 
-    emission = led.emit(u1, u2)
-    emission["origin_W_m"] = safe_secondary_origins(
-        carrier_hit,
-        direction,
-    )[0]
+    sampled = lambertian_emission(
+        np.repeat(led.normal_W[None, :], len(u1), axis=0),
+        total_power=led.parameters.normalized_power,
+        u1=u1,
+        u2=u2,
+    )
+    emission = np.empty(len(u1), dtype=_EMISSION_DTYPE)
+    emission["origin_W_m"] = led.position_W_m
+    emission["direction_W"] = sampled["direction"]
+    emission["power"] = sampled["ray_power"]
     return emission
 
 
@@ -118,8 +92,6 @@ def emit_from_stem_window(
     angular_u2: np.ndarray,
     window_u_x: np.ndarray,
     window_u_y: np.ndarray,
-    *,
-    carrier_mask: int,
 ) -> np.ndarray:
     """Emit uniformly across the physical X-Y package window.
 
@@ -157,7 +129,7 @@ def emit_from_stem_window(
         ):
             raise ValueError(f"{name} must be finite and in [0, 1)")
 
-    emission = led.emit(angular_u1, angular_u2)
+    emission = _sample_lambertian_emission(led, angular_u1, angular_u2)
     source_positions = np.repeat(
         led.position_W_m[None, :],
         len(emission),
@@ -179,7 +151,7 @@ def emit_from_stem_window(
     carrier_hits = scene.trace_closest(
         probe_origins,
         directions,
-        mask=carrier_mask,
+        mask=_CARRIER_MASK,
     )
     if not np.all(carrier_hits["hit"]):
         raise RuntimeError("finite LED window probe missed the stem recess floor")
@@ -196,33 +168,10 @@ def emit_from_stem_window(
     return emission
 
 
-def source_inside_silicone(
-    scene: OptixScene,
-    led: LED,
-    emission: np.ndarray,
-    *,
-    silicone_mask: int,
-) -> bool:
-    """Resolve the emitted ray's initial medium from the silicone boundary."""
-    silicone_hit = scene.trace_closest(
-        emission["origin_W_m"][:1],
-        led.normal_W[None, :],
-        mask=silicone_mask,
-    )[0]
-    if not silicone_hit["hit"]:
-        raise RuntimeError("the LED normal does not reach silicone")
-    normal_projection = float(np.dot(silicone_hit["normal_W"], led.normal_W))
-    if abs(normal_projection) <= 1.0e-6:
-        raise RuntimeError("the LED source interface is geometrically ambiguous")
-    return normal_projection > 0.0
-
-
 def sources_inside_silicone(
     scene: OptixScene,
     led: LED,
     emission: np.ndarray,
-    *,
-    silicone_mask: int,
 ) -> np.ndarray:
     """Resolve the initial medium independently for every source sample."""
     origins = np.asarray(emission["origin_W_m"], dtype=np.float64)
@@ -232,7 +181,7 @@ def sources_inside_silicone(
     silicone_hits = scene.trace_closest(
         origins,
         directions,
-        mask=silicone_mask,
+        mask=_SILICONE_MASK,
     )
     if not np.all(silicone_hits["hit"]):
         raise RuntimeError("the LED window normal does not reach silicone")
@@ -248,8 +197,6 @@ def sources_inside_silicone(
 
 __all__ = [
     "LED",
-    "emit_from_stem_boundary",
     "emit_from_stem_window",
-    "source_inside_silicone",
     "sources_inside_silicone",
 ]

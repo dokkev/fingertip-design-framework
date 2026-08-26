@@ -1,4 +1,4 @@
-"""Regression tests for the production full-finger objectives."""
+"""Regression tests for the production fingertip objectives."""
 
 from __future__ import annotations
 
@@ -7,18 +7,25 @@ from inspect import signature
 import numpy as np
 import pytest
 
-from lumo.optimization.evaluator import evaluate_full_finger
+from lumo.optimization.evaluator import evaluate_fingertip
 from lumo.optimization.objective import (
-    combine_led_responses,
     compute_contact_objective,
     compute_observation_objective,
 )
 from lumo.ray_tracing import longitudinal_side_view_power
+
+
 def test_production_loading_is_gpu_force_threshold_crossing() -> None:
-    parameters = signature(evaluate_full_finger).parameters
-    assert parameters["use_cuda_graph"].default is True
-    assert "loading_mode" not in parameters
-    assert "settle_duration_s" not in parameters
+    parameters = signature(evaluate_fingertip).parameters
+    for obsolete_option in (
+        "use_cuda_graph",
+        "reuse_finalized_models",
+        "reuse_runtimes",
+        "parallel_world_count",
+        "loading_mode",
+        "settle_duration_s",
+    ):
+        assert obsolete_option not in parameters
 
 
 def _observation_inputs() -> dict[str, object]:
@@ -61,8 +68,8 @@ def test_led_permutation_cannot_change_combined_field_or_objective() -> None:
     baseline = inputs["no_contact_response"]
     permutation = (3, 0, 4, 1, 2)
 
-    combined = combine_led_responses(response)
-    permuted_combined = combine_led_responses(response[:, :, permutation, :])
+    combined = response.sum(axis=-2)
+    permuted_combined = response[:, :, permutation, :].sum(axis=-2)
     original = compute_observation_objective(**inputs)
     permuted = compute_observation_objective(
         **{
@@ -77,9 +84,7 @@ def test_led_permutation_cannot_change_combined_field_or_objective() -> None:
 
 
 def test_contact_objective_components_match_definition() -> None:
-    reference_vertices = np.array(
-        ((0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0))
-    )
+    reference_vertices = np.array(((0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0)))
     contact_indices = np.tile((0, 1, 2, -1), (4, 1))
     offsets = np.array(((((0, 1), (1, 1), (2, 1), (3, 1))),))
 
@@ -123,33 +128,3 @@ def test_longitudinal_roi_bins_plus_outside_equal_visible_power() -> None:
     assert outside == pytest.approx(7.0)
     assert visible == pytest.approx(11.0)
     assert bins.sum() + outside == pytest.approx(visible)
-
-
-def test_linear_longitudinal_splat_conserves_power_and_removes_bin_jump() -> None:
-    ray_dtype = np.dtype(
-        [
-            ("origin_W_m", np.float64, (3,)),
-            ("direction_W", np.float64, (3,)),
-            ("power", np.float64),
-        ]
-    )
-
-    def response_at(y_m: float, *, linear_splat: bool) -> np.ndarray:
-        rays = np.zeros(1, dtype=ray_dtype)
-        rays["origin_W_m"][0, 1] = y_m
-        rays["direction_W"][0, 0] = 1.0
-        rays["power"][0] = 1.0
-        bins, outside, visible = longitudinal_side_view_power(
-            rays,
-            linear_splat=linear_splat,
-        )
-        assert bins.sum() + outside == pytest.approx(visible)
-        return bins
-
-    hard_left = response_at(-22.5001e-3, linear_splat=False)
-    hard_right = response_at(-22.4999e-3, linear_splat=False)
-    linear_left = response_at(-22.5001e-3, linear_splat=True)
-    linear_right = response_at(-22.4999e-3, linear_splat=True)
-
-    assert np.linalg.norm(hard_left - hard_right, ord=1) == pytest.approx(2.0)
-    assert np.linalg.norm(linear_left - linear_right, ord=1) < 1.0e-3

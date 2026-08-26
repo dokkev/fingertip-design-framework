@@ -34,7 +34,9 @@ FingertipParameters
         ↓
     Fingertip
         ↓
- LumoSimulation
+IndentationStudy
+        ↓
+four independent LumoSimulation worlds
         └── internally: FingertipMesh → Newton model
 ```
 
@@ -174,14 +176,13 @@ carrier stem rail ends with the 55 mm active section, while only its dorsal
 plate extends across the 5 mm solid end-cap. Silicone vertices under that
 distal dorsal plate belong to the carrier's perfect kinematic bond. The
 collision proxy ends with the physical 55 mm stem rail. The five recesses are
-present in both the visible carrier and its Newton collision proxy. With
-nominal `void_height_mm=0`, silicone keeps the existing stem-bottom plane while
-each LED emitting top lies on its recess floor, producing a geometry-derived
-0.19 mm unloaded air cavity. No optical offset or displaced silicone surface
-manufactures that gap. `void_height_mm` remains fixed at zero for the initial
-full-finger morphology study; the hardware recess, not `void_height_mm`, owns
-this interface dimension. The local XZ morphology and the constructed 30 mm
-height contract are otherwise unchanged.
+present in both the visible carrier and its Newton collision proxy. The
+silicone cavity bottom is defined directly by `stem_height_mm`, while each LED
+emitting top lies on its recess floor, producing a geometry-derived 0.19 mm
+unloaded air cavity. No optical offset or displaced silicone surface
+manufactures that gap. The hardware recess is the only owner of this interface
+dimension. The local XZ morphology and the constructed 30 mm height contract
+are otherwise unchanged.
 
 Mesh code may use Gmsh and geometry libraries internally.
 
@@ -205,7 +206,7 @@ needed:
 - the carrier's visualization-only full shape and invisible particle-contact
   proxy shape;
 - the silicone-to-carrier perfect bond;
-- kinematic rigid indenters created from URDF or prepared `newton.Mesh` assets;
+- kinematic rigid indenters created from packaged URDF assets;
 - Newton-specific model and object identities consumed by the runtime.
 
 Use Newton's public API directly whenever practical.
@@ -222,13 +223,12 @@ default normal contact stiffness is `1e6 N/m`; model construction exposes that
 scalar only so the numerical sensitivity benchmark can vary it without
 changing material parameters.
 
-`Indenter.add_urdf()` and `Indenter.add_mesh()` accept optional normal-contact
-stiffness and damping overrides. Their default `None` values preserve Newton's
-shape material because no indenter contact pair has been frozen as a production
-numerical contract. URDF construction applies requested values only while the
-importer creates that asset and then restores the builder defaults.
-Prepared-mesh construction applies requested values to a copied shape
-configuration. Neither path changes objects added later.
+`Indenter.add_urdf()` accepts optional normal-contact stiffness and damping
+overrides. Its default `None` values preserve Newton's shape material because
+no indenter contact pair has been frozen as a production numerical contract.
+URDF construction applies requested values only while the importer creates
+that asset and then restores the builder defaults, so objects added later are
+unchanged.
 
 Do not introduce a generic physics-backend layer while Newton is the only
 mechanics implementation.
@@ -288,9 +288,9 @@ available to validations that inspect those stages directly.
 The current step order is:
 
 ```text
-caller optionally updates held fingertip and indenter poses
+caller optionally updates a kinematic indenter pose
     ↓
-reapply held fingertip pose through the carrier and kinematic bond
+reapply the fixed identity carrier pose and kinematic bond
     ↓
 collision
     ↓
@@ -303,8 +303,8 @@ state swap
 advance global step count and time
 ```
 
-`LumoSimulation` also owns the accelerated GPU-resident checkpoint path used
-by the production full-finger evaluator. The first tick remains uncaptured so
+`LumoSimulation` also owns the private GPU-resident checkpoint machinery used
+by `IndentationStudy`. The first tick remains uncaptured so
 Newton can finish lazy full-surface contact-state and rigid-history allocation.
 After that warm-up, the runtime verifies the fixed contact capacities and
 captures two even-length graphs for the state ping-pong parities:
@@ -317,7 +317,7 @@ graph_B: prescribed motion -> B-to-A physics -> wrench -> threshold checkpoint
          prescribed motion -> A-to-B physics -> wrench -> threshold checkpoint
 ```
 
-The production mode applies the constant positive approach speed, kinematic
+The checkpoint machinery applies the constant positive approach speed, kinematic
 indenter pose, collision, complete fixed-iteration VBD solve, proxy wrench
 harvest, ordered threshold test, and target transition on the device. It has no
 force feedback and no dwell counter. Ten graph replays advance twenty physics
@@ -327,16 +327,11 @@ particle state and full soft-contact record into that threshold's exact slot;
 the synchronous evaluator callback later inspects that saved tick, not a newer
 live state.
 
-`evaluate_full_finger()` selects this GPU-resident path by default after the
-direct-times-five versus graph-times-five scientific-equivalence gate passed.
-The direct backend remains explicit through `use_cuda_graph=False` for
-conservative reference and debugging. Bitwise equality is not an acceptance
-contract because Newton full-surface contact emission and wrench accumulation
-are intrinsically atomic-order nondeterministic after contact onset. The gate
-instead checks force/checkpoint meaning, deformation, canonical patch support,
-contact objectives, finite-area optical response, inversion, and contact-buffer
-safety. A graph-captured fingertip pose is immutable after capture; callers
-that need to move the whole fingertip must use the direct path.
+`evaluate_fingertip()` always uses this path. CUDA graph selection, finalized
+model reuse, runtime reset reuse, and world count are not public execution
+modes. Procedural validations that need an uncaptured reference use
+`LumoSimulation.step()` directly instead of adding a second indentation
+protocol to production.
 
 `LumoSimulation.step()` does not own approach trajectories, force thresholds,
 validation policy, or result reporting. It is the only production API that
@@ -345,9 +340,6 @@ Construction populates the initial contact buffer once, and each global step
 refreshes it before SolverVBD. `soft_contact_count()` exposes total or
 body-specific counts without leaking Newton contact-array indexing into
 callers.
-`set_fingertip_pose()` replaces a held fingertip pose that defaults to the
-identity pose, and `step()` reapplies it through the rigid carrier and bonded
-silicone vertices before every Newton tick.
 Callers update other kinematic objects as needed before one tick and may query
 the resulting indenter reaction force or maximum active silicone-particle
 speed afterward. These observations reduce into preallocated scalar device
@@ -355,14 +347,16 @@ buffers rather than cloning full velocity or wrench arrays on every tick. The
 runtime may later orchestrate optical work, but no ray-tracing behavior is part
 of the current runtime.
 
-#### `design_trial.py`
+#### `indentation.py`
 
-`DesignTrial` is one indentation definition plus lightweight scalar and pose
-results. Its optional initial-clearance scalar lets consumers report physical
-indentation rather than total approach travel. It never retains its
+`IndentationTrial` is one indentation scenario plus lightweight scalar and pose
+results for the current threshold callback. Its nonnegative initial-clearance
+scalar lets consumers report physical indentation rather than total approach
+travel. It never retains its
 `LumoSimulation` or `Indenter`.
-`DesignStudy` owns one immutable analytic `Fingertip` design and an
-ordered tuple of design trials. It constructs a fresh builder, indenter,
+`IndentationStudy` owns one immutable analytic `Fingertip`, an ordered tuple of
+indentation trials, and the one strictly increasing force schedule. It
+constructs a fresh builder, indenter,
 `LumoSimulation`, and Newton state for each trial, so every trial evaluates the
 same fingertip morphology but starts from an independent reference state.
 An optional immutable `FingertipMesh` is reused by each fresh Newton runtime;
@@ -375,13 +369,11 @@ Each trial specifies a normalized `motion_direction_W` and physical
 `approach_speed_m_s`. The pose increment is derived directly from that speed
 and the simulation timestep.
 
-For the concrete multi-force sensing evaluation, a study may use one strictly
-increasing force-target tuple. The same trial runtime then advances through
-each target without resetting Newton state. The production evaluator captures
+The same trial runtime advances through the study's force targets without
+resetting Newton state. The production evaluator captures
 the first measured state at or above each of `5, 10, 15, 20 N`; target
 tolerance is not an acceptance condition. The inspection callback receives
-that exact state, either live in direct mode or from its device checkpoint slot
-in accelerated mode.
+that exact state from its device checkpoint slot.
 
 The production first-crossing path is simply:
 
@@ -398,21 +390,15 @@ copy that tick immediately, then continue toward the next threshold
 There is no force feedback, pause, pose correction, force-band dwell, or
 settled-state claim. The saved states are dynamic threshold-crossing snapshots.
 
-With `use_cuda_graph=True`, `DesignStudy` configures production fixed motion
-and ordered first-crossing thresholds in `LumoSimulation` device buffers. It
-polls only every twenty physics ticks and invokes the unchanged callback
-against exact device-saved checkpoint states. `use_cuda_graph=True` is the
-runtime and study default; `False` remains an explicit reference/debug path.
-
 Only `LumoSimulation` mutates Newton state or simulation time. Trials never
-share mutable Newton state. For the production full-finger path, `DesignStudy`
-may execute up to four independent trials concurrently in one Python process
-and CUDA context. Each world owns its state pair, solver, contacts,
+share mutable Newton state. `IndentationStudy` executes batches of up to four
+independent trials in one Python process and CUDA context. Each world owns its
+state pair, solver, contacts,
 motion/checkpoint buffers, graphs, and CUDA stream; worlds with one sphere
 diameter share only the finalized immutable model and coloring. Checkpoint
 callbacks remain synchronous after the corresponding stream reaches an exact
-device-saved checkpoint. Serial execution remains available by setting
-`parallel_world_count=1`; no generic simulation manager was introduced.
+device-saved checkpoint. The four-world batch size and model sharing are fixed
+implementation details, not user-facing simulation policy.
 
 ### `lumo/ray_tracing/`
 
@@ -423,7 +409,10 @@ OptiX is the ray-tracing backend.
 `OptixScene` is the first concrete OptiX 9.1 runtime component. It owns one
 persistent CUDA stream, the OptiX context and pipeline resources, device
 geometry buffers, two triangle GASes for silicone and carrier, and the IAS
-containing those two instances. Its only query `trace_closest()` returns hit
+containing those two instances. Silicone/carrier instance IDs and visibility
+masks are fixed backend details owned inside `scene.py`; callers construct the
+scene from one reference `FingertipMesh` and do not allocate IAS identities.
+Its only query `trace_closest()` returns hit
 state, distance, instance ID, primitive ID, triangle barycentrics, and the
 world-frame geometric normal `normal_W`.
 Triangle hits also return NVIDIA OptiX Toolkit ShaderUtil
@@ -468,9 +457,11 @@ sampling operation for one ideal Lambertian source. Caller-supplied sample
 coordinates determine the directions, and normalized total source power is
 divided equally among the rays.
 
-`LED` combines one `LEDParameters` with a world-frame position and unit normal,
-then delegates emission sampling to `lambertian_emission()`. It does not copy
-or independently own hardware or optical parameter values. The current
+`LED` combines one `LEDParameters` with a world-frame position and unit normal.
+`emit_from_stem_window()` is the sole public source operation: it samples
+Lambertian directions and distributes origins uniformly across the physical
+emitting window before resolving OTK-safe origins on the carrier recess floor.
+It does not copy or independently own hardware or optical parameter values. The current
 parameters identify the Adafruit Green LED Sequin (Product ID 1756), whose
 underlying LED is the LuckyLight S150PGC-G5-1B 1206 Pure Green InGaN package.
 Its hardware metadata is a 525 nm dominant wavelength, 520 nm peak wavelength,
@@ -504,19 +495,13 @@ power. The effective extinction may include unresolved scattering, especially
 for translucent Dragon Skin 10 NV; volumetric scattering is not modeled. This
 is a bounded concrete fingertip path operation, not a renderer.
 
-`PathTraceResult` in `path_result.py` is the fixed public result contract for
-that operation. It owns the escaped-ray array, explicit scalar power ledger,
-remaining ray count, and optional diagnostic segments. The path algorithm no
-longer changes tuple arity or exposes a string-keyed statistics dictionary.
+`PathTraceResult` lives beside `trace_bounded_paths()` in `path.py`. It owns the
+escaped-ray array and explicit scalar power ledger. The path algorithm does not
+retain segment history, change tuple arity, or expose a string-keyed statistics
+dictionary.
 OptiX hit layouts remain next to their CUDA decoding in `scene.py`, while the
 short-lived vectorized Fresnel and Lambertian result layouts remain next to the
 numerical operations in `transport.py`.
-
-The optional `record_segments=True` diagnostic mode fills
-`PathTraceResult.segments` with compact ray ID, bounce, start, end, power, and
-hit-instance records for finite hit segments. The default is false, retains no
-segment history, and returns `segments=None`. The diagnostic data comes from
-the same 3D bounded transport; it does not define a second tracer.
 
 `safe_secondary_origins()` selects the OTK front or back spawn position by the
 sign of the outgoing direction dotted with `normal_W`. It does not infer media
@@ -525,30 +510,23 @@ use this operation for every triangle departure. OptiX traversal uses `tmin=0`:
 the OTK origin owns self-intersection separation, so no second scene epsilon is
 combined with the official offset.
 
-`emit_from_stem_boundary()` places an `LED` emission on the resolved carrier
-stem or recess boundary using that same OTK spawn contract. `source_inside_silicone()`
-then queries the current silicone surface to select the initial medium. These
-operations remain source-local primitives: a caller that needs several LEDs
-traces their independent linear contributions and sums modeled power without a
-multi-LED scene abstraction.
+`sources_inside_silicone()` queries the current silicone surface independently
+for every finite-window origin and selects each path's initial medium. A caller
+with several LEDs traces their independent linear contributions and sums
+modeled power without a multi-LED scene abstraction.
 
-`side_view_observation()` in `observation.py` is a validation-oriented reducer
-that keeps rays traveling toward `+Y` and bins power by escape origin in the
-X-Z cross section. Quadrants are ordered upper-right, upper-left, lower-left,
-lower-right around the analytic silicone semiellipse center. It is not the
-production full-finger camera representation.
+`longitudinal_side_view_power()` is the sole observation reducer. It selects
+escaped power traveling toward the canonical camera-facing `+X` side and
+accumulates hard histogram power into eleven fixed 5 mm bins over the 55 mm
+active Y range. It also returns outside-ROI and total visible-side power for
+accounting. Thus its image coordinate is longitudinal Y and it does not use
+hidden emitter identity. It is a directional surface-power observation, not a
+finite camera aperture, projection plane, lens, or pixel model.
 
-`longitudinal_side_view_observation()` is the full-finger receiver. It selects
-escaped power traveling toward the canonical camera-facing `+X` side and sums
-all simultaneously active LEDs into eleven fixed 5 mm bins over the 55 mm
-active Y range. Thus its image coordinate is longitudinal Y and it does not use
-hidden emitter identity. It is still a directional surface-power observation,
-not a finite camera aperture, projection plane, lens, or pixel model. The
-current production call retains hard histogram bins. The same reducer exposes
-an explicit linear cloud-in-cell option for optical-model validation: power is
-split between neighboring bin centers, end half-bins accumulate into their
-nearest bin, and active-ROI power remains exactly conserved. This option has no
-PSF width or calibrated smoothing parameter.
+The package root exports only the complete scene/source/path/observation flow.
+Low-level Fresnel, Lambertian, and OTK spawn operations remain available from
+their owning `transport.py` and `scene.py` modules for focused validation; they
+are not alternate production pipelines.
 
 The scene has no Newton dependency. The optimization evaluator explicitly
 passes each final Newton vertex checkpoint through `update_silicone()`; neither
@@ -568,12 +546,12 @@ This layer must not own mechanics evolution.
 
 Owns design-space and optimization policy.
 
-Current responsibilities include design parameter bounds, feasibility
-constraints, one concrete sensing evaluation, and pure sensing-objective
-evaluation.
+Current responsibilities are the concrete five-dimensional design space, one
+mechanics-to-optics evaluation, pure objective reductions, the sequential Ax
+loop, and durable campaign persistence.
 
 `evaluator.py` owns the production mechanics-to-optics orchestration. Its
-`evaluate_full_finger()` entry builds one canonical `FingertipMesh` and one
+`evaluate_fingertip()` builds one canonical `FingertipMesh` and one
 `OptixScene`, generates deterministic samples and traces the undeformed state
 once for each of the five LEDs, then evaluates the Cartesian product of
 explicit sphere diameters and longitudinal contact-Y locations. Each location
@@ -581,14 +559,13 @@ uses an independent Newton runtime; increasing force checkpoints within that
 scenario reuse the runtime. Each live checkpoint updates the same silicone GAS
 and IAS and is traced with the same emission and bounce samples.
 
-The production evaluator defaults to four independent CUDA-stream Newton
-worlds. OptiX checkpoint consumption remains serialized through the one shared
-scene.
+The evaluator has one production execution path. `IndentationStudy` owns its
+fixed internal GPU execution policy; the evaluator does not expose CUDA graph,
+model reuse, runtime reuse, or world-count choices. OptiX checkpoint consumption
+remains serialized through the one shared scene.
 
-`FullFingerEvaluation` is a raw-data result, not an objective result. It records
-the explicit mechanics backend, checkpoint step indices, graph replay counts,
-checkpoint host intervention/synchronization counts, and average ticks per
-host intervention. It keeps
+`FingertipEvaluation` is a raw-data result, not an objective result. It keeps
+checkpoint step indices,
 per-emitter longitudinal responses shaped `(scenario, force, 5, 11)`,
 per-emitter energy ledgers, and the shared five-emitter no-contact state.
 Simultaneous 11-bin responses are derived by summing the emitter axis and are
@@ -622,10 +599,10 @@ Historical force-servo, adaptive-settling, and force-ramp paths are not part of
 the production API. Focused fixed-pose studies may still use `LumoSimulation`
 directly when the hold itself is the validation question.
 
-Each full-finger LED remains on its carrier recess floor. The nominal 0.19 mm
-hardware cavity places air between that source and unloaded silicone even when
-`void_height_mm=0`; transport starts in air and lets OptiX resolve silicone
-entry, carrier reflection, or escape. Loaded Newton geometry may close that
+Each fingertip LED remains on its carrier recess floor. The nominal 0.19 mm
+hardware cavity places air between that source and unloaded silicone;
+transport starts in air and lets OptiX resolve silicone entry, carrier
+reflection, or escape. Loaded Newton geometry may close that
 explicit cavity and change the initial medium without a source epsilon or
 per-state gap adjustment.
 
@@ -633,23 +610,43 @@ per-state gap adjustment.
 frozen dwell and ramp vertices without rerunning Newton. It compares the
 historical point source and hard bins against linear splatting and a uniform
 finite source over the manufacturer's `1.8 x 1.6 mm` water-clear resin window.
-That validation selected finite-area origins and per-ray initial media for
-production while retaining hard bins. Ballistic transport, ray count, bounce count, and
+Historical point emission and linear splatting are implemented locally in that
+procedural validation rather than exposed as production ray-tracing options.
+The result selected finite-area origins and per-ray initial media for production
+while retaining hard bins. Ballistic transport, ray count, bounce count, and
 `J_obs` are unchanged in this comparison.
 
-The next full-finger discrete search contract fixes both
-`flat_pad_width_mm=30` and `void_height_mm=0`. It exposes five geometry
-dimensions--flat height, semiellipse height, stem width, stem height, and void
-width--as integer half-millimeter steps. The 0.19 mm LED air cavity remains a
-fixed carrier-recess feature and is not a design variable. The complete physical
-height runs from the carrier top at `+10 mm` to the silicone ellipse tip at
+The discrete search contract fixes `flat_pad_width_mm=30` and
+exposes five geometry dimensions--flat height, semiellipse height, stem width,
+stem height, and void width--as integer half-millimeter steps. The 0.19 mm LED
+air cavity remains a fixed carrier-recess feature and is not a design variable.
+The complete physical height runs from the carrier top at `+10 mm` to the
+silicone ellipse tip at
 `-flat_pad_height_mm-semiellipse_height_mm`. `Fingertip.full_height_mm` derives
 that extent from the constructed geometry, and `DesignSpace` authoritatively
 requires it to be at most `30 mm`. Ax equivalently enforces
-`flat_pad_height_step + semiellipse_height_step <= 40`; the existing
-`FingertipGeometry` and `DesignSpace` checks remain the sole owners of nonlinear
-geometry validity.
-`scripts/run_mobo.py` records the intended new full-finger campaign inputs,
+`flat_pad_height_step + semiellipse_height_step <= 40`. It also enforces the
+exact lattice form of the bonded-side width requirement,
+`stem_width_step + 2*void_width_step <= 39`. The existing
+`DesignSpace` contains only the current five geometry bounds and fixed base
+`FingertipParameters`. Constructing `FingertipGeometry`/`Fingertip` owns
+nonlinear geometry validity; `DesignSpace` additionally owns the 30 mm complete
+height and 5 mm minimum-silicone-thickness limits. The two Ax constraints are
+proposal-time mirrors, not independent scientific owners.
+
+Candidate generation derives a deterministic finite subset of the 0.5 mm
+lattice by retaining only points accepted by `DesignSpace.is_feasible()`. During
+initialization, one exact-feasible Sobol point is attached at a time. During
+model-based generation, Ax fits its normal multi-objective surrogate and scores
+a fresh pool of 256 exact-feasible Sobol points through its public acquisition
+evaluation API. Only the best feasible point is attached as an Ax trial. Thus
+the finite-pool acquisition search is approximate, but analytical validity is
+exact and analytically invalid morphologies are never sent to Newton or stored
+as abandoned Ax proposals. The pool seed is derived from the fixed campaign
+seed and persisted trial count, so interruption and resume reproduce the same
+proposal sequence.
+`scripts/run_mobo.py` is the only executable campaign entry. It records the
+current fingertip campaign inputs,
 including explicit sphere diameters and longitudinal contact locations.
 It exposes separate mechanics and optical presets, physical parameter
 bounds, indenter URDF list, sequential force thresholds, initial clearance,
@@ -662,12 +659,11 @@ diameter and places its center one radius plus the configured clearance below
 the undeformed pad. The entry script supplies its sibling
 `optix-toolkit/ShaderUtil/include` as the default `OTK_INCLUDE_DIR`; an
 explicitly exported environment value still takes precedence.
-The prepared production entry selects nominal Dragon Skin 10 NV optics, uses
-the accepted four-world evaluator explicitly, and targets 120 cumulative
-successful morphologies in the fresh
-`mobo_full_finger_instantaneous_05mm` directory. Its
-run config records the finite `1.8 x 1.6 mm` package-window source, the
-four-world backend, and dependency/source hashes. Resume is refused if the
+The prepared production entry selects nominal Dragon Skin 10 NV optics and
+targets 120 cumulative successful morphologies in the fresh
+`mobo_fingertip_instantaneous_05mm` directory. Its
+run config records the finite `1.8 x 1.6 mm` package-window source and
+dependency/source hashes. Resume is refused if the
 scientific source, optimizer source, dependency versions, or serialized
 scientific contract differ.
 `validation/optomech/mobo_smoke.py` reads those production entry settings
@@ -677,11 +673,14 @@ reopens that directory through the public resume path and verifies that the
 completed trial is neither lost nor repeated, without touching the
 120-morphology campaign directory.
 
-The previous continuous and six-dimensional discrete Ax campaigns remain
-historical artifacts and cannot be resumed through the production entry point.
-The corrected campaign uses a new output directory, run-config schema, and Ax
-state, so old `J_intensity/J_spatial` observations cannot be attached to the
-five-dimensional full-finger experiment.
+`ax_bo.py` owns only Ax search-space conversion, feasible candidate generation,
+and the sequential evaluation loop. It has no module CLI, continuous-campaign
+branch, historical warm-start observations, or startup self-test.
+`campaign_io.py` owns run-config provenance, atomic Ax/CSV/NPZ persistence,
+resume reconciliation, Pareto tables, plots, and summary output. A fresh
+campaign starts with no reused objective observations. The expensive one-trial
+save/resume verification remains solely in
+`validation/optomech/mobo_smoke.py`.
 
 `objective.py` owns the frozen production reductions. For every mechanical
 scenario it computes finite 5 N patch formation, reference-area-weighted
@@ -717,28 +716,14 @@ detection and force magnitude. Old +Y Q and labeled per-emitter responses are
 diagnostic only. The script does not register an objective or call Newton,
 OptiX, or Ax.
 
-`validation/optomech/full_finger_spatial_observation.py` is the transitional
-optical-only reprojection for the saved pre-camera-axis nominal artifact. It
-reuses its Newton vertex checkpoints, applies the production 65,536-ray,
-24-bounce samples, verifies the saved energy ledgers are unchanged, and stores
-the +X per-emitter 5x11 responses. It does not run Newton. New calls to
-`evaluate_full_finger()` already produce this spatial representation directly.
-
 ### `lumo/util/`
 
 Contains only small shared helpers with clear current consumers.
-
-`lumo/util/mesh_io.py` converts OBJ or STL triangle-surface files into prepared
-`newton.Mesh` objects. Source coordinates are converted to metres with an
-explicit caller-provided scale. It does not parse URDF or add Newton bodies and
-shapes.
 
 Rigid indenter asset flow is:
 
 ```text
 packaged URDF resource → filesystem path → Indenter.add_urdf()
-
-OBJ/STL path → mesh_io.load_mesh() → newton.Mesh → Indenter.add_mesh()
 ```
 
 LUMO-owned URDF assets live under `lumo/assets/objects/`, with primitive sphere
@@ -752,7 +737,7 @@ finalization:
 
 ```text
 caller-owned ModelBuilder
-├── Indenter.add_urdf(...) or Indenter.add_mesh(...)
+├── Indenter.add_urdf(...)
 └── LumoSimulation(fingertip, builder=builder)
         └── finalize one shared Newton model
 ```
@@ -760,6 +745,10 @@ caller-owned ModelBuilder
 Neither `LumoSimulation` nor `build_fingertip_newton_model()` chooses or places
 an indenter. Both accept a caller-populated builder so all scene bodies can be
 finalized into the same Newton model.
+
+When no builder is supplied, `build_fingertip_newton_model()` creates and
+finalizes a zero-gravity builder. A caller-supplied builder owns its scene
+gravity; model construction does not override it.
 
 `Indenter.add_urdf()` stores its supplied world `tf` as the initial kinematic
 body pose as well as passing it to Newton's URDF importer.
@@ -795,7 +784,7 @@ carrier. Its optional ViewerGL path only observes simulation state and
 contacts; it does not advance or mutate the simulation.
 
 `validation/contact-physics/sphere_indentation.py` creates one analytic
-fingertip and uses a `DesignStudy` to run the packaged 5, 10, and 20 mm
+fingertip and uses an `IndentationStudy` to run the packaged 5, 10, and 20 mm
 diameter sphere URDFs at `X=-7.5`, `0`, and `+7.5 mm`. It places each sphere
 from the local analytic semiellipse height at that X location. Each simulation
 moves at its prescribed physical speed and captures the first `20 N` threshold

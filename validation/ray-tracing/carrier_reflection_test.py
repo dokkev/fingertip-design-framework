@@ -6,11 +6,11 @@ import numpy as np
 
 from lumo.fingertip import Fingertip, FingertipParameters
 from lumo.mesh import make_fingertip_mesh
-from lumo.ray_tracing import (
-    OptixScene,
+from lumo.ray_tracing import OptixScene
+from lumo.ray_tracing.scene import safe_secondary_origins
+from lumo.ray_tracing.transport import (
     interface_transport,
     lambertian_reflection,
-    safe_secondary_origins,
 )
 
 
@@ -93,11 +93,7 @@ def main() -> None:
         raise AssertionError("Lambertian reflection depends on mesh winding")
 
     scene = OptixScene(
-        make_fingertip_mesh(Fingertip(FingertipParameters())),
-        silicone_instance_id=SILICONE_INSTANCE_ID,
-        carrier_instance_id=CARRIER_INSTANCE_ID,
-        silicone_visibility_mask=SILICONE_MASK,
-        carrier_visibility_mask=CARRIER_MASK,
+        make_fingertip_mesh(Fingertip(FingertipParameters()))
     )
 
     primary_origins = np.array(

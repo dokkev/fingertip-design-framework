@@ -40,37 +40,37 @@ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 conda run --no-capture-output -n lit \
   pytest -q tests/unit
 ```
 
-The full-finger objective and Ax search contract have focused tests:
+The fingertip objective and Ax search contract have focused tests:
 
 ```bash
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 conda run --no-capture-output -n lit \
   pytest -q \
-    tests/unit/optimization/test_full_finger_objective.py \
-    tests/unit/optimization/test_height_constraint.py
+    tests/unit/optimization/test_fingertip_objective.py \
+    tests/unit/optimization/test_design_space.py
 ```
 
 ## Geometry and mechanics viewers
 
-Render the analytic bond and the full five-LED mesh:
+Render the analytic bond and the complete fingertip mesh:
 
 ```bash
 conda run -n lit python validation/fingertip/view_bond_geometry.py
 conda run --no-capture-output -n lit \
-  python -u validation/fingertip/view_fingertip_5led.py
+  python -u validation/fingertip/view_fingertip.py
 ```
 
 Open the full mesh in Newton ViewerGL:
 
 ```bash
 conda run --no-capture-output -n lit \
-  python -u validation/fingertip/view_fingertip_5led_newton.py
+  python -u validation/fingertip/view_fingertip_newton.py
 ```
 
-Run the short full-finger Newton compatibility smoke:
+Run the short fingertip Newton compatibility smoke:
 
 ```bash
 conda run --no-capture-output -n lit \
-  python -u validation/contact-physics/fingertip_5led_smoke.py
+  python -u validation/contact-physics/fingertip_smoke.py
 ```
 
 ## Production evaluator checks
@@ -83,18 +83,18 @@ conda run --no-capture-output -n lit \
   python -u validation/optomech/instantaneous_first_crossing.py
 ```
 
-Run one nominal full-finger raw Newton-to-OptiX evaluation and reload its NPZ:
+Run one nominal fingertip raw Newton-to-OptiX evaluation and reload its NPZ:
 
 ```bash
 conda run --no-capture-output -n lit \
-  python -u validation/optomech/full_finger_raw_evaluator.py
+  python -u validation/optomech/fingertip_raw_evaluator.py
 ```
 
 Run the expensive complete production-objective freeze validation:
 
 ```bash
 conda run --no-capture-output -n lit \
-  python -u validation/optomech/full_finger_production_objective_freeze.py
+  python -u validation/optomech/fingertip_production_objective_freeze.py
 ```
 
 These commands perform GPU simulation and OptiX tracing; they are not part of
@@ -109,7 +109,7 @@ conda run --no-capture-output -n lit \
   python -u validation/optomech/mobo_smoke.py
 ```
 
-This uses the exact production settings, evaluates one successful full-finger
+This uses the exact production settings, evaluates one successful fingertip
 morphology in a fresh timestamped `output/validation/mobo_smoke/` directory,
 and verifies raw NPZ/CSV output, atomic Ax state, and resume reload. It is an
 expensive GPU smoke, not a lightweight unit test.
@@ -121,10 +121,11 @@ directory for a new scientific contract, then run:
 conda run --no-capture-output -n lit python -u scripts/run_mobo.py
 ```
 
-The campaign is sequential and resumable. It evaluates five geometry variables
-on the 0.5 mm lattice, fixes `flat_pad_width_mm=30` and `void_height_mm=0`, and
-maximizes `J_contact` and `J_obs` independently. Production mechanics use the
-GPU CUDA-graph checkpoint backend by default: a constant `5 mm/s` approach and
+`scripts/run_mobo.py` is the only campaign entry; `ax_bo.py` is a library module
+and has no separate CLI. The campaign is sequential and resumable. It evaluates five geometry variables
+on the 0.5 mm lattice, fixes `flat_pad_width_mm=30`, and maximizes `J_contact`
+and `J_obs` independently. Production mechanics use the fixed four-world GPU
+CUDA-graph checkpoint path: a constant `5 mm/s` approach and
 the first samples at or above `5/10/15/20 N`, with no servo or dwell.
 
 Do not mix an output directory with an older run-config schema. Ax state and one

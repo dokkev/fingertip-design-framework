@@ -16,8 +16,8 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
 
-# VBD body-particle contact is penalty-based. The numerical sweep measures
-# whether this baseline is stiff enough for the current force-controlled case.
+# VBD rigid-soft contact is penalty-based. This is the validated carrier-contact
+# stiffness used by the current model.
 _DEFAULT_CARRIER_CONTACT_STIFFNESS_N_M = 1.0e6
 
 
@@ -59,8 +59,6 @@ class FingertipNewtonModel:
     fingertip_mesh: FingertipMesh
     model: newton.Model
     carrier_body: int
-    carrier_shape: int
-    carrier_collision_shape: int
     silicone_particle_start: int
     silicone_particle_count: int
     bonded_particle_indices: wp.array
@@ -159,12 +157,9 @@ def build_fingertip_newton_model(
     fingertip_mesh: FingertipMesh,
     *,
     builder: newton.ModelBuilder | None = None,
-    gravity: float = 0.0,
     carrier_contact_stiffness_n_m: float = (
         _DEFAULT_CARRIER_CONTACT_STIFFNESS_N_M
     ),
-    carrier_color: wp.vec3 | None = None,
-    device: str | None = None,
 ) -> FingertipNewtonModel:
     """Build the first concrete Newton model for one fingertip mesh.
 
@@ -194,10 +189,8 @@ def build_fingertip_newton_model(
     material = parameters.mechanics
 
     if builder is None:
-        builder = newton.ModelBuilder(gravity=gravity)
-    elif gravity != 0.0:
-        raise ValueError(
-            "gravity must be configured on a caller-supplied builder"
+        builder = newton.ModelBuilder(
+            gravity=wp.vec3(0.0, 0.0, 0.0),
         )
 
     particle_start = builder.particle_count
@@ -254,11 +247,10 @@ def build_fingertip_newton_model(
         has_particle_collision=False,
         is_visible=True,
     )
-    carrier_shape = builder.add_shape_mesh(
+    builder.add_shape_mesh(
         body=carrier_body,
         mesh=fingertip_mesh.carrier,
         cfg=carrier_cfg,
-        color=carrier_color,
         label="fingertip_carrier_surface",
     )
     carrier_collision_cfg = newton.ModelBuilder.ShapeConfig(
@@ -288,7 +280,7 @@ def build_fingertip_newton_model(
         )
 
     builder.color()
-    model = builder.finalize(device=device, requires_grad=False)
+    model = builder.finalize(requires_grad=False)
     local_positions = _bonded_local_positions(
         builder.particle_q,
         global_indices,
@@ -298,8 +290,6 @@ def build_fingertip_newton_model(
         fingertip_mesh=fingertip_mesh,
         model=model,
         carrier_body=carrier_body,
-        carrier_shape=carrier_shape,
-        carrier_collision_shape=carrier_collision_shape,
         silicone_particle_start=particle_start,
         silicone_particle_count=particle_count,
         bonded_particle_indices=wp.array(

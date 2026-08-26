@@ -6,8 +6,8 @@ from math import cos, radians, sin
 
 import numpy as np
 
-from lumo.ray_tracing import interface_transport
 from lumo.ray_tracing.path import _sample_dielectric_branches
+from lumo.ray_tracing.transport import interface_transport
 
 
 def main() -> None:

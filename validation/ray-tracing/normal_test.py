@@ -7,7 +7,8 @@ import numpy as np
 from lumo.fingertip import Fingertip, FingertipParameters
 from lumo.fingertip.geometric_param import semiellipse_depth_at_x_mm
 from lumo.mesh import make_fingertip_mesh
-from lumo.ray_tracing import OptixScene, interface_transport
+from lumo.ray_tracing import OptixScene
+from lumo.ray_tracing.transport import interface_transport
 
 
 SILICONE_INSTANCE_ID = 1
@@ -32,13 +33,7 @@ def _require_unit_normal(label: str, normal: np.ndarray) -> None:
 
 def main() -> None:
     fingertip = Fingertip(FingertipParameters())
-    scene = OptixScene(
-        make_fingertip_mesh(fingertip),
-        silicone_instance_id=SILICONE_INSTANCE_ID,
-        carrier_instance_id=CARRIER_INSTANCE_ID,
-        silicone_visibility_mask=SILICONE_MASK,
-        carrier_visibility_mask=CARRIER_MASK,
-    )
+    scene = OptixScene(make_fingertip_mesh(fingertip))
 
     positive_z = np.array((0.0, 0.0, 1.0), dtype=np.float32)
     negative_z = np.array((0.0, 0.0, -1.0), dtype=np.float32)

@@ -1,10 +1,10 @@
-"""LUMO simulation runtime and design studies."""
+"""LUMO simulation runtime and prescribed indentation."""
 
-from lumo.simulation.design_trial import DesignStudy, DesignTrial
+from lumo.simulation.indentation import IndentationStudy, IndentationTrial
 from lumo.simulation.runtime import LumoSimulation
 
 __all__ = [
-    "DesignStudy",
-    "DesignTrial",
+    "IndentationStudy",
+    "IndentationTrial",
     "LumoSimulation",
 ]

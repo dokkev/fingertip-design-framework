@@ -6,11 +6,9 @@ import numpy as np
 
 from lumo.fingertip import Fingertip, FingertipParameters
 from lumo.mesh import make_fingertip_mesh
-from lumo.ray_tracing import (
-    OptixScene,
-    interface_transport,
-    safe_secondary_origins,
-)
+from lumo.ray_tracing import OptixScene
+from lumo.ray_tracing.scene import safe_secondary_origins
+from lumo.ray_tracing.transport import interface_transport
 
 
 SILICONE_INSTANCE_ID = 1
@@ -23,13 +21,7 @@ ALL_MASK = SILICONE_MASK | CARRIER_MASK
 
 def main() -> None:
     fingertip = Fingertip(FingertipParameters())
-    scene = OptixScene(
-        make_fingertip_mesh(fingertip),
-        silicone_instance_id=SILICONE_INSTANCE_ID,
-        carrier_instance_id=CARRIER_INSTANCE_ID,
-        silicone_visibility_mask=SILICONE_MASK,
-        carrier_visibility_mask=CARRIER_MASK,
-    )
+    scene = OptixScene(make_fingertip_mesh(fingertip))
 
     primary_origins = np.array(
         ((-0.0070, 0.00090, -0.030),),

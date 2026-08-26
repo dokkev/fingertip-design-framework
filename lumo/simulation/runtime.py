@@ -298,7 +298,6 @@ class LumoSimulation:
         carrier_contact_stiffness_n_m: float = (
             _DEFAULT_CARRIER_CONTACT_STIFFNESS_N_M
         ),
-        use_cuda_graph: bool = True,
     ) -> None:
         if not isinstance(fingertip, Fingertip):
             raise TypeError("fingertip must be a Fingertip")
@@ -352,9 +351,6 @@ class LumoSimulation:
             "carrier_contact_stiffness_n_m",
             carrier_contact_stiffness_n_m,
         )
-        if not isinstance(use_cuda_graph, bool):
-            raise TypeError("use_cuda_graph must be a bool")
-
         self.fingertip = fingertip
         if fingertip_model is None:
             self.fingertip_mesh = (
@@ -383,7 +379,6 @@ class LumoSimulation:
         self.time_step_s = 1.0 / self.sim_frequency
         self.step_count = 0
         self.time_s = 0.0
-        self._fingertip_pose = wp.transform_identity()
         self.solver = newton.solvers.SolverVBD(
             model,
             iterations=iterations,
@@ -431,11 +426,6 @@ class LumoSimulation:
             dtype=wp.int32,
             device=model.device,
         )
-        if use_cuda_graph and not model.device.is_cuda:
-            raise ValueError("use_cuda_graph requires a CUDA Newton model")
-        self._use_cuda_graph = use_cuda_graph
-        self._step_graph_ab: wp.Graph | None = None
-        self._step_graph_ba: wp.Graph | None = None
         self._cuda_graph_replay_count = 0
         self._checkpoint_graph_a: wp.Graph | None = None
         self._checkpoint_graph_b: wp.Graph | None = None
@@ -462,14 +452,6 @@ class LumoSimulation:
         ] | None = None
         self._has_step_result = False
         self.collision_pipeline.collide(self.state, self.contacts)
-
-    def set_fingertip_pose(self, pose: wp.transform) -> None:
-        """Set the fingertip pose held across subsequent simulation ticks."""
-        if self._step_graph_ab is not None:
-            raise RuntimeError(
-                "the fingertip pose cannot change after CUDA graph capture"
-            )
-        self._fingertip_pose = pose
 
     def silicone_vertices(self) -> np.ndarray:
         """Return current silicone positions in fingertip-mesh vertex order."""
@@ -533,7 +515,7 @@ class LumoSimulation:
         self.fingertip_model.prepare_step(
             state_in,
             state_out,
-            self._fingertip_pose,
+            wp.transform_identity(),
         )
         if state_in.body_qd is None:
             raise RuntimeError("simulation state has no rigid-body velocities")
@@ -564,7 +546,7 @@ class LumoSimulation:
             dt=self.time_step_s,
         )
 
-    def configure_force_checkpoints(
+    def _configure_force_checkpoints(
         self,
         indenter: Indenter,
         *,
@@ -574,12 +556,10 @@ class LumoSimulation:
         target_forces_n: tuple[float, ...],
     ) -> None:
         """Prepare GPU-resident motion and ordered force checkpoints."""
-        if not self._use_cuda_graph:
-            raise RuntimeError("force checkpoints require use_cuda_graph=True")
+        if not self.fingertip_model.model.device.is_cuda:
+            raise RuntimeError("force checkpoints require a CUDA Newton model")
         if self._motion_float is not None:
             raise RuntimeError("force checkpoints are already configured")
-        if self._step_graph_ab is not None:
-            raise RuntimeError("partial step graphs already exist")
         if not isinstance(indenter, Indenter):
             raise TypeError("indenter must be an Indenter")
         if not 0 <= indenter.body_index < self.fingertip_model.model.body_count:
@@ -654,67 +634,6 @@ class LumoSimulation:
         self.time_s = self.time_step_s
         self._has_step_result = True
         self._capture_force_checkpoint_graphs()
-
-    def reset_force_checkpoints(
-        self,
-        indenter: Indenter,
-        *,
-        initial_tf: wp.transform,
-    ) -> None:
-        """Restore one captured runtime to an independent reference state."""
-        self._require_force_checkpoints()
-        if self._live_checkpoint_selection is not None:
-            raise RuntimeError("cannot reset while a checkpoint is selected")
-        if indenter.body_index != self._indenter_body_index:
-            raise ValueError("reset indenter does not match the captured runtime")
-
-        wp.synchronize_device(self.fingertip_model.model.device)
-        reset_flags = (
-            newton.StateFlags.BODY_Q
-            | newton.StateFlags.BODY_QD
-            | newton.StateFlags.PARTICLE_Q
-            | newton.StateFlags.PARTICLE_QD
-        )
-        self.solver.reset(self._state_a, flags=reset_flags)
-        self.solver.reset(self._state_b, flags=reset_flags)
-
-        initial_tf_values = np.asarray(initial_tf, dtype=np.float32)
-        self._initial_translation_W_m.assign(initial_tf_values[None, :3])
-        self._initial_rotation.assign(initial_tf_values[None, 3:])
-        self.apply_indenter_pose(indenter, initial_tf)
-        self.fingertip_model.prepare_step(
-            self._state_a, self._state_b, self._fingertip_pose
-        )
-
-        self.contacts.clear()
-        self.collision_pipeline.reset_contact_matching()
-        self._state_a.clear_forces()
-        self._state_b.clear_forces()
-        self._body_qd_before.zero_()
-        self._body_wrenches.zero_()
-        self._reaction_force_n.zero_()
-        self._maximum_particle_speed_m_s.zero_()
-        self._nonfinite_particle_velocity_count.zero_()
-        self.solver.body_body_contact_overflow_max.zero_()
-        self.solver.body_particle_contact_overflow_max.zero_()
-        self._motion_float.zero_()
-        reset_int = np.zeros(_MOTION_INT_COUNT, dtype=np.int32)
-        reset_int[_MOTION_EVENT_SLOT] = -1
-        self._motion_int.assign(reset_int)
-        self._checkpoint_float.zero_()
-        self._checkpoint_step.zero_()
-        for checkpoint_contact in self._checkpoint_contacts:
-            checkpoint_contact.clear()
-
-        self.state = self._state_a
-        self._next_state = self._state_b
-        self.step_count = 0
-        self.time_s = 0.0
-        self._cuda_graph_replay_count = 0
-        self._checkpoint_host_intervention_count = 0
-        self._checkpoint_host_sync_count = 0
-        self._has_step_result = False
-        self.collision_pipeline.collide(self.state, self.contacts)
 
     def _require_force_checkpoints(self) -> None:
         if (
@@ -861,7 +780,7 @@ class LumoSimulation:
         if allocation_signature != self._cuda_graph_contact_allocation_signature():
             raise RuntimeError("checkpoint graph B replaced Newton contact storage")
 
-    def launch_force_checkpoints(
+    def _launch_force_checkpoints(
         self,
         tick_count: int,
         *,
@@ -896,7 +815,7 @@ class LumoSimulation:
         self._has_step_result = True
         self._checkpoint_host_intervention_count += 1
 
-    def force_checkpoint_status(
+    def _force_checkpoint_status(
         self,
         *,
         stream: wp.Stream | None = None,
@@ -913,12 +832,7 @@ class LumoSimulation:
             int(status[_MOTION_ERROR]),
         )
 
-    def advance_force_checkpoints(self, tick_count: int) -> tuple[int, bool, int]:
-        """Replay checkpoint ticks and return coarse host status."""
-        self.launch_force_checkpoints(tick_count)
-        return self.force_checkpoint_status()
-
-    def force_checkpoint(self, index: int) -> dict[str, float | int]:
+    def _force_checkpoint(self, index: int) -> dict[str, float | int]:
         """Read one compact threshold-crossing record."""
         self._require_force_checkpoints()
         if index < 0 or index >= self._target_count:
@@ -938,14 +852,14 @@ class LumoSimulation:
             "simulation_time_s": checkpoint_step * self.time_step_s,
         }
 
-    def current_reaction_force_n(self) -> float:
+    def _current_reaction_force_n(self) -> float:
         """Read the current projected force for a terminal error report."""
         self._require_force_checkpoints()
         value = float(self._motion_float.numpy()[_MOTION_REACTION_FORCE])
         self._checkpoint_host_sync_count += 1
         return value
 
-    def select_force_checkpoint(self, index: int) -> None:
+    def _select_force_checkpoint(self, index: int) -> None:
         """Expose one exact saved checkpoint through the callback API."""
         if self._live_checkpoint_selection is not None:
             raise RuntimeError("a checkpoint is already selected")
@@ -964,7 +878,7 @@ class LumoSimulation:
         self.step_count = checkpoint_step
         self.time_s = checkpoint_step * self.time_step_s
 
-    def restore_live_state(self) -> None:
+    def _restore_live_state(self) -> None:
         """Restore the live graph state after one checkpoint callback."""
         if self._live_checkpoint_selection is None:
             raise RuntimeError("no checkpoint is selected")
@@ -974,7 +888,7 @@ class LumoSimulation:
         self._live_checkpoint_selection = None
 
     @property
-    def force_checkpoint_performance(self) -> dict[str, float | int]:
+    def _force_checkpoint_performance(self) -> dict[str, float | int]:
         """Return graph replay and synchronization diagnostics."""
         interventions = self._checkpoint_host_intervention_count
         live_step_count = (
@@ -1043,49 +957,13 @@ class LumoSimulation:
                 pointers.append(int(array.ptr))
         return tuple(pointers)
 
-    def _capture_step_graphs(self) -> None:
-        """Capture the two fixed ping-pong Newton step graphs."""
-        wp.synchronize_device(self.fingertip_model.model.device)
-        self._validate_cuda_graph_capture_ready()
-        allocation_signature = self._cuda_graph_contact_allocation_signature()
-
-        with wp.ScopedCapture(
-            device=self.fingertip_model.model.device,
-            capture_mode=wp.CaptureMode.THREAD_LOCAL,
-        ) as capture_ab:
-            self._launch_step_device_operations(self._state_a, self._state_b)
-        self._step_graph_ab = capture_ab.graph
-        if allocation_signature != self._cuda_graph_contact_allocation_signature():
-            raise RuntimeError("graph_AB capture replaced Newton contact storage")
-
-        with wp.ScopedCapture(
-            device=self.fingertip_model.model.device,
-            capture_mode=wp.CaptureMode.THREAD_LOCAL,
-        ) as capture_ba:
-            self._launch_step_device_operations(self._state_b, self._state_a)
-        self._step_graph_ba = capture_ba.graph
-        if allocation_signature != self._cuda_graph_contact_allocation_signature():
-            raise RuntimeError("graph_BA capture replaced Newton contact storage")
-
     def step(self) -> None:
         """Advance one global tick and record its rigid-body wrenches."""
-        if self._step_graph_ab is None:
-            self._launch_step_device_operations(self.state, self._next_state)
-        elif self.state is self._state_a and self._next_state is self._state_b:
-            wp.capture_launch(self._step_graph_ab)
-            self._cuda_graph_replay_count += 1
-        elif self.state is self._state_b and self._next_state is self._state_a:
-            wp.capture_launch(self._step_graph_ba)
-            self._cuda_graph_replay_count += 1
-        else:
-            raise RuntimeError("simulation state buffers no longer form A/B pairs")
-
+        self._launch_step_device_operations(self.state, self._next_state)
         self.state, self._next_state = self._next_state, self.state
         self.step_count += 1
         self.time_s = self.step_count * self.time_step_s
         self._has_step_result = True
-        if self._use_cuda_graph and self._step_graph_ab is None:
-            self._capture_step_graphs()
 
     def indenter_reaction_force(
         self,

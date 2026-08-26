@@ -1,4 +1,4 @@
-"""Pure numerical objectives for one full-finger evaluation."""
+"""Pure numerical objectives for one fingertip evaluation."""
 
 from __future__ import annotations
 
@@ -51,7 +51,7 @@ class ObservationObjective:
     location_separations: np.ndarray
 
 
-def combine_led_responses(per_emitter_response: np.ndarray) -> np.ndarray:
+def _combine_led_responses(per_emitter_response: np.ndarray) -> np.ndarray:
     """Sum the emitter axis so LED identity cannot enter an observation."""
     values = np.asarray(per_emitter_response, dtype=np.float64)
     if values.ndim < 2:
@@ -73,7 +73,9 @@ def _triangle_areas(vertices_m: np.ndarray, triangles: np.ndarray) -> np.ndarray
 
 def _surface_incidence(
     triangles: np.ndarray,
-) -> tuple[dict[int, set[int]], dict[tuple[int, int], set[int]], dict[tuple[int, ...], int]]:
+) -> tuple[
+    dict[int, set[int]], dict[tuple[int, int], set[int]], dict[tuple[int, ...], int]
+]:
     vertex_triangles: dict[int, set[int]] = {}
     edge_triangles: dict[tuple[int, int], set[int]] = {}
     triangle_ids: dict[tuple[int, ...], int] = {}
@@ -171,7 +173,10 @@ def compute_contact_objective(
         raise ValueError("surface_triangles must have shape (triangle, 3)")
     if diameters.shape != (scenario_count,) or np.any(diameters <= 0.0):
         raise ValueError("sphere diameters must be positive and match scenarios")
-    if forces.shape != expected_state_shape or indentations.shape != expected_state_shape:
+    if (
+        forces.shape != expected_state_shape
+        or indentations.shape != expected_state_shape
+    ):
         raise ValueError("force and indentation arrays must match scenarios and forces")
     if offsets.shape != (*expected_state_shape, 2):
         raise ValueError("contact_record_offsets has the wrong shape")
@@ -263,7 +268,11 @@ def compute_contact_objective(
             raise ValueError(f"{scenario_name} has non-positive stiffness")
         q_stiff[scenario_index] = float(np.clip(1.0 - k_early / k_late, 0.0, 1.0))
         q_contact[scenario_index] = float(
-            np.cbrt(q_form[scenario_index] * q_stable[scenario_index] * q_stiff[scenario_index])
+            np.cbrt(
+                q_form[scenario_index]
+                * q_stable[scenario_index]
+                * q_stiff[scenario_index]
+            )
         )
         patch_area_5_m2[scenario_index] = area_5_m2
         k_early_n_m[scenario_index] = k_early
@@ -300,8 +309,8 @@ def compute_observation_objective(
     emitted_power: float,
 ) -> ObservationObjective:
     """Compute worst same-force location separation within each sphere size."""
-    combined = combine_led_responses(response_matrix)
-    baseline = combine_led_responses(no_contact_response)
+    combined = _combine_led_responses(response_matrix)
+    baseline = _combine_led_responses(no_contact_response)
     if combined.ndim != 3:
         raise ValueError("response_matrix must have shape (scenario, force, LED, bin)")
     if baseline.shape != combined.shape[2:]:
@@ -340,7 +349,12 @@ def compute_observation_objective(
         raise ValueError("responses must contain the full diameter/location product")
 
     separations = np.zeros(
-        (len(unique_diameters), force_count, len(unique_locations), len(unique_locations)),
+        (
+            len(unique_diameters),
+            force_count,
+            len(unique_locations),
+            len(unique_locations),
+        ),
         dtype=np.float64,
     )
     minimum = float("inf")
@@ -349,7 +363,9 @@ def compute_observation_objective(
         for force_index in range(force_count):
             for first, second in combinations(range(len(unique_locations)), 2):
                 first_index = lookup[(float(diameter), float(unique_locations[first]))]
-                second_index = lookup[(float(diameter), float(unique_locations[second]))]
+                second_index = lookup[
+                    (float(diameter), float(unique_locations[second]))
+                ]
                 distance = float(
                     np.linalg.norm(
                         normalized[first_index, force_index]
@@ -363,7 +379,9 @@ def compute_observation_objective(
                     limiting = (diameter_index, force_index, first, second)
 
     onset_distances = np.linalg.norm(normalized, axis=2)
-    onset_index = np.unravel_index(int(np.argmin(onset_distances)), onset_distances.shape)
+    onset_index = np.unravel_index(
+        int(np.argmin(onset_distances)), onset_distances.shape
+    )
     diameter_index, force_index, first, second = limiting
     return ObservationObjective(
         J_obs=minimum,
@@ -387,7 +405,7 @@ def compute_observation_objective(
 def compute_objectives_from_raw(
     data: Mapping[str, object],
 ) -> tuple[ContactObjective, ObservationObjective]:
-    """Recompute both objectives from a saved raw full-finger artifact."""
+    """Recompute both objectives from a saved raw fingertip artifact."""
     energy_fields = tuple(str(field) for field in data["energy_fields"])
     emitted_index = energy_fields.index("emitted_power")
     no_contact_energy = np.asarray(data["no_contact_energy"], dtype=np.float64)
@@ -401,7 +419,7 @@ def compute_objectives_from_raw(
     ):
         raise ValueError("emitted optical power changes between evaluation states")
     if not np.isclose(emitted_power, 5.0, rtol=0.0, atol=1.0e-12):
-        raise ValueError("production full-finger emitted power must equal 5")
+        raise ValueError("production fingertip emitted power must equal 5")
 
     names = tuple(str(name) for name in data["scenario_names"])
     contact = compute_contact_objective(
@@ -432,7 +450,6 @@ def compute_objectives_from_raw(
 __all__ = [
     "ContactObjective",
     "ObservationObjective",
-    "combine_led_responses",
     "compute_contact_objective",
     "compute_objectives_from_raw",
     "compute_observation_objective",
