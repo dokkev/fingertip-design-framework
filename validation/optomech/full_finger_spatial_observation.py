@@ -154,7 +154,7 @@ def main() -> None:
                 raise RuntimeError(
                     f"unloaded LED {led_index + 1} is not inside its air recess"
                 )
-            optics = fingertip.parameters.optical
+            optics = fingertip.parameters.optics
             paths = trace_bounded_paths(
                 scene,
                 emission["origin_W_m"],

@@ -144,7 +144,7 @@ def _trace_paths(
     carrier_u1: np.ndarray,
     carrier_u2: np.ndarray,
 ) -> PathTraceResult:
-    optics = fingertip.parameters.optical
+    optics = fingertip.parameters.optics
     return trace_bounded_paths(
         scene,
         emission["origin_W_m"],

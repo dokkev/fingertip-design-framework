@@ -183,17 +183,17 @@ open only at the cutout mouth for loaded optical-domain closure.
 ## Mechanics inputs
 
 `FingertipParameters` combines `FingertipGeometry` for geometry with
-`ViscoelasticParameters` for the fingertip's constitutive and inertial inputs,
+`SiliconeMechanics` for the fingertip's damped Neo-Hookean and inertial inputs,
 and `SiliconeOptics` for its effective monochromatic optical inputs.
 Production mechanics uses those material values through
-`FingertipParameters.viscoelastic`. The separate
+`FingertipParameters.mechanics`. The separate
 `lumo.mechanics_contract.MechanicsContract` owns solver execution settings,
 contact coefficients, and checkpoint-acceptance thresholds.
 
 The LED package parameters are owned by `FingertipParameters.led`; the
 world-frame source pose and Lambertian emission operation remain in
 `lumo.ray_tracing.LED`. Bulk optical values are owned by
-`FingertipParameters.optical`.
+`FingertipParameters.optics`.
 
 The repository does not currently define or calibrate a Young's-modulus and
 Poisson-ratio material model, and therefore does not expose disconnected

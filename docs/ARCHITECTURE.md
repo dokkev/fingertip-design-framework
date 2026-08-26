@@ -68,24 +68,26 @@ FingertipParameters
 `FingertipParameters` contains physical input values.
 
 `FingertipParameters.led` is the single parameter source for the current
-Adafruit Green LED Sequin. Its `LEDParameters` owns the hardware identity,
-two-dimensional fingertip design envelope, normalized modeled source power,
-wavelength metadata, and viewing half-angle. Ray tracing consumes this object
-directly rather than maintaining a second copy of those values.
+Green LED Sequin model. `LEDParameters` contains only dimensions and source
+power that affect the simulation: the board cross-section, finite emitting
+window, and normalized modeled power. Product and spectral metadata remain
+documentation rather than inactive runtime parameters.
 
-`FingertipParameters.optical` is one immutable `SiliconeOptics` value. The
+`FingertipParameters.optics` is one immutable `SiliconeOptics` value. The
 default is the nominal Dragon Skin 10 NV optical sensitivity preset, matching
-the current default mechanics material. Concrete low/nominal/high presets also
-exist for Solaris and Dragon Skin 10 NV. These are monochromatic effective
-properties, not a material hierarchy: Solaris refractive index is manufacturer
-data, while Dragon Skin refractive index and every extinction coefficient are
-explicit literature/modeling priors rather than measured product calibration.
+the current optical baseline. Concrete low/nominal/high presets also exist for
+Solaris and Dragon Skin 10 NV. These are monochromatic effective properties,
+not a material hierarchy: Solaris refractive index is manufacturer data, while
+Dragon Skin refractive index and every extinction coefficient are explicit
+literature/modeling priors rather than measured product calibration.
 
-The default `ViscoelasticParameters` use the current Dragon Skin 10 NV
-baseline: `1070 kg/m³`, `k_mu=1.06e5 Pa`, and `k_lambda=1.0494e7 Pa`. The
-Lamé values correspond to a Poisson ratio of `0.495`. The default Newton
-damping value remains an uncalibrated `10 Pa·s`, not a datasheet-derived
-material measurement.
+`FingertipParameters.mechanics` is one immutable `SiliconeMechanics` value.
+The default passes `1070 kg/m³`, a `1.06e5 Pa` shear modulus, a
+`1.0494e7 Pa` first Lamé parameter, and `10 Pa·s` damping directly to
+Newton's damped Neo-Hookean tetrahedra. It is not a hereditary viscoelastic
+model and contains no Maxwell, Prony, or relaxation state. The damping value
+remains an uncalibrated numerical input rather than a datasheet measurement.
+The type and its single `silicone` preset live in `mechanical_param.py`.
 
 `Fingertip` constructs the analytic fingertip assembly. Its `tip_z_m` property
 exposes the reference silicone tip coordinate in Newton-compatible metres so
@@ -94,10 +96,8 @@ callers do not repeat the semiellipse endpoint calculation and unit conversion.
 `Silicone` and `Carrier` are constructed geometry objects, not separate
 parameter systems. `BondingInterface` is the derived pair of left and right
 carrier-silicone polylines that receive the perfect kinematic bond. It does not
-own independent physical parameters. A caller may supply a bonding interface
-to select a smaller portion of that shared boundary. `Fingertip` clips any
-overhang to the actual carrier-silicone boundary and prints a `[WARNING]` when
-clipping occurs; an empty or disconnected result is rejected.
+own independent physical parameters and cannot be overridden by callers;
+`Fingertip` always derives it from the actual shared geometry.
 
 This package does not own:
 
@@ -646,7 +646,7 @@ requires it to be at most `30 mm`. Ax equivalently enforces
 geometry validity.
 `scripts/run_mobo.py` records the intended new full-finger campaign inputs,
 including explicit sphere diameters and longitudinal contact locations.
-It exposes separate viscoelastic and optical presets, physical parameter
+It exposes separate mechanics and optical presets, physical parameter
 bounds, indenter URDF list, sequential force thresholds, initial clearance,
 output directory, and cumulative target morphology count. Mechanics and optical algorithms remain owned by their
 production modules. `silicone` is the current mechanics preset.

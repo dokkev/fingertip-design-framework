@@ -330,9 +330,9 @@ def _trace_state(
             emission["power"],
             inside_silicone=inside_silicone,
             n_air=1.0,
-            n_silicone=fingertip.parameters.optical.refractive_index,
+            n_silicone=fingertip.parameters.optics.refractive_index,
             extinction_coefficient_m_inv=(
-                fingertip.parameters.optical.extinction_coefficient_m_inv
+                fingertip.parameters.optics.extinction_coefficient_m_inv
             ),
             carrier_albedo=_CARRIER_ALBEDO,
             max_bounces=_MAX_BOUNCES,
@@ -801,7 +801,7 @@ def _write_report(
     scene_build_time_s: float,
     deterministic_max_difference: float,
 ) -> None:
-    optics = fingertip.parameters.optical
+    optics = fingertip.parameters.optics
     no_contact = results["no_contact"]
     distal = results["distal_10n"]
     center_between = next(
@@ -854,7 +854,7 @@ def _write_report(
         f"- LED centers Y [mm]: `{(1.0e3 * mesh.led_centers_m[:, 1]).tolist()}`",
         f"- hardware stem recess: {LED_RECESS_WIDTH_MM:g} mm along Y × "
         f"{LED_RECESS_DEPTH_MM:g} mm deep at every LED",
-        f"- LED model: `{fingertip.parameters.led.LED_PART_NUMBER}`, normal `-Z`",
+        "- LED source: finite package-window emitter, normal `-Z`",
         f"- emitted power: {fingertip.parameters.led.normalized_power:g} modeled unit/LED, "
         f"{5.0 * fingertip.parameters.led.normalized_power:g} total",
         f"- samples: {_PRODUCTION_SAMPLE_SIDE**2:,} paths/LED, "
@@ -1271,10 +1271,10 @@ def main() -> None:
         deterministic_max_difference=deterministic_max_difference,
     )
     metadata = {
-        "optical_preset": fingertip.parameters.optical.name,
-        "refractive_index": fingertip.parameters.optical.refractive_index,
+        "optical_preset": fingertip.parameters.optics.name,
+        "refractive_index": fingertip.parameters.optics.refractive_index,
         "extinction_coefficient_m_inv": (
-            fingertip.parameters.optical.extinction_coefficient_m_inv
+            fingertip.parameters.optics.extinction_coefficient_m_inv
         ),
         "led_centers_y_mm": (1.0e3 * mesh.led_centers_m[:, 1]).tolist(),
         "led_normal_W": [0.0, 0.0, -1.0],

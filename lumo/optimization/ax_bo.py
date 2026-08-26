@@ -24,8 +24,8 @@ from ax.api.client import Client
 from ax.api.configs import RangeParameterConfig
 
 from lumo.fingertip import (
+    MECHANICS_PRESETS,
     OPTICAL_PRESETS,
-    VISCOELASTIC_PRESETS,
     FingertipParameters,
 )
 
@@ -84,7 +84,7 @@ _DEFAULT_SPHERE_DIAMETERS_MM = (5.0, 10.0, 20.0)
 _DEFAULT_FORCE_TARGETS_N = (5.0, 10.0, 15.0, 20.0)
 _DEFAULT_INITIAL_CLEARANCE_M = 1.0e-3
 _DEFAULT_CONTACT_Y_MM = (-22.0, -11.0, -5.5, 0.0, 5.5, 11.0, 22.0)
-_DEFAULT_VISCOELASTIC_PRESET = "silicone"
+_DEFAULT_MECHANICS_PRESET = "silicone"
 _DEFAULT_OPTICAL_PRESET = "dragon_skin_10_nv_nominal"
 _CONTINUOUS_WARM_START_RESULT_FIELDS = (
     ("sphere_5mm", "J_intensity_5mm", "J_spatial_5mm"),
@@ -120,7 +120,7 @@ _MAX_PROPOSALS_PER_COMPLETED_TRIAL = 50
 _OBJECTIVE_DEFINITION = (
     "full-finger-contact-and-threshold-conditioned-observation-v2"
 )
-_RUN_CONFIG_SCHEMA = 8
+_RUN_CONFIG_SCHEMA = 9
 
 
 @dataclass(frozen=True)
@@ -146,7 +146,7 @@ class CampaignDefinition:
     force_targets_n: tuple[float, ...] = _DEFAULT_FORCE_TARGETS_N
     initial_clearance_m: float = _DEFAULT_INITIAL_CLEARANCE_M
     contact_y_mm: tuple[float, ...] = _DEFAULT_CONTACT_Y_MM
-    viscoelastic_preset: str = _DEFAULT_VISCOELASTIC_PRESET
+    mechanics_preset: str = _DEFAULT_MECHANICS_PRESET
     optical_preset: str = _DEFAULT_OPTICAL_PRESET
 
     @property
@@ -326,7 +326,7 @@ def _campaign_definition(
     force_targets_n: Iterable[float] = _DEFAULT_FORCE_TARGETS_N,
     initial_clearance_m: float = _DEFAULT_INITIAL_CLEARANCE_M,
     contact_y_mm: Iterable[float] = _DEFAULT_CONTACT_Y_MM,
-    viscoelastic_preset: str = _DEFAULT_VISCOELASTIC_PRESET,
+    mechanics_preset: str = _DEFAULT_MECHANICS_PRESET,
     optical_preset: str = _DEFAULT_OPTICAL_PRESET,
 ) -> CampaignDefinition:
     indenters = _indenter_definitions(indenter_urdfs)
@@ -354,17 +354,17 @@ def _campaign_definition(
     if len(set(contact_locations_y_mm)) != len(contact_locations_y_mm):
         raise ValueError("contact_y_mm must be unique")
     if (
-        not isinstance(viscoelastic_preset, str)
-        or viscoelastic_preset not in VISCOELASTIC_PRESETS
+        not isinstance(mechanics_preset, str)
+        or mechanics_preset not in MECHANICS_PRESETS
     ):
         raise ValueError(
-            f"viscoelastic_preset must be one of {sorted(VISCOELASTIC_PRESETS)!r}"
+            f"mechanics_preset must be one of {sorted(MECHANICS_PRESETS)!r}"
         )
     if not isinstance(optical_preset, str) or optical_preset not in OPTICAL_PRESETS:
         raise ValueError(f"optical_preset must be one of {sorted(OPTICAL_PRESETS)!r}")
     fingertip_parameters = FingertipParameters(
-        viscoelastic=VISCOELASTIC_PRESETS[viscoelastic_preset],
-        optical=OPTICAL_PRESETS[optical_preset],
+        mechanics=MECHANICS_PRESETS[mechanics_preset],
+        optics=OPTICAL_PRESETS[optical_preset],
     )
     if name == "continuous":
         raise ValueError(
@@ -433,7 +433,7 @@ def _campaign_definition(
             force_targets_n=targets,
             initial_clearance_m=initial_clearance_m,
             contact_y_mm=contact_locations_y_mm,
-            viscoelastic_preset=viscoelastic_preset,
+            mechanics_preset=mechanics_preset,
             optical_preset=optical_preset,
         )
     raise ValueError(f"unknown campaign {name!r}")
@@ -958,7 +958,7 @@ def _run_config(campaign: CampaignDefinition) -> dict[str, object]:
             },
         },
         "scientific_contract": {
-            "viscoelastic_preset": campaign.viscoelastic_preset,
+            "mechanics_preset": campaign.mechanics_preset,
             "optical_preset": campaign.optical_preset,
             "fingertip_parameters": asdict(campaign.space.parameter_bounds.parameters),
             "mechanics": {
@@ -1790,7 +1790,7 @@ def run(
     force_targets_n: Iterable[float] = _DEFAULT_FORCE_TARGETS_N,
     initial_clearance_m: float = _DEFAULT_INITIAL_CLEARANCE_M,
     contact_y_mm: Iterable[float] = _DEFAULT_CONTACT_Y_MM,
-    viscoelastic_preset: str = _DEFAULT_VISCOELASTIC_PRESET,
+    mechanics_preset: str = _DEFAULT_MECHANICS_PRESET,
     optical_preset: str = _DEFAULT_OPTICAL_PRESET,
 ) -> list[dict[str, object]]:
     """Create or resume the full-finger sequential Ax campaign."""
@@ -1806,7 +1806,7 @@ def run(
         force_targets_n=force_targets_n,
         initial_clearance_m=initial_clearance_m,
         contact_y_mm=contact_y_mm,
-        viscoelastic_preset=viscoelastic_preset,
+        mechanics_preset=mechanics_preset,
         optical_preset=optical_preset,
     )
     if output_directory == _CONTINUOUS_OUTPUT_DIRECTORY.resolve():

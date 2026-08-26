@@ -191,7 +191,7 @@ def build_fingertip_newton_model(
         raise ValueError("bonded vertex index exceeds silicone vertex count")
 
     parameters = fingertip_mesh.fingertip.parameters
-    material = parameters.viscoelastic
+    material = parameters.mechanics
 
     if builder is None:
         builder = newton.ModelBuilder(gravity=gravity)
@@ -208,9 +208,9 @@ def build_fingertip_newton_model(
         vel=wp.vec3(0.0, 0.0, 0.0),
         mesh=fingertip_mesh.silicone,
         density=material.density_kg_m3,
-        k_mu=material.k_mu_pa,
-        k_lambda=material.k_lambda_pa,
-        k_damp=material.damping,
+        k_mu=material.shear_modulus_pa,
+        k_lambda=material.lame_lambda_pa,
+        k_damp=material.damping_pa_s,
         particle_radius=0.0,
         label="fingertip_silicone",
     )

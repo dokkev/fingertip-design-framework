@@ -21,7 +21,7 @@ def _run(output_directory: Path) -> list[dict[str, object]]:
         output_directory=output_directory,
         target_bo_trials=1,
         campaign_name="discrete-05mm",
-        viscoelastic_preset=production.VISCOELASTIC_PRESET,
+        mechanics_preset=production.MECHANICS_PRESET,
         optical_preset=production.OPTICAL_PRESET,
         parameter_bounds_mm=production.PARAMETER_BOUNDS_MM,
         indenter_urdfs=production.INDENTER_URDFS,

@@ -84,6 +84,13 @@ def test_production_scientific_contract_is_explicitly_serialized() -> None:
     campaign = _campaign()
     config = _run_config(campaign)["scientific_contract"]
 
+    assert config["mechanics_preset"] == "silicone"
+    assert set(config["fingertip_parameters"]) == {
+        "geometry",
+        "mechanics",
+        "optics",
+        "led",
+    }
     assert campaign.contact_y_mm == (
         -22.0,
         -11.0,

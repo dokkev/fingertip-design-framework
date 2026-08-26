@@ -345,9 +345,9 @@ def _trace_emitter(
         emission["power"],
         inside_silicone=applied_inside,
         n_air=1.0,
-        n_silicone=fingertip.parameters.optical.refractive_index,
+        n_silicone=fingertip.parameters.optics.refractive_index,
         extinction_coefficient_m_inv=(
-            fingertip.parameters.optical.extinction_coefficient_m_inv
+            fingertip.parameters.optics.extinction_coefficient_m_inv
         ),
         carrier_albedo=_CARRIER_ALBEDO,
         max_bounces=_MAX_BOUNCES,

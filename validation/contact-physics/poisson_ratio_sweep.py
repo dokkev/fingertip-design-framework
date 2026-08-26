@@ -11,7 +11,7 @@ import warp as wp
 from lumo.fingertip import (
     Fingertip,
     FingertipParameters,
-    ViscoelasticParameters,
+    SiliconeMechanics,
 )
 from lumo.newton import Indenter
 from lumo.simulation import LumoSimulation
@@ -54,11 +54,11 @@ def _run_case(poisson_ratio: float) -> None:
     k_lambda_pa = _lame_lambda_pa(poisson_ratio)
     fingertip = Fingertip(
         FingertipParameters(
-            viscoelastic=ViscoelasticParameters(
+            mechanics=SiliconeMechanics(
                 density_kg_m3=_DENSITY_KG_M3,
-                k_mu_pa=_K_MU_PA,
-                k_lambda_pa=k_lambda_pa,
-                damping=_DAMPING_PA_S,
+                shear_modulus_pa=_K_MU_PA,
+                lame_lambda_pa=k_lambda_pa,
+                damping_pa_s=_DAMPING_PA_S,
             )
         )
     )

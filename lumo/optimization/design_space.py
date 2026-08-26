@@ -9,7 +9,6 @@ from types import MappingProxyType
 
 from lumo.fingertip.fingertip import Fingertip
 from lumo.fingertip.fingertip_param import FingertipParameters
-from lumo.fingertip.geometric_param import InvalidFingertipParameters
 from lumo.util.scalar_validation import require_finite
 
 from .design_param_bound import DesignParameterBounds
@@ -298,7 +297,7 @@ class DesignSpace:
 
         try:
             parameters = self.to_parameters(candidate)
-        except (ValueError, TypeError, InvalidFingertipParameters):
+        except (ValueError, TypeError):
             return False
 
         values = self.parameter_values(parameters)

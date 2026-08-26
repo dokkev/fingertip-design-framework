@@ -152,9 +152,9 @@ class Fingertip:
     """
 
     parameters: FingertipParameters = field(default_factory=FingertipParameters)
-    bonding_interface: BondingInterface | None = None
     silicone: Silicone = field(init=False)
     carrier: Carrier = field(init=False)
+    bonding_interface: BondingInterface = field(init=False)
 
     @property
     def tip_z_m(self) -> float:
@@ -229,7 +229,7 @@ class Fingertip:
             )
         )
 
-        geometry_boundary = BondingInterface(
+        bonding_interface = BondingInterface(
             left=(
                 (silicone.cavity_left_x_mm, 0.0),
                 (silicone.bond_left_inner_x_mm, 0.0),
@@ -249,16 +249,6 @@ class Fingertip:
                 (silicone.cavity_right_x_mm, 0.0),
             ),
         )
-        bonding_interface = self.bonding_interface
-        if bonding_interface is None:
-            bonding_interface = geometry_boundary
-        elif not isinstance(bonding_interface, BondingInterface):
-            raise TypeError("bonding_interface must be a BondingInterface")
-        else:
-            bonding_interface = bonding_interface.clipped_to(
-                geometry_boundary
-            )
-
         object.__setattr__(self, "silicone", silicone)
         object.__setattr__(self, "carrier", carrier)
         object.__setattr__(self, "bonding_interface", bonding_interface)

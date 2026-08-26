@@ -1,12 +1,13 @@
 # Fixed Mechanics and Optical Parameters
 
-The current default mechanics material is Smooth-On Dragon Skin 10 NV. Newton
-receives `density_kg_m3`, `k_mu_pa`, `k_lambda_pa`, and `k_damp` directly from
-`FingertipParameters.viscoelastic`; these values are numerical inputs, not a
-complete material-identification result. `LumoSimulation` separately owns the
-mesh and solver settings.
+The current default mechanics preset is the repository's silicone baseline.
+Newton receives `density_kg_m3`, `shear_modulus_pa`, `lame_lambda_pa`, and
+`damping_pa_s` directly from `FingertipParameters.mechanics`; these values are
+numerical damped Neo-Hookean inputs, not a calibrated hereditary viscoelastic
+model or complete material-identification result. `LumoSimulation` separately
+owns the mesh and solver settings.
 
-`FingertipParameters.optical` stores one `SiliconeOptics` value with only the
+`FingertipParameters.optics` stores one `SiliconeOptics` value with only the
 monochromatic properties used by current transport. The low/nominal/high
 presets below support sensitivity analysis. They are not optimization variables
 and are not calibrated measurements of the actual LUMO casting.
@@ -19,20 +20,21 @@ board that is `2 mm` thick and identifies its LED as a 1206 green device. The
 2-D fingertip geometry therefore uses the board's `4 x 2 mm` cross-section.
 
 The linked [LuckyLight S150PGC-G5-1B technical
-datasheet](https://cdn-shop.adafruit.com/datasheets/S150PGC-G5-1B.pdf) gives:
+datasheet](https://cdn-shop.adafruit.com/datasheets/S150PGC-G5-1B.pdf) provides
+the package dimensions and optical product metadata. Only values that affect
+the current simulation belong to `LEDParameters`:
 
 | `LEDParameters` field | Default | Source status |
 | --- | ---: | --- |
-| `dominant_wavelength_nm` | `525` | LuckyLight manufacturer typical value |
-| `peak_wavelength_nm` | `520` | LuckyLight manufacturer typical value |
-| `spectral_half_width_nm` | `35` | LuckyLight manufacturer typical value |
-| `viewing_half_angle_deg` | `60` | Half of the manufacturer `120 deg` full half-intensity angle |
+| `width_mm` | `4.0` | Modeled board cross-section |
+| `height_mm` | `2.0` | Modeled board cross-section |
+| `emitting_window_x_mm` | `1.8` | LuckyLight resin-window drawing |
+| `emitting_window_y_mm` | `1.6` | LuckyLight resin-window drawing |
 | `normalized_power` | `1.0` | Modeling normalization; not optical watts |
 
-Transport remains monochromatic at `525 nm` and uses an ideal Lambertian
-emitter. The datasheet's half-intensity angle is consistent with this
-first-order model because `cos(60 deg) = 0.5`; the implementation does not claim
-to reproduce the complete measured radiation diagram.
+Transport uses an ideal Lambertian emitter. The product's wavelength and
+viewing-angle values document the hardware choice but do not configure the
+current transport implementation.
 
 ## Silicone refractive index
 
@@ -101,8 +103,8 @@ model does not redirect scattered power or implement volumetric transport.
 
 ## Current use
 
-`FingertipParameters.optical` defaults to the nominal Dragon Skin 10 NV preset,
-matching the default mechanics material. The LED sensor-response validation
+`FingertipParameters.optics` defaults to the nominal Dragon Skin 10 NV preset.
+The LED sensor-response validation
 uses the same mechanics deformation and common optical samples for all six
 presets, so the reported differences isolate only the stated optical
 assumptions.

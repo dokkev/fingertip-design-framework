@@ -9,7 +9,7 @@ from lumo.optimization.ax_bo import run
 # User settings. Available mechanics: silicone.
 # Available optics: solaris_{low,nominal,high} and
 # dragon_skin_10_nv_{low,nominal,high}.
-VISCOELASTIC_PRESET = "silicone"
+MECHANICS_PRESET = "silicone"
 OPTICAL_PRESET = "dragon_skin_10_nv_nominal"
 OTK_INCLUDE_DIR = (
     Path(__file__).resolve().parents[2] / "optix-toolkit" / "ShaderUtil" / "include"
@@ -46,7 +46,7 @@ def main() -> None:
         output_directory=OUTPUT_DIRECTORY,
         target_bo_trials=TARGET_MORPHOLOGIES,
         campaign_name="discrete-05mm",
-        viscoelastic_preset=VISCOELASTIC_PRESET,
+        mechanics_preset=MECHANICS_PRESET,
         optical_preset=OPTICAL_PRESET,
         parameter_bounds_mm=PARAMETER_BOUNDS_MM,
         indenter_urdfs=INDENTER_URDFS,

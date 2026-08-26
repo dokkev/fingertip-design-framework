@@ -239,7 +239,7 @@ def _trace_state(
     energy = np.empty((len(leds), len(_ENERGY_FIELDS)), dtype=np.float64)
     outside = np.empty(len(leds), dtype=np.float64)
     inside_fraction = np.empty(len(leds), dtype=np.float64)
-    optics = fingertip.parameters.optical
+    optics = fingertip.parameters.optics
     for led_index, (led, emission) in enumerate(zip(leds, emissions, strict=True)):
         inside = _source_media(
             scene,

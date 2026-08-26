@@ -12,10 +12,6 @@ from lumo.util.scalar_validation import (
 )
 
 
-class InvalidFingertipParameters(ValueError):
-    """Raised when the parameters cannot define a valid fingertip geometry."""
-
-
 @dataclass(frozen=True)
 class FingertipGeometry:
     """Physical dimensions defining one fingertip morphology.
@@ -75,7 +71,6 @@ class FingertipGeometry:
             require_positive(
                 name,
                 getattr(self, name),
-                error_type=InvalidFingertipParameters,
             )
 
     def _validate_clearance(self) -> None:
@@ -83,12 +78,11 @@ class FingertipGeometry:
             require_nonnegative(
                 name,
                 getattr(self, name),
-                error_type=InvalidFingertipParameters,
             )
 
     def _validate_link_geometry(self) -> None:
         if self.bond_extension_height_mm >= self.link_thickness_mm:
-            raise InvalidFingertipParameters(
+            raise ValueError(
                 "bond_extension_height_mm must be smaller than "
                 "link_thickness_mm"
             )
@@ -99,7 +93,7 @@ class FingertipGeometry:
         )
 
         if required_width >= self.flat_pad_width_mm:
-            raise InvalidFingertipParameters(
+            raise ValueError(
                 "bond extensions and the internal cutout must leave a "
                 "nonzero bonded region: "
                 f"required_width={required_width:g} mm, "
@@ -111,7 +105,7 @@ class FingertipGeometry:
         half_cutout_width = 0.5 * self.cutout_width_mm
 
         if half_cutout_width >= half_pad_width:
-            raise InvalidFingertipParameters(
+            raise ValueError(
                 "the internal cutout must remain inside the pad width: "
                 f"half_cutout_width={half_cutout_width:g} mm, "
                 f"half_pad_width={half_pad_width:g} mm"
@@ -132,7 +126,7 @@ class FingertipGeometry:
         )
 
         if penetration_into_semiellipse >= available_depth:
-            raise InvalidFingertipParameters(
+            raise ValueError(
                 "the internal cutout exits the semielliptical pad envelope: "
                 f"penetration={penetration_into_semiellipse:g} mm, "
                 f"available_depth={available_depth:g} mm"
@@ -176,6 +170,5 @@ def semiellipse_depth_at_x_mm(
 
 __all__ = [
     "FingertipGeometry",
-    "InvalidFingertipParameters",
     "semiellipse_depth_at_x_mm",
 ]

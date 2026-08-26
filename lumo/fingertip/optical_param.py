@@ -3,11 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import ClassVar
 
 from lumo.util.scalar_validation import require_nonnegative, require_positive
-
-from .geometric_param import InvalidFingertipParameters
 
 
 @dataclass(frozen=True)
@@ -19,20 +16,16 @@ class SiliconeOptics:
     extinction_coefficient_m_inv: float
 
     def __post_init__(self) -> None:
-        error_type = InvalidFingertipParameters
-
         if not isinstance(self.name, str) or not self.name.strip():
-            raise error_type("name must be a nonempty string")
+            raise ValueError("name must be a nonempty string")
 
         require_positive(
             "refractive_index",
             self.refractive_index,
-            error_type=error_type,
         )
         require_nonnegative(
             "extinction_coefficient_m_inv",
             self.extinction_coefficient_m_inv,
-            error_type=error_type,
         )
 
 
@@ -141,11 +134,7 @@ OPTICAL_PRESETS = {
 
 @dataclass(frozen=True)
 class LEDParameters:
-    """Current Green Sequin design envelope and optical source parameters."""
-
-    ADAFRUIT_PRODUCT_ID: ClassVar[int] = 1756
-    LED_PART_NUMBER: ClassVar[str] = "LuckyLight S150PGC-G5-1B"
-    PACKAGE: ClassVar[str] = "1206 Pure Green InGaN"
+    """LED dimensions and source parameters used by the simulation."""
 
     # The 2-D fingertip model uses the 4 mm by 2 mm board cross-section. The
     # board's omitted out-of-plane dimension is 9 mm.
@@ -157,53 +146,28 @@ class LEDParameters:
     emitting_window_y_mm: float = 1.6
     # Modeled source power before absolute optical calibration.
     normalized_power: float = 1.0
-    dominant_wavelength_nm: float = 525.0
-    peak_wavelength_nm: float = 520.0
-    spectral_half_width_nm: float = 35.0
-    # The datasheet specifies a 120 degree full half-intensity viewing angle.
-    viewing_half_angle_deg: float = 60.0
 
     def __post_init__(self) -> None:
-        error_type = InvalidFingertipParameters
-
         require_positive(
             "width_mm",
             self.width_mm,
-            error_type=error_type,
         )
         require_positive(
             "height_mm",
             self.height_mm,
-            error_type=error_type,
         )
         require_positive(
             "emitting_window_x_mm",
             self.emitting_window_x_mm,
-            error_type=error_type,
         )
         require_positive(
             "emitting_window_y_mm",
             self.emitting_window_y_mm,
-            error_type=error_type,
         )
         require_nonnegative(
             "normalized_power",
             self.normalized_power,
-            error_type=error_type,
         )
-        for name in (
-            "dominant_wavelength_nm",
-            "peak_wavelength_nm",
-            "spectral_half_width_nm",
-        ):
-            require_positive(
-                name,
-                getattr(self, name),
-                error_type=error_type,
-            )
-
-        if not 0.0 < self.viewing_half_angle_deg < 90.0:
-            raise error_type("viewing_half_angle_deg must be between 0 and 90 degrees")
 
 
 __all__ = [

@@ -3,7 +3,12 @@
 from .bonding_interface import BondingInterface
 from .fingertip import Carrier, Fingertip, Silicone
 from .fingertip_param import FingertipParameters
-from .geometric_param import FingertipGeometry, InvalidFingertipParameters
+from .geometric_param import FingertipGeometry
+from .mechanical_param import (
+    MECHANICS_PRESETS,
+    SILICONE_MECHANICS,
+    SiliconeMechanics,
+)
 from .optical_param import (
     DRAGON_SKIN_10_NV_OPTICS_HIGH,
     DRAGON_SKIN_10_NV_OPTICS_LOW,
@@ -15,21 +20,15 @@ from .optical_param import (
     OPTICAL_PRESETS,
     SiliconeOptics,
 )
-from .viscoelastic_param import (
-    SILICONE_VISCOELASTIC,
-    VISCOELASTIC_PRESETS,
-    ViscoelasticParameters,
-)
-
 __all__ = [
     "Fingertip",
     "Silicone",
     "Carrier",
     "BondingInterface",
-    "SILICONE_VISCOELASTIC",
+    "SILICONE_MECHANICS",
     "FingertipParameters",
     "FingertipGeometry",
-    "InvalidFingertipParameters",
+    "MECHANICS_PRESETS",
     "DRAGON_SKIN_10_NV_OPTICS_HIGH",
     "DRAGON_SKIN_10_NV_OPTICS_LOW",
     "DRAGON_SKIN_10_NV_OPTICS_NOMINAL",
@@ -39,6 +38,5 @@ __all__ = [
     "SOLARIS_OPTICS_LOW",
     "SOLARIS_OPTICS_NOMINAL",
     "SiliconeOptics",
-    "VISCOELASTIC_PRESETS",
-    "ViscoelasticParameters",
+    "SiliconeMechanics",
 ]
