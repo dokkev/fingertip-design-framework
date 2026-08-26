@@ -14,9 +14,7 @@ import warp as wp
 from lumo.fingertip import Fingertip
 from lumo.mesh import (
     Fingertip5LEDMesh,
-    FingertipMesh,
     make_fingertip_5led_mesh,
-    make_fingertip_mesh,
 )
 from lumo.newton import Indenter
 from lumo.ray_tracing import (
@@ -24,22 +22,12 @@ from lumo.ray_tracing import (
     LONGITUDINAL_SIDE_BIN_COUNT,
     OptixScene,
     PathTraceResult,
-    emit_from_stem_boundary,
     emit_from_stem_window,
     longitudinal_side_view_power,
-    side_view_observation,
-    source_inside_silicone,
     sources_inside_silicone,
     trace_bounded_paths,
 )
-from lumo.simulation import (
-    DesignStudy,
-    DesignTrial,
-    FIRST_CROSSING_LOADING,
-    LumoSimulation,
-    QUASISTATIC_RAMP_LOADING,
-    REFERENCE_DWELL_LOADING,
-)
+from lumo.simulation import DesignStudy, DesignTrial, LumoSimulation
 
 
 _SILICONE_INSTANCE_ID = 1
@@ -56,16 +44,12 @@ _CARRIER_ALBEDO = 0.7
 
 _SIM_FREQUENCY_HZ = 100.0
 _VBD_ITERATIONS = 10
-_SERVO_SETTLE_DURATION_S = 5.0
-_SERVO_SETTLE_DISPLACEMENT_TOLERANCE_M = None
-_FORCE_GAIN_M_S_N = 2.5e-4
 _CONTACT_STIFFNESS_N_M = 3.0e4
 _CONTACT_DAMPING_N_S_M = 0.28228017516945547
 _ELEMENT_SIZE_MM = 1.0
 _SOFT_CONTACT_MARGIN_M = 1.0e-4
 _CARRIER_CONTACT_STIFFNESS_N_M = 1.0e6
 _FORCE_TARGETS_N = (5.0, 10.0, 15.0, 20.0)
-_FORCE_TOLERANCE_FRACTION = 0.1
 _PRODUCTION_PARALLEL_WORLD_COUNT = 4
 _ENERGY_FIELDS = (
     "emitted_power",
@@ -77,23 +61,6 @@ _ENERGY_FIELDS = (
     "accounted_power",
     "closure_error",
 )
-
-
-@dataclass(frozen=True)
-class ContactSensingEvaluation:
-    """Compact no-contact and scenario-by-force sensing results."""
-
-    no_contact_response: np.ndarray
-    no_contact_energy: np.ndarray
-    scenario_names: tuple[str, ...]
-    force_targets_n: np.ndarray
-    actual_forces_n: np.ndarray
-    indentations_m: np.ndarray
-    response_matrix: np.ndarray
-    energy_fields: tuple[str, ...]
-    energy_matrix: np.ndarray
-    checkpoint_times_s: np.ndarray
-    scenario_runtime_s: np.ndarray
 
 
 @dataclass(frozen=True)
@@ -124,12 +91,9 @@ class FullFingerEvaluation:
     rms_particle_speeds_m_s: np.ndarray
     particle_speed_p95_m_s: np.ndarray
     kinetic_energy_j: np.ndarray
-    force_references_n: np.ndarray
+    force_overshoots_n: np.ndarray
     reaction_force_rates_n_s: np.ndarray
     indentation_rates_m_s: np.ndarray
-    servo_errors_n: np.ndarray
-    settle_window_force_drifts_n: np.ndarray
-    settle_window_indentation_drifts_m: np.ndarray
     indenter_contact_counts: np.ndarray
     total_contact_counts: np.ndarray
     contact_buffer_overflow: np.ndarray
@@ -155,11 +119,9 @@ class FullFingerEvaluation:
     no_contact_optics_runtime_s: float
     mechanics_backend: str
     graph_replay_counts: np.ndarray
-    force_servo_host_intervention_counts: np.ndarray
-    force_servo_host_sync_counts: np.ndarray
-    force_servo_average_ticks_per_host_intervention: np.ndarray
-    loading_mode: str
-    force_ramp_rate_n_s: float | None
+    checkpoint_host_intervention_counts: np.ndarray
+    checkpoint_host_sync_counts: np.ndarray
+    checkpoint_average_ticks_per_host_intervention: np.ndarray
 
     @property
     def combined_no_contact_response(self) -> np.ndarray:
@@ -170,17 +132,6 @@ class FullFingerEvaluation:
     def combined_response_matrix(self) -> np.ndarray:
         """Return simultaneous checkpoint responses without storing a copy."""
         return self.response_matrix.sum(axis=2)
-
-
-def _make_led(fingertip: Fingertip, fingertip_mesh: FingertipMesh) -> LED:
-    vertices = np.asarray(fingertip_mesh.silicone.vertices, dtype=np.float64)
-    extrusion_center_y_m = 0.5 * float(vertices[:, 1].min() + vertices[:, 1].max())
-    stem_bottom_z_m = -1.0e-3 * fingertip.parameters.geometry.stem_height_mm
-    return LED(
-        position_W_m=np.array((0.0, extrusion_center_y_m, stem_bottom_z_m)),
-        normal_W=np.array((0.0, 0.0, -1.0)),
-        parameters=fingertip.parameters.led,
-    )
 
 
 def _trace_paths(
@@ -227,239 +178,6 @@ def _path_energy(paths: PathTraceResult) -> np.ndarray:
             paths.closure_error,
         ),
         dtype=np.float64,
-    )
-
-
-def _trace_state(
-    scene: OptixScene,
-    fingertip: Fingertip,
-    emission: np.ndarray,
-    *,
-    inside_silicone: bool,
-    dielectric_branch_u: np.ndarray,
-    carrier_u1: np.ndarray,
-    carrier_u2: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray]:
-    paths = _trace_paths(
-        scene,
-        fingertip,
-        emission,
-        inside_silicone=inside_silicone,
-        dielectric_branch_u=dielectric_branch_u,
-        carrier_u1=carrier_u1,
-        carrier_u2=carrier_u2,
-    )
-    response = side_view_observation(
-        paths.escaped_rays,
-        fingertip=fingertip,
-    )
-    energy = _path_energy(paths)
-    del paths
-    return response, energy
-
-
-def evaluate_contact_sensing(
-    fingertip: Fingertip,
-    trials: Iterable[DesignTrial],
-    *,
-    force_targets_n: Iterable[float] = _FORCE_TARGETS_N,
-    settle_duration_s: float = _SERVO_SETTLE_DURATION_S,
-    settle_displacement_tolerance_m: float | None = (
-        _SERVO_SETTLE_DISPLACEMENT_TOLERANCE_M
-    ),
-    force_tolerance_fraction: float = _FORCE_TOLERANCE_FRACTION,
-) -> ContactSensingEvaluation:
-    """Evaluate one no-contact state and force-servo contact scenarios.
-
-    The immutable fingertip mesh and OptiX scene are built once. The contact
-    trials reuse that mesh in independent Newton runtimes. Each accepted force
-    checkpoint updates the existing silicone GAS and IAS before tracing with
-    the same deterministic optical samples. Defaults implement the validated
-    five-second force-band dwell. Force targets, dwell, and relative tolerance
-    are explicit inputs so an optimization campaign can record and enforce its
-    own mechanics contract without changing the Newton or optical pipeline.
-    """
-    if not isinstance(fingertip, Fingertip):
-        raise TypeError("fingertip must be a Fingertip")
-    if isinstance(trials, DesignTrial):
-        raise TypeError("trials must be an iterable of DesignTrial objects")
-    trial_tuple = tuple(trials)
-    if not trial_tuple:
-        raise ValueError("trials must contain at least one DesignTrial")
-    if any(not isinstance(trial, DesignTrial) for trial in trial_tuple):
-        raise TypeError("trials must contain only DesignTrial objects")
-    force_targets = tuple(float(target) for target in force_targets_n)
-    if len(force_targets) < 2:
-        raise ValueError("force_targets_n must contain at least two targets")
-    if any(not np.isfinite(target) or target <= 0.0 for target in force_targets):
-        raise ValueError("force targets must be finite and positive")
-    if any(
-        current <= previous
-        for previous, current in zip(force_targets, force_targets[1:])
-    ):
-        raise ValueError("force_targets_n must be strictly increasing")
-    if (
-        not np.isfinite(force_tolerance_fraction)
-        or force_tolerance_fraction <= 0.0
-        or force_tolerance_fraction >= 1.0
-    ):
-        raise ValueError("force_tolerance_fraction must lie between zero and one")
-
-    fingertip_mesh = make_fingertip_mesh(fingertip)
-    scene = OptixScene(
-        fingertip_mesh,
-        silicone_instance_id=_SILICONE_INSTANCE_ID,
-        carrier_instance_id=_CARRIER_INSTANCE_ID,
-        silicone_visibility_mask=_SILICONE_MASK,
-        carrier_visibility_mask=_CARRIER_MASK,
-    )
-    led = _make_led(fingertip, fingertip_mesh)
-
-    sample_i, sample_j = np.meshgrid(
-        np.arange(_SAMPLE_SIDE_COUNT),
-        np.arange(_SAMPLE_SIDE_COUNT),
-        indexing="ij",
-    )
-    emission_u1 = (sample_i.ravel() + 0.5) / _SAMPLE_SIDE_COUNT
-    emission_u2 = (sample_j.ravel() + 0.5) / _SAMPLE_SIDE_COUNT
-    emission = emit_from_stem_boundary(
-        scene,
-        led,
-        emission_u1,
-        emission_u2,
-        carrier_mask=_CARRIER_MASK,
-    )
-
-    rng = np.random.default_rng(_RNG_SEED)
-    sample_shape = (_MAX_BOUNCES, len(emission))
-    dielectric_branch_u = rng.random(sample_shape)
-    carrier_u1 = rng.random(sample_shape)
-    carrier_u2 = rng.random(sample_shape)
-
-    no_contact_response, no_contact_energy = _trace_state(
-        scene,
-        fingertip,
-        emission,
-        inside_silicone=source_inside_silicone(
-            scene,
-            led,
-            emission,
-            silicone_mask=_SILICONE_MASK,
-        ),
-        dielectric_branch_u=dielectric_branch_u,
-        carrier_u1=carrier_u1,
-        carrier_u2=carrier_u2,
-    )
-
-    scenario_count = len(trial_tuple)
-    force_count = len(force_targets)
-    response_matrix = np.empty((scenario_count, force_count, 4), dtype=np.float64)
-    energy_matrix = np.empty(
-        (scenario_count, force_count, len(_ENERGY_FIELDS)),
-        dtype=np.float64,
-    )
-    actual_forces_n = np.empty((scenario_count, force_count), dtype=np.float64)
-    indentations_m = np.empty((scenario_count, force_count), dtype=np.float64)
-    checkpoint_times_s = np.empty(
-        (scenario_count, force_count),
-        dtype=np.float64,
-    )
-    scenario_runtime_s = np.empty(scenario_count, dtype=np.float64)
-    scenario_indices = {id(trial): index for index, trial in enumerate(trial_tuple)}
-    next_force_indices = np.zeros(scenario_count, dtype=np.int64)
-    scenario_start_s = perf_counter()
-
-    def trace_contact(
-        completed_trial: DesignTrial,
-        simulation: LumoSimulation,
-        indenter: Indenter,
-    ) -> None:
-        nonlocal scenario_start_s
-        if simulation.fingertip_mesh is not fingertip_mesh:
-            raise RuntimeError("Newton did not reuse the evaluator fingertip mesh")
-        if simulation.soft_contact_count(indenter.body_index) == 0:
-            raise RuntimeError(f"{completed_trial.name} has no indenter contact")
-        silicone_vertices = simulation.silicone_vertices()
-        if not np.all(np.isfinite(silicone_vertices)):
-            raise RuntimeError(
-                f"{completed_trial.name} produced non-finite silicone vertices"
-            )
-
-        scenario_index = scenario_indices[id(completed_trial)]
-        force_index = int(next_force_indices[scenario_index])
-        if force_index >= force_count:
-            raise RuntimeError(f"{completed_trial.name} produced an extra checkpoint")
-        if (
-            completed_trial.reaction_force_n is None
-            or completed_trial.travel_m is None
-            or completed_trial.simulation_time_s is None
-        ):
-            raise RuntimeError(
-                f"{completed_trial.name} checkpoint has no mechanics result"
-            )
-
-        scene.update_silicone(silicone_vertices)
-        response, energy = _trace_state(
-            scene,
-            fingertip,
-            emission,
-            inside_silicone=source_inside_silicone(
-                scene,
-                led,
-                emission,
-                silicone_mask=_SILICONE_MASK,
-            ),
-            dielectric_branch_u=dielectric_branch_u,
-            carrier_u1=carrier_u1,
-            carrier_u2=carrier_u2,
-        )
-        response_matrix[scenario_index, force_index] = response
-        energy_matrix[scenario_index, force_index] = energy
-        actual_forces_n[scenario_index, force_index] = completed_trial.reaction_force_n
-        indentations_m[scenario_index, force_index] = (
-            completed_trial.travel_m - completed_trial.initial_clearance_m
-        )
-        checkpoint_times_s[scenario_index, force_index] = (
-            completed_trial.simulation_time_s
-        )
-        next_force_indices[scenario_index] += 1
-        if next_force_indices[scenario_index] == force_count:
-            now_s = perf_counter()
-            scenario_runtime_s[scenario_index] = now_s - scenario_start_s
-            scenario_start_s = now_s
-
-    DesignStudy(
-        fingertip,
-        trial_tuple,
-        fingertip_mesh=fingertip_mesh,
-        sim_frequency=_SIM_FREQUENCY_HZ,
-        settle_duration_s=settle_duration_s,
-        settle_displacement_tolerance_m=settle_displacement_tolerance_m,
-        force_tolerance_fraction=force_tolerance_fraction,
-        force_targets_n=force_targets,
-        force_gain_m_s_n=_FORCE_GAIN_M_S_N,
-        element_size_mm=_ELEMENT_SIZE_MM,
-        iterations=_VBD_ITERATIONS,
-        soft_contact_margin_m=_SOFT_CONTACT_MARGIN_M,
-        carrier_contact_stiffness_n_m=_CARRIER_CONTACT_STIFFNESS_N_M,
-        contact_stiffness_n_m=_CONTACT_STIFFNESS_N_M,
-        contact_damping_n_s_m=_CONTACT_DAMPING_N_S_M,
-    ).run(inspect_trial=trace_contact)
-
-    if np.any(next_force_indices != force_count):
-        raise RuntimeError("not every force checkpoint was evaluated")
-    return ContactSensingEvaluation(
-        no_contact_response=no_contact_response,
-        no_contact_energy=no_contact_energy,
-        scenario_names=tuple(trial.name for trial in trial_tuple),
-        force_targets_n=np.asarray(force_targets, dtype=np.float64),
-        actual_forces_n=actual_forces_n,
-        indentations_m=indentations_m,
-        response_matrix=response_matrix,
-        energy_fields=_ENERGY_FIELDS,
-        energy_matrix=energy_matrix,
-        checkpoint_times_s=checkpoint_times_s,
-        scenario_runtime_s=scenario_runtime_s,
     )
 
 
@@ -662,13 +380,9 @@ def evaluate_full_finger(
     contact_y_mm: Iterable[float],
     *,
     force_targets_n: Iterable[float] = _FORCE_TARGETS_N,
-    settle_duration_s: float = 0.0,
-    force_tolerance_fraction: float = _FORCE_TOLERANCE_FRACTION,
     initial_clearance_m: float = 1.0e-3,
     approach_speed_m_s: float = 5.0e-3,
     max_sim_time_s: float = 60.0,
-    loading_mode: str = FIRST_CROSSING_LOADING,
-    force_ramp_rate_n_s: float | None = None,
     use_cuda_graph: bool = True,
     reuse_finalized_models: bool = False,
     reuse_runtimes: bool | None = None,
@@ -746,46 +460,6 @@ def evaluate_full_finger(
     ):
         if not np.isfinite(value) or value <= 0.0:
             raise ValueError(f"{name} must be finite and positive")
-    if loading_mode == REFERENCE_DWELL_LOADING:
-        if not np.isfinite(settle_duration_s) or settle_duration_s <= 0.0:
-            raise ValueError(
-                "reference_dwell requires a positive settle_duration_s"
-            )
-        if force_ramp_rate_n_s is not None:
-            raise ValueError(
-                "force_ramp_rate_n_s is only valid for quasistatic_ramp"
-            )
-    elif loading_mode == QUASISTATIC_RAMP_LOADING:
-        if settle_duration_s != 0.0:
-            raise ValueError(
-                "quasistatic_ramp requires settle_duration_s=0"
-            )
-        if (
-            force_ramp_rate_n_s is None
-            or not np.isfinite(force_ramp_rate_n_s)
-            or force_ramp_rate_n_s <= 0.0
-        ):
-            raise ValueError(
-                "quasistatic_ramp requires a positive force_ramp_rate_n_s"
-            )
-    elif loading_mode == FIRST_CROSSING_LOADING:
-        if settle_duration_s != 0.0:
-            raise ValueError("first_crossing requires settle_duration_s=0")
-        if force_ramp_rate_n_s is not None:
-            raise ValueError(
-                "force_ramp_rate_n_s is only valid for quasistatic_ramp"
-            )
-    else:
-        raise ValueError(
-            "loading_mode must be 'reference_dwell', 'quasistatic_ramp', "
-            "or 'first_crossing'"
-        )
-    if (
-        not np.isfinite(force_tolerance_fraction)
-        or not 0.0 < force_tolerance_fraction < 1.0
-    ):
-        raise ValueError("force_tolerance_fraction must lie between zero and one")
-
     fingertip_mesh = make_fingertip_5led_mesh(
         fingertip,
         element_size_mm=_ELEMENT_SIZE_MM,
@@ -898,16 +572,9 @@ def evaluate_full_finger(
     rms_particle_speeds_m_s = np.empty(shape, dtype=np.float64)
     particle_speed_p95_m_s = np.empty(shape, dtype=np.float64)
     kinetic_energy_j = np.empty(shape, dtype=np.float64)
-    force_references_n = np.empty(shape, dtype=np.float64)
+    force_overshoots_n = np.empty(shape, dtype=np.float64)
     reaction_force_rates_n_s = np.empty(shape, dtype=np.float64)
     indentation_rates_m_s = np.empty(shape, dtype=np.float64)
-    servo_errors_n = np.empty(shape, dtype=np.float64)
-    settle_window_force_drifts_n = np.full(shape, np.nan, dtype=np.float64)
-    settle_window_indentation_drifts_m = np.full(
-        shape,
-        np.nan,
-        dtype=np.float64,
-    )
     indenter_contact_counts = np.empty(shape, dtype=np.int32)
     total_contact_counts = np.empty(shape, dtype=np.int32)
     contact_buffer_overflow = np.empty(shape, dtype=np.int32)
@@ -934,12 +601,12 @@ def evaluate_full_finger(
     scenario_runtime_s = np.empty(scenario_count, dtype=np.float64)
     checkpoint_optics_runtime_s = np.empty(shape, dtype=np.float64)
     graph_replay_counts = np.zeros(scenario_count, dtype=np.int64)
-    force_servo_host_intervention_counts = np.zeros(
+    checkpoint_host_intervention_counts = np.zeros(
         scenario_count,
         dtype=np.int64,
     )
-    force_servo_host_sync_counts = np.zeros(scenario_count, dtype=np.int64)
-    force_servo_average_ticks_per_host_intervention = np.ones(
+    checkpoint_host_sync_counts = np.zeros(scenario_count, dtype=np.int64)
+    checkpoint_average_ticks_per_host_intervention = np.ones(
         scenario_count,
         dtype=np.float64,
     )
@@ -968,20 +635,9 @@ def evaluate_full_finger(
             or completed_trial.travel_m is None
             or completed_trial.simulation_time_s is None
             or completed_trial.maximum_particle_speed_m_s is None
-            or completed_trial.force_reference_n is None
+            or completed_trial.force_overshoot_n is None
             or completed_trial.reaction_force_rate_n_s is None
             or completed_trial.indentation_rate_m_s is None
-            or completed_trial.servo_error_n is None
-            or (
-                use_cuda_graph
-                and loading_mode == REFERENCE_DWELL_LOADING
-                and completed_trial.settle_window_force_drift_n is None
-            )
-            or (
-                use_cuda_graph
-                and loading_mode == REFERENCE_DWELL_LOADING
-                and completed_trial.settle_window_indentation_drift_m is None
-            )
         ):
             raise RuntimeError(f"{completed_trial.name} checkpoint is incomplete")
 
@@ -1071,8 +727,8 @@ def evaluate_full_finger(
                 masses_kg[active] * active_speeds_m_s**2,
             )
         )
-        force_references_n[scenario_index, force_index] = (
-            completed_trial.force_reference_n
+        force_overshoots_n[scenario_index, force_index] = (
+            completed_trial.force_overshoot_n
         )
         reaction_force_rates_n_s[scenario_index, force_index] = (
             completed_trial.reaction_force_rate_n_s
@@ -1080,15 +736,6 @@ def evaluate_full_finger(
         indentation_rates_m_s[scenario_index, force_index] = (
             completed_trial.indentation_rate_m_s
         )
-        servo_errors_n[scenario_index, force_index] = completed_trial.servo_error_n
-        if completed_trial.settle_window_force_drift_n is not None:
-            settle_window_force_drifts_n[scenario_index, force_index] = (
-                completed_trial.settle_window_force_drift_n
-            )
-        if completed_trial.settle_window_indentation_drift_m is not None:
-            settle_window_indentation_drifts_m[scenario_index, force_index] = (
-                completed_trial.settle_window_indentation_drift_m
-            )
         indenter_contact_counts[scenario_index, force_index] = (
             simulation.soft_contact_count(indenter.body_index)
         )
@@ -1127,24 +774,24 @@ def evaluate_full_finger(
         next_force_indices[scenario_index] += 1
         if next_force_indices[scenario_index] == force_count:
             if use_cuda_graph:
-                performance = simulation.force_servo_performance
+                performance = simulation.force_checkpoint_performance
                 graph_replay_counts[scenario_index] = int(
                     performance["graph_replay_count"]
                 )
-                force_servo_host_intervention_counts[scenario_index] = int(
+                checkpoint_host_intervention_counts[scenario_index] = int(
                     performance["host_intervention_count"]
                 )
-                force_servo_host_sync_counts[scenario_index] = int(
+                checkpoint_host_sync_counts[scenario_index] = int(
                     performance["host_sync_count"]
                 )
-                force_servo_average_ticks_per_host_intervention[
+                checkpoint_average_ticks_per_host_intervention[
                     scenario_index
                 ] = float(performance["average_ticks_per_host_intervention"])
             else:
-                force_servo_host_intervention_counts[scenario_index] = (
+                checkpoint_host_intervention_counts[scenario_index] = (
                     completed_trial.step_count
                 )
-                force_servo_host_sync_counts[scenario_index] = (
+                checkpoint_host_sync_counts[scenario_index] = (
                     completed_trial.step_count
                 )
             now_s = perf_counter()
@@ -1161,11 +808,7 @@ def evaluate_full_finger(
         trial_tuple,
         fingertip_mesh=fingertip_mesh,
         sim_frequency=_SIM_FREQUENCY_HZ,
-        settle_duration_s=settle_duration_s,
-        settle_displacement_tolerance_m=None,
-        force_tolerance_fraction=force_tolerance_fraction,
         force_targets_n=force_targets,
-        force_gain_m_s_n=_FORCE_GAIN_M_S_N,
         element_size_mm=_ELEMENT_SIZE_MM,
         iterations=_VBD_ITERATIONS,
         soft_contact_margin_m=_SOFT_CONTACT_MARGIN_M,
@@ -1176,11 +819,7 @@ def evaluate_full_finger(
         reuse_finalized_models=reuse_finalized_models,
         reuse_runtimes=resolved_reuse_runtimes,
         parallel_world_count=parallel_world_count,
-    ).run(
-        loading_mode=loading_mode,
-        force_ramp_rate_n_s=force_ramp_rate_n_s,
-        inspect_trial=collect_checkpoint,
-    )
+    ).run(inspect_trial=collect_checkpoint)
 
     if np.any(next_force_indices != force_count):
         raise RuntimeError("not every full-finger force checkpoint was collected")
@@ -1211,14 +850,9 @@ def evaluate_full_finger(
         rms_particle_speeds_m_s=rms_particle_speeds_m_s,
         particle_speed_p95_m_s=particle_speed_p95_m_s,
         kinetic_energy_j=kinetic_energy_j,
-        force_references_n=force_references_n,
+        force_overshoots_n=force_overshoots_n,
         reaction_force_rates_n_s=reaction_force_rates_n_s,
         indentation_rates_m_s=indentation_rates_m_s,
-        servo_errors_n=servo_errors_n,
-        settle_window_force_drifts_n=settle_window_force_drifts_n,
-        settle_window_indentation_drifts_m=(
-            settle_window_indentation_drifts_m
-        ),
         indenter_contact_counts=indenter_contact_counts,
         total_contact_counts=total_contact_counts,
         contact_buffer_overflow=contact_buffer_overflow,
@@ -1243,47 +877,28 @@ def evaluate_full_finger(
         checkpoint_optics_runtime_s=checkpoint_optics_runtime_s,
         no_contact_optics_runtime_s=no_contact_optics_runtime_s,
         mechanics_backend=(
-            f"gpu_first_crossing_graph_parallel_{parallel_world_count}"
-            if loading_mode == FIRST_CROSSING_LOADING
-            and parallel_world_count > 1
-            else "gpu_first_crossing_graph_runtime_reuse"
-            if loading_mode == FIRST_CROSSING_LOADING
-            and resolved_reuse_runtimes
-            else "gpu_first_crossing_graph_model_reuse"
-            if loading_mode == FIRST_CROSSING_LOADING
-            and use_cuda_graph
-            and reuse_finalized_models
-            else "gpu_first_crossing_graph"
-            if loading_mode == FIRST_CROSSING_LOADING and use_cuda_graph
-            else "direct_first_crossing"
-            if loading_mode == FIRST_CROSSING_LOADING
-            else f"gpu_resident_graph_parallel_{parallel_world_count}"
+            f"cuda_graph_parallel_{parallel_world_count}"
             if parallel_world_count > 1
-            else
-            "gpu_resident_graph_runtime_reuse"
+            else "cuda_graph_runtime_reuse"
             if resolved_reuse_runtimes
-            else "gpu_resident_graph_model_reuse"
+            else "cuda_graph_model_reuse"
             if use_cuda_graph and reuse_finalized_models
-            else "gpu_resident_graph"
+            else "cuda_graph"
             if use_cuda_graph
             else "direct"
         ),
         graph_replay_counts=graph_replay_counts,
-        force_servo_host_intervention_counts=(
-            force_servo_host_intervention_counts
+        checkpoint_host_intervention_counts=(
+            checkpoint_host_intervention_counts
         ),
-        force_servo_host_sync_counts=force_servo_host_sync_counts,
-        force_servo_average_ticks_per_host_intervention=(
-            force_servo_average_ticks_per_host_intervention
+        checkpoint_host_sync_counts=checkpoint_host_sync_counts,
+        checkpoint_average_ticks_per_host_intervention=(
+            checkpoint_average_ticks_per_host_intervention
         ),
-        loading_mode=loading_mode,
-        force_ramp_rate_n_s=force_ramp_rate_n_s,
     )
 
 
 __all__ = [
-    "ContactSensingEvaluation",
     "FullFingerEvaluation",
-    "evaluate_contact_sensing",
     "evaluate_full_finger",
 ]

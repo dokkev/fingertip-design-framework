@@ -96,9 +96,11 @@ def test_production_scientific_contract_is_explicitly_serialized() -> None:
     assert campaign.contact_y_mm == _DEFAULT_CONTACT_Y_MM
     assert config["scenarios"]["contact_y_mm"] == list(campaign.contact_y_mm)
     assert config["mechanics"]["force_targets_n"] == [5.0, 10.0, 15.0, 20.0]
-    assert config["mechanics"]["loading_mode"] == "first_crossing"
+    assert config["mechanics"]["loading_protocol"] == (
+        "constant_speed_force_thresholds"
+    )
     assert config["mechanics"]["backend"] == (
-        "gpu_first_crossing_graph_parallel_4"
+        "cuda_graph_parallel_4"
     )
     assert config["mechanics"]["parallel_world_count"] == 4
     assert config["mechanics"]["sim_frequency_hz"] == 100.0
@@ -134,8 +136,8 @@ def test_ax_candidate_uses_the_parallel_production_evaluator(monkeypatch) -> Non
 
     assert captured["use_cuda_graph"] is True
     assert captured["parallel_world_count"] == 4
-    assert captured["loading_mode"] == "first_crossing"
-    assert captured["settle_duration_s"] == 0.0
+    assert "loading_mode" not in captured
+    assert "settle_duration_s" not in captured
 
 
 def test_campaign_continues_past_initial_mechanics_failure(

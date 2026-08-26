@@ -23,7 +23,6 @@ from lumo.optimization.objective import (
     compute_objectives_from_raw,
     compute_observation_objective,
 )
-from lumo.simulation import FIRST_CROSSING_LOADING
 
 
 _OUTPUT_DIRECTORY = Path(
@@ -276,11 +275,9 @@ def main() -> None:
             _SPHERE_DIAMETERS_MM,
             _CONTACT_Y_MM,
             force_targets_n=_FORCE_TARGETS_N,
-            settle_duration_s=0.0,
             initial_clearance_m=1.0e-3,
             approach_speed_m_s=5.0e-3,
             max_sim_time_s=60.0,
-            loading_mode=FIRST_CROSSING_LOADING,
         )
     runtime_s = perf_counter() - start_s
     details = _objective_details(evaluation)

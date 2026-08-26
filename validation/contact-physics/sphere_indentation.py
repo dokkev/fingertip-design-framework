@@ -246,8 +246,6 @@ def main() -> None:
             fingertip,
             trials,
             sim_frequency=_SIM_FREQUENCY_HZ,
-            force_tolerance_n=_FORCE_TOLERANCE_N,
-            settle_duration_s=_SETTLE_DURATION_S,
         )
         study.run(inspect_trial=_validate_and_report)
 

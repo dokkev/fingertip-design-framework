@@ -120,7 +120,7 @@ _MAX_PROPOSALS_PER_COMPLETED_TRIAL = 50
 _OBJECTIVE_DEFINITION = (
     "full-finger-contact-and-threshold-conditioned-observation-v2"
 )
-_RUN_CONFIG_SCHEMA = 7
+_RUN_CONFIG_SCHEMA = 8
 
 
 @dataclass(frozen=True)
@@ -962,10 +962,10 @@ def _run_config(campaign: CampaignDefinition) -> dict[str, object]:
             "optical_preset": campaign.optical_preset,
             "fingertip_parameters": asdict(campaign.space.parameter_bounds.parameters),
             "mechanics": {
-                "loading_mode": "first_crossing",
+                "loading_protocol": "constant_speed_force_thresholds",
                 "capture_rule": "first reaction-force sample >= threshold",
                 "backend": (
-                    f"gpu_first_crossing_graph_parallel_"
+                    f"cuda_graph_parallel_"
                     f"{evaluator._PRODUCTION_PARALLEL_WORLD_COUNT}"
                 ),
                 "parallel_world_count": (
@@ -979,8 +979,6 @@ def _run_config(campaign: CampaignDefinition) -> dict[str, object]:
                     _APPROACH_SPEED_M_S / evaluator._SIM_FREQUENCY_HZ
                 ),
                 "force_targets_n": list(campaign.force_targets_n),
-                "snapshot_dwell_s": 0.0,
-                "force_feedback": False,
                 "max_sim_time_s": _MAX_SIM_TIME_S,
                 "element_size_mm": evaluator._ELEMENT_SIZE_MM,
                 "soft_contact_margin_m": evaluator._SOFT_CONTACT_MARGIN_M,
@@ -1134,8 +1132,6 @@ def _evaluate_candidate(
         _PRODUCTION_PARALLEL_WORLD_COUNT,
         evaluate_full_finger,
     )
-    from lumo.simulation import FIRST_CROSSING_LOADING
-
     fingertip = Fingertip(campaign.space.to_parameters(parameters))
     resource_root = files("lumo").joinpath("assets", "objects", "urdf")
     with ExitStack() as resources:
@@ -1149,12 +1145,9 @@ def _evaluate_candidate(
             campaign.sphere_diameters_mm,
             campaign.contact_y_mm,
             force_targets_n=campaign.force_targets_n,
-            settle_duration_s=0.0,
             initial_clearance_m=campaign.initial_clearance_m,
             approach_speed_m_s=_APPROACH_SPEED_M_S,
             max_sim_time_s=_MAX_SIM_TIME_S,
-            loading_mode=FIRST_CROSSING_LOADING,
-            use_cuda_graph=True,
             parallel_world_count=_PRODUCTION_PARALLEL_WORLD_COUNT,
         )
 
@@ -1246,18 +1239,11 @@ def _save_trial_result(
                 evaluation.particle_speed_p95_m_s
             ),
             kinetic_energy_j=np.asarray(evaluation.kinetic_energy_j),
-            force_references_n=np.asarray(evaluation.force_references_n),
+            force_overshoots_n=np.asarray(evaluation.force_overshoots_n),
             reaction_force_rates_n_s=np.asarray(
                 evaluation.reaction_force_rates_n_s
             ),
             indentation_rates_m_s=np.asarray(evaluation.indentation_rates_m_s),
-            servo_errors_n=np.asarray(evaluation.servo_errors_n),
-            settle_window_force_drifts_n=np.asarray(
-                evaluation.settle_window_force_drifts_n
-            ),
-            settle_window_indentation_drifts_m=np.asarray(
-                evaluation.settle_window_indentation_drifts_m
-            ),
             indenter_contact_counts=np.asarray(evaluation.indenter_contact_counts),
             total_contact_counts=np.asarray(evaluation.total_contact_counts),
             contact_buffer_overflow=np.asarray(evaluation.contact_buffer_overflow),
@@ -1282,20 +1268,14 @@ def _save_trial_result(
             ),
             mechanics_backend=np.asarray(evaluation.mechanics_backend),
             graph_replay_counts=np.asarray(evaluation.graph_replay_counts),
-            force_servo_host_intervention_counts=np.asarray(
-                evaluation.force_servo_host_intervention_counts
+            checkpoint_host_intervention_counts=np.asarray(
+                evaluation.checkpoint_host_intervention_counts
             ),
-            force_servo_host_sync_counts=np.asarray(
-                evaluation.force_servo_host_sync_counts
+            checkpoint_host_sync_counts=np.asarray(
+                evaluation.checkpoint_host_sync_counts
             ),
-            force_servo_average_ticks_per_host_intervention=np.asarray(
-                evaluation.force_servo_average_ticks_per_host_intervention
-            ),
-            loading_mode=np.asarray(evaluation.loading_mode),
-            force_ramp_rate_n_s=np.asarray(
-                np.nan
-                if evaluation.force_ramp_rate_n_s is None
-                else evaluation.force_ramp_rate_n_s
+            checkpoint_average_ticks_per_host_intervention=np.asarray(
+                evaluation.checkpoint_average_ticks_per_host_intervention
             ),
             scenario_names=np.asarray(evaluation.scenario_names),
             sphere_diameters_mm=np.asarray(evaluation.sphere_diameters_mm),

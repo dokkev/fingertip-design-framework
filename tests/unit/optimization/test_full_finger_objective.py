@@ -14,17 +14,11 @@ from lumo.optimization.objective import (
     compute_observation_objective,
 )
 from lumo.ray_tracing import longitudinal_side_view_power
-from lumo.simulation import FIRST_CROSSING_LOADING
-
-
-def test_production_loading_default_is_instantaneous_first_crossing() -> None:
-    assert (
-        signature(evaluate_full_finger).parameters["loading_mode"].default
-        == FIRST_CROSSING_LOADING
-    )
-    assert signature(evaluate_full_finger).parameters[
-        "settle_duration_s"
-    ].default == 0.0
+def test_production_loading_is_gpu_force_threshold_crossing() -> None:
+    parameters = signature(evaluate_full_finger).parameters
+    assert parameters["use_cuda_graph"].default is True
+    assert "loading_mode" not in parameters
+    assert "settle_duration_s" not in parameters
 
 
 def _observation_inputs() -> dict[str, object]:

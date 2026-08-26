@@ -365,10 +365,8 @@ the same rigid-soft contact pair values to the URDF indenter endpoint and the
 Newton soft endpoint. `None` preserves both Newton defaults; the study does not
 freeze provisional contact values as production defaults.
 Each trial specifies a normalized `motion_direction_W` and physical
-`approach_speed_m_s`. Production first-crossing loading derives the positive
-pose increment directly from that speed and the simulation timestep. The
-historical `reference_dwell` mode retains the bounded proportional force servo
-for validation comparisons.
+`approach_speed_m_s`. The pose increment is derived directly from that speed
+and the simulation timestep.
 
 For the concrete multi-force sensing evaluation, a study may use one strictly
 increasing force-target tuple. The same trial runtime then advances through
@@ -390,36 +388,14 @@ reaction force >= current ordered threshold?
 copy that tick immediately, then continue toward the next threshold
 ```
 
-There is no pause, pose correction, force-band dwell, or settled-state claim.
-The saved states are explicitly dynamic threshold-crossing snapshots.
-
-The validation-only `reference_dwell` path keeps the proportional force servo:
-
-```text
-last reaction force
-        ↓
-bounded proportional velocity
-        ↓
-update the kinematic indenter pose
-        ↓
-one LumoSimulation step and reaction measurement
-        ↓
-test force and commanded-displacement settling conditions
-        ↓
-accept after both remain true for the settling duration
-```
-
-Leaving the force tolerance or exceeding an optional per-tick commanded
-displacement tolerance resets the single consecutive-tick counter. The
-optional displacement criterion remains available only for focused
-adaptive-settling validation. This historical mode is not the Ax default.
+There is no force feedback, pause, pose correction, force-band dwell, or
+settled-state claim. The saved states are dynamic threshold-crossing snapshots.
 
 With `use_cuda_graph=True`, `DesignStudy` configures production fixed motion
 and ordered first-crossing thresholds in `LumoSimulation` device buffers. It
 polls only every twenty physics ticks and invokes the unchanged callback
-against exact device-saved checkpoint states. The same internal buffers also
-support the historical servo validation mode; that does not change production
-semantics.
+against exact device-saved checkpoint states. `use_cuda_graph=True` is the
+runtime and study default; `False` remains an explicit reference/debug path.
 
 Only `LumoSimulation` mutates Newton state or simulation time. Trials never
 share mutable Newton state. For the production full-finger path, `DesignStudy`
@@ -430,24 +406,6 @@ diameter share only the finalized immutable model and coloring. Checkpoint
 callbacks remain synchronous after the corresponding stream reaches an exact
 device-saved checkpoint. Serial execution remains available by setting
 `parallel_world_count=1`; no generic simulation manager was introduced.
-
-### `lumo/benchmark/`
-
-Owns explicit, long-running measurement commands that consume the current
-production simulation APIs. It is not imported by the mechanics runtime.
-
-`newton_parameter_sweep.py` holds the physical fingertip and 10 mm
-center-sphere case and `25 mm/s` approach speed fixed while varying mesh element
-size, simulation frequency, SolverVBD iterations, soft-contact margin, and
-carrier contact stiffness one family at a time. Each frequency therefore uses
-a per-tick translation derived from the fixed speed. The benchmark writes one
-strict JSON artifact after every requested run has finished. The artifact
-contains the raw scalar results and comparisons to the measured baseline.
-`--fine` adds only the expensive `0.5 mm` mesh case; `--matrix` adds the
-baseline-only 3-by-3 sphere/location robustness check.
-
-Benchmarks may report production behavior, but they do not own simulation
-state, solver policy, material calibration, or production defaults.
 
 ### `lumo/ray_tracing/`
 
@@ -619,15 +577,12 @@ scenario reuse the runtime. Each live checkpoint updates the same silicone GAS
 and IAS and is traced with the same emission and bounce samples.
 
 The production evaluator defaults to four independent CUDA-stream Newton
-worlds. The measured 1/2/4/7-world gate selected four because it improved
-accepted throughput by 14.3% over serial, while seven improved only another
-2.2% and used more VRAM. OptiX checkpoint consumption remains serialized
-through the one shared scene. The final 21-scenario nominal evaluation measured
-294.814 s versus the original 1222.991 s, a 4.148x end-to-end speedup.
+worlds. OptiX checkpoint consumption remains serialized through the one shared
+scene.
 
 `FullFingerEvaluation` is a raw-data result, not an objective result. It records
 the explicit mechanics backend, checkpoint step indices, graph replay counts,
-force-control host intervention/synchronization counts, and average ticks per
+checkpoint host intervention/synchronization counts, and average ticks per
 host intervention. It keeps
 per-emitter longitudinal responses shaped `(scenario, force, 5, 11)`,
 per-emitter energy ledgers, and the shared five-emitter no-contact state.
@@ -637,8 +592,8 @@ outside-ROI power, total `+X` visible power, and outside-ROI fractions so every
 state satisfies `sum(11 bins) + outside ROI = total +X visible power` without
 changing transport or adding an objective penalty. Mechanics data includes force,
 indentation, checkpoint time, maximum/mean/RMS/P95 particle speed, kinetic
-energy, force reference, reaction-force rate, indentation rate, servo error,
-contact counts and buffer overflow, minimum
+energy, force overshoot, reaction-force rate, indentation rate, contact counts
+and buffer overflow, minimum
 tet determinant and inversion count, contact centroids, local particle
 indices, barycentric coordinates, reconstructed world contact points, contact
 normals, body contact positions, and deformed silicone vertices. Variable-size
@@ -658,19 +613,9 @@ per LED, `24` bounces, and hard 11-bin observation. This evaluator does not perf
 morphology optimization. `objective.py` is the pure numerical reduction layer
 between this rich result and Ax.
 
-The post-Phase 4 fixed-pose studies remain validation-only. They showed that
-holding the first-crossing pose changes reaction force and geometry over time,
-while longer dwell materially increases campaign cost. Production therefore
-uses the explicitly different instantaneous threshold-crossing experiment;
-the historical force-servo dwell and fixed-pose relaxation protocols remain
-available only when a validation selects them by name.
-
-`DesignStudy.run()` also exposes an explicit `quasistatic_ramp` mode for the
-procedural loading-protocol study. It increases a force reference continuously
-and captures the first actual-force crossing of each checkpoint without
-retracting the kinematic indenter. The full 1/2/4/8 N/s validation found large
-optical-response differences from the historical dwell reference. It remains
-a procedural comparison rather than the production Ax loading mode.
+Historical force-servo, adaptive-settling, and force-ramp paths are not part of
+the production API. Focused fixed-pose studies may still use `LumoSimulation`
+directly when the hold itself is the validation question.
 
 Each full-finger LED remains on its carrier recess floor. The nominal 0.19 mm
 hardware cavity places air between that source and unloaded silicone even when
@@ -853,11 +798,10 @@ contacts; it does not advance or mutate the simulation.
 `validation/contact-physics/sphere_indentation.py` creates one analytic
 fingertip and uses a `DesignStudy` to run the packaged 5, 10, and 20 mm
 diameter sphere URDFs at `X=-7.5`, `0`, and `+7.5 mm`. It places each sphere
-from the local analytic semiellipse height at that X location. Each of the nine
-independent simulations uses the kinematic proportional force servo to approach
-`20 N` and accepts only after remaining inside `20 ± 1 N` for `5 ms`. It then
-checks contact, finite silicone state, perfect-bond drift, and carrier
-penetration before releasing that runtime.
+from the local analytic semiellipse height at that X location. Each simulation
+moves at its prescribed physical speed and captures the first `20 N` threshold
+crossing. It then checks contact, finite silicone state, perfect-bond drift,
+and carrier penetration before releasing that runtime.
 
 `validation/contact-physics/sphere_15mm_viewer.py` is a focused interactive
 contact diagnostic. It loads the packaged 15 mm sphere, advances that one
@@ -867,7 +811,7 @@ reaction first reaches `20 N`. It continues advancing and rendering Newton
 during that hold, reports force, active-particle speed, and sphere contact count
 at a throttled interval, and freezes the final held state until the viewer
 closes. It is a fixed-speed diagnostic and does not run the production force
-servo.
+checkpoint workflow.
 
 `validation/contact-physics/force_traj.py` repeats that centered 15 mm sphere
 approach without a viewer, stops prescribed motion at the first transient
@@ -970,58 +914,6 @@ dielectric rule directly: `u < R` reflects, `u >= R` transmits, TIR always
 reflects, only transmission toggles the silicone-medium flag, and a selected
 lossless branch retains its incident path power.
 
-`validation/ray-tracing/led_sensor_response_test.py` is one deterministic
-source-to-receiver optical-property sensitivity study. It uses the actual Green
-Sequin hardware metadata through `LED`, while its point-source pose and ideal
-planar receiver remain validation-local placeholders. The study reuses the
-same 64-by-64 stratified LED samples and the same precomputed per-ray/per-bounce
-dielectric and carrier samples before and after a force-stable central 10 mm
-sphere indentation. It updates the silicone GAS from the live Newton checkpoint
-and evaluates a fixed 24-bounce cap for low, nominal, and high Solaris and
-Dragon Skin 10 NV optical priors.
-
-`validation/ray-tracing/sensing_evaluator_test.py` runs the production evaluator
-for the Cartesian product of 5, 10, and 20 mm spheres with contact locations
-`X=-7.5, 0, +7.5 mm`. Each of those nine fresh Newton runtimes advances through
-`5, 10, 15, 20 N` without reset. The script reports the shared no-contact
-response, accepted mechanics checkpoints, the nine-by-four-by-four side-view
-response matrix, compact energy ledgers, response deltas, and wall runtimes.
-All scenarios reuse one mesh, one OptiX scene, and one deterministic optical
-sample set while their Newton runtimes remain independent and sequential. The
-script does not simulate a camera, compute a morphology objective, or start
-optimization.
-
-`validation/ray-tracing/sensing_visualization.py` projects a deterministic
-subset of those real 3D segment records onto the LED-center X-Z plane. It plots
-the actual triangle-plane section of unloaded and Newton-deformed silicone,
-the LED, `+Y` escape locations, and the observation quadrants in matched axes.
-The loaded panel uses the current centered 15 mm sphere, `500 Hz / 10 iteration`
-contact configuration and the accepted `20 +/- 1 N` checkpoint after a 5 s
-continuous force-band hold. Both panels reuse the same 4096 deterministic
-diagnostic paths with a 24-bounce cap.
-This Matplotlib-only diagnostic is not a 2D optical simulation or production
-rendering API.
-
-`validation/contact-physics/sensing_convergence.py` is the single procedural
-Newton/OptiX convergence study for that evaluator. It first compares 5, 20,
-and 50 ms fixed-pose settling holds, then runs a small one-factor-at-a-time
-study of carrier stiffness, timestep frequency, VBD iterations, and mesh size.
-Only the selected hard-valid reference/contact vertex snapshots survive for the
-later 16384/65536-ray, three-seed convergence comparison. The script adds no
-production sweep or convergence abstraction. If a Newton setting fails the
-existing mechanics acceptance checks, the script records it and continues with
-the remaining settings.
-Its carrier check treats tetrahedra touching the perfect-bond interface as a
-separate diagnostic because that interface intentionally has no contact
-constraint; only nonbonded particles and nonbonded tetrahedra determine the
-penetration acceptance result.
-
-`validation/optomech/newton_parameter_sweep.py` is a separate procedural
-throughput study. It runs the requested 24 Newton combinations, evaluates only
-hard-valid states with the fixed 65,536-ray optical protocol, records stage
-timings and per-contact diagnostics, and writes a machine-readable result. It
-does not introduce a benchmark framework or production timing hooks.
-
 They should normally:
 
 1. construct production objects;
@@ -1048,8 +940,6 @@ lumo.mesh
 lumo.newton
       ↓
 lumo.simulation
-      ↓
-lumo.benchmark
 
 lumo.fingertip / lumo.mesh
       ↓
@@ -1068,8 +958,6 @@ Important constraints:
 - `lumo.newton` must not import ray-tracing, optimization, or validation code.
 - `lumo.simulation` may compose the concrete Newton runtime but must not import
   validation or optimization policy.
-- `lumo.benchmark` may consume fingertip and simulation APIs; production runtime
-  packages must not import benchmark code.
 - `lumo.ray_tracing` must not import Newton solver implementation.
 - production packages must not import `validation/` or `tests/`.
 - optional heavy dependencies should enter only at their owning execution

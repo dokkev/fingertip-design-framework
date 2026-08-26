@@ -11,7 +11,6 @@ import numpy as np
 from lumo.fingertip import Fingertip, FingertipParameters
 from lumo.optimization.evaluator import FullFingerEvaluation, evaluate_full_finger
 from lumo.ray_tracing import LONGITUDINAL_SIDE_BIN_COUNT
-from lumo.simulation import FIRST_CROSSING_LOADING
 
 
 _OUTPUT_DIRECTORY = Path("output/validation/full_finger_raw_evaluator")
@@ -270,8 +269,6 @@ def main() -> None:
             (_SPHERE_DIAMETER_MM,),
             _CONTACT_Y_MM,
             force_targets_n=_FORCE_TARGETS_N,
-            settle_duration_s=0.0,
-            loading_mode=FIRST_CROSSING_LOADING,
         )
     _save(evaluation)
     verification = _reload_and_verify()

@@ -12,7 +12,6 @@ import numpy as np
 from lumo.fingertip import Fingertip, FingertipParameters
 from lumo.optimization.evaluator import evaluate_full_finger
 from lumo.optimization.objective import compute_objectives_from_raw
-from lumo.simulation import FIRST_CROSSING_LOADING
 
 
 _OUTPUT_DIRECTORY = (
@@ -39,20 +38,15 @@ def main() -> None:
             (10.0,),
             _CONTACT_Y_MM,
             force_targets_n=_FORCE_TARGETS_N,
-            settle_duration_s=0.0,
             initial_clearance_m=1.0e-3,
             approach_speed_m_s=_APPROACH_SPEED_M_S,
             max_sim_time_s=60.0,
-            loading_mode=FIRST_CROSSING_LOADING,
-            use_cuda_graph=True,
             parallel_world_count=4,
         )
     runtime_s = perf_counter() - start_s
 
     targets = np.asarray(_FORCE_TARGETS_N, dtype=np.float64)[None, :]
-    if evaluation.loading_mode != FIRST_CROSSING_LOADING:
-        raise RuntimeError("production evaluator did not use first_crossing")
-    if evaluation.mechanics_backend != "gpu_first_crossing_graph_parallel_4":
+    if evaluation.mechanics_backend != "cuda_graph_parallel_4":
         raise RuntimeError("production evaluator used an unexpected backend")
     if np.any(evaluation.actual_forces_n < targets):
         raise RuntimeError("a saved checkpoint precedes its force crossing")
@@ -70,16 +64,6 @@ def main() -> None:
             "a checkpoint was not captured during constant approach: "
             f"{evaluation.indentation_rates_m_s}"
         )
-    if not np.array_equal(
-        evaluation.settle_window_force_drifts_n,
-        np.zeros_like(evaluation.settle_window_force_drifts_n),
-    ):
-        raise RuntimeError("first-crossing checkpoints contain force dwell")
-    if not np.array_equal(
-        evaluation.settle_window_indentation_drifts_m,
-        np.zeros_like(evaluation.settle_window_indentation_drifts_m),
-    ):
-        raise RuntimeError("first-crossing checkpoints contain indentation dwell")
     if np.any(evaluation.indenter_contact_counts <= 0):
         raise RuntimeError("a checkpoint has no indenter contact")
     if np.any(evaluation.contact_buffer_overflow != 0):
@@ -147,9 +131,8 @@ def main() -> None:
                 "Result: PASS",
                 "",
                 f"- backend: `{evaluation.mechanics_backend}`",
-                f"- loading mode: `{evaluation.loading_mode}`",
+                "- loading protocol: `constant_speed_force_thresholds`",
                 f"- approach speed: `{_APPROACH_SPEED_M_S:g} m/s`",
-                "- dwell after threshold crossing: `0 s`",
                 f"- scenarios: `{len(evaluation.scenario_names)}`",
                 f"- checkpoints: `{evaluation.actual_forces_n.size}`",
                 f"- maximum force overshoot: `{float(overshoot_n.max()):.9f} N`",

@@ -17,34 +17,29 @@ _DEFAULT_SOFT_CONTACT_MARGIN_M = 1.0e-4
 _DEFAULT_ELEMENT_SIZE_MM = 1.0
 _DEFAULT_CARRIER_CONTACT_STIFFNESS_N_M = 1.0e6
 _VBD_BODY_PARTICLE_CONTACT_BUFFER_SIZE = 2048
-_FORCE_SERVO_CHECKPOINT_CAPACITY = 4
+_FORCE_CHECKPOINT_CAPACITY = 4
 
-_SERVO_REACTION_FORCE = 0
-_SERVO_PREVIOUS_FORCE = 1
-_SERVO_TRAVEL = 2
-_SERVO_COMMANDED_DISPLACEMENT = 3
-_SERVO_VELOCITY = 4
-_SERVO_FLOAT_COUNT = 5
+_MOTION_REACTION_FORCE = 0
+_MOTION_PREVIOUS_FORCE = 1
+_MOTION_TRAVEL = 2
+_MOTION_FLOAT_COUNT = 3
 
-_SERVO_TARGET_INDEX = 0
-_SERVO_DWELL_COUNT = 1
-_SERVO_CHECKPOINT_COUNT = 2
-_SERVO_FINISHED = 3
-_SERVO_ERROR = 4
-_SERVO_STEP_COUNT = 5
-_SERVO_EVENT_SLOT = 6
-_SERVO_INT_COUNT = 7
+_MOTION_TARGET_INDEX = 0
+_MOTION_CHECKPOINT_COUNT = 1
+_MOTION_FINISHED = 2
+_MOTION_ERROR = 3
+_MOTION_STEP_COUNT = 4
+_MOTION_EVENT_SLOT = 5
+_MOTION_INT_COUNT = 6
 
 _CHECKPOINT_FORCE = 0
 _CHECKPOINT_TRAVEL = 1
 _CHECKPOINT_FORCE_CHANGE = 2
-_CHECKPOINT_FORCE_REFERENCE = 3
+_CHECKPOINT_THRESHOLD = 3
 _CHECKPOINT_FORCE_RATE = 4
 _CHECKPOINT_INDENTATION_RATE = 5
-_CHECKPOINT_SERVO_ERROR = 6
-_CHECKPOINT_WINDOW_START_FORCE = 7
-_CHECKPOINT_WINDOW_START_TRAVEL = 8
-_CHECKPOINT_FLOAT_COUNT = 9
+_CHECKPOINT_FORCE_OVERSHOOT = 6
+_CHECKPOINT_FLOAT_COUNT = 7
 
 
 @wp.kernel
@@ -71,50 +66,27 @@ def _project_body_reaction_force(
 
 
 @wp.kernel
-def _force_servo_before_step(
+def _force_checkpoint_before_step(
     initial_translation_W_m: wp.array(dtype=wp.vec3),
     initial_rotation: wp.array(dtype=wp.quat),
     motion_direction_W: wp.vec3,
     indenter_body_index: int,
     approach_speed_m_s: float,
-    force_gain_m_s_n: float,
-    capture_on_first_crossing: bool,
     time_step_s: float,
-    target_forces_n: wp.array(dtype=float),
-    servo_float: wp.array(dtype=float),
-    servo_int: wp.array(dtype=wp.int32),
+    motion_float: wp.array(dtype=float),
+    motion_int: wp.array(dtype=wp.int32),
     body_q_a: wp.array(dtype=wp.transform),
     body_q_b: wp.array(dtype=wp.transform),
 ):
-    """Apply prescribed motion or the proportional servo before one tick."""
-    if servo_int[_SERVO_FINISHED] != 0 or servo_int[_SERVO_ERROR] != 0:
-        servo_float[_SERVO_COMMANDED_DISPLACEMENT] = 0.0
-        servo_float[_SERVO_VELOCITY] = 0.0
-    else:
-        velocity_m_s = approach_speed_m_s
-        if not capture_on_first_crossing:
-            target_index = servo_int[_SERVO_TARGET_INDEX]
-            force_error_n = (
-                target_forces_n[target_index]
-                - servo_float[_SERVO_REACTION_FORCE]
-            )
-            velocity_m_s = wp.max(
-                -approach_speed_m_s,
-                wp.min(
-                    approach_speed_m_s,
-                    force_gain_m_s_n * force_error_n,
-                ),
-            )
-        commanded_displacement_m = velocity_m_s * time_step_s
-        servo_float[_SERVO_VELOCITY] = velocity_m_s
-        servo_float[_SERVO_COMMANDED_DISPLACEMENT] = commanded_displacement_m
-        servo_float[_SERVO_TRAVEL] = (
-            servo_float[_SERVO_TRAVEL] + commanded_displacement_m
+    """Advance the kinematic indenter at the prescribed physical speed."""
+    if motion_int[_MOTION_FINISHED] == 0 and motion_int[_MOTION_ERROR] == 0:
+        motion_float[_MOTION_TRAVEL] = (
+            motion_float[_MOTION_TRAVEL] + approach_speed_m_s * time_step_s
         )
 
     translation_W_m = (
         initial_translation_W_m[0]
-        + servo_float[_SERVO_TRAVEL] * motion_direction_W
+        + motion_float[_MOTION_TRAVEL] * motion_direction_W
     )
     pose = wp.transform(translation_W_m, initial_rotation[0])
     body_q_a[indenter_body_index] = pose
@@ -122,104 +94,68 @@ def _force_servo_before_step(
 
 
 @wp.kernel
-def _force_servo_after_step(
+def _force_checkpoint_after_step(
     time_step_s: float,
-    settle_ticks: int,
-    settle_window_ticks: int,
     target_count: int,
-    displacement_tolerance_m: float,
-    capture_on_first_crossing: bool,
     target_forces_n: wp.array(dtype=float),
-    force_tolerances_n: wp.array(dtype=float),
-    servo_float: wp.array(dtype=float),
-    servo_int: wp.array(dtype=wp.int32),
+    approach_speed_m_s: float,
+    motion_float: wp.array(dtype=float),
+    motion_int: wp.array(dtype=wp.int32),
     checkpoint_float: wp.array2d(dtype=float),
     checkpoint_step: wp.array(dtype=wp.int32),
 ):
-    """Update dwell/checkpoint state after the current reaction is measured."""
-    servo_int[_SERVO_EVENT_SLOT] = -1
-    servo_int[_SERVO_STEP_COUNT] = servo_int[_SERVO_STEP_COUNT] + 1
+    """Save the first tick at or above the current ordered force threshold."""
+    motion_int[_MOTION_EVENT_SLOT] = -1
+    motion_int[_MOTION_STEP_COUNT] = motion_int[_MOTION_STEP_COUNT] + 1
 
-    reaction_force_n = servo_float[_SERVO_REACTION_FORCE]
-    previous_force_n = servo_float[_SERVO_PREVIOUS_FORCE]
+    reaction_force_n = motion_float[_MOTION_REACTION_FORCE]
+    previous_force_n = motion_float[_MOTION_PREVIOUS_FORCE]
     if not wp.isfinite(reaction_force_n):
-        servo_int[_SERVO_ERROR] = 1
+        motion_int[_MOTION_ERROR] = 1
         return
-    servo_float[_SERVO_PREVIOUS_FORCE] = reaction_force_n
+    motion_float[_MOTION_PREVIOUS_FORCE] = reaction_force_n
 
-    if servo_int[_SERVO_FINISHED] != 0 or servo_int[_SERVO_ERROR] != 0:
+    if motion_int[_MOTION_FINISHED] != 0 or motion_int[_MOTION_ERROR] != 0:
         return
 
-    target_index = servo_int[_SERVO_TARGET_INDEX]
+    target_index = motion_int[_MOTION_TARGET_INDEX]
     target_force_n = target_forces_n[target_index]
-    checkpoint_slot = servo_int[_SERVO_CHECKPOINT_COUNT]
+    checkpoint_slot = motion_int[_MOTION_CHECKPOINT_COUNT]
     if checkpoint_slot >= target_count:
-        servo_int[_SERVO_ERROR] = 2
+        motion_int[_MOTION_ERROR] = 2
         return
-    if capture_on_first_crossing:
-        if reaction_force_n < target_force_n:
-            return
-        checkpoint_float[checkpoint_slot, _CHECKPOINT_WINDOW_START_FORCE] = (
-            reaction_force_n
-        )
-        checkpoint_float[checkpoint_slot, _CHECKPOINT_WINDOW_START_TRAVEL] = (
-            servo_float[_SERVO_TRAVEL]
-        )
-    else:
-        force_tolerance_n = force_tolerances_n[target_index]
-        commanded_displacement_m = servo_float[_SERVO_COMMANDED_DISPLACEMENT]
-        force_is_settled = (
-            wp.abs(reaction_force_n - target_force_n) <= force_tolerance_n
-        )
-        displacement_is_settled = (
-            displacement_tolerance_m < 0.0
-            or wp.abs(commanded_displacement_m) <= displacement_tolerance_m
-        )
-        if force_is_settled and displacement_is_settled:
-            servo_int[_SERVO_DWELL_COUNT] = servo_int[_SERVO_DWELL_COUNT] + 1
-        else:
-            servo_int[_SERVO_DWELL_COUNT] = 0
-
-        window_start_count = wp.max(1, settle_ticks - settle_window_ticks)
-        if servo_int[_SERVO_DWELL_COUNT] == window_start_count:
-            checkpoint_float[checkpoint_slot, _CHECKPOINT_WINDOW_START_FORCE] = (
-                reaction_force_n
-            )
-            checkpoint_float[checkpoint_slot, _CHECKPOINT_WINDOW_START_TRAVEL] = (
-                servo_float[_SERVO_TRAVEL]
-            )
-
-        if servo_int[_SERVO_DWELL_COUNT] < settle_ticks:
-            return
+    if reaction_force_n < target_force_n:
+        return
 
     signed_force_change_n = reaction_force_n - previous_force_n
     checkpoint_float[checkpoint_slot, _CHECKPOINT_FORCE] = reaction_force_n
-    checkpoint_float[checkpoint_slot, _CHECKPOINT_TRAVEL] = servo_float[_SERVO_TRAVEL]
+    checkpoint_float[checkpoint_slot, _CHECKPOINT_TRAVEL] = motion_float[
+        _MOTION_TRAVEL
+    ]
     checkpoint_float[checkpoint_slot, _CHECKPOINT_FORCE_CHANGE] = wp.abs(
         signed_force_change_n
     )
-    checkpoint_float[checkpoint_slot, _CHECKPOINT_FORCE_REFERENCE] = target_force_n
+    checkpoint_float[checkpoint_slot, _CHECKPOINT_THRESHOLD] = target_force_n
     checkpoint_float[checkpoint_slot, _CHECKPOINT_FORCE_RATE] = (
         signed_force_change_n / time_step_s
     )
     checkpoint_float[checkpoint_slot, _CHECKPOINT_INDENTATION_RATE] = (
-        servo_float[_SERVO_VELOCITY]
+        approach_speed_m_s
     )
-    checkpoint_float[checkpoint_slot, _CHECKPOINT_SERVO_ERROR] = (
-        target_force_n - reaction_force_n
+    checkpoint_float[checkpoint_slot, _CHECKPOINT_FORCE_OVERSHOOT] = (
+        reaction_force_n - target_force_n
     )
-    checkpoint_step[checkpoint_slot] = servo_int[_SERVO_STEP_COUNT]
-    servo_int[_SERVO_EVENT_SLOT] = checkpoint_slot
-    servo_int[_SERVO_CHECKPOINT_COUNT] = checkpoint_slot + 1
-    servo_int[_SERVO_DWELL_COUNT] = 0
+    checkpoint_step[checkpoint_slot] = motion_int[_MOTION_STEP_COUNT]
+    motion_int[_MOTION_EVENT_SLOT] = checkpoint_slot
+    motion_int[_MOTION_CHECKPOINT_COUNT] = checkpoint_slot + 1
     if checkpoint_slot + 1 == target_count:
-        servo_int[_SERVO_FINISHED] = 1
+        motion_int[_MOTION_FINISHED] = 1
     else:
-        servo_int[_SERVO_TARGET_INDEX] = target_index + 1
+        motion_int[_MOTION_TARGET_INDEX] = target_index + 1
 
 
 @wp.kernel
-def _snapshot_force_servo_particles(
+def _snapshot_force_checkpoint_particles(
     event_slot: wp.array(dtype=wp.int32),
     particle_q: wp.array(dtype=wp.vec3),
     particle_qd: wp.array(dtype=wp.vec3),
@@ -233,7 +169,7 @@ def _snapshot_force_servo_particles(
     checkpoint_qd_3: wp.array(dtype=wp.vec3),
 ):
     particle_index = wp.tid()
-    slot = event_slot[_SERVO_EVENT_SLOT]
+    slot = event_slot[_MOTION_EVENT_SLOT]
     if slot == 0:
         checkpoint_q_0[particle_index] = particle_q[particle_index]
         checkpoint_qd_0[particle_index] = particle_qd[particle_index]
@@ -249,7 +185,7 @@ def _snapshot_force_servo_particles(
 
 
 @wp.kernel
-def _snapshot_force_servo_contacts(
+def _snapshot_force_checkpoint_contacts(
     event_slot: wp.array(dtype=wp.int32),
     soft_contact_count: wp.array(dtype=wp.int32),
     soft_contact_shape: wp.array(dtype=wp.int32),
@@ -283,7 +219,7 @@ def _snapshot_force_servo_contacts(
     body_pos_3: wp.array(dtype=wp.vec3),
 ):
     contact_index = wp.tid()
-    slot = event_slot[_SERVO_EVENT_SLOT]
+    slot = event_slot[_MOTION_EVENT_SLOT]
     emitted_count = soft_contact_count[0]
     if slot == 0:
         if contact_index == 0:
@@ -362,7 +298,7 @@ class LumoSimulation:
         carrier_contact_stiffness_n_m: float = (
             _DEFAULT_CARRIER_CONTACT_STIFFNESS_N_M
         ),
-        use_cuda_graph: bool = False,
+        use_cuda_graph: bool = True,
     ) -> None:
         if not isinstance(fingertip, Fingertip):
             raise TypeError("fingertip must be a Fingertip")
@@ -501,30 +437,24 @@ class LumoSimulation:
         self._step_graph_ab: wp.Graph | None = None
         self._step_graph_ba: wp.Graph | None = None
         self._cuda_graph_replay_count = 0
-        self._servo_graph_a: wp.Graph | None = None
-        self._servo_graph_b: wp.Graph | None = None
-        self._servo_float: wp.array | None = None
-        self._servo_int: wp.array | None = None
-        self._servo_target_forces_n: wp.array | None = None
-        self._servo_force_tolerances_n: wp.array | None = None
-        self._servo_checkpoint_float: wp.array | None = None
-        self._servo_checkpoint_step: wp.array | None = None
-        self._servo_checkpoint_states: tuple[newton.State, ...] = ()
-        self._servo_checkpoint_contacts: tuple[newton.Contacts, ...] = ()
-        self._servo_initial_translation_W_m: wp.array | None = None
-        self._servo_initial_rotation: wp.array | None = None
-        self._servo_motion_direction_W: wp.vec3 | None = None
-        self._servo_indenter_body_index: int | None = None
-        self._servo_approach_speed_m_s: float | None = None
-        self._servo_force_gain_m_s_n: float | None = None
-        self._servo_capture_on_first_crossing: bool | None = None
-        self._servo_settle_ticks: int | None = None
-        self._servo_settle_window_ticks: int | None = None
-        self._servo_displacement_tolerance_m: float | None = None
-        self._servo_target_count = 0
-        self._servo_host_intervention_count = 0
-        self._servo_host_sync_count = 0
-        self._servo_live_selection: tuple[
+        self._checkpoint_graph_a: wp.Graph | None = None
+        self._checkpoint_graph_b: wp.Graph | None = None
+        self._motion_float: wp.array | None = None
+        self._motion_int: wp.array | None = None
+        self._target_forces_n: wp.array | None = None
+        self._checkpoint_float: wp.array | None = None
+        self._checkpoint_step: wp.array | None = None
+        self._checkpoint_states: tuple[newton.State, ...] = ()
+        self._checkpoint_contacts: tuple[newton.Contacts, ...] = ()
+        self._initial_translation_W_m: wp.array | None = None
+        self._initial_rotation: wp.array | None = None
+        self._motion_direction_W: wp.vec3 | None = None
+        self._indenter_body_index: int | None = None
+        self._approach_speed_m_s: float | None = None
+        self._target_count = 0
+        self._checkpoint_host_intervention_count = 0
+        self._checkpoint_host_sync_count = 0
+        self._live_checkpoint_selection: tuple[
             newton.State,
             newton.Contacts,
             int,
@@ -634,125 +564,108 @@ class LumoSimulation:
             dt=self.time_step_s,
         )
 
-    def configure_force_servo(
+    def configure_force_checkpoints(
         self,
         indenter: Indenter,
         *,
         initial_tf: wp.transform,
         motion_direction_W: wp.vec3,
         approach_speed_m_s: float,
-        force_gain_m_s_n: float,
         target_forces_n: tuple[float, ...],
-        force_tolerances_n: tuple[float, ...],
-        settle_ticks: int,
-        displacement_tolerance_m: float | None,
-        capture_on_first_crossing: bool = False,
     ) -> None:
-        """Prepare device-resident motion and force checkpoints."""
+        """Prepare GPU-resident motion and ordered force checkpoints."""
         if not self._use_cuda_graph:
-            raise RuntimeError("GPU force servo requires use_cuda_graph=True")
-        if self._servo_float is not None:
-            raise RuntimeError("force servo has already been configured")
-        if len(target_forces_n) != len(force_tolerances_n):
-            raise ValueError("force targets and tolerances must have equal length")
-        if (
-            not target_forces_n
-            or len(target_forces_n) > _FORCE_SERVO_CHECKPOINT_CAPACITY
-        ):
-            raise ValueError("GPU force servo supports one to four force targets")
-        if settle_ticks < 1:
-            raise ValueError("settle_ticks must be positive")
+            raise RuntimeError("force checkpoints require use_cuda_graph=True")
+        if self._motion_float is not None:
+            raise RuntimeError("force checkpoints are already configured")
         if self._step_graph_ab is not None:
             raise RuntimeError("partial step graphs already exist")
+        if not isinstance(indenter, Indenter):
+            raise TypeError("indenter must be an Indenter")
+        if not 0 <= indenter.body_index < self.fingertip_model.model.body_count:
+            raise ValueError("indenter body index is outside this simulation")
 
         initial_tf_values = np.asarray(initial_tf, dtype=np.float64)
+        if initial_tf_values.shape != (7,) or not np.all(
+            np.isfinite(initial_tf_values)
+        ):
+            raise ValueError("initial_tf must be a finite Warp transform")
         direction_W = np.asarray(motion_direction_W, dtype=np.float64)
-        direction_W /= np.linalg.norm(direction_W)
+        if direction_W.shape != (3,) or not np.all(np.isfinite(direction_W)):
+            raise ValueError("motion_direction_W must be a finite 3-vector")
+        direction_norm = float(np.linalg.norm(direction_W))
+        require_positive("motion_direction_W norm", direction_norm)
+        direction_W /= direction_norm
+        require_positive("approach_speed_m_s", approach_speed_m_s)
+
+        targets_n = np.asarray(target_forces_n, dtype=np.float64)
+        if (
+            targets_n.ndim != 1
+            or targets_n.size < 1
+            or targets_n.size > _FORCE_CHECKPOINT_CAPACITY
+        ):
+            raise ValueError("one to four force targets are supported")
+        if not np.all(np.isfinite(targets_n)) or np.any(targets_n <= 0.0):
+            raise ValueError("force targets must be finite and positive")
+        if np.any(np.diff(targets_n) <= 0.0):
+            raise ValueError("force targets must be strictly increasing")
+
         device = self.fingertip_model.model.device
-        self._servo_initial_translation_W_m = wp.array(
-            [wp.vec3(*initial_tf_values[:3])],
-            dtype=wp.vec3,
-            device=device,
+        self._initial_translation_W_m = wp.array(
+            [wp.vec3(*initial_tf_values[:3])], dtype=wp.vec3, device=device
         )
-        self._servo_initial_rotation = wp.array(
-            [wp.quat(*initial_tf_values[3:])],
-            dtype=wp.quat,
-            device=device,
+        self._initial_rotation = wp.array(
+            [wp.quat(*initial_tf_values[3:])], dtype=wp.quat, device=device
         )
-        self._servo_motion_direction_W = wp.vec3(*direction_W)
-        self._servo_indenter_body_index = indenter.body_index
-        self._servo_approach_speed_m_s = float(approach_speed_m_s)
-        self._servo_force_gain_m_s_n = float(force_gain_m_s_n)
-        self._servo_capture_on_first_crossing = bool(
-            capture_on_first_crossing
-        )
-        self._servo_settle_ticks = int(settle_ticks)
-        self._servo_settle_window_ticks = min(
-            int(settle_ticks),
-            max(1, int(np.ceil(0.5 / self.time_step_s))),
-        )
-        self._servo_displacement_tolerance_m = (
-            -1.0
-            if displacement_tolerance_m is None
-            else float(displacement_tolerance_m)
-        )
-        self._servo_target_count = len(target_forces_n)
-        self._servo_float = wp.zeros(
-            _SERVO_FLOAT_COUNT,
+        self._motion_direction_W = wp.vec3(*direction_W)
+        self._indenter_body_index = indenter.body_index
+        self._approach_speed_m_s = float(approach_speed_m_s)
+        self._target_count = int(targets_n.size)
+        self._motion_float = wp.zeros(_MOTION_FLOAT_COUNT, dtype=float, device=device)
+        initial_int = np.zeros(_MOTION_INT_COUNT, dtype=np.int32)
+        initial_int[_MOTION_EVENT_SLOT] = -1
+        self._motion_int = wp.array(initial_int, dtype=wp.int32, device=device)
+        self._target_forces_n = wp.array(
+            targets_n.astype(np.float32),
             dtype=float,
             device=device,
         )
-        initial_int = np.zeros(_SERVO_INT_COUNT, dtype=np.int32)
-        initial_int[_SERVO_EVENT_SLOT] = -1
-        self._servo_int = wp.array(initial_int, dtype=wp.int32, device=device)
-        self._servo_target_forces_n = wp.array(
-            np.asarray(target_forces_n, dtype=np.float32),
+        self._checkpoint_float = wp.zeros(
+            (self._target_count, _CHECKPOINT_FLOAT_COUNT),
             dtype=float,
             device=device,
         )
-        self._servo_force_tolerances_n = wp.array(
-            np.asarray(force_tolerances_n, dtype=np.float32),
-            dtype=float,
-            device=device,
+        self._checkpoint_step = wp.zeros(
+            self._target_count, dtype=wp.int32, device=device
         )
-        self._servo_checkpoint_float = wp.zeros(
-            (self._servo_target_count, _CHECKPOINT_FLOAT_COUNT),
-            dtype=float,
-            device=device,
-        )
-        self._servo_checkpoint_step = wp.zeros(
-            self._servo_target_count,
-            dtype=wp.int32,
-            device=device,
-        )
-        self._servo_checkpoint_states = tuple(
+        self._checkpoint_states = tuple(
             self.fingertip_model.model.state()
-            for _ in range(_FORCE_SERVO_CHECKPOINT_CAPACITY)
+            for _ in range(_FORCE_CHECKPOINT_CAPACITY)
         )
-        self._servo_checkpoint_contacts = tuple(
+        self._checkpoint_contacts = tuple(
             self.collision_pipeline.contacts()
-            for _ in range(_FORCE_SERVO_CHECKPOINT_CAPACITY)
+            for _ in range(_FORCE_CHECKPOINT_CAPACITY)
         )
 
-        # The first uncaptured tick performs Newton's lazy contact-buffer sizing.
-        self._launch_force_servo_tick(self.state, self._next_state)
+        # Let Newton finish lazy contact-buffer sizing before graph capture.
+        self._launch_force_checkpoint_tick(self.state, self._next_state)
         self.state, self._next_state = self._next_state, self.state
         self.step_count = 1
         self.time_s = self.time_step_s
         self._has_step_result = True
-        self._capture_force_servo_graphs()
+        self._capture_force_checkpoint_graphs()
 
-    def reset_force_servo(
+    def reset_force_checkpoints(
         self,
         indenter: Indenter,
         *,
         initial_tf: wp.transform,
     ) -> None:
         """Restore one captured runtime to an independent reference state."""
-        self._require_force_servo()
-        if self._servo_live_selection is not None:
+        self._require_force_checkpoints()
+        if self._live_checkpoint_selection is not None:
             raise RuntimeError("cannot reset while a checkpoint is selected")
-        if indenter.body_index != self._servo_indenter_body_index:
+        if indenter.body_index != self._indenter_body_index:
             raise ValueError("reset indenter does not match the captured runtime")
 
         wp.synchronize_device(self.fingertip_model.model.device)
@@ -766,15 +679,11 @@ class LumoSimulation:
         self.solver.reset(self._state_b, flags=reset_flags)
 
         initial_tf_values = np.asarray(initial_tf, dtype=np.float32)
-        self._servo_initial_translation_W_m.assign(
-            initial_tf_values[None, :3]
-        )
-        self._servo_initial_rotation.assign(initial_tf_values[None, 3:])
+        self._initial_translation_W_m.assign(initial_tf_values[None, :3])
+        self._initial_rotation.assign(initial_tf_values[None, 3:])
         self.apply_indenter_pose(indenter, initial_tf)
         self.fingertip_model.prepare_step(
-            self._state_a,
-            self._state_b,
-            self._fingertip_pose,
+            self._state_a, self._state_b, self._fingertip_pose
         )
 
         self.contacts.clear()
@@ -788,13 +697,13 @@ class LumoSimulation:
         self._nonfinite_particle_velocity_count.zero_()
         self.solver.body_body_contact_overflow_max.zero_()
         self.solver.body_particle_contact_overflow_max.zero_()
-        self._servo_float.zero_()
-        reset_int = np.zeros(_SERVO_INT_COUNT, dtype=np.int32)
-        reset_int[_SERVO_EVENT_SLOT] = -1
-        self._servo_int.assign(reset_int)
-        self._servo_checkpoint_float.zero_()
-        self._servo_checkpoint_step.zero_()
-        for checkpoint_contact in self._servo_checkpoint_contacts:
+        self._motion_float.zero_()
+        reset_int = np.zeros(_MOTION_INT_COUNT, dtype=np.int32)
+        reset_int[_MOTION_EVENT_SLOT] = -1
+        self._motion_int.assign(reset_int)
+        self._checkpoint_float.zero_()
+        self._checkpoint_step.zero_()
+        for checkpoint_contact in self._checkpoint_contacts:
             checkpoint_contact.clear()
 
         self.state = self._state_a
@@ -802,48 +711,39 @@ class LumoSimulation:
         self.step_count = 0
         self.time_s = 0.0
         self._cuda_graph_replay_count = 0
-        self._servo_host_intervention_count = 0
-        self._servo_host_sync_count = 0
+        self._checkpoint_host_intervention_count = 0
+        self._checkpoint_host_sync_count = 0
         self._has_step_result = False
         self.collision_pipeline.collide(self.state, self.contacts)
 
-    def _require_force_servo(self) -> None:
+    def _require_force_checkpoints(self) -> None:
         if (
-            self._servo_float is None
-            or self._servo_int is None
-            or self._servo_target_forces_n is None
-            or self._servo_force_tolerances_n is None
-            or self._servo_checkpoint_float is None
-            or self._servo_checkpoint_step is None
-            or self._servo_initial_translation_W_m is None
-            or self._servo_initial_rotation is None
-            or self._servo_motion_direction_W is None
-            or self._servo_indenter_body_index is None
-            or self._servo_approach_speed_m_s is None
-            or self._servo_force_gain_m_s_n is None
-            or self._servo_capture_on_first_crossing is None
-            or self._servo_settle_ticks is None
-            or self._servo_settle_window_ticks is None
-            or self._servo_displacement_tolerance_m is None
+            self._motion_float is None
+            or self._motion_int is None
+            or self._target_forces_n is None
+            or self._checkpoint_float is None
+            or self._checkpoint_step is None
+            or self._initial_translation_W_m is None
+            or self._initial_rotation is None
+            or self._motion_direction_W is None
+            or self._indenter_body_index is None
+            or self._approach_speed_m_s is None
         ):
-            raise RuntimeError("GPU force servo is not configured")
+            raise RuntimeError("force checkpoints are not configured")
 
-    def _launch_force_servo_snapshots(self, state_out: newton.State) -> None:
-        """Copy an accepted tick into its device-resident checkpoint slot."""
-        self._require_force_servo()
+    def _launch_force_checkpoint_snapshots(self, state_out: newton.State) -> None:
+        """Copy a threshold-crossing tick into its device checkpoint slot."""
+        self._require_force_checkpoints()
         if state_out.particle_q is None or state_out.particle_qd is None:
             raise RuntimeError("simulation state has no particle state")
         particle_outputs: list[wp.array] = []
         contact_outputs: list[wp.array] = []
         for checkpoint_state, checkpoint_contact in zip(
-            self._servo_checkpoint_states,
-            self._servo_checkpoint_contacts,
+            self._checkpoint_states,
+            self._checkpoint_contacts,
             strict=True,
         ):
-            if (
-                checkpoint_state.particle_q is None
-                or checkpoint_state.particle_qd is None
-            ):
+            if checkpoint_state.particle_q is None or checkpoint_state.particle_qd is None:
                 raise RuntimeError("checkpoint state has no particle state")
             particle_outputs.extend(
                 [checkpoint_state.particle_q, checkpoint_state.particle_qd]
@@ -859,21 +759,16 @@ class LumoSimulation:
                 ]
             )
         wp.launch(
-            _snapshot_force_servo_particles,
+            _snapshot_force_checkpoint_particles,
             dim=self.fingertip_model.model.particle_count,
-            inputs=[
-                self._servo_int,
-                state_out.particle_q,
-                state_out.particle_qd,
-                *particle_outputs,
-            ],
+            inputs=[self._motion_int, state_out.particle_q, state_out.particle_qd, *particle_outputs],
             device=self.fingertip_model.model.device,
         )
         wp.launch(
-            _snapshot_force_servo_contacts,
+            _snapshot_force_checkpoint_contacts,
             dim=self.contacts.soft_contact_max,
             inputs=[
-                self._servo_int,
+                self._motion_int,
                 self.contacts.soft_contact_count,
                 self.contacts.soft_contact_shape,
                 self.contacts.soft_contact_indices,
@@ -885,30 +780,27 @@ class LumoSimulation:
             device=self.fingertip_model.model.device,
         )
 
-    def _launch_force_servo_tick(
+    def _launch_force_checkpoint_tick(
         self,
         state_in: newton.State,
         state_out: newton.State,
     ) -> None:
-        """Launch one complete servo, physics, wrench, and checkpoint tick."""
-        self._require_force_servo()
+        """Launch prescribed motion, physics, wrench, and checkpoint work."""
+        self._require_force_checkpoints()
         if state_in.body_q is None or state_out.body_q is None:
             raise RuntimeError("simulation state has no rigid-body poses")
         wp.launch(
-            _force_servo_before_step,
+            _force_checkpoint_before_step,
             dim=1,
             inputs=[
-                self._servo_initial_translation_W_m,
-                self._servo_initial_rotation,
-                self._servo_motion_direction_W,
-                self._servo_indenter_body_index,
-                self._servo_approach_speed_m_s,
-                self._servo_force_gain_m_s_n,
-                self._servo_capture_on_first_crossing,
+                self._initial_translation_W_m,
+                self._initial_rotation,
+                self._motion_direction_W,
+                self._indenter_body_index,
+                self._approach_speed_m_s,
                 self.time_step_s,
-                self._servo_target_forces_n,
-                self._servo_float,
-                self._servo_int,
+                self._motion_float,
+                self._motion_int,
                 state_in.body_q,
                 state_out.body_q,
             ],
@@ -920,35 +812,31 @@ class LumoSimulation:
             dim=1,
             inputs=[
                 self._body_wrenches,
-                self._servo_indenter_body_index,
-                self._servo_motion_direction_W,
+                self._indenter_body_index,
+                self._motion_direction_W,
             ],
             outputs=[self._reaction_force_n],
             device=self.fingertip_model.model.device,
         )
-        wp.copy(self._servo_float, self._reaction_force_n, count=1)
+        wp.copy(self._motion_float, self._reaction_force_n, count=1)
         wp.launch(
-            _force_servo_after_step,
+            _force_checkpoint_after_step,
             dim=1,
             inputs=[
                 self.time_step_s,
-                self._servo_settle_ticks,
-                self._servo_settle_window_ticks,
-                self._servo_target_count,
-                self._servo_displacement_tolerance_m,
-                self._servo_capture_on_first_crossing,
-                self._servo_target_forces_n,
-                self._servo_force_tolerances_n,
-                self._servo_float,
-                self._servo_int,
-                self._servo_checkpoint_float,
-                self._servo_checkpoint_step,
+                self._target_count,
+                self._target_forces_n,
+                self._approach_speed_m_s,
+                self._motion_float,
+                self._motion_int,
+                self._checkpoint_float,
+                self._checkpoint_step,
             ],
             device=self.fingertip_model.model.device,
         )
-        self._launch_force_servo_snapshots(state_out)
+        self._launch_force_checkpoint_snapshots(state_out)
 
-    def _capture_force_servo_graphs(self) -> None:
+    def _capture_force_checkpoint_graphs(self) -> None:
         """Capture two-tick graphs that return to their starting parity."""
         wp.synchronize_device(self.fingertip_model.model.device)
         self._validate_cuda_graph_capture_ready()
@@ -957,162 +845,147 @@ class LumoSimulation:
             device=self.fingertip_model.model.device,
             capture_mode=wp.CaptureMode.THREAD_LOCAL,
         ) as capture_a:
-            self._launch_force_servo_tick(self._state_a, self._state_b)
-            self._launch_force_servo_tick(self._state_b, self._state_a)
-        self._servo_graph_a = capture_a.graph
+            self._launch_force_checkpoint_tick(self._state_a, self._state_b)
+            self._launch_force_checkpoint_tick(self._state_b, self._state_a)
+        self._checkpoint_graph_a = capture_a.graph
         if allocation_signature != self._cuda_graph_contact_allocation_signature():
-            raise RuntimeError("force-servo graph A replaced Newton contact storage")
+            raise RuntimeError("checkpoint graph A replaced Newton contact storage")
 
         with wp.ScopedCapture(
             device=self.fingertip_model.model.device,
             capture_mode=wp.CaptureMode.THREAD_LOCAL,
         ) as capture_b:
-            self._launch_force_servo_tick(self._state_b, self._state_a)
-            self._launch_force_servo_tick(self._state_a, self._state_b)
-        self._servo_graph_b = capture_b.graph
+            self._launch_force_checkpoint_tick(self._state_b, self._state_a)
+            self._launch_force_checkpoint_tick(self._state_a, self._state_b)
+        self._checkpoint_graph_b = capture_b.graph
         if allocation_signature != self._cuda_graph_contact_allocation_signature():
-            raise RuntimeError("force-servo graph B replaced Newton contact storage")
+            raise RuntimeError("checkpoint graph B replaced Newton contact storage")
 
-    def launch_force_servo(
+    def launch_force_checkpoints(
         self,
         tick_count: int,
         *,
         stream: wp.Stream | None = None,
     ) -> None:
-        """Enqueue device-resident servo ticks without a host readback."""
-        self._require_force_servo()
+        """Enqueue GPU-resident threshold-checkpoint ticks."""
+        self._require_force_checkpoints()
         if tick_count < 1:
             raise ValueError("tick_count must be positive")
         if stream is not None and stream.device != self.fingertip_model.model.device:
-            raise ValueError("force-servo stream belongs to another device")
+            raise ValueError("checkpoint stream belongs to another device")
         remaining = tick_count
         while remaining >= 2:
             if self.state is self._state_a:
-                if self._servo_graph_a is None:
-                    raise RuntimeError("force-servo graph A is unavailable")
-                wp.capture_launch(self._servo_graph_a, stream=stream)
+                graph = self._checkpoint_graph_a
             elif self.state is self._state_b:
-                if self._servo_graph_b is None:
-                    raise RuntimeError("force-servo graph B is unavailable")
-                wp.capture_launch(self._servo_graph_b, stream=stream)
+                graph = self._checkpoint_graph_b
             else:
                 raise RuntimeError("live state is not an A/B state")
+            if graph is None:
+                raise RuntimeError("checkpoint graph is unavailable")
+            wp.capture_launch(graph, stream=stream)
             self._cuda_graph_replay_count += 1
             self.step_count += 2
             remaining -= 2
         if remaining:
             with wp.ScopedStream(stream, sync_enter=False):
-                self._launch_force_servo_tick(self.state, self._next_state)
+                self._launch_force_checkpoint_tick(self.state, self._next_state)
             self.state, self._next_state = self._next_state, self.state
             self.step_count += 1
         self.time_s = self.step_count * self.time_step_s
         self._has_step_result = True
-        self._servo_host_intervention_count += 1
+        self._checkpoint_host_intervention_count += 1
 
-    def force_servo_status(
+    def force_checkpoint_status(
         self,
         *,
         stream: wp.Stream | None = None,
     ) -> tuple[int, bool, int]:
-        """Synchronize one servo stream and return its compact device status."""
-        self._require_force_servo()
+        """Synchronize one stream and return compact checkpoint status."""
+        self._require_force_checkpoints()
         if stream is not None:
             wp.synchronize_stream(stream)
-        self._servo_host_sync_count += 1
-        status = self._servo_int.numpy()
+        self._checkpoint_host_sync_count += 1
+        status = self._motion_int.numpy()
         return (
-            int(status[_SERVO_CHECKPOINT_COUNT]),
-            bool(status[_SERVO_FINISHED]),
-            int(status[_SERVO_ERROR]),
+            int(status[_MOTION_CHECKPOINT_COUNT]),
+            bool(status[_MOTION_FINISHED]),
+            int(status[_MOTION_ERROR]),
         )
 
-    def advance_force_servo(self, tick_count: int) -> tuple[int, bool, int]:
-        """Replay device-resident servo ticks and return coarse host status."""
-        self.launch_force_servo(tick_count)
-        return self.force_servo_status()
+    def advance_force_checkpoints(self, tick_count: int) -> tuple[int, bool, int]:
+        """Replay checkpoint ticks and return coarse host status."""
+        self.launch_force_checkpoints(tick_count)
+        return self.force_checkpoint_status()
 
-    def force_servo_checkpoint(self, index: int) -> dict[str, float | int]:
-        """Read one compact checkpoint record after device completion."""
-        self._require_force_servo()
-        if index < 0 or index >= self._servo_target_count:
+    def force_checkpoint(self, index: int) -> dict[str, float | int]:
+        """Read one compact threshold-crossing record."""
+        self._require_force_checkpoints()
+        if index < 0 or index >= self._target_count:
             raise ValueError("checkpoint index is outside the target schedule")
-        checkpoint_float = self._servo_checkpoint_float.numpy()[index]
-        checkpoint_step = int(self._servo_checkpoint_step.numpy()[index])
-        self._servo_host_sync_count += 2
+        checkpoint_float = self._checkpoint_float.numpy()[index]
+        checkpoint_step = int(self._checkpoint_step.numpy()[index])
+        self._checkpoint_host_sync_count += 2
         return {
             "reaction_force_n": float(checkpoint_float[_CHECKPOINT_FORCE]),
             "travel_m": float(checkpoint_float[_CHECKPOINT_TRAVEL]),
             "force_change_n": float(checkpoint_float[_CHECKPOINT_FORCE_CHANGE]),
-            "force_reference_n": float(
-                checkpoint_float[_CHECKPOINT_FORCE_REFERENCE]
-            ),
-            "reaction_force_rate_n_s": float(
-                checkpoint_float[_CHECKPOINT_FORCE_RATE]
-            ),
-            "indentation_rate_m_s": float(
-                checkpoint_float[_CHECKPOINT_INDENTATION_RATE]
-            ),
-            "servo_error_n": float(checkpoint_float[_CHECKPOINT_SERVO_ERROR]),
-            "settle_window_force_drift_n": float(
-                checkpoint_float[_CHECKPOINT_FORCE]
-                - checkpoint_float[_CHECKPOINT_WINDOW_START_FORCE]
-            ),
-            "settle_window_indentation_drift_m": float(
-                checkpoint_float[_CHECKPOINT_TRAVEL]
-                - checkpoint_float[_CHECKPOINT_WINDOW_START_TRAVEL]
-            ),
+            "force_threshold_n": float(checkpoint_float[_CHECKPOINT_THRESHOLD]),
+            "reaction_force_rate_n_s": float(checkpoint_float[_CHECKPOINT_FORCE_RATE]),
+            "indentation_rate_m_s": float(checkpoint_float[_CHECKPOINT_INDENTATION_RATE]),
+            "force_overshoot_n": float(checkpoint_float[_CHECKPOINT_FORCE_OVERSHOOT]),
             "step_count": checkpoint_step,
             "simulation_time_s": checkpoint_step * self.time_step_s,
         }
 
-    def force_servo_current_force_n(self) -> float:
+    def current_reaction_force_n(self) -> float:
         """Read the current projected force for a terminal error report."""
-        self._require_force_servo()
-        value = float(self._servo_float.numpy()[_SERVO_REACTION_FORCE])
-        self._servo_host_sync_count += 1
+        self._require_force_checkpoints()
+        value = float(self._motion_float.numpy()[_MOTION_REACTION_FORCE])
+        self._checkpoint_host_sync_count += 1
         return value
 
-    def select_force_servo_checkpoint(self, index: int) -> None:
-        """Expose one exact saved checkpoint through the existing callback API."""
-        if self._servo_live_selection is not None:
+    def select_force_checkpoint(self, index: int) -> None:
+        """Expose one exact saved checkpoint through the callback API."""
+        if self._live_checkpoint_selection is not None:
             raise RuntimeError("a checkpoint is already selected")
-        if index < 0 or index >= self._servo_target_count:
+        if index < 0 or index >= self._target_count:
             raise ValueError("checkpoint index is outside the target schedule")
-        checkpoint_step = int(self._servo_checkpoint_step.numpy()[index])
-        self._servo_host_sync_count += 1
-        self._servo_live_selection = (
+        checkpoint_step = int(self._checkpoint_step.numpy()[index])
+        self._checkpoint_host_sync_count += 1
+        self._live_checkpoint_selection = (
             self.state,
             self.contacts,
             self.step_count,
             self.time_s,
         )
-        self.state = self._servo_checkpoint_states[index]
-        self.contacts = self._servo_checkpoint_contacts[index]
+        self.state = self._checkpoint_states[index]
+        self.contacts = self._checkpoint_contacts[index]
         self.step_count = checkpoint_step
         self.time_s = checkpoint_step * self.time_step_s
 
-    def restore_force_servo_live_state(self) -> None:
+    def restore_live_state(self) -> None:
         """Restore the live graph state after one checkpoint callback."""
-        if self._servo_live_selection is None:
+        if self._live_checkpoint_selection is None:
             raise RuntimeError("no checkpoint is selected")
         self.state, self.contacts, self.step_count, self.time_s = (
-            self._servo_live_selection
+            self._live_checkpoint_selection
         )
-        self._servo_live_selection = None
+        self._live_checkpoint_selection = None
 
     @property
-    def force_servo_performance(self) -> dict[str, float | int]:
+    def force_checkpoint_performance(self) -> dict[str, float | int]:
         """Return graph replay and synchronization diagnostics."""
-        interventions = self._servo_host_intervention_count
+        interventions = self._checkpoint_host_intervention_count
         live_step_count = (
             self.step_count
-            if self._servo_live_selection is None
-            else self._servo_live_selection[2]
+            if self._live_checkpoint_selection is None
+            else self._live_checkpoint_selection[2]
         )
         return {
             "graph_replay_count": self._cuda_graph_replay_count,
             "host_intervention_count": interventions,
-            "host_sync_count": self._servo_host_sync_count,
+            "host_sync_count": self._checkpoint_host_sync_count,
             "average_ticks_per_host_intervention": (
                 live_step_count / interventions if interventions else 0.0
             ),
