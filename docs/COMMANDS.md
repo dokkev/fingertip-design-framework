@@ -88,6 +88,49 @@ conda run --no-capture-output -n lit \
   python -u validation/contact-physics/fingertip_5led_smoke.py
 ```
 
+Run the full five-LED Newton mechanics validation at the center LED, the
+`Y=+5.5 mm` midpoint, and the distal LED:
+
+```bash
+conda run --no-capture-output -n lit \
+  python -u validation/contact-physics/fingertip_5led_mechanics.py
+```
+
+The procedural validation writes its report to
+`output/validation/5led_newton_mechanics_validation.md` and raw deformation,
+contact, profile, runtime, and visualization artifacts under
+`output/validation/5led_newton/`.
+
+Validate the full five-LED OptiX field using the saved 10 N Newton states,
+without rerunning mechanics:
+
+```bash
+conda run --no-capture-output -n lit \
+  python -u validation/ray-tracing/fingertip_5led_optix.py
+```
+
+The validation uses five simultaneous unit-power LED sources with 65,536
+deterministic paths per emitter, saves raw escaped paths and per-emitter
+responses under `output/validation/5led_optix/`, and writes the conclusions to
+`output/validation/5led_optix_validation.md`. It also verifies the nominal
+five 0.19 mm LED air cavities and reports which loaded states close each
+cavity.
+
+Diagnose LED-interface sensitivity using the saved full-finger Newton states:
+
+```bash
+conda run --no-capture-output -n lit \
+  python -u validation/ray-tracing/led_silicone_interface.py
+```
+
+This optical-only diagnostic reuses the saved Newton states and writes the report to
+`output/validation/5led_led_silicone_interface_diagnostic.md` and its signed
+geometry gaps, medium traces, epsilon/gap sweeps, treatment comparisons, and
+figures under `output/validation/5led_led_silicone_interface/`. Its controlled
+gap sweep is measured from the fixed LED top and includes the nominal 190 µm
+hardware cavity. The production geometry contract and primary cavity-closure
+result are also reported by `fingertip_5led_optix.py`.
+
 Compare the six selected Dragon Skin/Solaris physical-validation morphologies
 in one common-scale 2x3 XZ cross-section figure:
 

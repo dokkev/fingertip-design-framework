@@ -1,6 +1,6 @@
 """Ray-tracing ownership for the new LUMO implementation."""
 
-from .led import LED
+from .led import LED, emit_from_stem_boundary, source_inside_silicone
 from .observation import side_view_observation
 from .path import trace_bounded_paths
 from .path_result import PathTraceResult
@@ -15,10 +15,12 @@ __all__ = [
     "LED",
     "OptixScene",
     "PathTraceResult",
+    "emit_from_stem_boundary",
     "interface_transport",
     "lambertian_emission",
     "lambertian_reflection",
     "safe_secondary_origins",
     "side_view_observation",
+    "source_inside_silicone",
     "trace_bounded_paths",
 ]

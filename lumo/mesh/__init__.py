@@ -3,6 +3,8 @@
 from .fingertip_mesh import (
     DISTAL_END_CAP_LENGTH_MM,
     LED_PITCH_MM,
+    LED_RECESS_DEPTH_MM,
+    LED_RECESS_WIDTH_MM,
     MAIN_LENGTH_MM,
     MAIN_Y_BOUNDS_MM,
     NUM_LEDS,
@@ -20,6 +22,8 @@ __all__ = [
     "Fingertip5LEDMesh",
     "FingertipMesh",
     "LED_PITCH_MM",
+    "LED_RECESS_DEPTH_MM",
+    "LED_RECESS_WIDTH_MM",
     "MAIN_LENGTH_MM",
     "MAIN_Y_BOUNDS_MM",
     "NUM_LEDS",

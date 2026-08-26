@@ -14,8 +14,9 @@ from lumo.newton import Indenter
 from lumo.ray_tracing import (
     LED,
     OptixScene,
-    safe_secondary_origins,
+    emit_from_stem_boundary,
     side_view_observation,
+    source_inside_silicone,
     trace_bounded_paths,
 )
 from lumo.simulation import DesignStudy, DesignTrial, LumoSimulation
@@ -82,57 +83,6 @@ def _make_led(fingertip: Fingertip, fingertip_mesh: FingertipMesh) -> LED:
         normal_W=np.array((0.0, 0.0, -1.0)),
         parameters=fingertip.parameters.led,
     )
-
-
-def _emit_from_stem_boundary(
-    scene: OptixScene,
-    led: LED,
-    u1: np.ndarray,
-    u2: np.ndarray,
-) -> np.ndarray:
-    probe_distance_m = 0.5e-3 * led.parameters.height_mm
-    probe_origin = (led.position_W_m - probe_distance_m * led.normal_W)[None, :]
-    direction = led.normal_W[None, :]
-    carrier_hit = scene.trace_closest(
-        probe_origin,
-        direction,
-        mask=_CARRIER_MASK,
-    )
-    if not carrier_hit["hit"][0]:
-        raise RuntimeError("carrier probe did not find the LED stem boundary")
-    hit_position = probe_origin[0] + carrier_hit["t"][0] * led.normal_W
-    if not np.allclose(
-        hit_position,
-        led.position_W_m,
-        rtol=0.0,
-        atol=1.0e-7,
-    ):
-        raise RuntimeError("carrier probe found the wrong LED stem boundary")
-
-    emission = led.emit(u1, u2)
-    emission["origin_W_m"] = safe_secondary_origins(
-        carrier_hit,
-        direction,
-    )[0]
-    return emission
-
-
-def _source_inside_silicone(
-    scene: OptixScene,
-    led: LED,
-    emission: np.ndarray,
-) -> bool:
-    silicone_hit = scene.trace_closest(
-        emission["origin_W_m"][:1],
-        led.normal_W[None, :],
-        mask=_SILICONE_MASK,
-    )[0]
-    if not silicone_hit["hit"]:
-        raise RuntimeError("the LED normal does not reach silicone")
-    normal_projection = float(np.dot(silicone_hit["normal_W"], led.normal_W))
-    if abs(normal_projection) <= 1.0e-6:
-        raise RuntimeError("the LED source interface is geometrically ambiguous")
-    return normal_projection > 0.0
 
 
 def _trace_state(
@@ -249,11 +199,12 @@ def evaluate_contact_sensing(
     )
     emission_u1 = (sample_i.ravel() + 0.5) / _SAMPLE_SIDE_COUNT
     emission_u2 = (sample_j.ravel() + 0.5) / _SAMPLE_SIDE_COUNT
-    emission = _emit_from_stem_boundary(
+    emission = emit_from_stem_boundary(
         scene,
         led,
         emission_u1,
         emission_u2,
+        carrier_mask=_CARRIER_MASK,
     )
 
     rng = np.random.default_rng(_RNG_SEED)
@@ -266,7 +217,12 @@ def evaluate_contact_sensing(
         scene,
         fingertip,
         emission,
-        inside_silicone=_source_inside_silicone(scene, led, emission),
+        inside_silicone=source_inside_silicone(
+            scene,
+            led,
+            emission,
+            silicone_mask=_SILICONE_MASK,
+        ),
         dielectric_branch_u=dielectric_branch_u,
         carrier_u1=carrier_u1,
         carrier_u2=carrier_u2,
@@ -324,7 +280,12 @@ def evaluate_contact_sensing(
             scene,
             fingertip,
             emission,
-            inside_silicone=_source_inside_silicone(scene, led, emission),
+            inside_silicone=source_inside_silicone(
+                scene,
+                led,
+                emission,
+                silicone_mask=_SILICONE_MASK,
+            ),
             dielectric_branch_u=dielectric_branch_u,
             carrier_u1=carrier_u1,
             carrier_u2=carrier_u2,

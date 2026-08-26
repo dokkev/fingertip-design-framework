@@ -9,6 +9,7 @@ import numpy as np
 
 from lumo.fingertip import LEDParameters
 
+from .scene import OptixScene, safe_secondary_origins
 from .transport import lambertian_emission
 
 
@@ -74,4 +75,61 @@ class LED:
         return emission
 
 
-__all__ = ["LED"]
+def emit_from_stem_boundary(
+    scene: OptixScene,
+    led: LED,
+    u1: np.ndarray,
+    u2: np.ndarray,
+    *,
+    carrier_mask: int,
+) -> np.ndarray:
+    """Emit one LED from its resolved carrier stem boundary."""
+    probe_distance_m = 0.5e-3 * led.parameters.height_mm
+    probe_origin = (led.position_W_m - probe_distance_m * led.normal_W)[None, :]
+    direction = led.normal_W[None, :]
+    carrier_hit = scene.trace_closest(
+        probe_origin,
+        direction,
+        mask=carrier_mask,
+    )
+    if not carrier_hit["hit"][0]:
+        raise RuntimeError("carrier probe did not find the LED stem boundary")
+    hit_position = probe_origin[0] + carrier_hit["t"][0] * led.normal_W
+    if not np.allclose(
+        hit_position,
+        led.position_W_m,
+        rtol=0.0,
+        atol=1.0e-7,
+    ):
+        raise RuntimeError("carrier probe found the wrong LED stem boundary")
+
+    emission = led.emit(u1, u2)
+    emission["origin_W_m"] = safe_secondary_origins(
+        carrier_hit,
+        direction,
+    )[0]
+    return emission
+
+
+def source_inside_silicone(
+    scene: OptixScene,
+    led: LED,
+    emission: np.ndarray,
+    *,
+    silicone_mask: int,
+) -> bool:
+    """Resolve the emitted ray's initial medium from the silicone boundary."""
+    silicone_hit = scene.trace_closest(
+        emission["origin_W_m"][:1],
+        led.normal_W[None, :],
+        mask=silicone_mask,
+    )[0]
+    if not silicone_hit["hit"]:
+        raise RuntimeError("the LED normal does not reach silicone")
+    normal_projection = float(np.dot(silicone_hit["normal_W"], led.normal_W))
+    if abs(normal_projection) <= 1.0e-6:
+        raise RuntimeError("the LED source interface is geometrically ambiguous")
+    return normal_projection > 0.0
+
+
+__all__ = ["LED", "emit_from_stem_boundary", "source_inside_silicone"]

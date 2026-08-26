@@ -24,6 +24,8 @@ if TYPE_CHECKING:
 
 NUM_LEDS = 5
 LED_PITCH_MM = 11.0
+LED_RECESS_WIDTH_MM = 5.1
+LED_RECESS_DEPTH_MM = 0.19
 MAIN_LENGTH_MM = NUM_LEDS * LED_PITCH_MM
 DISTAL_END_CAP_LENGTH_MM = 5.0
 TOTAL_LENGTH_MM = MAIN_LENGTH_MM + DISTAL_END_CAP_LENGTH_MM
@@ -160,6 +162,11 @@ def make_fingertip_5led_mesh(
     if not isinstance(fingertip, Fingertip):
         raise TypeError("fingertip must be a Fingertip")
     require_positive("element_size_mm", element_size_mm)
+    if fingertip.parameters.geometry.void_height_mm != 0.0:
+        raise ValueError(
+            "the full five-LED production geometry requires "
+            "void_height_mm=0; LED clearance comes from the stem recesses"
+        )
 
     silicone, bonded_vertex_indices = _make_silicone_5led_mesh(
         fingertip.silicone,
@@ -172,19 +179,26 @@ def make_fingertip_5led_mesh(
         fingertip.carrier,
         main_length_mm=MAIN_LENGTH_MM,
         distal_end_cap_length_mm=DISTAL_END_CAP_LENGTH_MM,
+        led_centers_y_mm=led_centers_y_mm(),
+        led_recess_width_mm=LED_RECESS_WIDTH_MM,
+        led_recess_depth_mm=LED_RECESS_DEPTH_MM,
     )
     carrier_collision = _make_carrier_5led_collision_mesh(
         fingertip.carrier,
         fingertip.silicone,
         main_length_mm=MAIN_LENGTH_MM,
+        led_centers_y_mm=led_centers_y_mm(),
+        led_recess_width_mm=LED_RECESS_WIDTH_MM,
+        led_recess_depth_mm=LED_RECESS_DEPTH_MM,
     )
 
-    stem_bottom_z_m = _MM_TO_M * min(
-        z_mm for _, z_mm in fingertip.carrier.cross_section
+    led_top_z_m = _MM_TO_M * (
+        min(z_mm for _, z_mm in fingertip.carrier.cross_section)
+        + LED_RECESS_DEPTH_MM
     )
     centers_m = np.asarray(
         [
-            (0.0, _MM_TO_M * y_mm, stem_bottom_z_m)
+            (0.0, _MM_TO_M * y_mm, led_top_z_m)
             for y_mm in led_centers_y_mm()
         ],
         dtype=np.float64,
@@ -210,6 +224,8 @@ __all__ = [
     "Fingertip5LEDMesh",
     "FingertipMesh",
     "LED_PITCH_MM",
+    "LED_RECESS_DEPTH_MM",
+    "LED_RECESS_WIDTH_MM",
     "MAIN_LENGTH_MM",
     "MAIN_Y_BOUNDS_MM",
     "NUM_LEDS",

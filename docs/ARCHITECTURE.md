@@ -152,6 +152,7 @@ Y = [-27.5, +27.5] mm  55 mm active section
     continuous silicone outer body with the existing XZ cutout
     continuous rigid carrier/stem rail
     LED centers at [-22, -11, 0, +11, +22] mm
+    one 5.1 mm-wide, 0.19 mm-deep stem recess at each LED
 
 Y = [+27.5, +32.5] mm  5 mm distal solid-silicone end-cap
     silicone fills the complete section below the dorsal carrier plate
@@ -166,8 +167,14 @@ plate extends across the 5 mm solid end-cap. Silicone vertices under that
 distal dorsal plate belong to the carrier's perfect kinematic bond. The
 single-section collision proxy still puts closure caps outside its silicone
 slice; the full-finger proxy instead ends with the physical 55 mm stem rail.
-The local XZ morphology and the constructed 30 mm height contract are
-unchanged.
+The five recesses are present in both the visible carrier and its Newton
+collision proxy. With nominal `void_height_mm=0`, silicone keeps the existing
+stem-bottom plane while each LED emitting top lies on its recess floor,
+producing a geometry-derived 0.19 mm unloaded air cavity. No optical offset or
+displaced silicone surface manufactures that gap. `void_height_mm` remains
+fixed at zero for the initial full-finger morphology study; the hardware
+recess, not `void_height_mm`, owns this interface dimension. The local XZ
+morphology and the constructed 30 mm height contract are otherwise unchanged.
 
 Mesh code may use Gmsh and geometry libraries internally.
 
@@ -495,6 +502,13 @@ use this operation for every triangle departure. OptiX traversal uses `tmin=0`:
 the OTK origin owns self-intersection separation, so no second scene epsilon is
 combined with the official offset.
 
+`emit_from_stem_boundary()` places an `LED` emission on the resolved carrier
+stem or recess boundary using that same OTK spawn contract. `source_inside_silicone()`
+then queries the current silicone surface to select the initial medium. These
+operations remain source-local primitives: a caller that needs several LEDs
+traces their independent linear contributions and sums modeled power without a
+multi-LED scene abstraction.
+
 `side_view_observation()` in `observation.py` reduces escaped paths from the one
 current optical-cell LED to one raw four-quadrant response. It keeps only rays
 traveling toward the canonical camera-facing `+Y` side and bins their power by
@@ -545,10 +559,12 @@ force remains within its `+/- 10%` band continuously for `5 s`. The servo uses
 `2.5 um/(N tick)` gain and `50 um/tick` maximum step. Optical transport
 uses `65,536` paths and `24` bounces. This evaluator does not perform
 morphology optimization or combine sensing objectives.
-The LED remains on the carrier stem boundary. If a nonzero geometry void
-places air between that source and silicone, transport starts in air and lets
-OptiX resolve silicone entry, carrier reflection, or escape rather than
-requiring every primary ray to enter silicone immediately.
+Each full-finger LED remains on its carrier recess floor. The nominal 0.19 mm
+hardware cavity places air between that source and unloaded silicone even when
+`void_height_mm=0`; transport starts in air and lets OptiX resolve silicone
+entry, carrier reflection, or escape. Loaded Newton geometry may close that
+explicit cavity and change the initial medium without a source epsilon or
+per-state gap adjustment.
 
 `sensing_descriptors()` consumes a state array shaped `(contact states, 4)`.
 For the current single optical cell it forms one scalar intensity response from
