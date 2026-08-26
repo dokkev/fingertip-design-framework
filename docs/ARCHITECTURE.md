@@ -296,32 +296,40 @@ state swap
 advance global step count and time
 ```
 
-`LumoSimulation` also has an explicit, opt-in `use_cuda_graph` execution
-path for this same device work. The first tick remains uncaptured so Newton
-can finish lazy full-surface contact-state and rigid-history allocation. After
-that warm-up, the runtime verifies the fixed contact capacities and captures
-two separate graphs for the state ping-pong directions:
+`LumoSimulation` also owns the accelerated GPU-resident force-servo path used
+by the production full-finger evaluator. The first tick remains uncaptured so
+Newton can finish lazy full-surface contact-state and rigid-history allocation.
+After that warm-up, the runtime verifies the fixed contact capacities and
+captures two even-length graphs for the state ping-pong parities:
 
 ```text
-graph_AB: state_A -> state_B
-graph_BA: state_B -> state_A
+graph_A: servo -> A-to-B physics -> wrench -> checkpoint
+         servo -> B-to-A physics -> wrench -> checkpoint
+
+graph_B: servo -> B-to-A physics -> wrench -> checkpoint
+         servo -> A-to-B physics -> wrench -> checkpoint
 ```
 
-Each graph contains the held carrier/bond update, rigid-velocity history copy,
-force clear, collision, the complete fixed-iteration VBD solve, and proxy
-wrench harvest. Indenter pose application, the Python state-reference swap,
-reaction-force projection/readback, force servo, tolerance, and dwell logic
-remain outside the graph. A graph-captured fingertip pose is immutable after
-capture; callers that need to move the whole fingertip must use the direct
-path.
+The proportional force measurement, servo update, kinematic indenter pose,
+collision, complete fixed-iteration VBD solve, proxy wrench harvest, force-band
+dwell counter, and target transition all remain on the device. Ten graph
+replays advance twenty physics ticks before one coarse host status readback.
+When a force checkpoint completes inside that block, device kernels copy the
+particle state and full soft-contact record into its exact checkpoint slot;
+the existing synchronous evaluator callback later inspects that saved tick,
+not the newer live state. The four production checkpoints therefore preserve
+their original scientific meaning without a per-tick `.numpy()` boundary.
 
-The production full-finger evaluator still uses the direct path. The focused
-CUDA-graph regression found that neither a fresh direct repeat nor direct vs
-graph is bitwise reproducible once atomically emitted full-surface contacts
-begin. The graph checkpoint indices consequently failed the frozen exact gate,
-so the measured speedup is not yet a production contract. Graph execution
-remains opt-in for continued equivalence work rather than becoming a silent
-default.
+`evaluate_full_finger()` selects this GPU-resident path by default after the
+direct-times-five versus graph-times-five scientific-equivalence gate passed.
+The direct backend remains explicit through `use_cuda_graph=False` for
+conservative reference and debugging. Bitwise equality is not an acceptance
+contract because Newton full-surface contact emission and wrench accumulation
+are intrinsically atomic-order nondeterministic after contact onset. The gate
+instead checks force/dwell meaning, deformation, canonical patch support,
+contact objectives, finite-area optical response, inversion, and contact-buffer
+safety. A graph-captured fingertip pose is immutable after capture; callers
+that need to move the whole fingertip must use the direct path.
 
 `LumoSimulation.step()` does not own approach trajectories, force thresholds,
 validation policy, or result reporting. It is the only production API that
@@ -367,10 +375,11 @@ For the concrete multi-force sensing evaluation, a study may use one strictly
 increasing force-target tuple. The same trial runtime then advances through
 each target without resetting Newton state. Tolerance may be an absolute force
 or a target-relative fraction; the sensing evaluator uses `5, 10, 15, 20 N`
-with `+/- 10%` at every level. The live inspection callback runs immediately
-after every accepted target while the current Newton state still exists.
+with `+/- 10%` at every level. The inspection callback receives the exact
+accepted state, either live in direct mode or from its device checkpoint slot
+in accelerated mode.
 
-The study keeps the per-trial force servo direct:
+The direct/reference study path keeps the per-trial force servo on the host:
 
 ```text
 last reaction force
@@ -394,11 +403,22 @@ displacement criterion remains available only for the focused adaptive-settling
 validation. There is no force-slope or particle-speed criterion, first-crossing
 stop, fixed-pose correction search, integral term, or PID controller.
 
-Only `LumoSimulation.step()` mutates Newton state or simulation time. The study
-does not share mutable Newton state between trials, run trials in parallel, or
-introduce a generic simulation manager. A synchronous trial-inspection callback
-may inspect each accepted live state; after the final callback returns, the
-trial runtime is released before the next trial is constructed.
+With `use_cuda_graph=True`, `DesignStudy` configures the same proportional
+equation, velocity bounds, force tolerances, consecutive dwell ticks, and
+ordered targets in `LumoSimulation` device buffers. It polls only every twenty
+physics ticks and invokes the unchanged callback against exact device-saved
+checkpoint states. This is an execution backend for the same protocol, not a
+second controller.
+
+Only `LumoSimulation` mutates Newton state or simulation time. Trials never
+share mutable Newton state. For the production full-finger path, `DesignStudy`
+may execute up to four independent trials concurrently in one Python process
+and CUDA context. Each world owns its state pair, solver, contacts,
+servo/checkpoint buffers, graphs, and CUDA stream; worlds with one sphere
+diameter share only the finalized immutable model and coloring. Checkpoint
+callbacks remain synchronous after the corresponding stream reaches an exact
+device-saved checkpoint. Serial execution remains available by setting
+`parallel_world_count=1`; no generic simulation manager was introduced.
 
 ### `lumo/benchmark/`
 
@@ -587,7 +607,17 @@ uses an independent Newton runtime; increasing force checkpoints within that
 scenario reuse the runtime. Each live checkpoint updates the same silicone GAS
 and IAS and is traced with the same emission and bounce samples.
 
-`FullFingerEvaluation` is a raw-data result, not an objective result. It keeps
+The production evaluator defaults to four independent CUDA-stream Newton
+worlds. The measured 1/2/4/7-world gate selected four because it improved
+accepted throughput by 14.3% over serial, while seven improved only another
+2.2% and used more VRAM. OptiX checkpoint consumption remains serialized
+through the one shared scene. The final 21-scenario nominal evaluation measured
+294.814 s versus the original 1222.991 s, a 4.148x end-to-end speedup.
+
+`FullFingerEvaluation` is a raw-data result, not an objective result. It records
+the explicit mechanics backend, checkpoint step indices, graph replay counts,
+force-control host intervention/synchronization counts, and average ticks per
+host intervention. It keeps
 per-emitter longitudinal responses shaped `(scenario, force, 5, 11)`,
 per-emitter energy ledgers, and the shared five-emitter no-contact state.
 Simultaneous 11-bin responses are derived by summing the emitter axis and are
@@ -611,7 +641,8 @@ The fixed current mechanics contract is
 force remains within its `+/- 10%` band continuously for `5 s`. The servo uses
 `Kf=2.5e-4 m/(s N)` with a `5 mm/s` trial cap, preserving the validated
 `2.5 um/(N tick)` gain and `50 um/tick` maximum step. Optical transport
-uses `65,536` paths per LED and `24` bounces. This evaluator does not perform
+uses a uniform finite-area `1.8 x 1.6 mm` LED emitting window, `65,536` paths
+per LED, `24` bounces, and hard 11-bin observation. This evaluator does not perform
 morphology optimization. `objective.py` is the pure numerical reduction layer
 between this rich result and Ax.
 
@@ -633,11 +664,10 @@ per-state gap adjustment.
 
 `validation/optomech/optical_observation_model_sensitivity.py` replays the
 frozen dwell and ramp vertices without rerunning Newton. It compares the
-production point source and hard bins against linear splatting and a uniform
+historical point source and hard bins against linear splatting and a uniform
 finite source over the manufacturer's `1.8 x 1.6 mm` water-clear resin window.
-Finite-area origins and per-ray initial media remain validation-local until the
-source contract is explicitly changed; the production evaluator still uses a
-point source and hard bins. Ballistic transport, ray count, bounce count, and
+That validation selected finite-area origins and per-ray initial media for
+production while retaining hard bins. Ballistic transport, ray count, bounce count, and
 `J_obs` are unchanged in this comparison.
 
 `sensing_descriptors()` consumes a state array shaped `(contact states, 4)`.

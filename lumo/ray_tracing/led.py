@@ -1,4 +1,4 @@
-"""Current Green Sequin LED point-source approximation."""
+"""Current Green Sequin LED source models."""
 
 from __future__ import annotations
 
@@ -111,6 +111,91 @@ def emit_from_stem_boundary(
     return emission
 
 
+def emit_from_stem_window(
+    scene: OptixScene,
+    led: LED,
+    angular_u1: np.ndarray,
+    angular_u2: np.ndarray,
+    window_u_x: np.ndarray,
+    window_u_y: np.ndarray,
+    *,
+    carrier_mask: int,
+) -> np.ndarray:
+    """Emit uniformly across the physical X-Y package window.
+
+    The current full-finger LEDs are mounted on the canonical stem floor with
+    normal ``-Z``.  Angular samples retain the existing Lambertian model while
+    the two window samples distribute origins over the measured resin window.
+    """
+    if not np.allclose(
+        led.normal_W,
+        np.array((0.0, 0.0, -1.0)),
+        rtol=0.0,
+        atol=1.0e-12,
+    ):
+        raise ValueError("finite stem-window emission requires LED normal -Z")
+    angular_u1 = np.asarray(angular_u1, dtype=np.float64)
+    angular_u2 = np.asarray(angular_u2, dtype=np.float64)
+    window_u_x = np.asarray(window_u_x, dtype=np.float64)
+    window_u_y = np.asarray(window_u_y, dtype=np.float64)
+    expected_shape = angular_u1.shape
+    for name, samples in (
+        ("angular_u2", angular_u2),
+        ("window_u_x", window_u_x),
+        ("window_u_y", window_u_y),
+    ):
+        if samples.shape != expected_shape:
+            raise ValueError(f"{name} must match angular_u1")
+    if angular_u1.ndim != 1 or not len(angular_u1):
+        raise ValueError("finite source samples must be nonempty 1-D arrays")
+    for name, samples in (
+        ("window_u_x", window_u_x),
+        ("window_u_y", window_u_y),
+    ):
+        if not np.all(np.isfinite(samples)) or np.any(
+            (samples < 0.0) | (samples >= 1.0)
+        ):
+            raise ValueError(f"{name} must be finite and in [0, 1)")
+
+    emission = led.emit(angular_u1, angular_u2)
+    source_positions = np.repeat(
+        led.position_W_m[None, :],
+        len(emission),
+        axis=0,
+    )
+    source_positions[:, 0] += (
+        1.0e-3
+        * led.parameters.emitting_window_x_mm
+        * (window_u_x - 0.5)
+    )
+    source_positions[:, 1] += (
+        1.0e-3
+        * led.parameters.emitting_window_y_mm
+        * (window_u_y - 0.5)
+    )
+    directions = np.repeat(led.normal_W[None, :], len(emission), axis=0)
+    probe_distance_m = 0.5e-3 * led.parameters.height_mm
+    probe_origins = source_positions - probe_distance_m * directions
+    carrier_hits = scene.trace_closest(
+        probe_origins,
+        directions,
+        mask=carrier_mask,
+    )
+    if not np.all(carrier_hits["hit"]):
+        raise RuntimeError("finite LED window probe missed the stem recess floor")
+    hit_positions = probe_origins + carrier_hits["t"][:, None] * directions
+    maximum_error_m = float(
+        np.max(np.linalg.norm(hit_positions - source_positions, axis=1))
+    )
+    if maximum_error_m > 1.0e-7:
+        raise RuntimeError(
+            "finite LED window probe found the wrong carrier surface; "
+            f"maximum error={maximum_error_m:.3e} m"
+        )
+    emission["origin_W_m"] = safe_secondary_origins(carrier_hits, directions)
+    return emission
+
+
 def source_inside_silicone(
     scene: OptixScene,
     led: LED,
@@ -132,4 +217,39 @@ def source_inside_silicone(
     return normal_projection > 0.0
 
 
-__all__ = ["LED", "emit_from_stem_boundary", "source_inside_silicone"]
+def sources_inside_silicone(
+    scene: OptixScene,
+    led: LED,
+    emission: np.ndarray,
+    *,
+    silicone_mask: int,
+) -> np.ndarray:
+    """Resolve the initial medium independently for every source sample."""
+    origins = np.asarray(emission["origin_W_m"], dtype=np.float64)
+    if origins.ndim != 2 or origins.shape[1:] != (3,) or not len(origins):
+        raise ValueError("emission must contain nonempty (N, 3) origins")
+    directions = np.repeat(led.normal_W[None, :], len(origins), axis=0)
+    silicone_hits = scene.trace_closest(
+        origins,
+        directions,
+        mask=silicone_mask,
+    )
+    if not np.all(silicone_hits["hit"]):
+        raise RuntimeError("the LED window normal does not reach silicone")
+    normal_projection = np.einsum(
+        "ij,ij->i",
+        silicone_hits["normal_W"],
+        directions,
+    )
+    if np.any(np.abs(normal_projection) <= 1.0e-6):
+        raise RuntimeError("the LED source interface is geometrically ambiguous")
+    return normal_projection > 0.0
+
+
+__all__ = [
+    "LED",
+    "emit_from_stem_boundary",
+    "emit_from_stem_window",
+    "source_inside_silicone",
+    "sources_inside_silicone",
+]

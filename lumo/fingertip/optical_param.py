@@ -151,6 +151,10 @@ class LEDParameters:
     # board's omitted out-of-plane dimension is 9 mm.
     width_mm: float = 4.0
     height_mm: float = 2.0
+    # LuckyLight package drawing: water-clear resin emitting window.  These
+    # dimensions define the modeled finite aperture, not calibrated radiometry.
+    emitting_window_x_mm: float = 1.8
+    emitting_window_y_mm: float = 1.6
     # Modeled source power before absolute optical calibration.
     normalized_power: float = 1.0
     dominant_wavelength_nm: float = 525.0
@@ -170,6 +174,16 @@ class LEDParameters:
         require_positive(
             "height_mm",
             self.height_mm,
+            error_type=error_type,
+        )
+        require_positive(
+            "emitting_window_x_mm",
+            self.emitting_window_x_mm,
+            error_type=error_type,
+        )
+        require_positive(
+            "emitting_window_y_mm",
+            self.emitting_window_y_mm,
             error_type=error_type,
         )
         require_nonnegative(

@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable
 from math import ceil
 from pathlib import Path
+from time import perf_counter
 
 import newton
 import numpy as np
@@ -12,7 +13,7 @@ import warp as wp
 
 from lumo.fingertip import Fingertip
 from lumo.mesh import FingertipMesh
-from lumo.newton import Indenter
+from lumo.newton import FingertipNewtonModel, Indenter
 from lumo.simulation.runtime import LumoSimulation
 from lumo.util.scalar_validation import require_nonnegative, require_positive
 
@@ -91,6 +92,9 @@ class DesignTrial:
         self.reaction_force_rate_n_s: float | None = None
         self.indentation_rate_m_s: float | None = None
         self.servo_error_n: float | None = None
+        self.settle_window_force_drift_n: float | None = None
+        self.settle_window_indentation_drift_m: float | None = None
+        self.wall_runtime_s: float | None = None
 
 
 class DesignStudy:
@@ -116,6 +120,9 @@ class DesignStudy:
         contact_stiffness_n_m: float | None = None,
         contact_damping_n_s_m: float | None = None,
         use_cuda_graph: bool = False,
+        reuse_finalized_models: bool = False,
+        reuse_runtimes: bool = False,
+        parallel_world_count: int = 1,
     ) -> None:
         if not isinstance(fingertip, Fingertip):
             raise TypeError("fingertip must be a Fingertip")
@@ -166,6 +173,20 @@ class DesignStudy:
             )
         if not isinstance(use_cuda_graph, bool):
             raise TypeError("use_cuda_graph must be a bool")
+        if not isinstance(reuse_finalized_models, bool):
+            raise TypeError("reuse_finalized_models must be a bool")
+        if not isinstance(reuse_runtimes, bool):
+            raise TypeError("reuse_runtimes must be a bool")
+        if reuse_runtimes and not use_cuda_graph:
+            raise ValueError("runtime reuse requires use_cuda_graph=True")
+        if (
+            isinstance(parallel_world_count, bool)
+            or not isinstance(parallel_world_count, int)
+            or parallel_world_count < 1
+        ):
+            raise ValueError("parallel_world_count must be a positive integer")
+        if parallel_world_count > 1 and not use_cuda_graph:
+            raise ValueError("parallel worlds require use_cuda_graph=True")
         if (
             isinstance(iterations, bool)
             or not isinstance(iterations, int)
@@ -245,7 +266,250 @@ class DesignStudy:
             None if contact_damping_n_s_m is None else float(contact_damping_n_s_m)
         )
         self.use_cuda_graph = use_cuda_graph
+        self.reuse_finalized_models = reuse_finalized_models or reuse_runtimes
+        self.reuse_runtimes = reuse_runtimes
+        self.parallel_world_count = parallel_world_count
         self._has_run = False
+
+    @staticmethod
+    def _inspect_graph_checkpoint(
+        trial: DesignTrial,
+        simulation: LumoSimulation,
+        indenter: Indenter,
+        checkpoint_index: int,
+        initial_translation_W_m: np.ndarray,
+        initial_rotation: wp.quat,
+        motion_direction_W: np.ndarray,
+        inspect_trial: Callable[[DesignTrial, LumoSimulation, Indenter], None]
+        | None,
+    ) -> None:
+        checkpoint = simulation.force_servo_checkpoint(checkpoint_index)
+        travel_m = float(checkpoint["travel_m"])
+        translation_W_m = (
+            initial_translation_W_m + travel_m * motion_direction_W
+        )
+        trial.final_tf = wp.transform(
+            wp.vec3(*translation_W_m),
+            initial_rotation,
+        )
+        trial.travel_m = travel_m
+        trial.step_count = int(checkpoint["step_count"])
+        trial.simulation_time_s = float(checkpoint["simulation_time_s"])
+        trial.reaction_force_n = float(checkpoint["reaction_force_n"])
+        trial.force_change_n = float(checkpoint["force_change_n"])
+        trial.force_reference_n = float(checkpoint["force_reference_n"])
+        trial.reaction_force_rate_n_s = float(
+            checkpoint["reaction_force_rate_n_s"]
+        )
+        trial.indentation_rate_m_s = float(checkpoint["indentation_rate_m_s"])
+        trial.servo_error_n = float(checkpoint["servo_error_n"])
+        trial.settle_window_force_drift_n = float(
+            checkpoint["settle_window_force_drift_n"]
+        )
+        trial.settle_window_indentation_drift_m = float(
+            checkpoint["settle_window_indentation_drift_m"]
+        )
+        simulation.select_force_servo_checkpoint(checkpoint_index)
+        try:
+            trial.maximum_particle_speed_m_s = (
+                simulation.maximum_active_particle_speed_m_s()
+            )
+            if inspect_trial is not None:
+                inspect_trial(trial, simulation, indenter)
+        finally:
+            simulation.restore_force_servo_live_state()
+
+    def _run_parallel_graph(
+        self,
+        inspect_trial: Callable[[DesignTrial, LumoSimulation, Indenter], None]
+        | None,
+    ) -> None:
+        """Run independent same-sphere histories on separate CUDA streams."""
+        force_targets_n = self.force_targets_n
+        if force_targets_n is None:
+            raise ValueError("parallel worlds require an explicit force schedule")
+        force_tolerances_n = tuple(
+            self.force_tolerance_n
+            if self.force_tolerance_n is not None
+            else target_force_n * self.force_tolerance_fraction
+            for target_force_n in force_targets_n
+        )
+        settle_ticks = max(
+            1,
+            ceil(self.settle_duration_s * self.sim_frequency),
+        )
+        host_poll_ticks = max(2, 2 * ceil(0.1 * self.sim_frequency))
+        grouped_trials: dict[Path, list[DesignTrial]] = {}
+        for trial in self.trials:
+            grouped_trials.setdefault(trial.urdf_path.resolve(), []).append(trial)
+
+        for trials in grouped_trials.values():
+            fingertip_model: FingertipNewtonModel | None = None
+            indenter: Indenter | None = None
+            for batch_start in range(0, len(trials), self.parallel_world_count):
+                batch = trials[batch_start : batch_start + self.parallel_world_count]
+                worlds: list[dict[str, object]] = []
+                batch_start_s = perf_counter()
+                for trial in batch:
+                    initial_tf = np.asarray(trial.initial_tf, dtype=np.float64)
+                    initial_translation_W_m = initial_tf[:3]
+                    initial_rotation = wp.quat(*initial_tf[3:])
+                    motion_direction_W = np.asarray(
+                        trial.motion_direction_W,
+                        dtype=np.float64,
+                    )
+                    if fingertip_model is None:
+                        builder = newton.ModelBuilder(
+                            gravity=wp.vec3(0.0, 0.0, 0.0)
+                        )
+                        indenter = Indenter.add_urdf(
+                            builder,
+                            trial.urdf_path,
+                            tf=trial.initial_tf,
+                            contact_stiffness_n_m=self.contact_stiffness_n_m,
+                            contact_damping_n_s_m=self.contact_damping_n_s_m,
+                        )
+                        simulation = LumoSimulation(
+                            self.fingertip,
+                            builder=builder,
+                            fingertip_mesh=self.fingertip_mesh,
+                            sim_frequency=self.sim_frequency,
+                            iterations=self.iterations,
+                            soft_contact_margin_m=self.soft_contact_margin_m,
+                            soft_contact_stiffness_n_m=(
+                                self.contact_stiffness_n_m
+                            ),
+                            soft_contact_damping_n_s_m=(
+                                self.contact_damping_n_s_m
+                            ),
+                            element_size_mm=self.element_size_mm,
+                            carrier_contact_stiffness_n_m=(
+                                self.carrier_contact_stiffness_n_m
+                            ),
+                            use_cuda_graph=True,
+                        )
+                        fingertip_model = simulation.fingertip_model
+                    else:
+                        if indenter is None:
+                            raise RuntimeError("parallel indenter is unavailable")
+                        simulation = LumoSimulation(
+                            self.fingertip,
+                            fingertip_model=fingertip_model,
+                            sim_frequency=self.sim_frequency,
+                            iterations=self.iterations,
+                            soft_contact_margin_m=self.soft_contact_margin_m,
+                            soft_contact_stiffness_n_m=(
+                                self.contact_stiffness_n_m
+                            ),
+                            soft_contact_damping_n_s_m=(
+                                self.contact_damping_n_s_m
+                            ),
+                            element_size_mm=self.element_size_mm,
+                            carrier_contact_stiffness_n_m=(
+                                self.carrier_contact_stiffness_n_m
+                            ),
+                            use_cuda_graph=True,
+                        )
+                    if indenter is None:
+                        raise RuntimeError("parallel indenter was not constructed")
+                    simulation.apply_indenter_pose(indenter, trial.initial_tf)
+                    simulation.collision_pipeline.collide(
+                        simulation.state,
+                        simulation.contacts,
+                    )
+                    if simulation.soft_contact_count(indenter.body_index):
+                        raise RuntimeError(
+                            f"{trial.name} has soft contacts before prescribed motion"
+                        )
+                    if trial.initial_clearance_m is None:
+                        raise ValueError(
+                            "GPU-resident force servo requires initial_clearance_m"
+                        )
+                    simulation.configure_force_servo(
+                        indenter,
+                        initial_tf=trial.initial_tf,
+                        motion_direction_W=trial.motion_direction_W,
+                        approach_speed_m_s=trial.approach_speed_m_s,
+                        force_gain_m_s_n=self.force_gain_m_s_n,
+                        target_forces_n=force_targets_n,
+                        force_tolerances_n=force_tolerances_n,
+                        settle_ticks=settle_ticks,
+                        displacement_tolerance_m=(
+                            self.settle_displacement_tolerance_m
+                        ),
+                    )
+                    worlds.append(
+                        {
+                            "trial": trial,
+                            "simulation": simulation,
+                            "stream": wp.Stream(simulation.fingertip_model.model.device),
+                            "processed": 0,
+                            "finished": False,
+                            "max_steps": int(
+                                trial.max_sim_time_s * self.sim_frequency
+                            ),
+                            "initial_translation": initial_translation_W_m,
+                            "initial_rotation": initial_rotation,
+                            "motion_direction": motion_direction_W,
+                        }
+                    )
+
+                while not all(bool(world["finished"]) for world in worlds):
+                    active = [world for world in worlds if not world["finished"]]
+                    for world in active:
+                        simulation = world["simulation"]
+                        remaining = int(world["max_steps"]) - simulation.step_count
+                        if remaining <= 0:
+                            continue
+                        simulation.launch_force_servo(
+                            min(host_poll_ticks, remaining),
+                            stream=world["stream"],
+                        )
+                    for world in active:
+                        simulation = world["simulation"]
+                        trial = world["trial"]
+                        checkpoint_count, finished, servo_error = (
+                            simulation.force_servo_status(stream=world["stream"])
+                        )
+                        if servo_error:
+                            raise RuntimeError(
+                                f"{trial.name} GPU force servo failed with code "
+                                f"{servo_error}"
+                            )
+                        while int(world["processed"]) < checkpoint_count:
+                            checkpoint_index = int(world["processed"])
+                            if checkpoint_index + 1 == len(force_targets_n):
+                                trial.wall_runtime_s = (
+                                    perf_counter() - batch_start_s
+                                )
+                            self._inspect_graph_checkpoint(
+                                trial,
+                                simulation,
+                                indenter,
+                                checkpoint_index,
+                                world["initial_translation"],
+                                world["initial_rotation"],
+                                world["motion_direction"],
+                                inspect_trial,
+                            )
+                            world["processed"] = checkpoint_index + 1
+                        world["finished"] = finished
+                        if not finished and simulation.step_count >= int(
+                            world["max_steps"]
+                        ):
+                            last_force_n = simulation.force_servo_current_force_n()
+                            missing_index = int(world["processed"])
+                            raise RuntimeError(
+                                f"{trial.name} did not keep "
+                                f"{force_targets_n[missing_index]:g} N within "
+                                f"{force_tolerances_n[missing_index]:g} N for "
+                                f"{self.settle_duration_s:g} s during "
+                                f"{trial.max_sim_time_s:g} s of simulation; last "
+                                f"force was {last_force_n:.9e} N"
+                            )
+                batch_wall_s = perf_counter() - batch_start_s
+                for world in worlds:
+                    world["trial"].wall_runtime_s = batch_wall_s
 
     def run(
         self,
@@ -280,7 +544,17 @@ class DesignStudy:
                 )
             require_positive("force_ramp_rate_n_s", force_ramp_rate_n_s)
         self._has_run = True
+        if self.parallel_world_count > 1:
+            if loading_mode != REFERENCE_DWELL_LOADING:
+                raise ValueError("parallel worlds support reference_dwell only")
+            self._run_parallel_graph(inspect_trial)
+            return
 
+        finalized_models: dict[
+            Path,
+            tuple[FingertipNewtonModel, Indenter],
+        ] = {}
+        runtime_cache: dict[Path, tuple[LumoSimulation, Indenter]] = {}
         for trial in self.trials:
             initial_tf = np.asarray(trial.initial_tf, dtype=np.float64)
             initial_translation_W_m = initial_tf[:3]
@@ -299,26 +573,73 @@ class DesignStudy:
                 ceil(self.settle_duration_s * self.sim_frequency),
             )
 
-            builder = newton.ModelBuilder(gravity=wp.vec3(0.0, 0.0, 0.0))
-            indenter = Indenter.add_urdf(
-                builder,
-                trial.urdf_path,
-                tf=trial.initial_tf,
-                contact_stiffness_n_m=self.contact_stiffness_n_m,
-                contact_damping_n_s_m=self.contact_damping_n_s_m,
-            )
-            simulation = LumoSimulation(
-                self.fingertip,
-                builder=builder,
-                fingertip_mesh=self.fingertip_mesh,
-                sim_frequency=self.sim_frequency,
-                iterations=self.iterations,
-                soft_contact_margin_m=self.soft_contact_margin_m,
-                soft_contact_stiffness_n_m=self.contact_stiffness_n_m,
-                soft_contact_damping_n_s_m=self.contact_damping_n_s_m,
-                element_size_mm=self.element_size_mm,
-                carrier_contact_stiffness_n_m=self.carrier_contact_stiffness_n_m,
-                use_cuda_graph=self.use_cuda_graph,
+            model_key = trial.urdf_path.resolve()
+            cached_runtime = runtime_cache.get(model_key)
+            runtime_was_reset = cached_runtime is not None
+            if cached_runtime is not None:
+                simulation, indenter = cached_runtime
+                builder = None
+                simulation.reset_force_servo(
+                    indenter,
+                    initial_tf=trial.initial_tf,
+                )
+            else:
+                cached = finalized_models.get(model_key)
+                if cached is None:
+                    builder = newton.ModelBuilder(
+                        gravity=wp.vec3(0.0, 0.0, 0.0)
+                    )
+                    indenter = Indenter.add_urdf(
+                        builder,
+                        trial.urdf_path,
+                        tf=trial.initial_tf,
+                        contact_stiffness_n_m=self.contact_stiffness_n_m,
+                        contact_damping_n_s_m=self.contact_damping_n_s_m,
+                    )
+                    simulation = LumoSimulation(
+                        self.fingertip,
+                        builder=builder,
+                        fingertip_mesh=self.fingertip_mesh,
+                        sim_frequency=self.sim_frequency,
+                        iterations=self.iterations,
+                        soft_contact_margin_m=self.soft_contact_margin_m,
+                        soft_contact_stiffness_n_m=self.contact_stiffness_n_m,
+                        soft_contact_damping_n_s_m=self.contact_damping_n_s_m,
+                        element_size_mm=self.element_size_mm,
+                        carrier_contact_stiffness_n_m=(
+                            self.carrier_contact_stiffness_n_m
+                        ),
+                        use_cuda_graph=self.use_cuda_graph,
+                    )
+                    if self.reuse_finalized_models:
+                        finalized_models[model_key] = (
+                            simulation.fingertip_model,
+                            indenter,
+                        )
+                else:
+                    fingertip_model, indenter = cached
+                    builder = None
+                    simulation = LumoSimulation(
+                        self.fingertip,
+                        fingertip_model=fingertip_model,
+                        sim_frequency=self.sim_frequency,
+                        iterations=self.iterations,
+                        soft_contact_margin_m=self.soft_contact_margin_m,
+                        soft_contact_stiffness_n_m=self.contact_stiffness_n_m,
+                        soft_contact_damping_n_s_m=self.contact_damping_n_s_m,
+                        element_size_mm=self.element_size_mm,
+                        carrier_contact_stiffness_n_m=(
+                            self.carrier_contact_stiffness_n_m
+                        ),
+                        use_cuda_graph=self.use_cuda_graph,
+                    )
+                if self.reuse_runtimes:
+                    runtime_cache[model_key] = (simulation, indenter)
+
+            simulation.apply_indenter_pose(indenter, trial.initial_tf)
+            simulation.collision_pipeline.collide(
+                simulation.state,
+                simulation.contacts,
             )
 
             if simulation.soft_contact_count(indenter.body_index):
@@ -326,20 +647,95 @@ class DesignStudy:
                     f"{trial.name} has soft contacts before prescribed motion"
                 )
 
+            force_targets_n = self.force_targets_n or (trial.target_force_n,)
+            force_tolerances_n = tuple(
+                self.force_tolerance_n
+                if self.force_tolerance_n is not None
+                else target_force_n * self.force_tolerance_fraction
+                for target_force_n in force_targets_n
+            )
+            if self.use_cuda_graph:
+                if loading_mode != REFERENCE_DWELL_LOADING:
+                    raise ValueError(
+                        "GPU-resident force servo supports reference_dwell only"
+                    )
+                if trial.initial_clearance_m is None:
+                    raise ValueError(
+                        "GPU-resident force servo requires initial_clearance_m"
+                    )
+                if not runtime_was_reset:
+                    simulation.configure_force_servo(
+                        indenter,
+                        initial_tf=trial.initial_tf,
+                        motion_direction_W=trial.motion_direction_W,
+                        approach_speed_m_s=trial.approach_speed_m_s,
+                        force_gain_m_s_n=self.force_gain_m_s_n,
+                        target_forces_n=force_targets_n,
+                        force_tolerances_n=force_tolerances_n,
+                        settle_ticks=settle_ticks,
+                        displacement_tolerance_m=(
+                            self.settle_displacement_tolerance_m
+                        ),
+                    )
+                processed_checkpoint_count = 0
+                finished = False
+                # Poll every 0.2 physical seconds. Accepted ticks are copied to
+                # device snapshots, so this cadence does not approximate them.
+                host_poll_ticks = max(2, 2 * ceil(0.1 * self.sim_frequency))
+                while simulation.step_count < max_step_count and not finished:
+                    tick_count = min(
+                        host_poll_ticks,
+                        max_step_count - simulation.step_count,
+                    )
+                    checkpoint_count, finished, servo_error = (
+                        simulation.advance_force_servo(tick_count)
+                    )
+                    if servo_error:
+                        raise RuntimeError(
+                            f"{trial.name} GPU force servo failed with code "
+                            f"{servo_error}"
+                        )
+                    while processed_checkpoint_count < checkpoint_count:
+                        checkpoint_index = processed_checkpoint_count
+                        self._inspect_graph_checkpoint(
+                            trial,
+                            simulation,
+                            indenter,
+                            checkpoint_index,
+                            initial_translation_W_m,
+                            initial_rotation,
+                            motion_direction_W,
+                            inspect_trial,
+                        )
+                        processed_checkpoint_count += 1
+
+                if not finished:
+                    last_force_n = simulation.force_servo_current_force_n()
+                    missing_target_n = force_targets_n[
+                        processed_checkpoint_count
+                    ]
+                    missing_tolerance_n = force_tolerances_n[
+                        processed_checkpoint_count
+                    ]
+                    raise RuntimeError(
+                        f"{trial.name} did not keep {missing_target_n:g} N "
+                        f"within {missing_tolerance_n:g} N for "
+                        f"{self.settle_duration_s:g} s during "
+                        f"{trial.max_sim_time_s:g} s of simulation; last "
+                        f"force was {last_force_n:.9e} N"
+                    )
+                del simulation, builder
+                continue
+
             travel_m = 0.0
             reaction_force_n = 0.0
             force_change_n = float("inf")
             previous_force_n = 0.0
             in_tolerance_ticks = 0
             pose = trial.initial_tf
-            force_targets_n = self.force_targets_n or (trial.target_force_n,)
             target_index = 0
             target_force_n = force_targets_n[target_index]
-            force_tolerance_n = (
-                self.force_tolerance_n
-                if self.force_tolerance_n is not None
-                else target_force_n * self.force_tolerance_fraction
-            )
+            force_tolerance_n = force_tolerances_n[target_index]
 
             while simulation.step_count < max_step_count:
                 force_reference_n = target_force_n
@@ -433,11 +829,7 @@ class DesignStudy:
                 if target_index == len(force_targets_n):
                     break
                 target_force_n = force_targets_n[target_index]
-                force_tolerance_n = (
-                    self.force_tolerance_n
-                    if self.force_tolerance_n is not None
-                    else target_force_n * self.force_tolerance_fraction
-                )
+                force_tolerance_n = force_tolerances_n[target_index]
                 in_tolerance_ticks = 0
             else:
                 if loading_mode == QUASISTATIC_RAMP_LOADING:
@@ -461,7 +853,7 @@ class DesignStudy:
                     f"force was {reaction_force_n:.9e} N"
                 )
 
-            del simulation, indenter, builder
+            del simulation, builder
 
 
 __all__ = [

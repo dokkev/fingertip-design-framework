@@ -654,24 +654,63 @@ writes `report.md` and `timing_breakdown.csv` under
 `output/validation/newton_runtime_profile/`. It does not change production
 settings or implement any optimization.
 
-Run the strict direct-versus-partial-CUDA-graph regression:
+Run the historical strict direct-versus-partial-CUDA-graph diagnostic:
 
 ```bash
 conda run --no-capture-output -n lit \
   python -u validation/optomech/cuda_graph_equivalence.py
 ```
 
-The procedure runs one fresh direct reference, one fresh direct repeat, and
-one opt-in graph execution of the same centered 20 mm production mechanics
-scenario. It first tries bitwise equality for the per-tick force trajectory
-and complete checkpoint deformation/contact records. Only an exact PASS may
-publish the speed benchmark. The current validation intentionally exits with
-failure: atomically emitted full-surface contacts make the fresh direct repeat
-itself non-bitwise-reproducible, and graph checkpoint steps do not match the
-direct reference. The diagnostic report, force trajectories, graph DOT files,
-and checkpoint CSV remain under
-`output/validation/cuda_graph_equivalence/`; production therefore keeps direct
-execution as its default.
+This older diagnostic documents why bitwise equality is not a valid gate for
+Newton's atomically emitted full-surface contacts. It is retained as history,
+not as the production activation test.
+
+Run the short GPU-resident force-servo semantics regression:
+
+```bash
+conda run --no-capture-output -n lit \
+  python -u validation/optomech/gpu_servo_semantics.py
+```
+
+Run the Phase 1-B production scientific-equivalence gate:
+
+```bash
+conda run --no-capture-output -n lit \
+  python -u validation/optomech/gpu_servo_graph_equivalence.py
+```
+
+The latter runs direct x5 and GPU-resident graph x5 on the difficult 10 mm
+sphere, `Y=+11/+22 mm` pair with the unchanged four force targets and 5 s
+dwell. It uses the production finite-area source and hard 11-bin observation,
+checks canonical patch IoU, deformation, q-components, limiting optical
+separation, inversion/contact-buffer safety, and reports control host
+interventions plus measured speedup under
+`output/validation/production_evaluator_acceleration/phase1_cuda_graph/`.
+
+Run the Phase 4 fixed-work concurrency benchmark:
+
+```bash
+conda run --no-capture-output -n lit \
+  python -u validation/optomech/gpu_scenario_parallelism.py
+```
+
+This compares 1/2/4/7 independent Newton worlds over the same seven 20 mm
+sphere locations. It records throughput, GPU/CPU utilization, peak VRAM, and
+scientific-equivalence diagnostics under
+`output/validation/production_evaluator_acceleration/phase4_parallel/`.
+
+Run or reload the final accelerated 21-scenario nominal evaluation:
+
+```bash
+conda run --no-capture-output -n lit \
+  python -u validation/optomech/production_evaluator_acceleration.py
+```
+
+The result and campaign-time projection are written to
+`output/validation/production_evaluator_acceleration/report.md`. The accepted
+production backend uses finite-area/hard optics, GPU-resident graphs, the
+validated reuse boundary, four CUDA-stream worlds, and the unchanged 5 s
+force-band dwell.
 
 ## Full-finger optimization search contract
 

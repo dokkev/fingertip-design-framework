@@ -1,6 +1,12 @@
 """Ray-tracing ownership for the new LUMO implementation."""
 
-from .led import LED, emit_from_stem_boundary, source_inside_silicone
+from .led import (
+    LED,
+    emit_from_stem_boundary,
+    emit_from_stem_window,
+    source_inside_silicone,
+    sources_inside_silicone,
+)
 from .observation import (
     LONGITUDINAL_SIDE_BIN_COUNT,
     longitudinal_side_view_observation,
@@ -22,6 +28,7 @@ __all__ = [
     "OptixScene",
     "PathTraceResult",
     "emit_from_stem_boundary",
+    "emit_from_stem_window",
     "interface_transport",
     "lambertian_emission",
     "lambertian_reflection",
@@ -30,5 +37,6 @@ __all__ = [
     "safe_secondary_origins",
     "side_view_observation",
     "source_inside_silicone",
+    "sources_inside_silicone",
     "trace_bounded_paths",
 ]

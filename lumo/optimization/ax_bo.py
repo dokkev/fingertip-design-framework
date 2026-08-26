@@ -973,6 +973,8 @@ def _run_config(campaign: CampaignDefinition) -> dict[str, object]:
             "fingertip_parameters": asdict(campaign.space.parameter_bounds.parameters),
             "mechanics": {
                 "loading_mode": REFERENCE_DWELL_LOADING,
+            "backend": "gpu_resident_graph_runtime_reuse",
+                "direct_reference_available": True,
                 "sim_frequency_hz": evaluator._SIM_FREQUENCY_HZ,
                 "vbd_iterations": evaluator._VBD_ITERATIONS,
                 "force_gain_m_s_n": evaluator._FORCE_GAIN_M_S_N,
@@ -1136,6 +1138,7 @@ def _evaluate_candidate(
             initial_clearance_m=campaign.initial_clearance_m,
             approach_speed_m_s=_APPROACH_SPEED_M_S,
             max_sim_time_s=_MAX_SIM_TIME_S,
+            use_cuda_graph=True,
         )
 
 
@@ -1211,6 +1214,7 @@ def _save_trial_result(
             ),
             actual_forces_n=np.asarray(evaluation.actual_forces_n),
             indentations_m=np.asarray(evaluation.indentations_m),
+            checkpoint_steps=np.asarray(evaluation.checkpoint_steps),
             checkpoint_times_s=np.asarray(evaluation.checkpoint_times_s),
             maximum_particle_speeds_m_s=np.asarray(
                 evaluation.maximum_particle_speeds_m_s
@@ -1231,6 +1235,12 @@ def _save_trial_result(
             ),
             indentation_rates_m_s=np.asarray(evaluation.indentation_rates_m_s),
             servo_errors_n=np.asarray(evaluation.servo_errors_n),
+            settle_window_force_drifts_n=np.asarray(
+                evaluation.settle_window_force_drifts_n
+            ),
+            settle_window_indentation_drifts_m=np.asarray(
+                evaluation.settle_window_indentation_drifts_m
+            ),
             indenter_contact_counts=np.asarray(evaluation.indenter_contact_counts),
             total_contact_counts=np.asarray(evaluation.total_contact_counts),
             contact_buffer_overflow=np.asarray(evaluation.contact_buffer_overflow),
@@ -1252,6 +1262,17 @@ def _save_trial_result(
             ),
             no_contact_optics_runtime_s=np.asarray(
                 evaluation.no_contact_optics_runtime_s
+            ),
+            mechanics_backend=np.asarray(evaluation.mechanics_backend),
+            graph_replay_counts=np.asarray(evaluation.graph_replay_counts),
+            force_servo_host_intervention_counts=np.asarray(
+                evaluation.force_servo_host_intervention_counts
+            ),
+            force_servo_host_sync_counts=np.asarray(
+                evaluation.force_servo_host_sync_counts
+            ),
+            force_servo_average_ticks_per_host_intervention=np.asarray(
+                evaluation.force_servo_average_ticks_per_host_intervention
             ),
             loading_mode=np.asarray(evaluation.loading_mode),
             force_ramp_rate_n_s=np.asarray(
