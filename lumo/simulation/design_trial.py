@@ -18,6 +18,8 @@ from lumo.util.scalar_validation import require_nonnegative, require_positive
 
 
 _DEFAULT_FORCE_GAIN_M_S_N = 1.25e-3
+REFERENCE_DWELL_LOADING = "reference_dwell"
+QUASISTATIC_RAMP_LOADING = "quasistatic_ramp"
 
 
 class DesignTrial:
@@ -85,6 +87,10 @@ class DesignTrial:
         self.reaction_force_n: float | None = None
         self.maximum_particle_speed_m_s: float | None = None
         self.force_change_n: float | None = None
+        self.force_reference_n: float | None = None
+        self.reaction_force_rate_n_s: float | None = None
+        self.indentation_rate_m_s: float | None = None
+        self.servo_error_n: float | None = None
 
 
 class DesignStudy:
@@ -109,6 +115,7 @@ class DesignStudy:
         carrier_contact_stiffness_n_m: float = 1.0e6,
         contact_stiffness_n_m: float | None = None,
         contact_damping_n_s_m: float | None = None,
+        use_cuda_graph: bool = False,
     ) -> None:
         if not isinstance(fingertip, Fingertip):
             raise TypeError("fingertip must be a Fingertip")
@@ -118,7 +125,7 @@ class DesignStudy:
             if fingertip_mesh.fingertip is not fingertip:
                 raise ValueError("fingertip_mesh must belong to the supplied fingertip")
         require_positive("sim_frequency", sim_frequency)
-        require_positive("settle_duration_s", settle_duration_s)
+        require_nonnegative("settle_duration_s", settle_duration_s)
         if settle_displacement_tolerance_m is not None:
             require_nonnegative(
                 "settle_displacement_tolerance_m",
@@ -157,6 +164,8 @@ class DesignStudy:
                 "contact_damping_n_s_m",
                 contact_damping_n_s_m,
             )
+        if not isinstance(use_cuda_graph, bool):
+            raise TypeError("use_cuda_graph must be a bool")
         if (
             isinstance(iterations, bool)
             or not isinstance(iterations, int)
@@ -235,11 +244,14 @@ class DesignStudy:
         self.contact_damping_n_s_m = (
             None if contact_damping_n_s_m is None else float(contact_damping_n_s_m)
         )
+        self.use_cuda_graph = use_cuda_graph
         self._has_run = False
 
     def run(
         self,
         *,
+        loading_mode: str = REFERENCE_DWELL_LOADING,
+        force_ramp_rate_n_s: float | None = None,
         inspect_trial: Callable[
             [DesignTrial, LumoSimulation, Indenter],
             None,
@@ -251,6 +263,22 @@ class DesignStudy:
             raise RuntimeError("design study has already been run")
         if inspect_trial is not None and not callable(inspect_trial):
             raise TypeError("inspect_trial must be callable")
+        if loading_mode not in {REFERENCE_DWELL_LOADING, QUASISTATIC_RAMP_LOADING}:
+            raise ValueError(
+                "loading_mode must be 'reference_dwell' or 'quasistatic_ramp'"
+            )
+        if loading_mode == REFERENCE_DWELL_LOADING:
+            require_positive("settle_duration_s", self.settle_duration_s)
+            if force_ramp_rate_n_s is not None:
+                raise ValueError(
+                    "force_ramp_rate_n_s is only valid for quasistatic_ramp"
+                )
+        else:
+            if force_ramp_rate_n_s is None:
+                raise ValueError(
+                    "quasistatic_ramp requires force_ramp_rate_n_s"
+                )
+            require_positive("force_ramp_rate_n_s", force_ramp_rate_n_s)
         self._has_run = True
 
         for trial in self.trials:
@@ -290,6 +318,7 @@ class DesignStudy:
                 soft_contact_damping_n_s_m=self.contact_damping_n_s_m,
                 element_size_mm=self.element_size_mm,
                 carrier_contact_stiffness_n_m=self.carrier_contact_stiffness_n_m,
+                use_cuda_graph=self.use_cuda_graph,
             )
 
             if simulation.soft_contact_count(indenter.body_index):
@@ -313,9 +342,20 @@ class DesignStudy:
             )
 
             while simulation.step_count < max_step_count:
-                force_error_n = target_force_n - reaction_force_n
+                force_reference_n = target_force_n
+                if loading_mode == QUASISTATIC_RAMP_LOADING:
+                    force_reference_n = min(
+                        force_targets_n[-1],
+                        force_ramp_rate_n_s * simulation.time_s,
+                    )
+                force_error_n = force_reference_n - reaction_force_n
+                minimum_velocity_m_s = (
+                    0.0
+                    if loading_mode == QUASISTATIC_RAMP_LOADING
+                    else -trial.approach_speed_m_s
+                )
                 velocity_m_s = max(
-                    -trial.approach_speed_m_s,
+                    minimum_velocity_m_s,
                     min(
                         trial.approach_speed_m_s,
                         self.force_gain_m_s_n * force_error_n,
@@ -339,24 +379,38 @@ class DesignStudy:
                 )
                 if trial.initial_clearance_m is None and reaction_force_n > 0.0:
                     trial.initial_clearance_m = travel_m
-                force_change_n = abs(reaction_force_n - previous_force_n)
+                signed_force_change_n = reaction_force_n - previous_force_n
+                force_change_n = abs(signed_force_change_n)
+                reaction_force_rate_n_s = (
+                    signed_force_change_n / simulation.time_step_s
+                )
                 previous_force_n = reaction_force_n
 
-                force_is_settled = (
-                    abs(reaction_force_n - target_force_n) <= force_tolerance_n
-                )
-                displacement_is_settled = (
-                    self.settle_displacement_tolerance_m is None
-                    or abs(commanded_displacement_m)
-                    <= self.settle_displacement_tolerance_m
-                )
-                if force_is_settled and displacement_is_settled:
-                    in_tolerance_ticks += 1
+                if loading_mode == QUASISTATIC_RAMP_LOADING:
+                    if reaction_force_n < target_force_n:
+                        continue
+                    if abs(reaction_force_n - target_force_n) > force_tolerance_n:
+                        raise RuntimeError(
+                            f"{trial.name} crossed {target_force_n:g} N at "
+                            f"{reaction_force_n:.9e} N, outside the "
+                            f"+/-{force_tolerance_n:g} N capture tolerance"
+                        )
                 else:
-                    in_tolerance_ticks = 0
+                    force_is_settled = (
+                        abs(reaction_force_n - target_force_n) <= force_tolerance_n
+                    )
+                    displacement_is_settled = (
+                        self.settle_displacement_tolerance_m is None
+                        or abs(commanded_displacement_m)
+                        <= self.settle_displacement_tolerance_m
+                    )
+                    if force_is_settled and displacement_is_settled:
+                        in_tolerance_ticks += 1
+                    else:
+                        in_tolerance_ticks = 0
 
-                if in_tolerance_ticks < settle_ticks:
-                    continue
+                    if in_tolerance_ticks < settle_ticks:
+                        continue
 
                 if trial.initial_clearance_m is None:
                     raise RuntimeError(f"{trial.name} reached force without contact")
@@ -369,6 +423,10 @@ class DesignStudy:
                     simulation.maximum_active_particle_speed_m_s()
                 )
                 trial.force_change_n = force_change_n
+                trial.force_reference_n = force_reference_n
+                trial.reaction_force_rate_n_s = reaction_force_rate_n_s
+                trial.indentation_rate_m_s = velocity_m_s
+                trial.servo_error_n = force_reference_n - reaction_force_n
                 if inspect_trial is not None:
                     inspect_trial(trial, simulation, indenter)
                 target_index += 1
@@ -382,6 +440,13 @@ class DesignStudy:
                 )
                 in_tolerance_ticks = 0
             else:
+                if loading_mode == QUASISTATIC_RAMP_LOADING:
+                    raise RuntimeError(
+                        f"{trial.name} did not cross {target_force_n:g} N "
+                        f"within tolerance during {trial.max_sim_time_s:g} s "
+                        f"of continuous loading; last force was "
+                        f"{reaction_force_n:.9e} N"
+                    )
                 displacement_condition = ""
                 if self.settle_displacement_tolerance_m is not None:
                     displacement_condition = (
@@ -399,4 +464,9 @@ class DesignStudy:
             del simulation, indenter, builder
 
 
-__all__ = ["DesignStudy", "DesignTrial"]
+__all__ = [
+    "DesignStudy",
+    "DesignTrial",
+    "QUASISTATIC_RAMP_LOADING",
+    "REFERENCE_DWELL_LOADING",
+]

@@ -296,6 +296,33 @@ state swap
 advance global step count and time
 ```
 
+`LumoSimulation` also has an explicit, opt-in `use_cuda_graph` execution
+path for this same device work. The first tick remains uncaptured so Newton
+can finish lazy full-surface contact-state and rigid-history allocation. After
+that warm-up, the runtime verifies the fixed contact capacities and captures
+two separate graphs for the state ping-pong directions:
+
+```text
+graph_AB: state_A -> state_B
+graph_BA: state_B -> state_A
+```
+
+Each graph contains the held carrier/bond update, rigid-velocity history copy,
+force clear, collision, the complete fixed-iteration VBD solve, and proxy
+wrench harvest. Indenter pose application, the Python state-reference swap,
+reaction-force projection/readback, force servo, tolerance, and dwell logic
+remain outside the graph. A graph-captured fingertip pose is immutable after
+capture; callers that need to move the whole fingertip must use the direct
+path.
+
+The production full-finger evaluator still uses the direct path. The focused
+CUDA-graph regression found that neither a fresh direct repeat nor direct vs
+graph is bitwise reproducible once atomically emitted full-surface contacts
+begin. The graph checkpoint indices consequently failed the frozen exact gate,
+so the measured speedup is not yet a production contract. Graph execution
+remains opt-in for continued equivalence work rather than becoming a silent
+default.
+
 `LumoSimulation.step()` does not own approach trajectories, force thresholds,
 validation policy, or result reporting. It is the only production API that
 advances Newton state, the global step count, or simulation time.
@@ -511,11 +538,23 @@ multi-LED scene abstraction.
 
 `side_view_observation()` in `observation.py` reduces escaped paths from the one
 current optical-cell LED to one raw four-quadrant response. It keeps only rays
-traveling toward the canonical camera-facing `+Y` side and bins their power by
-the escape origin in the X-Z cross section. Quadrants are ordered upper-right,
-upper-left, lower-left, lower-right around the current analytic silicone
-semiellipse center. This is a directional side-view response, not a camera,
-image, projection plane, pixel model, or optimization score.
+traveling toward `+Y` and bins their power by the escape origin in the X-Z
+cross section. Quadrants are ordered upper-right, upper-left, lower-left,
+lower-right around the current analytic silicone semiellipse center. In the
+full 60 mm finger, `+Y` is an end-facing view because Y is longitudinal; this
+four-bin reducer remains only for the representative single-section studies.
+
+`longitudinal_side_view_observation()` is the full-finger receiver. It selects
+escaped power traveling toward the canonical camera-facing `+X` side and sums
+all simultaneously active LEDs into eleven fixed 5 mm bins over the 55 mm
+active Y range. Thus its image coordinate is longitudinal Y and it does not use
+hidden emitter identity. It is still a directional surface-power observation,
+not a finite camera aperture, projection plane, lens, or pixel model. The
+current production call retains hard histogram bins. The same reducer exposes
+an explicit linear cloud-in-cell option for optical-model validation: power is
+split between neighboring bin centers, end half-bins accumulate into their
+nearest bin, and active-ROI power remains exactly conserved. This option has no
+PSF width or calibrated smoothing parameter.
 
 The scene has no Newton dependency. The optimization evaluator explicitly
 passes each final Newton vertex checkpoint through `update_silicone()`; neither
@@ -539,32 +578,67 @@ Current responsibilities include design parameter bounds, feasibility
 constraints, one concrete sensing evaluation, and pure sensing-objective
 evaluation.
 
-`evaluator.py` owns the production mechanics-to-optics orchestration. It builds
-one `FingertipMesh` and one `OptixScene`, generates deterministic samples and
-traces the undeformed state once, then runs supplied `DesignTrial` scenarios in
-independent Newton runtimes. Each live final vertex state updates the same
-silicone GAS and IAS and is traced with the same emission and bounce samples.
-At each accepted `5, 10, 15, 20 N` checkpoint it immediately records actual
-force, indentation, a four-quadrant response, and a compact scalar energy
-ledger. It then releases the full `PathTraceResult` and escaped-ray arrays
-before Newton continues toward the next target. The returned response array is
-shaped `(scenario, force, quadrant)` and the energy array is shaped
-`(scenario, force, energy field)`, with separate no-contact reference vectors
-plus checkpoint simulation times and per-scenario wall runtime. The fixed
-current mechanics contract is
+`evaluator.py` owns the production mechanics-to-optics orchestration. Its
+`evaluate_full_finger()` entry builds one `Fingertip5LEDMesh` and one
+`OptixScene`, generates deterministic samples and traces the undeformed state
+once for each of the five LEDs, then evaluates the Cartesian product of
+explicit sphere diameters and longitudinal contact-Y locations. Each location
+uses an independent Newton runtime; increasing force checkpoints within that
+scenario reuse the runtime. Each live checkpoint updates the same silicone GAS
+and IAS and is traced with the same emission and bounce samples.
+
+`FullFingerEvaluation` is a raw-data result, not an objective result. It keeps
+per-emitter longitudinal responses shaped `(scenario, force, 5, 11)`,
+per-emitter energy ledgers, and the shared five-emitter no-contact state.
+Simultaneous 11-bin responses are derived by summing the emitter axis and are
+never the sole stored representation. It also persists active-ROI power,
+outside-ROI power, total `+X` visible power, and outside-ROI fractions so every
+state satisfies `sum(11 bins) + outside ROI = total +X visible power` without
+changing transport or adding an objective penalty. Mechanics data includes force,
+indentation, checkpoint time, maximum/mean/RMS/P95 particle speed, kinetic
+energy, force reference, reaction-force rate, indentation rate, servo error,
+contact counts and buffer overflow, minimum
+tet determinant and inversion count, contact centroids, local particle
+indices, barycentric coordinates, reconstructed world contact points, contact
+normals, body contact positions, and deformed silicone vertices. Variable-size
+contact records use one flat array plus explicit `(start, count)` offsets per
+checkpoint. Newton, OptiX, and escaped-ray runtime buffers are still released
+after evaluation.
+
+The fixed current mechanics contract is
 `100 Hz`, `10` VBD iterations, equal `ke=3e4 N/m` endpoints,
 `kd=0.282280175 N s/m`, the proportional force servo, and acceptance after
 force remains within its `+/- 10%` band continuously for `5 s`. The servo uses
 `Kf=2.5e-4 m/(s N)` with a `5 mm/s` trial cap, preserving the validated
 `2.5 um/(N tick)` gain and `50 um/tick` maximum step. Optical transport
-uses `65,536` paths and `24` bounces. This evaluator does not perform
-morphology optimization or combine sensing objectives.
+uses `65,536` paths per LED and `24` bounces. This evaluator does not perform
+morphology optimization. `objective.py` is the pure numerical reduction layer
+between this rich result and Ax.
+
+`DesignStudy.run()` also exposes an explicit `quasistatic_ramp` mode for the
+procedural loading-protocol study. It increases a force reference continuously
+and captures the first actual-force crossing of each checkpoint without
+retracting the kinematic indenter. This mode does not replace
+`reference_dwell`. The full 1/2/4/8 N/s validation found large non-limiting
+optical-response differences from the dwell reference even at the slowest
+ramp, so Ax remains serialized and executed with
+`loading_mode=reference_dwell`.
+
 Each full-finger LED remains on its carrier recess floor. The nominal 0.19 mm
 hardware cavity places air between that source and unloaded silicone even when
 `void_height_mm=0`; transport starts in air and lets OptiX resolve silicone
 entry, carrier reflection, or escape. Loaded Newton geometry may close that
 explicit cavity and change the initial medium without a source epsilon or
 per-state gap adjustment.
+
+`validation/optomech/optical_observation_model_sensitivity.py` replays the
+frozen dwell and ramp vertices without rerunning Newton. It compares the
+production point source and hard bins against linear splatting and a uniform
+finite source over the manufacturer's `1.8 x 1.6 mm` water-clear resin window.
+Finite-area origins and per-ray initial media remain validation-local until the
+source contract is explicitly changed; the production evaluator still uses a
+point source and hard bins. Ballistic transport, ray count, bounce count, and
+`J_obs` are unchanged in this comparison.
 
 `sensing_descriptors()` consumes a state array shaped `(contact states, 4)`.
 For the current single optical cell it forms one scalar intensity response from
@@ -578,13 +652,11 @@ indenter and returns both the per-indenter values and their indenter-wise
 minima. It does not know about LEDs, Newton, OptiX, ray tracing, morphology, or
 objective weights.
 
-`ax_bo.py` owns the sequential multi-objective optimization loop and its two
-separate campaign definitions. The original `continuous` campaign attaches and
-verifies the 13 completed Sobol observations from the sensing trade-off
-validation. The `discrete-05mm` campaign starts a separate Ax state with no
-reused objective values. It fixes `flat_pad_width_mm=30`, exposes the other six
-geometry dimensions as integer half-millimeter steps, and decodes those steps
-to physical millimeters only at the evaluator boundary. The complete physical
+The next full-finger discrete search contract fixes both
+`flat_pad_width_mm=30` and `void_height_mm=0`. It exposes five geometry
+dimensions--flat height, semiellipse height, stem width, stem height, and void
+width--as integer half-millimeter steps. The 0.19 mm LED air cavity remains a
+fixed carrier-recess feature and is not a design variable. The complete physical
 height runs from the carrier top at `+10 mm` to the silicone ellipse tip at
 `-flat_pad_height_mm-semiellipse_height_mm`. `Fingertip.full_height_mm` derives
 that extent from the constructed geometry, and `DesignSpace` authoritatively
@@ -592,79 +664,64 @@ requires it to be at most `30 mm`. Ax equivalently enforces
 `flat_pad_height_step + semiellipse_height_step <= 40`; the existing
 `FingertipGeometry` and `DesignSpace` checks remain the sole owners of nonlinear
 geometry validity.
-`scripts/run_mobo.py` is the user-edited entry point for the discrete campaign.
+`scripts/run_mobo.py` records the intended new full-finger campaign inputs,
+including explicit sphere diameters and longitudinal contact locations.
 It exposes separate viscoelastic and optical presets, physical parameter
 bounds, indenter URDF list, sequential force targets, initial clearance, fixed
-force-band dwell, relative tolerance, output directory, and
-successful-morphology target. The optimizer validates these inputs and records
-them in `run_config.json`; mechanics and optical algorithms remain owned by
-their production modules. `silicone` is the current mechanics preset.
+force-band dwell, relative tolerance, output directory, and cumulative target
+morphology count. Mechanics and optical algorithms remain owned by their
+production modules. `silicone` is the current mechanics preset.
 Optical selection independently exposes the existing Solaris and Dragon Skin
 10 NV low/nominal/high sensitivity presets, without claiming that Solaris uses
-Dragon Skin mechanics. All configured indenters share one initial center pose
-derived from a 20 mm reference indenter and the configured clearance; smaller
-packaged spheres simply approach from farther away. URDF filenames identify
-result groups but do not encode placement dimensions. For these common-pose
-trials, `DesignTrial` records the first positive contact-force travel as the
-clearance so reported indentation excludes object-dependent free approach.
-Callers that already know their geometric clearance can continue supplying it
-directly. The entry script supplies its sibling `optix-toolkit/ShaderUtil/include`
-as the default `OTK_INCLUDE_DIR`; an explicitly exported environment value
-still takes precedence.
+Dragon Skin mechanics. The evaluator pairs each sphere URDF with an explicit
+diameter and places its center one radius plus the configured clearance below
+the undeformed pad. The entry script supplies its sibling
+`optix-toolkit/ShaderUtil/include` as the default `OTK_INCLUDE_DIR`; an
+explicitly exported environment value still takes precedence.
 
-The discrete campaign records both integer steps and decoded millimeters in
-its CSV. Its six snapped continuous-Pareto designs are only ordered design
-seeds: each receives a fresh Newton-to-OptiX evaluation before it becomes an
-observation. No continuous objective is copied. Both campaigns maximize the
-same two independent objectives and request exactly one candidate at a time.
-Every proposed parameterization passes
-through `DesignSpace.is_feasible()` before Newton or OptiX is constructed. An
-invalid proposal is marked abandoned in Ax without a fabricated objective
-value.
-An evaluator failure is preserved as `FAILED` with its reason in the CSV while
-its Ax arm is abandoned, preventing deterministic re-proposal of the same
-failed morphology. It receives no objective value or penalty.
+The previous continuous and six-dimensional discrete Ax campaigns remain
+historical artifacts and cannot be resumed through the production entry point.
+The corrected campaign uses a new output directory, run-config schema, and Ax
+state, so old `J_intensity/J_spatial` observations cannot be attached to the
+five-dimensional full-finger experiment.
 
-Each feasible proposal uses `evaluator.py` for the configured centered
-indenter scenarios and uses `sensing_objective.py` for the indenter-wise
-worst-case objectives. The optimizer does not implement mechanics, optical
-transport, or objective arithmetic. Each successful new trial keeps only the
-compact evaluator arrays in one compressed NPZ; Newton, OptiX, and escaped-ray
-buffers are not retained between candidates.
+`objective.py` owns the frozen production reductions. For every mechanical
+scenario it computes finite 5 N patch formation, reference-area-weighted
+5-to-20 N Lagrangian patch IoU, and progressive stiffening, then defines
+`J_contact` as the minimum scenario-wise geometric mean of those three terms.
+The mean-normal score remains diagnostic only. `J_obs` first sums the LED axis,
+subtracts the no-contact simultaneous field, divides by total emitted power
+five, and takes the minimum 11D Euclidean separation over sphere diameter,
+force, and distinct contact-Y pairs. Contact onset is diagnostic only; force
+variation is not penalized. Both reducers accept saved raw NPZ arrays and know
+nothing about Newton, OptiX, or Ax.
 
-`run_config.json` freezes the scientific contract and scientific-source digest
-before the first proposal. Resume refuses a changed contract or changed
-scientific production source; optimizer-only source changes are recorded
-separately so a persistence bug can be corrected without invalidating completed
-Newton/OptiX observations.
-`ax_state.json`, `trials.csv`, and `pareto.csv` are atomically replaced after
-state transitions. If interruption occurs after an NPZ is written but before
-Ax completion, the `EVALUATED` CSV row lets resume report that saved result to
-Ax without repeating Newton or OptiX. A trial interrupted during evaluation is
-abandoned, so a crash loses at most the currently running morphology. The CLI
-budget is cumulative and counts only successful new BO trials; the 13 attached
-warm starts are excluded.
+The production Ax contract evaluates the exact Cartesian product of sphere
+diameters `5/10/20 mm` and contact Y positions
+`[-22,-11,-5.5,0,5.5,11,22] mm`, with sequential `5/10/15/20 N` checkpoints.
+It maximizes only `J_contact` and `J_obs`, without scalarization or objective
+thresholds. Trial NPZ files retain raw mechanics, optical responses, component
+scores, limiting conditions, same-force separation matrices, onset and ROI
+diagnostics. The nominal end-to-end freeze validation passed before this Ax
+execution gate was enabled; no campaign was launched by that validation.
 
-```text
-13 completed Sobol observations
-        ↓ attach to Ax
-Ax multi-objective MBM, max_trials=1
-        ↓
-analytic DesignSpace feasibility
-        ↓ valid
-production evaluator: configured centered indenter scenarios
-        ↓
-indenter-wise J_intensity and J_spatial
-        ↓
-compressed raw NPZ → CSV → complete Ax → atomic Ax state + Pareto CSV
-```
+`validation/optomech/objective_prototype.py` is the read-only numerical
+prototype for those equations. It reconstructs a Lagrangian contact patch from
+the saved vertex/edge/triangle Newton records, evaluates the proposed contact
+components, and evaluates force-conditioned contact-location separation using
+the simultaneous +X 11-bin longitudinal response. `J_obs` is the worst
+same-force location separation. Contact-onset distance and within-location
+force variation remain diagnostics because QDD proprioception owns contact
+detection and force magnitude. Old +Y Q and labeled per-emitter responses are
+diagnostic only. The script does not register an objective or call Newton,
+OptiX, or Ax.
 
-The discrete campaign follows the same persistence and evaluator flow, but its
-initialization begins with freshly evaluated snapped design seeds instead of
-completed warm-start observations. Its `run_config.json` additionally freezes
-the 0.5 mm resolution, integer step bounds, decoded physical bounds, fixed pad
-width, and step-space full-height constraint. Continuous and discrete campaigns
-use different output directories and cannot share Ax state or observations.
+`validation/optomech/full_finger_spatial_observation.py` is the transitional
+optical-only reprojection for the saved pre-camera-axis nominal artifact. It
+reuses its Newton vertex checkpoints, applies the production 65,536-ray,
+24-bounce samples, verifies the saved energy ledgers are unchanged, and stores
+the +X per-emitter 5x11 responses. It does not run Newton. New calls to
+`evaluate_full_finger()` already produce this spatial representation directly.
 
 ### `lumo/util/`
 

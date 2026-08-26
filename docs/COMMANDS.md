@@ -535,59 +535,148 @@ preflight, using the same typed execution YAML as production. Do not use it as
 a substitute for a reviewed production campaign, and do not run it as part of
 ordinary focused test execution.
 
-## Sequential Ax sensing BO
+## Full-finger raw evaluator
 
-Create the campaign and run one new sequential multi-objective BO evaluation as
-the end-to-end smoke test. The existing 13-row Sobol warm start is attached and
-verified without Newton/OptiX re-evaluation:
+Validate the new production Newton-to-OptiX path on one nominal morphology:
 
 ```bash
 OPTIX_INCLUDE_DIR=/path/to/NVIDIA-OptiX-SDK-9.1.0/include \
 OTK_INCLUDE_DIR=/path/to/optix-toolkit/ShaderUtil/include \
 conda run --no-capture-output -n lit \
-  python -u -m lumo.optimization.ax_bo \
-  --campaign continuous \
-  --target-bo-trials 1 \
-  --output output/optimization/mobo
+  python -u validation/optomech/full_finger_raw_evaluator.py
 ```
 
-The command uses the installed Ax multi-objective MBM and requests one candidate
-at a time. A feasible candidate runs the unchanged production evaluator for
-centered 5, 10, and 20 mm spheres at sequential 5, 10, 15, and 20 N checkpoints.
-Both `J_intensity` and `J_spatial` are maximized without scalarization.
-Analytically invalid candidates are recorded and abandoned before GPU
-evaluation.
+The procedural validation builds the full 60 mm mesh once, traces all five LEDs
+once without contact, and evaluates one 15 mm sphere at `Y=0`, `+5.5`, and
+`+22 mm` with sequential `5`, `10`, `15`, and `20 N` checkpoints under the
+production `5 s` dwell and `+/- 10%` force band. It stores per-emitter
+5x11 longitudinal-response/energy data, deformation snapshots, raw contacts, and mechanics
+diagnostics in
+`output/validation/full_finger_raw_evaluator/nominal_full_finger_raw.npz`.
+It then reloads that NPZ without Newton or OptiX and reconstructs the combined
+11-bin response, contact centroids, minimum `det(F)`, inversion counts, and
+energy closure.
 
-If the smoke passes, continue the same checkpoint to the cumulative 120-new-
-trial target:
+Reproject the existing pre-`+X` nominal artifact without rerunning Newton:
 
 ```bash
-OPTIX_INCLUDE_DIR=/path/to/NVIDIA-OptiX-SDK-9.1.0/include \
-OTK_INCLUDE_DIR=/path/to/optix-toolkit/ShaderUtil/include \
 conda run --no-capture-output -n lit \
-  python -u -m lumo.optimization.ax_bo \
-  --campaign continuous \
-  --target-bo-trials 120 \
-  --output output/optimization/mobo
+  python -u validation/optomech/full_finger_spatial_observation.py
 ```
 
-An existing complete campaign directory resumes automatically. Thus a future
-`--target-bo-trials 200` continues with trial 121 rather than adding 200 more or
-repeating completed morphologies. The 13 warm-start observations never count
-toward this target.
+This runs only the fixed optical trace and writes
+`output/validation/full_finger_spatial_observation/spatial_response.npz`.
 
-The directory contains `run_config.json`, atomically replaced `ax_state.json`,
-`trials.csv`, `pareto.csv`, one compact `trials/trial_NNNN.npz` per successful
-new trial, plots, and `run_summary.json`. Resume rejects changed scientific
-settings or changed production source instead of mixing incompatible results.
-Use `--target-bo-trials 0` only for a warm-start creation/resume check in a
-separate empty output directory.
+Compute the read-only `J_contact` and `J_obs` candidates and component plots
+from that saved artifact:
 
-### Discrete 0.5 mm campaign
+```bash
+conda run --no-capture-output -n lit \
+  python -u validation/optomech/objective_prototype.py
+```
 
-Before creating a corrected discrete campaign, validate the complete physical
-30 mm height envelope, integer encoding, Sobol/MBM proposals, and reusable
-historical observations without running Newton or OptiX:
+The script writes contact components, diagnostic contact-onset distances, all
+same-force location distances, force-trajectory diagnostics, summary CSV/NPZ data, plots,
+and `j_obs_force_conditioned_report.md` under
+`output/validation/full_finger_objective_prototype/`. It performs no
+Newton/OptiX run and does not register either candidate objective with Ax.
+
+Run the production objective, LED-permutation, ROI-accounting, five-dimensional
+schema, and serialized-contract checks with:
+
+```bash
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 conda run --no-capture-output -n lit \
+  pytest -q \
+    tests/unit/optimization/test_full_finger_objective.py \
+    tests/unit/optimization/test_height_constraint.py
+```
+
+Run the expensive nominal production objective freeze validation with:
+
+```bash
+conda run --no-capture-output -n lit \
+  python -u validation/optomech/full_finger_production_objective_freeze.py
+```
+
+It evaluates 3 sphere diameters x 7 longitudinal locations x 4 force
+checkpoints, writes the complete raw NPZ and report under
+`output/validation/full_finger_production_objective_freeze/`, reloads the NPZ,
+and verifies mechanics integrity, energy/ROI accounting, LED-order invariance,
+and exact objective reproduction. The nominal frozen result is
+`J_contact=0.430140029` and `J_obs=0.002798493`; the run does not create Ax
+state or start a campaign.
+
+Run the continuous force-ramp protocol comparison against that frozen raw
+reference with:
+
+```bash
+OTK_INCLUDE_DIR=/home/dk/workspace/optix-toolkit/ShaderUtil/include \
+  conda run --no-capture-output -n lit \
+  python -u validation/optomech/quasistatic_ramp_protocol.py
+```
+
+The procedure evaluates the exact 21-scenario production set at 1, 2, 4, and
+8 N/s, capturing first actual-force crossings at 5/10/15/20 N. It writes one
+raw NPZ per ramp, a 336-row checkpoint comparison, a protocol summary, and
+`report.md` under `output/validation/quasistatic_ramp_protocol/`. Completed
+NPZ files are reused on rerun. The measured ramps did not preserve the frozen
+raw optical separations, so this command is validation-only and the Ax entry
+point continues to use `reference_dwell`.
+
+Compare point/finite-area LED emission and hard/linear longitudinal binning
+without rerunning Newton:
+
+```bash
+OTK_INCLUDE_DIR=/home/dk/workspace/optix-toolkit/ShaderUtil/include \
+  conda run --no-capture-output -n lit \
+  python -u validation/optomech/optical_observation_model_sensitivity.py
+```
+
+The procedure replays the frozen dwell and four ramp NPZ deformation sets with
+common deterministic optical samples. It traces each source model once per
+state, derives hard and linear observations from the same escaped rays, and
+writes CSV/NPZ results, a comparison plot, and `report.md` under
+`output/validation/optical_observation_model_sensitivity/`. The finite source
+uses the LuckyLight package drawing's `1.8 x 1.6 mm` water-clear resin window;
+it is an optical validation choice, not the production source default.
+
+Profile one exact frozen Newton scenario without OptiX or physics changes:
+
+```bash
+conda run --no-capture-output -n lit \
+  python -u validation/optomech/newton_runtime_profile.py
+```
+
+The procedure runs the nominal 20 mm sphere at `Y=0` through the production
+5/10/15/20 N, 5 s dwell protocol twice for cold/warm comparison. It combines
+wall timers, sampled CUDA events, and one 20-step Warp activity window, then
+writes `report.md` and `timing_breakdown.csv` under
+`output/validation/newton_runtime_profile/`. It does not change production
+settings or implement any optimization.
+
+Run the strict direct-versus-partial-CUDA-graph regression:
+
+```bash
+conda run --no-capture-output -n lit \
+  python -u validation/optomech/cuda_graph_equivalence.py
+```
+
+The procedure runs one fresh direct reference, one fresh direct repeat, and
+one opt-in graph execution of the same centered 20 mm production mechanics
+scenario. It first tries bitwise equality for the per-tick force trajectory
+and complete checkpoint deformation/contact records. Only an exact PASS may
+publish the speed benchmark. The current validation intentionally exits with
+failure: atomically emitted full-surface contacts make the fresh direct repeat
+itself non-bitwise-reproducible, and graph checkpoint steps do not match the
+direct reference. The diagnostic report, force trajectories, graph DOT files,
+and checkpoint CSV remain under
+`output/validation/cuda_graph_equivalence/`; production therefore keeps direct
+execution as its default.
+
+## Full-finger optimization search contract
+
+Validate the 30 mm height envelope and the five-dimensional half-millimeter Ax
+encoding without running Newton or OptiX:
 
 ```bash
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 conda run --no-capture-output -n lit \
@@ -599,55 +688,23 @@ conda run --no-capture-output -n lit \
 
 The report is written to
 `output/optimization/corrected_height_constraint_validation.md`. The procedure
-reads but does not modify the old Dragon Skin or Solaris Ax campaign states and
-does not start a corrected production campaign.
+does not modify historical Dragon Skin or Solaris campaigns. The active search
+definition fixes `flat_pad_width_mm=30` and `void_height_mm=0`; it optimizes the
+remaining five geometry values on a 0.5 mm lattice.
 
-Create the independent integer-lattice campaign and run one fresh evaluation
-as its save/resume smoke test:
-
-```bash
-OPTIX_INCLUDE_DIR=/path/to/NVIDIA-OptiX-SDK-9.1.0/include \
-OTK_INCLUDE_DIR=/path/to/optix-toolkit/ShaderUtil/include \
-conda run --no-capture-output -n lit \
-  python -u -m lumo.optimization.ax_bo \
-  --campaign discrete-05mm \
-  --target-bo-trials 1 \
-  --output output/optimization/mobo_discrete_05mm
-```
-
-On a fresh directory the command first prints the Ax integer search space and
-checks deterministic candidate probes for exact 0.5 mm decoding, fixed
-`flat_pad_width_mm=30`, varied `stem_height_mm`, and the step-space full-height
-constraint derived from the complete 30 mm fingertip height. Snapped
-continuous-Pareto geometries are then evaluated as new
-observations; their old objectives are never attached. Resume is cumulative:
+`scripts/run_mobo.py` is the production campaign entry point. Review its user
+settings, choose a fresh output directory, then run:
 
 ```bash
-OPTIX_INCLUDE_DIR=/path/to/NVIDIA-OptiX-SDK-9.1.0/include \
-conda run --no-capture-output -n lit \
-  python -u scripts/run_mobo.py
+conda run --no-capture-output -n lit python -u scripts/run_mobo.py
 ```
 
-`scripts/run_mobo.py` resolves the default OTK include directory from the
-sibling `optix-toolkit` checkout. Export `OTK_INCLUDE_DIR` only to override that
-default.
-
-The script writes and resumes only
-`output/optimization/mobo_discrete_05mm_clean`; the earlier interrupted
-campaign remains untouched. Edit the user-settings block at the top of
-`scripts/run_mobo.py` to select viscoelastic and optical presets or change the
-0.5 mm physical bounds, packaged indenter URDFs, initial clearance, sequential
-force targets, settle duration, relative force tolerance, or
-successful-morphology target. The current mechanics preset is `silicone`.
-Optical choices are `solaris_low`, `solaris_nominal`,
-`solaris_high`, `dragon_skin_10_nv_low`, `dragon_skin_10_nv_nominal`, and
-`dragon_skin_10_nv_high`. All listed indenters use the same initial center pose
-based on a 20 mm reference indenter, so the filename does not need to encode a
-diameter. Changing scientific settings requires a new empty output directory;
-resume rejects a settings mismatch.
-
-Do not point the discrete command at `output/optimization/mobo`; its Ax state
-and observations belong only to the continuous campaign.
+The campaign is sequential and resumable. It uses only the five-dimensional
+`discrete-05mm` search space and the exact objectives `J_contact,J_obs`.
+Historical continuous `J_intensity/J_spatial` campaigns are rejected and must
+not share the new output directory. The command above is documented for a
+separate explicitly authorized campaign run; the objective-freeze validation
+did not launch it.
 
 ## Representative scientific convergence harness
 

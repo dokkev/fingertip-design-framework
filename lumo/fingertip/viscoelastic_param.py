@@ -15,6 +15,22 @@ class ViscoelasticParameters:
     k_mu_pa: float = 1.06e5
     k_lambda_pa: float = 1.0494e7
     damping: float = 10.0
+    
+    # dragon_skin_10nv_datasheet
+    #     density = 1070 kg/m^3
+    #     k_mu    = 106376 Pa
+    #     nu      = existing silicone nu
+    #     k_lambda = derived from k_mu and existing nu
+    #     k_damp  = existing silicone k_damp
+
+    # solaris_datasheet
+    #     density = 990 kg/m^3
+    #     k_mu    = 98497 Pa
+    #     nu      = existing silicone nu
+    #     k_lambda = derived from k_mu and existing nu
+    #     k_damp  = existing silicone k_damp
+    
+    
 
     def __post_init__(self) -> None:
         error_type = InvalidFingertipParameters

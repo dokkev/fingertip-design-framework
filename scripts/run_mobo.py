@@ -21,24 +21,24 @@ PARAMETER_BOUNDS_MM = {
     "stem_width_mm": (4.0, 15.0),
     "stem_height_mm": (2.0, 15.0),
     "void_width_mm": (0.0, 4.0),
-    "void_height_mm": (0.0, 5.0),
 }
-# Packaged URDFs share one initial pose based on a 20 mm reference indenter.
 INDENTER_URDFS = (
+    "sphere_5mm.urdf",
     "sphere_10mm.urdf",
-    "sphere_15mm.urdf",
     "sphere_20mm.urdf",
 )
+SPHERE_DIAMETERS_MM = (5.0, 10.0, 20.0)
+CONTACT_Y_MM = (-22.0, -11.0, -5.5, 0.0, 5.5, 11.0, 22.0)
 INITIAL_CLEARANCE_M = 1.0e-3
-FORCE_TARGETS_N = (10.0, 15.0, 20.0)
-SETTLE_DURATION_S = 3.0
-FORCE_TOLERANCE_FRACTION = 0.20  # ±this fraction of each force target
+FORCE_TARGETS_N = (5.0, 10.0, 15.0, 20.0)
+SETTLE_DURATION_S = 5.0
+FORCE_TOLERANCE_FRACTION = 0.10  # ±this fraction of each force target
 TARGET_MORPHOLOGIES = 120
 OUTPUT_DIRECTORY = (
     Path(__file__).resolve().parents[1]
     / "output"
     / "optimization"
-    / "mobo_discrete_05mm_solaris_nominal"
+    / "mobo_full_finger_05mm"
 )
 
 
@@ -52,6 +52,8 @@ def main() -> None:
         optical_preset=OPTICAL_PRESET,
         parameter_bounds_mm=PARAMETER_BOUNDS_MM,
         indenter_urdfs=INDENTER_URDFS,
+        sphere_diameters_mm=SPHERE_DIAMETERS_MM,
+        contact_y_mm=CONTACT_Y_MM,
         initial_clearance_m=INITIAL_CLEARANCE_M,
         force_targets_n=FORCE_TARGETS_N,
         settle_duration_s=SETTLE_DURATION_S,

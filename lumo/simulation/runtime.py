@@ -84,6 +84,7 @@ class LumoSimulation:
         carrier_contact_stiffness_n_m: float = (
             _DEFAULT_CARRIER_CONTACT_STIFFNESS_N_M
         ),
+        use_cuda_graph: bool = False,
     ) -> None:
         if not isinstance(fingertip, Fingertip):
             raise TypeError("fingertip must be a Fingertip")
@@ -125,6 +126,8 @@ class LumoSimulation:
             "carrier_contact_stiffness_n_m",
             carrier_contact_stiffness_n_m,
         )
+        if not isinstance(use_cuda_graph, bool):
+            raise TypeError("use_cuda_graph must be a bool")
 
         self.fingertip = fingertip
         self.fingertip_mesh = (
@@ -165,8 +168,10 @@ class LumoSimulation:
             enable_rigid_soft_full_surface_contact=True,
         )
         self.contacts = self.collision_pipeline.contacts()
-        self.state = model.state()
-        self._next_state = model.state()
+        self._state_a = model.state()
+        self._state_b = model.state()
+        self.state = self._state_a
+        self._next_state = self._state_b
         self.control = model.control()
         if self.state.body_qd is None:
             raise RuntimeError("simulation state has no rigid-body velocities")
@@ -196,11 +201,21 @@ class LumoSimulation:
             dtype=wp.int32,
             device=model.device,
         )
+        if use_cuda_graph and not model.device.is_cuda:
+            raise ValueError("use_cuda_graph requires a CUDA Newton model")
+        self._use_cuda_graph = use_cuda_graph
+        self._step_graph_ab: wp.Graph | None = None
+        self._step_graph_ba: wp.Graph | None = None
+        self._cuda_graph_replay_count = 0
         self._has_step_result = False
         self.collision_pipeline.collide(self.state, self.contacts)
 
     def set_fingertip_pose(self, pose: wp.transform) -> None:
         """Set the fingertip pose held across subsequent simulation ticks."""
+        if self._step_graph_ab is not None:
+            raise RuntimeError(
+                "the fingertip pose cannot change after CUDA graph capture"
+            )
         self._fingertip_pose = pose
 
     def silicone_vertices(self) -> np.ndarray:
@@ -256,28 +271,31 @@ class LumoSimulation:
             )
         )
 
-    def step(self) -> None:
-        """Advance one global tick and record its rigid-body wrenches."""
+    def _launch_step_device_operations(
+        self,
+        state_in: newton.State,
+        state_out: newton.State,
+    ) -> None:
+        """Launch the fixed device work for one Newton tick."""
         self.fingertip_model.prepare_step(
-            self.state,
-            self._next_state,
+            state_in,
+            state_out,
             self._fingertip_pose,
         )
-        if self.state.body_qd is None:
+        if state_in.body_qd is None:
             raise RuntimeError("simulation state has no rigid-body velocities")
-        wp.copy(self._body_qd_before, self.state.body_qd)
-        state_before = self.state
+        wp.copy(self._body_qd_before, state_in.body_qd)
         self.solver.coupling_notify_input_state_update(
-            self.state,
+            state_in,
             newton.StateFlags.BODY_Q,
             dt=self.time_step_s,
         )
 
-        self.state.clear_forces()
-        self.collision_pipeline.collide(self.state, self.contacts)
+        state_in.clear_forces()
+        self.collision_pipeline.collide(state_in, self.contacts)
         self.solver.step(
-            self.state,
-            self._next_state,
+            state_in,
+            state_out,
             self.control,
             self.contacts,
             self.time_step_s,
@@ -287,15 +305,107 @@ class LumoSimulation:
             self._body_to_wrench,
             self._body_wrenches,
             body_qd_before=self._body_qd_before,
-            state=state_before,
-            state_out=self._next_state,
+            state=state_in,
+            state_out=state_out,
             contacts=self.contacts,
             dt=self.time_step_s,
         )
+
+    def _validate_cuda_graph_capture_ready(self) -> None:
+        """Verify that Newton's lazily sized contact storage is fixed."""
+        soft_capacity = self.contacts.soft_contact_max
+        if self.solver.body_particle_contact_penalty_k.shape[0] < soft_capacity:
+            raise RuntimeError(
+                "uncaptured warm-up did not size the body-particle contact state"
+            )
+
+        rigid_capacity = self.contacts.rigid_contact_max
+        if self.solver.body_body_contact_penalty_k.shape[0] < rigid_capacity:
+            raise RuntimeError(
+                "uncaptured warm-up did not size the body-body contact state"
+            )
+        if self.solver.rigid_contact_history:
+            contact_history = self.solver._prev_contact_lambda
+            if (
+                contact_history is None
+                or contact_history.shape[0] < rigid_capacity
+            ):
+                raise RuntimeError(
+                    "uncaptured warm-up did not size rigid contact history"
+                )
+
+    def _cuda_graph_contact_allocation_signature(self) -> tuple[int, ...]:
+        """Return pointers for Newton contact storage captured by the graphs."""
+        arrays = (
+            self.solver.body_particle_contact_penalty_k,
+            self.solver.body_particle_contact_material_ke,
+            self.solver.body_particle_contact_material_kd,
+            self.solver.body_particle_contact_material_mu,
+            self.solver.body_body_contact_penalty_k,
+            self.solver.body_body_contact_material_ke,
+            self.solver.body_body_contact_material_kd,
+            self.solver.body_body_contact_material_mu,
+            self.solver.body_body_contact_lambda,
+            self.solver.body_body_contact_C0,
+            self.solver._prev_contact_lambda,
+            self.solver._prev_contact_penalty_k,
+            self.solver._prev_contact_normal,
+        )
+        pointers = []
+        for array in arrays:
+            if array is None or array.shape[0] == 0:
+                pointers.append(0)
+            elif array.ptr == 0:
+                raise RuntimeError(
+                    "uncaptured warm-up left contact storage unallocated"
+                )
+            else:
+                pointers.append(int(array.ptr))
+        return tuple(pointers)
+
+    def _capture_step_graphs(self) -> None:
+        """Capture the two fixed ping-pong Newton step graphs."""
+        wp.synchronize_device(self.fingertip_model.model.device)
+        self._validate_cuda_graph_capture_ready()
+        allocation_signature = self._cuda_graph_contact_allocation_signature()
+
+        with wp.ScopedCapture(
+            device=self.fingertip_model.model.device,
+            capture_mode=wp.CaptureMode.THREAD_LOCAL,
+        ) as capture_ab:
+            self._launch_step_device_operations(self._state_a, self._state_b)
+        self._step_graph_ab = capture_ab.graph
+        if allocation_signature != self._cuda_graph_contact_allocation_signature():
+            raise RuntimeError("graph_AB capture replaced Newton contact storage")
+
+        with wp.ScopedCapture(
+            device=self.fingertip_model.model.device,
+            capture_mode=wp.CaptureMode.THREAD_LOCAL,
+        ) as capture_ba:
+            self._launch_step_device_operations(self._state_b, self._state_a)
+        self._step_graph_ba = capture_ba.graph
+        if allocation_signature != self._cuda_graph_contact_allocation_signature():
+            raise RuntimeError("graph_BA capture replaced Newton contact storage")
+
+    def step(self) -> None:
+        """Advance one global tick and record its rigid-body wrenches."""
+        if self._step_graph_ab is None:
+            self._launch_step_device_operations(self.state, self._next_state)
+        elif self.state is self._state_a and self._next_state is self._state_b:
+            wp.capture_launch(self._step_graph_ab)
+            self._cuda_graph_replay_count += 1
+        elif self.state is self._state_b and self._next_state is self._state_a:
+            wp.capture_launch(self._step_graph_ba)
+            self._cuda_graph_replay_count += 1
+        else:
+            raise RuntimeError("simulation state buffers no longer form A/B pairs")
+
         self.state, self._next_state = self._next_state, self.state
         self.step_count += 1
         self.time_s = self.step_count * self.time_step_s
         self._has_step_result = True
+        if self._use_cuda_graph and self._step_graph_ab is None:
+            self._capture_step_graphs()
 
     def indenter_reaction_force(
         self,

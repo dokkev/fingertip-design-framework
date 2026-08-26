@@ -8,9 +8,13 @@ import pytest
 
 from lumo.fingertip import Fingertip, FingertipParameters
 from lumo.optimization.ax_bo import (
+    _DEFAULT_CONTACT_Y_MM,
     _DISCRETE_MAX_PAD_DEPTH_STEPS,
+    _OBJECTIVE_NAMES,
     _campaign_definition,
     _decode_ax_parameters,
+    _new_client,
+    _run_config,
     _validate_campaign_parameters,
 )
 from lumo.optimization.design_space import MAX_FINGERTIP_HEIGHT_MM
@@ -22,7 +26,6 @@ _PRODUCTION_BOUNDS_MM = {
     "stem_width_mm": (4.0, 15.0),
     "stem_height_mm": (2.0, 15.0),
     "void_width_mm": (0.0, 4.0),
-    "void_height_mm": (0.0, 5.0),
 }
 
 
@@ -55,6 +58,64 @@ def _campaign():
     )
 
 
+def test_full_finger_campaign_is_five_dimensional() -> None:
+    campaign = _campaign()
+
+    assert campaign.space.variable_names == (
+        "geometry.flat_pad_height_mm",
+        "geometry.semiellipse_height_mm",
+        "geometry.stem_width_mm",
+        "geometry.stem_height_mm",
+        "geometry.void_width_mm",
+    )
+    assert dict(campaign.fixed_geometry) == {
+        "geometry.flat_pad_width_mm": 30.0,
+        "geometry.void_height_mm": 0.0,
+    }
+    geometry = campaign.space.parameter_bounds.parameters.geometry
+    assert geometry.flat_pad_width_mm == 30.0
+    assert geometry.void_height_mm == 0.0
+
+
+def test_production_scientific_contract_is_explicitly_serialized() -> None:
+    campaign = _campaign()
+    config = _run_config(campaign)["scientific_contract"]
+
+    assert campaign.contact_y_mm == (
+        -22.0,
+        -11.0,
+        -5.5,
+        0.0,
+        5.5,
+        11.0,
+        22.0,
+    )
+    assert campaign.contact_y_mm == _DEFAULT_CONTACT_Y_MM
+    assert config["scenarios"]["contact_y_mm"] == list(campaign.contact_y_mm)
+    assert config["mechanics"]["force_targets_n"] == [5.0, 10.0, 15.0, 20.0]
+    assert config["mechanics"]["loading_mode"] == "reference_dwell"
+    assert config["mechanics"]["sim_frequency_hz"] == 100.0
+    assert config["mechanics"]["vbd_iterations"] == 10
+    assert config["mechanics"]["fixed_servo_dwell_s"] == 5.0
+    assert config["mechanics"]["force_tolerance_fraction"] == 0.1
+    assert config["optics"]["led_centers_y_mm"] == [-22.0, -11.0, 0.0, 11.0, 22.0]
+    assert config["optics"]["observation_view_direction"] == "+X"
+    assert config["optics"]["spatial_roi_y_mm"] == [-27.5, 27.5]
+    assert config["optics"]["spatial_bin_count"] == 11
+    assert config["optics"]["spatial_bin_width_mm"] == 5.0
+    assert config["design_space"]["fixed"]["geometry.void_height_mm"] == 0.0
+    assert config["design_space"]["full_fingertip_height_max_mm"] == 30.0
+    assert tuple(config["objectives"]["names"]) == _OBJECTIVE_NAMES
+
+
+def test_ax_uses_only_the_frozen_full_finger_objectives() -> None:
+    optimization = _new_client(_campaign())._experiment.optimization_config
+
+    assert optimization.objective.metric_names == ["J_contact", "J_obs"]
+    assert optimization.objective.expression == "J_contact, J_obs"
+    assert optimization.objective_thresholds == []
+
+
 def _candidate(
     flat_height_mm: float,
     ellipse_height_mm: float,
@@ -62,7 +123,6 @@ def _candidate(
     stem_width_mm: float = 8.0,
     stem_height_mm: float = 4.0,
     void_width_mm: float = 0.0,
-    void_height_mm: float = 0.0,
 ) -> dict[str, float]:
     return {
         "geometry.flat_pad_height_mm": flat_height_mm,
@@ -70,7 +130,6 @@ def _candidate(
         "geometry.stem_width_mm": stem_width_mm,
         "geometry.stem_height_mm": stem_height_mm,
         "geometry.void_width_mm": void_width_mm,
-        "geometry.void_height_mm": void_height_mm,
     }
 
 
@@ -108,7 +167,6 @@ def test_physical_height_boundary_and_historical_designs() -> None:
         stem_width_mm=7.0,
         stem_height_mm=4.0,
         void_width_mm=3.0,
-        void_height_mm=5.0,
     )
     solaris_107 = _candidate(
         20.0,
@@ -116,7 +174,6 @@ def test_physical_height_boundary_and_historical_designs() -> None:
         stem_width_mm=13.0,
         stem_height_mm=2.5,
         void_width_mm=0.5,
-        void_height_mm=4.5,
     )
     assert not campaign.space.is_feasible(dragon_123)
     assert not campaign.space.is_feasible(solaris_107)
@@ -157,7 +214,6 @@ def test_encoded_boundary_is_accepted_and_next_step_is_rejected() -> None:
         "stem_width_step": 16,
         "stem_height_step": 8,
         "void_width_step": 0,
-        "void_height_step": 0,
     }
     parameters = _decode_ax_parameters(campaign, boundary)
     _validate_campaign_parameters(campaign, boundary, parameters)
@@ -191,7 +247,6 @@ def test_encoded_half_millimetre_boundary_examples(
         "stem_width_step": 16,
         "stem_height_step": 8,
         "void_width_step": 0,
-        "void_height_step": 0,
     }
     parameters = _decode_ax_parameters(campaign, raw_parameters)
 

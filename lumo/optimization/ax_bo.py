@@ -1,4 +1,4 @@
-"""Sequential Ax optimization of the current LUMO sensing objectives."""
+"""Ax campaign definitions for LUMO morphology optimization."""
 
 from __future__ import annotations
 
@@ -50,7 +50,6 @@ _DISCRETE_STEP_TO_PHYSICAL_NAMES = (
     ("stem_width_step", "geometry.stem_width_mm"),
     ("stem_height_step", "geometry.stem_height_mm"),
     ("void_width_step", "geometry.void_width_mm"),
-    ("void_height_step", "geometry.void_height_mm"),
 )
 _DISCRETE_RESOLUTION_MM = 0.5
 _DISCRETE_FIXED_FLAT_PAD_WIDTH_MM = 30.0
@@ -65,29 +64,29 @@ _DEFAULT_DISCRETE_PARAMETER_BOUNDS_MM = {
     "geometry.stem_width_mm": (6.0, 10.0),
     "geometry.stem_height_mm": (4.0, 10.0),
     "geometry.void_width_mm": (0.0, 4.0),
-    "geometry.void_height_mm": (0.0, 5.0),
 }
 _DISCRETE_SEED_STEPS = (
-    ("continuous_pareto_0116", (13, 40, 16, 12, 0, 6)),
-    ("continuous_pareto_0164", (16, 24, 14, 12, 0, 6)),
-    ("continuous_pareto_0226", (16, 40, 16, 12, 0, 6)),
-    ("continuous_pareto_0251", (16, 40, 14, 12, 0, 6)),
-    ("continuous_pareto_0271", (16, 36, 14, 12, 0, 6)),
-    ("continuous_pareto_0282", (16, 40, 14, 12, 1, 6)),
+    ("continuous_pareto_0116", (13, 40, 16, 12, 0)),
+    ("continuous_pareto_0164", (16, 24, 14, 12, 0)),
+    ("continuous_pareto_0226", (16, 40, 16, 12, 0)),
+    ("continuous_pareto_0251", (16, 40, 14, 12, 0)),
+    ("continuous_pareto_0271", (16, 36, 14, 12, 0)),
+    ("continuous_pareto_0282", (16, 40, 14, 12, 1)),
 )
-_OBJECTIVE_NAMES = ("J_intensity", "J_spatial")
+_OBJECTIVE_NAMES = ("J_contact", "J_obs")
 _DEFAULT_INDENTER_URDFS = (
     "sphere_5mm.urdf",
     "sphere_10mm.urdf",
     "sphere_20mm.urdf",
 )
+_DEFAULT_SPHERE_DIAMETERS_MM = (5.0, 10.0, 20.0)
 _DEFAULT_FORCE_TARGETS_N = (5.0, 10.0, 15.0, 20.0)
 _DEFAULT_SETTLE_DURATION_S = 5.0
 _DEFAULT_FORCE_TOLERANCE_FRACTION = 0.1
 _DEFAULT_INITIAL_CLEARANCE_M = 1.0e-3
+_DEFAULT_CONTACT_Y_MM = (-22.0, -11.0, -5.5, 0.0, 5.5, 11.0, 22.0)
 _DEFAULT_VISCOELASTIC_PRESET = "silicone"
 _DEFAULT_OPTICAL_PRESET = "dragon_skin_10_nv_nominal"
-_INITIAL_INDENTER_REFERENCE_DIAMETER_MM = 20.0
 _CONTINUOUS_WARM_START_RESULT_FIELDS = (
     ("sphere_5mm", "J_intensity_5mm", "J_spatial_5mm"),
     ("sphere_10mm", "J_intensity_10mm", "J_spatial_10mm"),
@@ -119,8 +118,8 @@ _CONTINUOUS_WARM_START_COUNT = 13
 _APPROACH_SPEED_M_S = 5.0e-3
 _MAX_SIM_TIME_S = 60.0
 _MAX_PROPOSALS_PER_COMPLETED_TRIAL = 50
-_OBJECTIVE_DEFINITION = "indenter-wise-force-pair-min-v1"
-_RUN_CONFIG_SCHEMA = 3
+_OBJECTIVE_DEFINITION = "full-finger-contact-and-force-conditioned-observation-v1"
+_RUN_CONFIG_SCHEMA = 5
 
 
 @dataclass(frozen=True)
@@ -142,10 +141,12 @@ class CampaignDefinition:
     discrete_step_to_physical: tuple[tuple[str, str, int, int], ...] = ()
     seed_steps: tuple[tuple[str, tuple[int, ...]], ...] = ()
     indenters: tuple[tuple[str, str], ...] = ()
+    sphere_diameters_mm: tuple[float, ...] = _DEFAULT_SPHERE_DIAMETERS_MM
     force_targets_n: tuple[float, ...] = _DEFAULT_FORCE_TARGETS_N
     settle_duration_s: float = _DEFAULT_SETTLE_DURATION_S
     force_tolerance_fraction: float = _DEFAULT_FORCE_TOLERANCE_FRACTION
     initial_clearance_m: float = _DEFAULT_INITIAL_CLEARANCE_M
+    contact_y_mm: tuple[float, ...] = _DEFAULT_CONTACT_Y_MM
     viscoelastic_preset: str = _DEFAULT_VISCOELASTIC_PRESET
     optical_preset: str = _DEFAULT_OPTICAL_PRESET
 
@@ -169,14 +170,7 @@ class CampaignDefinition:
 
     @property
     def per_indenter_fields(self) -> tuple[str, ...]:
-        return tuple(
-            field
-            for indenter_name in self.indenter_names
-            for field in (
-                f"J_intensity_{indenter_name}",
-                f"J_spatial_{indenter_name}",
-            )
-        )
+        return ()
 
 
 def _continuous_design_space() -> DesignSpace:
@@ -299,6 +293,7 @@ def _discrete_design_space(
         geometry=replace(
             parameters.geometry,
             flat_pad_width_mm=_DISCRETE_FIXED_FLAT_PAD_WIDTH_MM,
+            void_height_mm=0.0,
         ),
     )
     bounds = DesignParameterBounds(
@@ -328,18 +323,30 @@ def _campaign_definition(
     *,
     parameter_bounds_mm: Mapping[str, tuple[float, float]] | None = None,
     indenter_urdfs: Iterable[str] = _DEFAULT_INDENTER_URDFS,
+    sphere_diameters_mm: Iterable[float] = _DEFAULT_SPHERE_DIAMETERS_MM,
     force_targets_n: Iterable[float] = _DEFAULT_FORCE_TARGETS_N,
     settle_duration_s: float = _DEFAULT_SETTLE_DURATION_S,
     force_tolerance_fraction: float = _DEFAULT_FORCE_TOLERANCE_FRACTION,
     initial_clearance_m: float = _DEFAULT_INITIAL_CLEARANCE_M,
+    contact_y_mm: Iterable[float] = _DEFAULT_CONTACT_Y_MM,
     viscoelastic_preset: str = _DEFAULT_VISCOELASTIC_PRESET,
     optical_preset: str = _DEFAULT_OPTICAL_PRESET,
 ) -> CampaignDefinition:
     indenters = _indenter_definitions(indenter_urdfs)
+    sphere_diameters = tuple(float(value) for value in sphere_diameters_mm)
+    if len(sphere_diameters) != len(indenters) or any(
+        not isfinite(value) or value <= 0.0 for value in sphere_diameters
+    ):
+        raise ValueError(
+            "sphere_diameters_mm must contain one positive value per indenter"
+        )
+    if len(set(sphere_diameters)) != len(sphere_diameters):
+        raise ValueError("sphere_diameters_mm must be unique")
     targets = _force_targets(force_targets_n)
     settle_duration_s = float(settle_duration_s)
     force_tolerance_fraction = float(force_tolerance_fraction)
     initial_clearance_m = float(initial_clearance_m)
+    contact_locations_y_mm = tuple(float(value) for value in contact_y_mm)
     if not isfinite(settle_duration_s) or settle_duration_s <= 0.0:
         raise ValueError("settle_duration_s must be finite and positive")
     if (
@@ -350,6 +357,15 @@ def _campaign_definition(
         raise ValueError("force_tolerance_fraction must lie between zero and one")
     if not isfinite(initial_clearance_m) or initial_clearance_m < 0.0:
         raise ValueError("initial_clearance_m must be finite and nonnegative")
+    if not contact_locations_y_mm or any(
+        not isfinite(value) or not -27.5 <= value <= 27.5
+        for value in contact_locations_y_mm
+    ):
+        raise ValueError(
+            "contact_y_mm must contain finite locations inside [-27.5, 27.5] mm"
+        )
+    if len(set(contact_locations_y_mm)) != len(contact_locations_y_mm):
+        raise ValueError("contact_y_mm must be unique")
     if (
         not isinstance(viscoelastic_preset, str)
         or viscoelastic_preset not in VISCOELASTIC_PRESETS
@@ -364,57 +380,9 @@ def _campaign_definition(
         optical=OPTICAL_PRESETS[optical_preset],
     )
     if name == "continuous":
-        if parameter_bounds_mm is not None:
-            raise ValueError(
-                "custom parameter bounds are supported only by discrete-05mm"
-            )
-        if (
-            indenters != _indenter_definitions(_DEFAULT_INDENTER_URDFS)
-            or targets != _DEFAULT_FORCE_TARGETS_N
-            or settle_duration_s != _DEFAULT_SETTLE_DURATION_S
-            or force_tolerance_fraction != _DEFAULT_FORCE_TOLERANCE_FRACTION
-            or initial_clearance_m != _DEFAULT_INITIAL_CLEARANCE_M
-            or viscoelastic_preset != _DEFAULT_VISCOELASTIC_PRESET
-            or optical_preset != _DEFAULT_OPTICAL_PRESET
-        ):
-            raise ValueError("custom evaluation settings require discrete-05mm")
-        space = _continuous_design_space()
-        parameters = tuple(
-            RangeParameterConfig(
-                name=parameter_name,
-                bounds=(
-                    space.parameter_bounds.geometry[
-                        parameter_name.removeprefix("geometry.")
-                    ].lower,
-                    space.parameter_bounds.geometry[
-                        parameter_name.removeprefix("geometry.")
-                    ].upper,
-                ),
-                parameter_type="float",
-            )
-            for parameter_name in space.variable_names
-        )
-        return CampaignDefinition(
-            name=name,
-            experiment_name="lumo_center_contact_sensing",
-            default_output_directory=_CONTINUOUS_OUTPUT_DIRECTORY,
-            space=space,
-            physical_parameter_names=_CONTINUOUS_PARAMETER_NAMES,
-            ax_parameters=parameters,
-            ax_parameter_constraints=(
-                "geometry.flat_pad_height_mm + geometry.semiellipse_height_mm "
-                f"<= {_MAX_PAD_DEPTH_MM:g}",
-            ),
-            initialization_budget=_CONTINUOUS_WARM_START_COUNT,
-            warm_start_path=_CONTINUOUS_WARM_START_PATH,
-            warm_start_count=_CONTINUOUS_WARM_START_COUNT,
-            indenters=indenters,
-            force_targets_n=targets,
-            settle_duration_s=settle_duration_s,
-            force_tolerance_fraction=force_tolerance_fraction,
-            initial_clearance_m=initial_clearance_m,
-            viscoelastic_preset=viscoelastic_preset,
-            optical_preset=optical_preset,
+        raise ValueError(
+            "the continuous J_intensity/J_spatial campaign is historical; "
+            "use discrete-05mm for the full-finger J_contact/J_obs campaign"
         )
     if name == "discrete-05mm":
         parameter_bounds, step_to_physical = _discrete_parameter_bounds(
@@ -446,7 +414,7 @@ def _campaign_definition(
         )
         return CampaignDefinition(
             name=name,
-            experiment_name="lumo_center_contact_sensing_discrete_05mm",
+            experiment_name="lumo_full_finger_objectives_discrete_05mm",
             default_output_directory=_DISCRETE_OUTPUT_DIRECTORY,
             space=space,
             physical_parameter_names=space.variable_names,
@@ -469,14 +437,17 @@ def _campaign_definition(
                     "geometry.flat_pad_width_mm",
                     _DISCRETE_FIXED_FLAT_PAD_WIDTH_MM,
                 ),
+                ("geometry.void_height_mm", 0.0),
             ),
             discrete_step_to_physical=step_to_physical,
             seed_steps=seed_steps,
             indenters=indenters,
+            sphere_diameters_mm=sphere_diameters,
             force_targets_n=targets,
             settle_duration_s=settle_duration_s,
             force_tolerance_fraction=force_tolerance_fraction,
             initial_clearance_m=initial_clearance_m,
+            contact_y_mm=contact_locations_y_mm,
             viscoelastic_preset=viscoelastic_preset,
             optical_preset=optical_preset,
         )
@@ -559,14 +530,15 @@ def _new_client(campaign: CampaignDefinition) -> Client:
     client.configure_experiment(
         name=campaign.experiment_name,
         description=(
-            "Center-contact LUMO sensing optimization over indenters "
-            f"{campaign.indenter_names} and force states "
+            "Full-finger LUMO contact and observation optimization over "
+            f"indenters {campaign.indenter_names}, contact Y locations "
+            f"{campaign.contact_y_mm} mm, and force states "
             f"{campaign.force_targets_n} N"
         ),
         parameters=campaign.ax_parameters,
         parameter_constraints=campaign.ax_parameter_constraints,
     )
-    client.configure_optimization(objective="J_intensity, J_spatial")
+    client.configure_optimization(objective="J_contact, J_obs")
     client.configure_generation_strategy(
         method="fast",
         initialization_budget=campaign.initialization_budget,
@@ -664,8 +636,8 @@ def _verify_discrete_search_space(campaign: CampaignDefinition) -> None:
         client.complete_trial(
             trial_index=trial_index,
             raw_data={
-                "J_intensity": float(probe_index),
-                "J_spatial": float(-probe_index),
+                "J_contact": float(probe_index),
+                "J_obs": float(-probe_index),
             },
         )
     if len(stem_height_steps) < 2:
@@ -689,10 +661,12 @@ def _fieldnames(campaign: CampaignDefinition) -> list[str]:
         *campaign.parameter_columns,
         *campaign.per_indenter_fields,
         *_OBJECTIVE_NAMES,
-        "worst_intensity_indenter",
-        "worst_intensity_force_pair_n",
-        "worst_spatial_indenter",
-        "worst_spatial_force_pair_n",
+        "limiting_contact_scenario",
+        "limiting_obs_sphere_diameter_mm",
+        "limiting_obs_force_n",
+        "limiting_obs_contact_y_pair_mm",
+        "d_onset_diagnostic",
+        "max_outside_roi_power_fraction",
         "runtime_s",
         "raw_result_path",
         "failure",
@@ -704,10 +678,12 @@ def _empty_result_fields(campaign: CampaignDefinition) -> dict[str, object]:
     return {
         **{name: "" for name in campaign.per_indenter_fields},
         **{name: "" for name in _OBJECTIVE_NAMES},
-        "worst_intensity_indenter": "",
-        "worst_intensity_force_pair_n": "",
-        "worst_spatial_indenter": "",
-        "worst_spatial_force_pair_n": "",
+        "limiting_contact_scenario": "",
+        "limiting_obs_sphere_diameter_mm": "",
+        "limiting_obs_force_n": "",
+        "limiting_obs_contact_y_pair_mm": "",
+        "d_onset_diagnostic": "",
+        "max_outside_roi_power_fraction": "",
         "runtime_s": "",
         "raw_result_path": "",
         "failure": "",
@@ -734,6 +710,10 @@ def _read_trials(
                 *campaign.physical_parameter_names,
                 *campaign.per_indenter_fields,
                 *_OBJECTIVE_NAMES,
+                "limiting_obs_sphere_diameter_mm",
+                "limiting_obs_force_n",
+                "d_onset_diagnostic",
+                "max_outside_roi_power_fraction",
                 "runtime_s",
             )
             for name in numeric_fields:
@@ -895,6 +875,14 @@ def _git_output(repository_root: Path, arguments: list[str]) -> str:
 
 def _run_config(campaign: CampaignDefinition) -> dict[str, object]:
     from . import evaluator
+    from lumo.mesh import (
+        LED_RECESS_DEPTH_MM,
+        LED_RECESS_WIDTH_MM,
+        MAIN_Y_BOUNDS_MM,
+        led_centers_y_mm,
+    )
+    from lumo.ray_tracing import LONGITUDINAL_SIDE_BIN_COUNT
+    from lumo.simulation import REFERENCE_DWELL_LOADING
 
     repository_root = Path(__file__).resolve().parents[2]
     parameter_bounds = {
@@ -918,6 +906,11 @@ def _run_config(campaign: CampaignDefinition) -> dict[str, object]:
         "bounds": parameter_bounds,
         "linear_constraints": linear_constraints,
         "minimum_silicone_thickness_mm": (campaign.space.minimum_silicone_thickness_mm),
+        "full_fingertip_height_max_mm": MAX_FINGERTIP_HEIGHT_MM,
+        "full_height_relation_mm": (
+            "link_thickness + flat_pad_height + semiellipse_height"
+        ),
+        "fixed_link_thickness_mm": _FIXED_UPPER_HEIGHT_MM,
     }
     if campaign.is_discrete:
         design_space_contract = {
@@ -938,6 +931,11 @@ def _run_config(campaign: CampaignDefinition) -> dict[str, object]:
             "minimum_silicone_thickness_mm": (
                 campaign.space.minimum_silicone_thickness_mm
             ),
+            "full_fingertip_height_max_mm": MAX_FINGERTIP_HEIGHT_MM,
+            "full_height_relation_mm": (
+                "link_thickness + flat_pad_height + semiellipse_height"
+            ),
+            "fixed_link_thickness_mm": _FIXED_UPPER_HEIGHT_MM,
             "new_observation_seed_steps": [
                 {
                     "source_design": source_design,
@@ -974,6 +972,7 @@ def _run_config(campaign: CampaignDefinition) -> dict[str, object]:
             "optical_preset": campaign.optical_preset,
             "fingertip_parameters": asdict(campaign.space.parameter_bounds.parameters),
             "mechanics": {
+                "loading_mode": REFERENCE_DWELL_LOADING,
                 "sim_frequency_hz": evaluator._SIM_FREQUENCY_HZ,
                 "vbd_iterations": evaluator._VBD_ITERATIONS,
                 "force_gain_m_s_n": evaluator._FORCE_GAIN_M_S_N,
@@ -999,11 +998,10 @@ def _run_config(campaign: CampaignDefinition) -> dict[str, object]:
             "scenarios": {
                 "indenter_urdfs": [filename for filename, _ in campaign.indenters],
                 "indenter_names": list(campaign.indenter_names),
-                "initial_pose_reference_diameter_mm": (
-                    _INITIAL_INDENTER_REFERENCE_DIAMETER_MM
-                ),
+                "sphere_diameters_mm": list(campaign.sphere_diameters_mm),
                 "initial_clearance_m": campaign.initial_clearance_m,
                 "contact_x_mm": 0.0,
+                "contact_y_mm": list(campaign.contact_y_mm),
             },
             "optics": {
                 "sample_side_count": evaluator._SAMPLE_SIDE_COUNT,
@@ -1012,6 +1010,19 @@ def _run_config(campaign: CampaignDefinition) -> dict[str, object]:
                 "deterministic_seed": evaluator._RNG_SEED,
                 "carrier_albedo": evaluator._CARRIER_ALBEDO,
                 "source_medium": "resolved per geometry from LED air-gap boundary",
+                "led_centers_y_mm": list(led_centers_y_mm()),
+                "led_count": len(led_centers_y_mm()),
+                "led_recess_width_mm": LED_RECESS_WIDTH_MM,
+                "led_recess_depth_mm": LED_RECESS_DEPTH_MM,
+                "observation_view_direction": "+X",
+                "longitudinal_coordinate": "Y",
+                "spatial_roi_y_mm": list(MAIN_Y_BOUNDS_MM),
+                "spatial_bin_count": LONGITUDINAL_SIDE_BIN_COUNT,
+                "spatial_bin_width_mm": (
+                    (MAIN_Y_BOUNDS_MM[1] - MAIN_Y_BOUNDS_MM[0])
+                    / LONGITUDINAL_SIDE_BIN_COUNT
+                ),
+                "simultaneous_emitted_power": float(len(led_centers_y_mm())),
             },
             "design_space": {
                 **design_space_contract,
@@ -1020,7 +1031,14 @@ def _run_config(campaign: CampaignDefinition) -> dict[str, object]:
                 "names": list(_OBJECTIVE_NAMES),
                 "directions": ["maximize", "maximize"],
                 "definition": _OBJECTIVE_DEFINITION,
-                "grouping": "force pairs within indenter, then minimum over indenter",
+                "J_contact": (
+                    "min over diameter/location scenarios of "
+                    "cuberoot(q_form*q_stable*q_stiff)"
+                ),
+                "J_obs": (
+                    "min over diameter, force, and distinct contact-Y pairs of "
+                    "L2((y-y0)/P_emit); d_onset is diagnostic only"
+                ),
             },
             "ax_random_seed": _RANDOM_SEED,
         },
@@ -1096,118 +1114,53 @@ def _evaluate_candidate(
     campaign: CampaignDefinition,
     parameters: dict[str, float],
 ):
-    import warp as wp
-
     from lumo.fingertip import Fingertip
-    from lumo.simulation import DesignTrial
 
-    from .evaluator import evaluate_contact_sensing
+    from .evaluator import evaluate_full_finger
 
     fingertip = Fingertip(campaign.space.to_parameters(parameters))
     resource_root = files("lumo").joinpath("assets", "objects", "urdf")
     with ExitStack() as resources:
-        indenter_resources = tuple(
-            (
-                resources.enter_context(as_file(resource_root.joinpath(filename))),
-                indenter_name,
-            )
-            for filename, indenter_name in campaign.indenters
+        indenter_paths = tuple(
+            resources.enter_context(as_file(resource_root.joinpath(filename)))
+            for filename, _ in campaign.indenters
         )
-        initial_z_m = (
-            fingertip.tip_z_m
-            - campaign.initial_clearance_m
-            - 0.5e-3 * _INITIAL_INDENTER_REFERENCE_DIAMETER_MM
-        )
-        trials = tuple(
-            DesignTrial(
-                name=f"{indenter_name}_center",
-                urdf_path=urdf_path,
-                initial_tf=wp.transform(
-                    wp.vec3(0.0, 0.0, initial_z_m),
-                    wp.quat_identity(),
-                ),
-                motion_direction_W=wp.vec3(0.0, 0.0, 1.0),
-                approach_speed_m_s=_APPROACH_SPEED_M_S,
-                target_force_n=campaign.force_targets_n[-1],
-                max_sim_time_s=_MAX_SIM_TIME_S,
-                initial_clearance_m=None,
-            )
-            for urdf_path, indenter_name in indenter_resources
-        )
-        return evaluate_contact_sensing(
+        return evaluate_full_finger(
             fingertip,
-            trials,
+            indenter_paths,
+            campaign.sphere_diameters_mm,
+            campaign.contact_y_mm,
             force_targets_n=campaign.force_targets_n,
             settle_duration_s=campaign.settle_duration_s,
             force_tolerance_fraction=campaign.force_tolerance_fraction,
+            initial_clearance_m=campaign.initial_clearance_m,
+            approach_speed_m_s=_APPROACH_SPEED_M_S,
+            max_sim_time_s=_MAX_SIM_TIME_S,
         )
-
-
-def _minimum_pair(
-    values: np.ndarray,
-    force_targets_n: np.ndarray,
-    *,
-    spatial: bool,
-) -> tuple[float, tuple[float, float]]:
-    minimum = float("inf")
-    pair = (float("nan"), float("nan"))
-    for first in range(len(values) - 1):
-        for second in range(first + 1, len(values)):
-            if spatial:
-                separation = float(np.linalg.norm(values[first] - values[second]))
-            else:
-                separation = abs(float(values[first] - values[second]))
-            if separation < minimum:
-                minimum = separation
-                pair = (
-                    float(force_targets_n[first]),
-                    float(force_targets_n[second]),
-                )
-    return minimum, pair
 
 
 def _objective_details(evaluation: object) -> dict[str, object]:
-    from .sensing_objective import sensing_descriptors, sensing_objectives
+    from .objective import compute_objectives_from_raw
 
-    per_intensity, per_spatial, intensity, spatial = sensing_objectives(
-        evaluation.response_matrix,
-        no_contact_response=evaluation.no_contact_response,
-    )
-    intensity_pairs = []
-    spatial_pairs = []
-    for responses in evaluation.response_matrix:
-        descriptors = sensing_descriptors(
-            np.vstack((evaluation.no_contact_response, responses))
-        )
-        _, intensity_pair = _minimum_pair(
-            descriptors[0][1:],
-            evaluation.force_targets_n,
-            spatial=False,
-        )
-        _, spatial_pair = _minimum_pair(
-            descriptors[1][1:],
-            evaluation.force_targets_n,
-            spatial=True,
-        )
-        intensity_pairs.append(intensity_pair)
-        spatial_pairs.append(spatial_pair)
-
-    worst_intensity_index = int(np.argmin(per_intensity))
-    worst_spatial_index = int(np.argmin(per_spatial))
+    contact, observation = compute_objectives_from_raw(vars(evaluation))
     return {
-        "per_intensity": per_intensity,
-        "per_spatial": per_spatial,
-        "J_intensity": float(intensity),
-        "J_spatial": float(spatial),
-        "worst_intensity_index": worst_intensity_index,
-        "worst_spatial_index": worst_spatial_index,
-        "intensity_pairs": tuple(intensity_pairs),
-        "spatial_pairs": tuple(spatial_pairs),
+        "J_contact": contact.J_contact,
+        "J_obs": observation.J_obs,
+        "contact": contact,
+        "observation": observation,
+        "emitted_power": float(
+            evaluation.no_contact_energy[
+                :,
+                tuple(evaluation.energy_fields).index("emitted_power"),
+            ].sum()
+        ),
+        "max_outside_roi_power_fraction": float(
+            max(
+                evaluation.no_contact_outside_roi_power_fraction,
+                np.max(evaluation.outside_roi_power_fraction),
+            )
+        ),
     }
-
-
-def _pair_text(pair: tuple[float, float]) -> str:
-    return f"{pair[0]:g}-{pair[1]:g}"
 
 
 def _trial_result_path(output_directory: Path, trial_index: int) -> Path:
@@ -1228,22 +1181,123 @@ def _save_trial_result(
     with temporary.open("wb") as output_file:
         np.savez_compressed(
             output_file,
+            reference_vertices_m=np.asarray(evaluation.reference_vertices_m),
+            tet_indices=np.asarray(evaluation.tet_indices),
+            surface_triangles=np.asarray(evaluation.surface_triangles),
+            bonded_vertex_indices=np.asarray(evaluation.bonded_vertex_indices),
+            led_centers_m=np.asarray(evaluation.led_centers_m),
             no_contact_response=np.asarray(evaluation.no_contact_response),
             no_contact_energy=np.asarray(evaluation.no_contact_energy),
+            no_contact_inside_roi_power=np.asarray(
+                evaluation.no_contact_inside_roi_power
+            ),
+            no_contact_outside_roi_power=np.asarray(
+                evaluation.no_contact_outside_roi_power
+            ),
+            no_contact_visible_side_power=np.asarray(
+                evaluation.no_contact_visible_side_power
+            ),
+            no_contact_outside_roi_power_fraction=np.asarray(
+                evaluation.no_contact_outside_roi_power_fraction
+            ),
             response_matrix=np.asarray(evaluation.response_matrix),
             energy_matrix=np.asarray(evaluation.energy_matrix),
             energy_fields=np.asarray(evaluation.energy_fields),
+            inside_roi_power=np.asarray(evaluation.inside_roi_power),
+            outside_roi_power=np.asarray(evaluation.outside_roi_power),
+            visible_side_power=np.asarray(evaluation.visible_side_power),
+            outside_roi_power_fraction=np.asarray(
+                evaluation.outside_roi_power_fraction
+            ),
             actual_forces_n=np.asarray(evaluation.actual_forces_n),
             indentations_m=np.asarray(evaluation.indentations_m),
             checkpoint_times_s=np.asarray(evaluation.checkpoint_times_s),
+            maximum_particle_speeds_m_s=np.asarray(
+                evaluation.maximum_particle_speeds_m_s
+            ),
+            mean_particle_speeds_m_s=np.asarray(
+                evaluation.mean_particle_speeds_m_s
+            ),
+            rms_particle_speeds_m_s=np.asarray(
+                evaluation.rms_particle_speeds_m_s
+            ),
+            particle_speed_p95_m_s=np.asarray(
+                evaluation.particle_speed_p95_m_s
+            ),
+            kinetic_energy_j=np.asarray(evaluation.kinetic_energy_j),
+            force_references_n=np.asarray(evaluation.force_references_n),
+            reaction_force_rates_n_s=np.asarray(
+                evaluation.reaction_force_rates_n_s
+            ),
+            indentation_rates_m_s=np.asarray(evaluation.indentation_rates_m_s),
+            servo_errors_n=np.asarray(evaluation.servo_errors_n),
+            indenter_contact_counts=np.asarray(evaluation.indenter_contact_counts),
+            total_contact_counts=np.asarray(evaluation.total_contact_counts),
+            contact_buffer_overflow=np.asarray(evaluation.contact_buffer_overflow),
+            minimum_det_f=np.asarray(evaluation.minimum_det_f),
+            inverted_tet_counts=np.asarray(evaluation.inverted_tet_counts),
+            contact_centroids_W_m=np.asarray(evaluation.contact_centroids_W_m),
+            contact_record_offsets=np.asarray(evaluation.contact_record_offsets),
+            contact_particle_indices=np.asarray(
+                evaluation.contact_particle_indices
+            ),
+            contact_barycentric=np.asarray(evaluation.contact_barycentric),
+            contact_positions_W_m=np.asarray(evaluation.contact_positions_W_m),
+            contact_normals_W=np.asarray(evaluation.contact_normals_W),
+            contact_body_positions=np.asarray(evaluation.contact_body_positions),
+            silicone_vertices_m=np.asarray(evaluation.silicone_vertices_m),
             scenario_runtime_s=np.asarray(evaluation.scenario_runtime_s),
+            checkpoint_optics_runtime_s=np.asarray(
+                evaluation.checkpoint_optics_runtime_s
+            ),
+            no_contact_optics_runtime_s=np.asarray(
+                evaluation.no_contact_optics_runtime_s
+            ),
+            loading_mode=np.asarray(evaluation.loading_mode),
+            force_ramp_rate_n_s=np.asarray(
+                np.nan
+                if evaluation.force_ramp_rate_n_s is None
+                else evaluation.force_ramp_rate_n_s
+            ),
             scenario_names=np.asarray(evaluation.scenario_names),
-            indenter_names=np.asarray(campaign.indenter_names),
+            sphere_diameters_mm=np.asarray(evaluation.sphere_diameters_mm),
+            contact_y_mm=np.asarray(evaluation.contact_y_mm),
             force_targets_n=np.asarray(evaluation.force_targets_n),
-            per_indenter_J_intensity=np.asarray(details["per_intensity"]),
-            per_indenter_J_spatial=np.asarray(details["per_spatial"]),
-            J_intensity=np.asarray(details["J_intensity"]),
-            J_spatial=np.asarray(details["J_spatial"]),
+            J_contact=np.asarray(details["J_contact"]),
+            limiting_contact_scenario=np.asarray(
+                details["contact"].limiting_scenario
+            ),
+            q_form=np.asarray(details["contact"].q_form),
+            q_stable=np.asarray(details["contact"].q_stable),
+            q_stiff=np.asarray(details["contact"].q_stiff),
+            q_contact=np.asarray(details["contact"].q_contact),
+            q_normal_diagnostic=np.asarray(details["contact"].q_normal),
+            patch_area_5_m2=np.asarray(details["contact"].patch_area_5_m2),
+            k_early_n_m=np.asarray(details["contact"].k_early_n_m),
+            k_late_n_m=np.asarray(details["contact"].k_late_n_m),
+            J_obs=np.asarray(details["J_obs"]),
+            limiting_obs_sphere_diameter_mm=np.asarray(
+                details["observation"].limiting_sphere_diameter_mm
+            ),
+            limiting_obs_force_n=np.asarray(
+                details["observation"].limiting_force_n
+            ),
+            limiting_obs_contact_y_pair_mm=np.asarray(
+                details["observation"].limiting_contact_y_pair_mm
+            ),
+            d_onset_diagnostic=np.asarray(details["observation"].d_onset),
+            normalized_observation=np.asarray(
+                details["observation"].normalized_response
+            ),
+            observation_sphere_diameters_mm=np.asarray(
+                details["observation"].sphere_diameters_mm
+            ),
+            observation_contact_y_mm=np.asarray(
+                details["observation"].contact_y_mm
+            ),
+            same_force_location_separations=np.asarray(
+                details["observation"].location_separations
+            ),
             evaluation_runtime_s=np.asarray(runtime_s),
             parameter_names=np.asarray(campaign.physical_parameter_names),
             parameter_values=np.asarray(
@@ -1263,24 +1317,24 @@ def _apply_result_to_row(
     runtime_s: float,
     raw_result_path: str,
 ) -> None:
-    per_intensity = np.asarray(details["per_intensity"])
-    per_spatial = np.asarray(details["per_spatial"])
-    for index, indenter_name in enumerate(campaign.indenter_names):
-        row[f"J_intensity_{indenter_name}"] = float(per_intensity[index])
-        row[f"J_spatial_{indenter_name}"] = float(per_spatial[index])
-    worst_intensity_index = int(details["worst_intensity_index"])
-    worst_spatial_index = int(details["worst_spatial_index"])
+    contact = details["contact"]
+    observation = details["observation"]
     row.update(
-        J_intensity=float(details["J_intensity"]),
-        J_spatial=float(details["J_spatial"]),
-        worst_intensity_indenter=campaign.indenter_names[worst_intensity_index],
-        worst_intensity_force_pair_n=_pair_text(
-            details["intensity_pairs"][worst_intensity_index]
+        J_contact=float(details["J_contact"]),
+        J_obs=float(details["J_obs"]),
+        limiting_contact_scenario=contact.limiting_scenario,
+        limiting_obs_sphere_diameter_mm=(
+            observation.limiting_sphere_diameter_mm
         ),
-        worst_spatial_indenter=campaign.indenter_names[worst_spatial_index],
-        worst_spatial_force_pair_n=_pair_text(
-            details["spatial_pairs"][worst_spatial_index]
+        limiting_obs_force_n=observation.limiting_force_n,
+        limiting_obs_contact_y_pair_mm=(
+            f"{observation.limiting_contact_y_pair_mm[0]:g},"
+            f"{observation.limiting_contact_y_pair_mm[1]:g}"
         ),
+        d_onset_diagnostic=observation.d_onset,
+        max_outside_roi_power_fraction=details[
+            "max_outside_roi_power_fraction"
+        ],
         runtime_s=runtime_s,
         raw_result_path=raw_result_path,
         failure="",
@@ -1576,12 +1630,12 @@ def _write_plots(output_directory: Path, rows: list[dict[str, object]]) -> None:
     import matplotlib.pyplot as plt
 
     completed = [row for row in rows if row["status"] == "COMPLETED"]
-    intensity = np.asarray(
-        [float(row["J_intensity"]) for row in completed],
+    contact = np.asarray(
+        [float(row["J_contact"]) for row in completed],
         dtype=np.float64,
     )
-    spatial = np.asarray(
-        [float(row["J_spatial"]) for row in completed],
+    observation = np.asarray(
+        [float(row["J_obs"]) for row in completed],
         dtype=np.float64,
     )
     is_pareto = np.asarray(
@@ -1595,46 +1649,46 @@ def _write_plots(output_directory: Path, rows: list[dict[str, object]]) -> None:
 
     figure, axes = plt.subplots(figsize=(7.0, 5.2), constrained_layout=True)
     axes.scatter(
-        intensity[is_warm],
-        spatial[is_warm],
+        contact[is_warm],
+        observation[is_warm],
         color="tab:gray",
         label="warm start",
         alpha=0.8,
     )
     axes.scatter(
-        intensity[~is_warm],
-        spatial[~is_warm],
+        contact[~is_warm],
+        observation[~is_warm],
         color="tab:blue",
         label="BO",
         alpha=0.8,
     )
-    axes.set_xlabel("J_intensity")
-    axes.set_ylabel("J_spatial")
-    axes.set_title("Observed LUMO sensing objectives")
+    axes.set_xlabel("J_contact")
+    axes.set_ylabel("J_obs")
+    axes.set_title("Observed LUMO full-finger objectives")
     axes.grid(alpha=0.25)
     axes.legend()
     figure.savefig(output_directory / "objective_scatter.png", dpi=180)
     plt.close(figure)
 
     figure, axes = plt.subplots(figsize=(7.0, 5.2), constrained_layout=True)
-    axes.scatter(intensity, spatial, color="0.7", label="dominated")
+    axes.scatter(contact, observation, color="0.7", label="dominated")
     axes.scatter(
-        intensity[is_pareto],
-        spatial[is_pareto],
+        contact[is_pareto],
+        observation[is_pareto],
         color="tab:red",
         label="observed Pareto",
         zorder=3,
     )
     if np.count_nonzero(is_pareto) > 1:
-        order = np.argsort(intensity[is_pareto])
+        order = np.argsort(contact[is_pareto])
         axes.plot(
-            intensity[is_pareto][order],
-            spatial[is_pareto][order],
+            contact[is_pareto][order],
+            observation[is_pareto][order],
             color="tab:red",
             alpha=0.6,
         )
-    axes.set_xlabel("J_intensity")
-    axes.set_ylabel("J_spatial")
+    axes.set_xlabel("J_contact")
+    axes.set_ylabel("J_obs")
     axes.set_title("Observed nondominated front")
     axes.grid(alpha=0.25)
     axes.legend()
@@ -1653,8 +1707,8 @@ def _finalize_outputs(
     _write_tables(output_directory, rows, campaign)
     _write_plots(output_directory, rows)
     completed = [row for row in rows if row["status"] == "COMPLETED"]
-    best_intensity = max(completed, key=lambda row: float(row["J_intensity"]))
-    best_spatial = max(completed, key=lambda row: float(row["J_spatial"]))
+    best_contact = max(completed, key=lambda row: float(row["J_contact"]))
+    best_observation = max(completed, key=lambda row: float(row["J_obs"]))
     previous_active_runtime_s = 0.0
     summary_path = output_directory / _SUMMARY_FILENAME
     if summary_path.is_file():
@@ -1692,15 +1746,15 @@ def _finalize_outputs(
                 row["status"] == "COMPLETED" and row["is_pareto"] for row in rows
             ),
         },
-        "best_J_intensity": {
-            "design": best_intensity["design"],
-            "ax_trial_index": best_intensity["ax_trial_index"],
-            "value": best_intensity["J_intensity"],
+        "best_J_contact": {
+            "design": best_contact["design"],
+            "ax_trial_index": best_contact["ax_trial_index"],
+            "value": best_contact["J_contact"],
         },
-        "best_J_spatial": {
-            "design": best_spatial["design"],
-            "ax_trial_index": best_spatial["ax_trial_index"],
-            "value": best_spatial["J_spatial"],
+        "best_J_obs": {
+            "design": best_observation["design"],
+            "ax_trial_index": best_observation["ax_trial_index"],
+            "value": best_observation["J_obs"],
         },
     }
     _atomic_write_json(summary_path, summary)
@@ -1711,17 +1765,19 @@ def run(
     *,
     output_directory: Path,
     target_bo_trials: int,
-    campaign_name: str = "continuous",
+    campaign_name: str = "discrete-05mm",
     parameter_bounds_mm: Mapping[str, tuple[float, float]] | None = None,
     indenter_urdfs: Iterable[str] = _DEFAULT_INDENTER_URDFS,
+    sphere_diameters_mm: Iterable[float] = _DEFAULT_SPHERE_DIAMETERS_MM,
     force_targets_n: Iterable[float] = _DEFAULT_FORCE_TARGETS_N,
     settle_duration_s: float = _DEFAULT_SETTLE_DURATION_S,
     force_tolerance_fraction: float = _DEFAULT_FORCE_TOLERANCE_FRACTION,
     initial_clearance_m: float = _DEFAULT_INITIAL_CLEARANCE_M,
+    contact_y_mm: Iterable[float] = _DEFAULT_CONTACT_Y_MM,
     viscoelastic_preset: str = _DEFAULT_VISCOELASTIC_PRESET,
     optical_preset: str = _DEFAULT_OPTICAL_PRESET,
 ) -> list[dict[str, object]]:
-    """Create or resume the concrete cumulative center-contact campaign."""
+    """Create or resume the full-finger sequential Ax campaign."""
     if target_bo_trials < 0:
         raise ValueError("target_bo_trials must be nonnegative")
     command_start_s = perf_counter()
@@ -1730,18 +1786,19 @@ def run(
         campaign_name,
         parameter_bounds_mm=parameter_bounds_mm,
         indenter_urdfs=indenter_urdfs,
+        sphere_diameters_mm=sphere_diameters_mm,
         force_targets_n=force_targets_n,
         settle_duration_s=settle_duration_s,
         force_tolerance_fraction=force_tolerance_fraction,
         initial_clearance_m=initial_clearance_m,
+        contact_y_mm=contact_y_mm,
         viscoelastic_preset=viscoelastic_preset,
         optical_preset=optical_preset,
     )
-    if (
-        campaign.is_discrete
-        and output_directory == _CONTINUOUS_OUTPUT_DIRECTORY.resolve()
-    ):
-        raise ValueError("the discrete campaign cannot use the continuous output")
+    if output_directory == _CONTINUOUS_OUTPUT_DIRECTORY.resolve():
+        raise ValueError(
+            "the full-finger campaign cannot use the historical continuous output"
+        )
     campaign_files_exist = any(
         (output_directory / filename).exists()
         for filename in (
@@ -1883,8 +1940,8 @@ def run(
 
         print(
             f"completed trial {trial_index}: "
-            f"J_intensity={float(row['J_intensity']):.9e}, "
-            f"J_spatial={float(row['J_spatial']):.9e}, "
+            f"J_contact={float(row['J_contact']):.9e}, "
+            f"J_obs={float(row['J_obs']):.9e}, "
             f"runtime={float(row['runtime_s']):.3f} s",
             flush=True,
         )
@@ -1920,13 +1977,13 @@ def run(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Run cumulative sequential Ax multi-objective LUMO BO."
+        description="Run the full-finger sequential Ax multi-objective campaign."
     )
     parser.add_argument(
         "--campaign",
-        choices=("continuous", "discrete-05mm"),
-        default="continuous",
-        help="search-space contract; campaigns use separate default outputs",
+        choices=("discrete-05mm",),
+        default="discrete-05mm",
+        help="five-dimensional half-millimeter production search space",
     )
     parser.add_argument(
         "--output",
@@ -1938,7 +1995,7 @@ def main() -> None:
         "--target-bo-trials",
         type=int,
         required=True,
-        help="cumulative successful new-evaluation target; warm starts are excluded",
+        help="cumulative successful evaluation target",
     )
     arguments = parser.parse_args()
     campaign = _campaign_definition(arguments.campaign)
