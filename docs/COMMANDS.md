@@ -102,6 +102,18 @@ the focused unit suite.
 
 ## Production BO
 
+Before a long campaign, run the single end-to-end smoke command:
+
+```bash
+conda run --no-capture-output -n lit \
+  python -u validation/optomech/mobo_smoke.py
+```
+
+This uses the exact production settings, evaluates one successful full-finger
+morphology in a fresh timestamped `output/validation/mobo_smoke/` directory,
+and verifies raw NPZ/CSV output, atomic Ax state, and resume reload. It is an
+expensive GPU smoke, not a lightweight unit test.
+
 Review the user settings at the top of `scripts/run_mobo.py`, use a fresh output
 directory for a new scientific contract, then run:
 

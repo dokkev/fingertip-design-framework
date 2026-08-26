@@ -105,8 +105,11 @@ def test_production_scientific_contract_is_explicitly_serialized() -> None:
     assert config["mechanics"]["parallel_world_count"] == 4
     assert config["mechanics"]["sim_frequency_hz"] == 100.0
     assert config["mechanics"]["vbd_iterations"] == 10
-    assert config["mechanics"]["snapshot_dwell_s"] == 0.0
-    assert config["mechanics"]["force_feedback"] is False
+    assert config["mechanics"]["capture_rule"] == (
+        "first reaction-force sample >= threshold"
+    )
+    assert "snapshot_dwell_s" not in config["mechanics"]
+    assert "force_feedback" not in config["mechanics"]
     assert config["mechanics"]["approach_speed_m_s"] == 5.0e-3
     assert config["mechanics"]["displacement_m_tick"] == 5.0e-5
     assert config["optics"]["led_centers_y_mm"] == [-22.0, -11.0, 0.0, 11.0, 22.0]

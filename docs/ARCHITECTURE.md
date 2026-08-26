@@ -677,6 +677,12 @@ run config records the finite `1.8 x 1.6 mm` package-window source, the
 four-world backend, and dependency/source hashes. Resume is refused if the
 scientific source, optimizer source, dependency versions, or serialized
 scientific contract differ.
+`validation/optomech/mobo_smoke.py` reads those production entry settings
+without changing `scripts/run_mobo.py`, targets one successful morphology in a
+fresh timestamped validation directory, and invokes the same Ax loop. It then
+reopens that directory through the public resume path and verifies that the
+completed trial is neither lost nor repeated, without touching the
+120-morphology campaign directory.
 
 The previous continuous and six-dimensional discrete Ax campaigns remain
 historical artifacts and cannot be resumed through the production entry point.
