@@ -10,7 +10,6 @@ from .objective import (
     compute_objectives_from_raw,
     compute_observation_objective,
 )
-from .sensing_objective import sensing_descriptors, sensing_objectives
 
 __all__ = [
     "DesignParameterBounds",
@@ -23,6 +22,4 @@ __all__ = [
     "compute_contact_objective",
     "compute_objectives_from_raw",
     "compute_observation_objective",
-    "sensing_descriptors",
-    "sensing_objectives",
 ]

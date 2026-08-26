@@ -632,18 +632,6 @@ That validation selected finite-area origins and per-ray initial media for
 production while retaining hard bins. Ballistic transport, ray count, bounce count, and
 `J_obs` are unchanged in this comparison.
 
-`sensing_descriptors()` consumes a state array shaped `(contact states, 4)`.
-For the current single optical cell it forms one scalar intensity response from
-total side-visible power relative to no contact, and one normalized four-value
-spatial response per state. It rejects a numerically zero no-contact reference
-or state-visible total instead of adding an objective-changing epsilon.
-`sensing_objectives()` returns the separate worst-case pairwise scalar-intensity
-and Euclidean spatial separations. With grouped responses shaped
-`(indenter, force state, quadrant)`, it compares force states only within each
-indenter and returns both the per-indenter values and their indenter-wise
-minima. It does not know about LEDs, Newton, OptiX, ray tracing, morphology, or
-objective weights.
-
 The next full-finger discrete search contract fixes both
 `flat_pad_width_mm=30` and `void_height_mm=0`. It exposes five geometry
 dimensions--flat height, semiellipse height, stem width, stem height, and void
