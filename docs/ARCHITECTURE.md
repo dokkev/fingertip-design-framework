@@ -373,9 +373,10 @@ and the simulation timestep.
 
 The same trial runtime advances through the study's force targets without
 resetting Newton state. The production evaluator captures
-the first measured state at or above each of `5, 10, 15, 20 N`; target
-tolerance is not an acceptance condition. The inspection callback receives
-that exact state from its device checkpoint slot.
+the first measured state at or above each configured force threshold; target
+tolerance is not an acceptance condition. At least three strictly increasing
+thresholds are required for the contact objective. The inspection callback
+receives that exact state from its device checkpoint slot.
 
 The production first-crossing path is simply:
 
@@ -684,9 +685,13 @@ campaign starts with no reused objective observations. The expensive one-trial
 save/resume verification remains solely in
 `validation/optomech/mobo_smoke.py`.
 
-`objective.py` owns the frozen production reductions. For every mechanical
-scenario it computes finite 5 N patch formation, reference-area-weighted
-5-to-20 N Lagrangian patch IoU, and progressive stiffening, then defines
+`objective.py` owns the production reductions. For every mechanical scenario
+it computes finite patch formation at the second configured force,
+reference-area-weighted Lagrangian patch IoU between the second and highest
+forces, and progressive stiffening from the first and last force intervals.
+For the production `1/2/5/10 N` thresholds, this means patch formation at
+`2 N`, patch stability from `2` to `10 N`, early stiffness from `1` to `2 N`,
+and late stiffness from `5` to `10 N`. It then defines
 `J_contact` as the minimum scenario-wise geometric mean of those three terms.
 The mean-normal score remains diagnostic only. `J_obs` first sums the LED axis,
 subtracts the no-contact simultaneous field, divides by total emitted power
@@ -695,10 +700,9 @@ force threshold, and distinct contact-Y pairs. Contact onset is diagnostic only;
 variation is not penalized. Both reducers accept saved raw NPZ arrays and know
 nothing about Newton, OptiX, or Ax.
 
-The production Ax contract evaluates the exact Cartesian product of sphere
-diameters `5/10/20 mm` and contact Y positions
-`[-22,-11,-5.5,0,5.5,11,22] mm`, with sequential instantaneous
-`5/10/15/20 N` threshold snapshots.
+The production Ax contract evaluates the exact Cartesian product of the sphere
+diameters and contact Y positions selected in `scripts/run_mobo.py`, with
+sequential instantaneous snapshots at its configured force thresholds.
 It maximizes only `J_contact` and `J_obs`, without scalarization or objective
 thresholds. Trial NPZ files retain raw mechanics, optical responses, component
 scores, limiting conditions, same-force separation matrices, onset and ROI

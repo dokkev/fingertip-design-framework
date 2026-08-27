@@ -253,8 +253,8 @@ def _indenter_definitions(
 
 def _force_targets(force_targets_n: Iterable[float]) -> tuple[float, ...]:
     targets = tuple(float(target) for target in force_targets_n)
-    if len(targets) < 2:
-        raise ValueError("force_targets_n must contain at least two targets")
+    if len(targets) < 3:
+        raise ValueError("force_targets_n must contain at least three targets")
     if any(not isfinite(target) or target <= 0.0 for target in targets):
         raise ValueError("force targets must be finite and positive")
     if any(current <= previous for previous, current in zip(targets, targets[1:])):

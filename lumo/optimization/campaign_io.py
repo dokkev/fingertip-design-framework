@@ -36,8 +36,8 @@ SUMMARY_FILENAME = "run_summary.json"
 TRIAL_RESULT_DIRECTORY = "trials"
 
 _OBJECTIVE_NAMES = ("J_contact", "J_obs")
-_RUN_CONFIG_SCHEMA = 11
-_OBJECTIVE_DEFINITION = "fingertip-contact-and-threshold-conditioned-observation-v2"
+_RUN_CONFIG_SCHEMA = 12
+_OBJECTIVE_DEFINITION = "fingertip-contact-and-threshold-conditioned-observation-v3"
 
 
 def _fieldnames(campaign: CampaignDefinition) -> list[str]:
@@ -406,7 +406,9 @@ def build_run_config(campaign: CampaignDefinition) -> dict[str, object]:
                 "definition": _OBJECTIVE_DEFINITION,
                 "J_contact": (
                     "min over diameter/location scenarios of "
-                    "cuberoot(q_form*q_stable*q_stiff)"
+                    "cuberoot(q_form*q_stable*q_stiff); q_form uses the second "
+                    "force, q_stable uses second/highest, and q_stiff compares "
+                    "the first and last force intervals"
                 ),
                 "J_obs": (
                     "min over diameter, force threshold, and distinct contact-Y "
@@ -546,7 +548,7 @@ def save_trial_result(
             q_stiff=np.asarray(contact.q_stiff),
             q_contact=np.asarray(contact.q_contact),
             q_normal_diagnostic=np.asarray(contact.q_normal),
-            patch_area_5_m2=np.asarray(contact.patch_area_5_m2),
+            patch_area_formation_m2=np.asarray(contact.patch_area_formation_m2),
             k_early_n_m=np.asarray(contact.k_early_n_m),
             k_late_n_m=np.asarray(contact.k_late_n_m),
             J_obs=np.asarray(details["J_obs"]),

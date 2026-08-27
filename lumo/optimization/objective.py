@@ -9,9 +9,6 @@ from itertools import combinations
 import numpy as np
 
 
-_REQUIRED_FORCE_TARGETS_N = (5.0, 10.0, 15.0, 20.0)
-
-
 @dataclass(frozen=True)
 class ContactObjective:
     """Worst-case contact quality and its per-scenario components."""
@@ -24,7 +21,7 @@ class ContactObjective:
     q_stiff: np.ndarray
     q_contact: np.ndarray
     q_normal: np.ndarray
-    patch_area_5_m2: np.ndarray
+    patch_area_formation_m2: np.ndarray
     k_early_n_m: np.ndarray
     k_late_n_m: np.ndarray
 
@@ -129,16 +126,15 @@ def _mean_contact_normal(normals: np.ndarray) -> np.ndarray:
     return normal / norm
 
 
-def _required_force_indices(force_targets_n: np.ndarray) -> dict[float, int]:
+def _contact_force_targets(force_targets_n: np.ndarray) -> np.ndarray:
     targets = np.asarray(force_targets_n, dtype=np.float64)
-    if targets.shape != (4,) or not np.allclose(
-        targets,
-        _REQUIRED_FORCE_TARGETS_N,
-        rtol=0.0,
-        atol=1.0e-9,
-    ):
-        raise ValueError("contact objective requires [5, 10, 15, 20] N")
-    return {target: index for index, target in enumerate(_REQUIRED_FORCE_TARGETS_N)}
+    if targets.ndim != 1 or len(targets) < 3:
+        raise ValueError("contact objective requires at least three force targets")
+    if not np.all(np.isfinite(targets)) or np.any(targets <= 0.0):
+        raise ValueError("force targets must be finite and positive")
+    if np.any(np.diff(targets) <= 0.0):
+        raise ValueError("force targets must be strictly increasing")
+    return targets
 
 
 def compute_contact_objective(
@@ -155,10 +151,11 @@ def compute_contact_objective(
     contact_normals_W: np.ndarray,
     silicone_vertices_m: np.ndarray,
 ) -> ContactObjective:
-    """Compute finite patch, patch stability, and progressive stiffening."""
+    """Score second-checkpoint patch formation, stability, and stiffening."""
     names = tuple(str(name) for name in scenario_names)
     scenario_count = len(names)
-    force_indices = _required_force_indices(force_targets_n)
+    force_targets = _contact_force_targets(force_targets_n)
+    force_count = len(force_targets)
     triangles = np.asarray(surface_triangles, dtype=np.int32)
     reference_vertices = np.asarray(reference_vertices_m, dtype=np.float64)
     diameters = np.asarray(sphere_diameters_mm, dtype=np.float64)
@@ -168,7 +165,7 @@ def compute_contact_objective(
     indices = np.asarray(contact_particle_indices, dtype=np.int32)
     normals = np.asarray(contact_normals_W, dtype=np.float64)
     vertices = np.asarray(silicone_vertices_m, dtype=np.float64)
-    expected_state_shape = (scenario_count, len(force_indices))
+    expected_state_shape = (scenario_count, force_count)
     if triangles.ndim != 2 or triangles.shape[1] != 3:
         raise ValueError("surface_triangles must have shape (triangle, 3)")
     if diameters.shape != (scenario_count,) or np.any(diameters <= 0.0):
@@ -193,43 +190,46 @@ def compute_contact_objective(
     q_stiff = np.empty(scenario_count, dtype=np.float64)
     q_contact = np.empty(scenario_count, dtype=np.float64)
     q_normal = np.empty(scenario_count, dtype=np.float64)
-    patch_area_5_m2 = np.empty(scenario_count, dtype=np.float64)
+    patch_area_formation_m2 = np.empty(scenario_count, dtype=np.float64)
     k_early_n_m = np.empty(scenario_count, dtype=np.float64)
     k_late_n_m = np.empty(scenario_count, dtype=np.float64)
 
     for scenario_index, scenario_name in enumerate(names):
-        patches: dict[float, set[int]] = {}
-        mean_normals: dict[float, np.ndarray] = {}
-        for target_n, force_index in force_indices.items():
+        patches: list[set[int]] = []
+        mean_normals: list[np.ndarray] = []
+        for force_index in range(force_count):
             start, count = offsets[scenario_index, force_index]
             if start < 0 or count <= 0 or start + count > len(indices):
                 raise ValueError(f"{scenario_name} has invalid contact offsets")
             contact_slice = indices[start : start + count]
-            patches[target_n] = _active_surface_triangles(
-                contact_slice,
-                vertex_triangles=vertex_triangles,
-                edge_triangles=edge_triangles,
-                triangle_ids=triangle_ids,
+            patches.append(
+                _active_surface_triangles(
+                    contact_slice,
+                    vertex_triangles=vertex_triangles,
+                    edge_triangles=edge_triangles,
+                    triangle_ids=triangle_ids,
+                )
             )
-            mean_normals[target_n] = _mean_contact_normal(
-                normals[start : start + count]
+            mean_normals.append(
+                _mean_contact_normal(normals[start : start + count])
             )
 
-        patch_5 = patches[5.0]
-        patch_20 = patches[20.0]
-        area_5_m2 = float(
+        formation_index = 1
+        formation_patch = patches[formation_index]
+        high_patch = patches[-1]
+        formation_area_m2 = float(
             _triangle_areas(
-                vertices[scenario_index, force_indices[5.0]],
+                vertices[scenario_index, formation_index],
                 triangles,
-            )[list(patch_5)].sum()
+            )[list(formation_patch)].sum()
         )
         radius_m = 0.5e-3 * diameters[scenario_index]
         q_form[scenario_index] = min(
             1.0,
-            np.sqrt(area_5_m2 / (np.pi * radius_m**2)),
+            np.sqrt(formation_area_m2 / (np.pi * radius_m**2)),
         )
-        intersection = patch_5 & patch_20
-        union = patch_5 | patch_20
+        intersection = formation_patch & high_patch
+        union = formation_patch | high_patch
         union_area_m2 = float(reference_areas_m2[list(union)].sum())
         if union_area_m2 <= 0.0:
             raise ValueError(f"{scenario_name} has zero reference patch area")
@@ -238,29 +238,31 @@ def compute_contact_objective(
         )
         q_normal[scenario_index] = float(
             np.clip(
-                0.5 * np.dot(mean_normals[5.0], mean_normals[20.0]) + 0.5,
+                0.5
+                * np.dot(mean_normals[formation_index], mean_normals[-1])
+                + 0.5,
                 0.0,
                 1.0,
             )
         )
 
         early_delta_m = (
-            indentations[scenario_index, force_indices[10.0]]
-            - indentations[scenario_index, force_indices[5.0]]
+            indentations[scenario_index, 1]
+            - indentations[scenario_index, 0]
         )
         late_delta_m = (
-            indentations[scenario_index, force_indices[20.0]]
-            - indentations[scenario_index, force_indices[15.0]]
+            indentations[scenario_index, -1]
+            - indentations[scenario_index, -2]
         )
         if early_delta_m <= 0.0 or late_delta_m <= 0.0:
             raise ValueError(f"{scenario_name} has non-increasing indentation")
         k_early = (
-            forces[scenario_index, force_indices[10.0]]
-            - forces[scenario_index, force_indices[5.0]]
+            forces[scenario_index, 1]
+            - forces[scenario_index, 0]
         ) / early_delta_m
         k_late = (
-            forces[scenario_index, force_indices[20.0]]
-            - forces[scenario_index, force_indices[15.0]]
+            forces[scenario_index, -1]
+            - forces[scenario_index, -2]
         ) / late_delta_m
         if not np.isfinite(k_early) or not np.isfinite(k_late):
             raise ValueError(f"{scenario_name} has non-finite stiffness")
@@ -274,7 +276,7 @@ def compute_contact_objective(
                 * q_stiff[scenario_index]
             )
         )
-        patch_area_5_m2[scenario_index] = area_5_m2
+        patch_area_formation_m2[scenario_index] = formation_area_m2
         k_early_n_m[scenario_index] = k_early
         k_late_n_m[scenario_index] = k_late
 
@@ -288,7 +290,7 @@ def compute_contact_objective(
         q_stiff=q_stiff,
         q_contact=q_contact,
         q_normal=q_normal,
-        patch_area_5_m2=patch_area_5_m2,
+        patch_area_formation_m2=patch_area_formation_m2,
         k_early_n_m=k_early_n_m,
         k_late_n_m=k_late_n_m,
     )

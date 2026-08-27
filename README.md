@@ -24,8 +24,8 @@ void width
 
 Flat-pad width is fixed at `30 mm`, void height is fixed at zero, and the
 `5.1 x 0.19 mm` LED recess is a hardware feature rather than an optimization
-variable. One evaluation uses 5/10/20 mm spheres, seven longitudinal contact
-locations, and sequential 5/10/15/20 N first-crossing snapshots.
+variable. One evaluation uses the sphere diameters, longitudinal contact
+locations, and sequential force thresholds configured in `scripts/run_mobo.py`.
 
 ## Repository map
 

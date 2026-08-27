@@ -382,10 +382,10 @@ def evaluate_fingertip(
         raise ValueError("contact_y_mm must be unique")
 
     force_targets = tuple(float(target) for target in force_targets_n)
-    if len(force_targets) < 2 or any(
+    if len(force_targets) < 3 or any(
         not np.isfinite(target) or target <= 0.0 for target in force_targets
     ):
-        raise ValueError("force_targets_n must contain at least two positive values")
+        raise ValueError("force_targets_n must contain at least three positive values")
     if any(
         current <= previous
         for previous, current in zip(force_targets, force_targets[1:])

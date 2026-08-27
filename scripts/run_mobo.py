@@ -22,17 +22,17 @@ PARAMETER_BOUNDS_MM = {
     "semiellipse_height_mm": (1.0, 20.0),
     "stem_width_mm": (4.0, 15.0),
     "stem_height_mm": (2.0, 15.0),
-    "void_width_mm": (0.0, 4.0),
+    "void_width_mm": (0.0, 10.0),
 }
 INDENTER_URDFS = (
-    "sphere_5mm.urdf",
     "sphere_10mm.urdf",
+    "sphere_15mm.urdf",
     "sphere_20mm.urdf",
 )
-SPHERE_DIAMETERS_MM = (5.0, 10.0, 20.0)
+SPHERE_DIAMETERS_MM = (10.0, 15.0, 20.0)
 CONTACT_Y_MM = (-22.0, -11.0, -5.5, 0.0, 5.5, 11.0, 22.0)
 INITIAL_CLEARANCE_M = 1.0e-3
-FORCE_TARGETS_N = (5.0, 10.0, 15.0, 20.0)
+FORCE_TARGETS_N = (1.0, 2.0, 5.0, 10.0)
 TARGET_MORPHOLOGIES = 120
 OUTPUT_DIRECTORY = (
     Path(__file__).resolve().parents[1]
