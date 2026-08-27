@@ -27,9 +27,6 @@ if TYPE_CHECKING:
     import newton
 
 
-_MM_TO_M = 1.0e-3
-
-
 @dataclass(frozen=True)
 class FingertipMesh:
     """Newton meshes produced from one analytic fingertip assembly."""
@@ -39,7 +36,6 @@ class FingertipMesh:
     carrier: "newton.Mesh"
     carrier_collision: "newton.Mesh"
     bonded_vertex_indices: np.ndarray
-    led_centers_m: np.ndarray
 
     def __post_init__(self) -> None:
         indices = np.asarray(
@@ -48,31 +44,18 @@ class FingertipMesh:
         )
         if indices.ndim != 1:
             raise ValueError("bonded_vertex_indices must be one-dimensional")
+        if indices.size == 0:
+            raise ValueError("bonded_vertex_indices must not be empty")
         if np.any(indices < 0):
             raise ValueError("bonded_vertex_indices must be non-negative")
 
         indices = np.unique(indices)
+        if indices[-1] >= self.silicone.vertex_count:
+            raise ValueError(
+                "bonded vertex index exceeds silicone vertex count"
+            )
         indices.setflags(write=False)
         object.__setattr__(self, "bonded_vertex_indices", indices)
-        centers = np.asarray(self.led_centers_m, dtype=np.float64)
-        expected_shape = (len(LED_CENTERS_Y_MM), 3)
-        if centers.shape != expected_shape:
-            raise ValueError(
-                f"led_centers_m must have shape {expected_shape}"
-            )
-        if not np.all(np.isfinite(centers)):
-            raise ValueError("led_centers_m must be finite")
-        if not np.allclose(
-            centers[:, 1],
-            _MM_TO_M * np.asarray(LED_CENTERS_Y_MM),
-            rtol=0.0,
-            atol=1.0e-12,
-        ):
-            raise ValueError("LED centers do not match the hardware layout")
-
-        centers = np.ascontiguousarray(centers)
-        centers.setflags(write=False)
-        object.__setattr__(self, "led_centers_m", centers)
 
 
 def make_fingertip_mesh(
@@ -110,24 +93,12 @@ def make_fingertip_mesh(
         led_recess_depth_mm=LED_RECESS_DEPTH_MM,
     )
 
-    led_top_z_m = _MM_TO_M * (
-        min(z_mm for _, z_mm in fingertip.carrier.cross_section)
-        + LED_RECESS_DEPTH_MM
-    )
-    centers_m = np.asarray(
-        [
-            (0.0, _MM_TO_M * y_mm, led_top_z_m)
-            for y_mm in LED_CENTERS_Y_MM
-        ],
-        dtype=np.float64,
-    )
     return FingertipMesh(
         fingertip=fingertip,
         silicone=silicone,
         carrier=carrier,
         carrier_collision=carrier_collision,
         bonded_vertex_indices=bonded_vertex_indices,
-        led_centers_m=centers_m,
     )
 
 

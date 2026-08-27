@@ -79,7 +79,6 @@ def _run_scenario(
             soft_contact_stiffness_n_m=3.0e4,
             soft_contact_damping_n_s_m=0.28228017516945547,
             element_size_mm=1.0,
-            carrier_contact_stiffness_n_m=1.0e6,
         )
 
         travel_m = 0.0

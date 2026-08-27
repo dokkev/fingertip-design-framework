@@ -34,8 +34,9 @@ def main() -> None:
     print(f"silicone tetrahedra: {fingertip_mesh.silicone.tet_count}")
     print(f"bonded vertices:     {len(fingertip_mesh.bonded_vertex_indices)}")
     print("LED centers [m]:")
-    for index, center_m in enumerate(fingertip_mesh.led_centers_m, start=1):
-        print(f"  LED {index}: {center_m.tolist()}")
+    led_source_centers_m = fingertip_mesh.fingertip.led_source_centers_m
+    for index, center_m in enumerate(led_source_centers_m, start=1):
+        print(f"  LED {index}: {list(center_m)}")
     print("Green markers show the five LED reference positions.")
 
     if model.particle_count != fingertip_mesh.silicone.vertex_count:
@@ -50,11 +51,11 @@ def main() -> None:
         dtype=wp.int32,
     )
     led_centers = wp.array(
-        fingertip_mesh.led_centers_m,
+        led_source_centers_m,
         dtype=wp.vec3,
     )
     led_colors = wp.full(
-        len(fingertip_mesh.led_centers_m),
+        len(led_source_centers_m),
         _LED_COLOR,
         dtype=wp.vec3,
     )

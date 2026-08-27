@@ -15,7 +15,6 @@ from lumo.util.scalar_validation import require_nonnegative, require_positive
 
 _DEFAULT_SOFT_CONTACT_MARGIN_M = 1.0e-4
 _DEFAULT_ELEMENT_SIZE_MM = 1.0
-_DEFAULT_CARRIER_CONTACT_STIFFNESS_N_M = 1.0e6
 _VBD_BODY_PARTICLE_CONTACT_BUFFER_SIZE = 2048
 _FORCE_CHECKPOINT_CAPACITY = 4
 
@@ -295,9 +294,6 @@ class LumoSimulation:
         soft_contact_stiffness_n_m: float | None = None,
         soft_contact_damping_n_s_m: float | None = None,
         element_size_mm: float = _DEFAULT_ELEMENT_SIZE_MM,
-        carrier_contact_stiffness_n_m: float = (
-            _DEFAULT_CARRIER_CONTACT_STIFFNESS_N_M
-        ),
     ) -> None:
         if not isinstance(fingertip, Fingertip):
             raise TypeError("fingertip must be a Fingertip")
@@ -347,10 +343,6 @@ class LumoSimulation:
                 soft_contact_damping_n_s_m,
             )
         require_positive("element_size_mm", element_size_mm)
-        require_positive(
-            "carrier_contact_stiffness_n_m",
-            carrier_contact_stiffness_n_m,
-        )
         self.fingertip = fingertip
         if fingertip_model is None:
             self.fingertip_mesh = (
@@ -364,7 +356,6 @@ class LumoSimulation:
             self.fingertip_model = build_fingertip_newton_model(
                 self.fingertip_mesh,
                 builder=builder,
-                carrier_contact_stiffness_n_m=carrier_contact_stiffness_n_m,
             )
         else:
             self.fingertip_mesh = fingertip_model.fingertip_mesh
@@ -512,11 +503,7 @@ class LumoSimulation:
         state_out: newton.State,
     ) -> None:
         """Launch the fixed device work for one Newton tick."""
-        self.fingertip_model.prepare_step(
-            state_in,
-            state_out,
-            wp.transform_identity(),
-        )
+        self.fingertip_model.prepare_step(state_in, state_out)
         if state_in.body_qd is None:
             raise RuntimeError("simulation state has no rigid-body velocities")
         wp.copy(self._body_qd_before, state_in.body_qd)

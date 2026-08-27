@@ -10,50 +10,44 @@ import newton
 import warp as wp
 
 from lumo.mesh import FingertipMesh
-from lumo.util.scalar_validation import require_positive
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
 
-# VBD rigid-soft contact is penalty-based. This is the validated carrier-contact
-# stiffness used by the current model.
-_DEFAULT_CARRIER_CONTACT_STIFFNESS_N_M = 1.0e6
+# VBD rigid-soft contact is penalty-based. This is the validated fixed
+# carrier-contact stiffness used by the current model.
+_CARRIER_CONTACT_STIFFNESS_N_M = 1.0e6
 
 
 @wp.kernel
-def _set_body_pose(
-    pose: wp.transform,
+def _set_fixed_carrier_pose(
     body_index: int,
     body_q: wp.array(dtype=wp.transform),
 ):
-    body_q[body_index] = pose
+    body_q[body_index] = wp.transform_identity()
 
 
 @wp.kernel
 def _set_bonded_particles(
-    pose: wp.transform,
     bonded_particle_indices: wp.array(dtype=wp.int32),
-    bonded_local_positions: wp.array(dtype=wp.vec3),
+    bonded_reference_positions: wp.array(dtype=wp.vec3),
     particle_q: wp.array(dtype=wp.vec3),
     particle_qd: wp.array(dtype=wp.vec3),
 ):
     index = wp.tid()
     particle_index = bonded_particle_indices[index]
-    particle_q[particle_index] = wp.transform_point(
-        pose,
-        bonded_local_positions[index],
-    )
+    particle_q[particle_index] = bonded_reference_positions[index]
     particle_qd[particle_index] = wp.vec3(0.0)
 
 
 @dataclass
 class FingertipNewtonModel:
-    """Newton model with a prescribed carrier and perfect silicone bond.
+    """Newton model with a fixed carrier and perfect silicone bond.
 
-    ``bonded_particle_indices`` are global Newton particle indices.  Their
-    reference positions are kept in ``bonded_local_positions`` so the bond
-    can be applied without copying particle arrays to the host.
+    ``bonded_particle_indices`` are global Newton particle indices. Their
+    fixed world-frame positions are kept in ``bonded_reference_positions`` so
+    the bond can be applied without copying particle arrays to the host.
     """
 
     fingertip_mesh: FingertipMesh
@@ -62,7 +56,7 @@ class FingertipNewtonModel:
     silicone_particle_start: int
     silicone_particle_count: int
     bonded_particle_indices: wp.array
-    bonded_local_positions: wp.array
+    bonded_reference_positions: wp.array
 
     def silicone_vertices(self, state: newton.State) -> np.ndarray:
         """Return current silicone positions in fingertip-mesh vertex order."""
@@ -89,21 +83,20 @@ class FingertipNewtonModel:
             raise RuntimeError("silicone particle positions are not finite")
         return vertices
 
-    def apply_carrier_pose(
+    def _apply_fixed_boundary(
         self,
         state: newton.State,
-        pose: wp.transform,
     ) -> None:
-        """Apply one prescribed carrier pose to one Newton state."""
+        """Reset one state to the fixed carrier and bond boundary."""
         if state.body_q is None:
             raise ValueError("state must contain rigid-body poses")
         if state.particle_q is None or state.particle_qd is None:
             raise ValueError("state must contain particle positions and velocities")
 
         wp.launch(
-            _set_body_pose,
+            _set_fixed_carrier_pose,
             dim=1,
-            inputs=[pose, self.carrier_body],
+            inputs=[self.carrier_body],
             outputs=[state.body_q],
             device=self.model.device,
         )
@@ -111,9 +104,8 @@ class FingertipNewtonModel:
             _set_bonded_particles,
             dim=self.bonded_particle_indices.shape[0],
             inputs=[
-                pose,
                 self.bonded_particle_indices,
-                self.bonded_local_positions,
+                self.bonded_reference_positions,
             ],
             outputs=[state.particle_q, state.particle_qd],
             device=self.model.device,
@@ -123,20 +115,19 @@ class FingertipNewtonModel:
         self,
         state_in: newton.State,
         state_out: newton.State,
-        pose: wp.transform,
     ) -> None:
         """Update both state buffers before one solver step.
 
         The caller should invoke this before one global Newton step. Updating
-        both buffers keeps the prescribed bond valid after the runtime swaps
+        both buffers keeps the fixed bond valid after the runtime swaps
         its state references.
         """
-        self.apply_carrier_pose(state_in, pose)
+        self._apply_fixed_boundary(state_in)
         if state_out is not state_in:
-            self.apply_carrier_pose(state_out, pose)
+            self._apply_fixed_boundary(state_out)
 
 
-def _bonded_local_positions(
+def _bonded_reference_positions(
     particle_positions: Sequence[object],
     particle_indices: np.ndarray,
 ) -> np.ndarray:
@@ -157,11 +148,8 @@ def build_fingertip_newton_model(
     fingertip_mesh: FingertipMesh,
     *,
     builder: newton.ModelBuilder | None = None,
-    carrier_contact_stiffness_n_m: float = (
-        _DEFAULT_CARRIER_CONTACT_STIFFNESS_N_M
-    ),
 ) -> FingertipNewtonModel:
-    """Build the first concrete Newton model for one fingertip mesh.
+    """Build the Newton model for one fingertip mesh.
 
     The carrier is a kinematic rigid body at the identity pose. Its full mesh
     is visualization-only, while a second mesh exposes only the cavity-facing
@@ -171,19 +159,7 @@ def build_fingertip_newton_model(
     """
     if not isinstance(fingertip_mesh, FingertipMesh):
         raise TypeError("fingertip_mesh must be a FingertipMesh")
-    require_positive(
-        "carrier_contact_stiffness_n_m",
-        carrier_contact_stiffness_n_m,
-    )
-
-    local_indices = np.asarray(
-        fingertip_mesh.bonded_vertex_indices,
-        dtype=np.int32,
-    )
-    if local_indices.size == 0:
-        raise ValueError("fingertip mesh must contain bonded vertices")
-    if np.any(local_indices >= fingertip_mesh.silicone.vertex_count):
-        raise ValueError("bonded vertex index exceeds silicone vertex count")
+    local_indices = fingertip_mesh.bonded_vertex_indices
 
     parameters = fingertip_mesh.fingertip.parameters
     material = parameters.mechanics
@@ -255,7 +231,7 @@ def build_fingertip_newton_model(
     )
     carrier_collision_cfg = newton.ModelBuilder.ShapeConfig(
         density=0.0,
-        ke=carrier_contact_stiffness_n_m,
+        ke=_CARRIER_CONTACT_STIFFNESS_N_M,
         margin=0.0,
         is_solid=True,
         collision_group=1,
@@ -281,7 +257,7 @@ def build_fingertip_newton_model(
 
     builder.color()
     model = builder.finalize(requires_grad=False)
-    local_positions = _bonded_local_positions(
+    reference_positions = _bonded_reference_positions(
         builder.particle_q,
         global_indices,
     )
@@ -297,8 +273,8 @@ def build_fingertip_newton_model(
             dtype=wp.int32,
             device=model.device,
         ),
-        bonded_local_positions=wp.array(
-            local_positions,
+        bonded_reference_positions=wp.array(
+            reference_positions,
             dtype=wp.vec3,
             device=model.device,
         ),

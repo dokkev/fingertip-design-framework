@@ -39,7 +39,6 @@ _CONTACT_STIFFNESS_N_M = 3.0e4
 _CONTACT_DAMPING_N_S_M = 0.28228017516945547
 _ELEMENT_SIZE_MM = 1.0
 _SOFT_CONTACT_MARGIN_M = 1.0e-4
-_CARRIER_CONTACT_STIFFNESS_N_M = 1.0e6
 _FORCE_TARGETS_N = (5.0, 10.0, 15.0, 20.0)
 _ENERGY_FIELDS = (
     "emitted_power",
@@ -61,7 +60,7 @@ class FingertipEvaluation:
     tet_indices: np.ndarray
     surface_triangles: np.ndarray
     bonded_vertex_indices: np.ndarray
-    led_centers_m: np.ndarray
+    led_source_centers_m: np.ndarray
     no_contact_response: np.ndarray
     no_contact_energy: np.ndarray
     no_contact_inside_roi_power: np.ndarray
@@ -163,10 +162,7 @@ def _path_energy(paths: PathTraceResult) -> np.ndarray:
     )
 
 
-def _make_leds(
-    fingertip: Fingertip,
-    fingertip_mesh: FingertipMesh,
-) -> tuple[LED, ...]:
+def _make_leds(fingertip: Fingertip) -> tuple[LED, ...]:
     normal_W = np.array((0.0, 0.0, -1.0), dtype=np.float64)
     return tuple(
         LED(
@@ -174,7 +170,7 @@ def _make_leds(
             normal_W=normal_W,
             parameters=fingertip.parameters.led,
         )
-        for center_m in fingertip_mesh.led_centers_m
+        for center_m in fingertip.led_source_centers_m
     )
 
 
@@ -432,7 +428,7 @@ def evaluate_fingertip(
         raise RuntimeError("fingertip reference mesh contains a degenerate tet")
 
     scene = OptixScene(fingertip_mesh)
-    leds = _make_leds(fingertip, fingertip_mesh)
+    leds = _make_leds(fingertip)
     emissions = _emissions(scene, leds)
     dielectric_branch_u, carrier_u1, carrier_u2 = _optical_samples(len(emissions[0]))
     no_contact_optics_start_s = perf_counter()
@@ -699,7 +695,6 @@ def evaluate_fingertip(
         element_size_mm=_ELEMENT_SIZE_MM,
         iterations=_VBD_ITERATIONS,
         soft_contact_margin_m=_SOFT_CONTACT_MARGIN_M,
-        carrier_contact_stiffness_n_m=_CARRIER_CONTACT_STIFFNESS_N_M,
         contact_stiffness_n_m=_CONTACT_STIFFNESS_N_M,
         contact_damping_n_s_m=_CONTACT_DAMPING_N_S_M,
     ).run(inspect_checkpoint=collect_checkpoint)
@@ -711,7 +706,10 @@ def evaluate_fingertip(
         tet_indices=tet_indices,
         surface_triangles=surface_triangles,
         bonded_vertex_indices=fingertip_mesh.bonded_vertex_indices,
-        led_centers_m=fingertip_mesh.led_centers_m,
+        led_source_centers_m=np.asarray(
+            fingertip.led_source_centers_m,
+            dtype=np.float64,
+        ),
         no_contact_response=no_contact_response,
         no_contact_energy=no_contact_energy,
         no_contact_inside_roi_power=no_contact_inside_roi_power,

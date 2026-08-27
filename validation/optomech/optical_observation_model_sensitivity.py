@@ -111,7 +111,7 @@ def _validate_saved_contract(
 ) -> None:
     for name in (
         "reference_vertices_m",
-        "led_centers_m",
+        "led_source_centers_m",
         "scenario_names",
         "sphere_diameters_mm",
         "contact_y_mm",
@@ -121,7 +121,10 @@ def _validate_saved_contract(
             raise RuntimeError(f"saved deformation contract differs in {name}")
 
 
-def _make_leds(fingertip: Fingertip, led_centers_m: np.ndarray) -> tuple[LED, ...]:
+def _make_leds(
+    fingertip: Fingertip,
+    led_source_centers_m: np.ndarray,
+) -> tuple[LED, ...]:
     normal_W = np.array((0.0, 0.0, -1.0), dtype=np.float64)
     return tuple(
         LED(
@@ -129,7 +132,7 @@ def _make_leds(fingertip: Fingertip, led_centers_m: np.ndarray) -> tuple[LED, ..
             normal_W=normal_W,
             parameters=fingertip.parameters.led,
         )
-        for center_m in led_centers_m
+        for center_m in led_source_centers_m
     )
 
 
@@ -716,7 +719,7 @@ def main() -> None:
     ):
         raise RuntimeError("saved deformation states do not match the current mesh")
     scene = OptixScene(mesh)
-    leds = _make_leds(fingertip, reference["led_centers_m"])
+    leds = _make_leds(fingertip, reference["led_source_centers_m"])
 
     coordinate = (
         np.arange(_SAMPLE_SIDE_COUNT, dtype=np.float64) + 0.5

@@ -408,7 +408,7 @@ def _build_solid_end_cap_cross_section(
     surfaces = [tag for dimension, tag in fused if dimension == 2]
     if len(surfaces) != 1:
         raise RuntimeError(
-            "5-LED solid end-cap cross-section must form one surface"
+            "solid end-cap cross-section must form one surface"
         )
     return surfaces[0]
 

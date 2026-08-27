@@ -1,4 +1,4 @@
-"""Check the first Newton fingertip kinematic boundary condition."""
+"""Check the Newton fingertip fixed boundary condition."""
 
 from __future__ import annotations
 
@@ -31,26 +31,27 @@ def main() -> None:
 
     state_0 = model.state()
     state_1 = model.state()
-    identity = wp.transform_identity()
-    fingertip_newton.prepare_step(state_0, state_1, identity)
+    fingertip_newton.prepare_step(state_0, state_1)
 
-    reference = model.particle_q.numpy()[bonded_indices]
-    identity_positions = state_0.particle_q.numpy()[bonded_indices]
-    np.testing.assert_allclose(identity_positions, reference, rtol=0.0, atol=1.0e-7)
+    reference = fingertip_newton.bonded_reference_positions.numpy()
+    identity = np.asarray(wp.transform_identity())
+    for state in (state_0, state_1):
+        bonded_positions = state.particle_q.numpy()[bonded_indices]
+        carrier_pose = state.body_q.numpy()[fingertip_newton.carrier_body]
+        np.testing.assert_allclose(
+            bonded_positions,
+            reference,
+            rtol=0.0,
+            atol=1.0e-7,
+        )
+        np.testing.assert_allclose(
+            carrier_pose,
+            identity,
+            rtol=0.0,
+            atol=1.0e-7,
+        )
 
-    translation = wp.transform(
-        p=wp.vec3(1.0e-3, -2.0e-3, 3.0e-3),
-        q=wp.quat_identity(),
-    )
-    fingertip_newton.prepare_step(state_0, state_1, translation)
-    translated = state_0.particle_q.numpy()[bonded_indices]
-    expected = fingertip_newton.bonded_local_positions.numpy() + np.asarray(
-        [1.0e-3, -2.0e-3, 3.0e-3],
-        dtype=np.float32,
-    )
-    np.testing.assert_allclose(translated, expected, rtol=0.0, atol=1.0e-7)
-
-    print("kinematic fingertip bond: PASS")
+    print("fixed fingertip bond: PASS")
     print(f"carrier body:             {fingertip_newton.carrier_body}")
     print(f"bonded particles:          {bonded_indices.size}")
 

@@ -138,7 +138,7 @@ def _draw_longitudinal(axes: plt.Axes, mesh) -> None:
             label="distal dorsal reinforcement",
         )
     )
-    centers_mm = 1.0e3 * mesh.led_centers_m
+    centers_mm = 1.0e3 * np.asarray(mesh.fingertip.led_source_centers_m)
     axes.scatter(
         centers_mm[:, 1],
         centers_mm[:, 2],
@@ -237,7 +237,7 @@ def _draw_material_mesh(axes, mesh) -> None:
             alpha=0.75,
         )
     )
-    centers_mm = 1.0e3 * mesh.led_centers_m
+    centers_mm = 1.0e3 * np.asarray(mesh.fingertip.led_source_centers_m)
     axes.scatter(
         centers_mm[:, 0],
         centers_mm[:, 1],
@@ -283,10 +283,10 @@ def main() -> None:
     print("five-LED mesh")
     for label, count in zip(labels, counts, strict=True):
         print(f"{label}: {count}")
-    print(
-        "LED centers Y [mm]: "
-        f"{(1.0e3 * mesh.led_centers_m[:, 1]).tolist()}"
-    )
+    led_source_y_mm = 1.0e3 * np.asarray(
+        mesh.fingertip.led_source_centers_m
+    )[:, 1]
+    print(f"LED centers Y [mm]: {led_source_y_mm.tolist()}")
 
     _OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     figure.savefig(_OUTPUT_PATH, dpi=180)

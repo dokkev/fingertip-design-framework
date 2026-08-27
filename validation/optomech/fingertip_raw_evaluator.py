@@ -44,7 +44,7 @@ def _save(evaluation: FingertipEvaluation) -> None:
         tet_indices=evaluation.tet_indices,
         surface_triangles=evaluation.surface_triangles,
         bonded_vertex_indices=evaluation.bonded_vertex_indices,
-        led_centers_m=evaluation.led_centers_m,
+        led_source_centers_m=evaluation.led_source_centers_m,
         no_contact_response=evaluation.no_contact_response,
         no_contact_energy=evaluation.no_contact_energy,
         no_contact_inside_roi_power=evaluation.no_contact_inside_roi_power,

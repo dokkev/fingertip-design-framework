@@ -8,6 +8,7 @@ from math import cos, isfinite, pi, sin, sqrt
 
 from .bonding_interface import BondingInterface, Point2D
 from .fingertip_param import FingertipParameters
+from .layout import LED_CENTERS_Y_MM, LED_RECESS_DEPTH_MM
 
 
 LineSegment2D = tuple[Point2D, Point2D]
@@ -175,6 +176,20 @@ class Fingertip:
             *carrier_z,
         )
         return top_z_mm - bottom_z_mm
+
+    @property
+    def led_source_centers_m(
+        self,
+    ) -> tuple[tuple[float, float, float], ...]:
+        """Return the five physical LED source-plane centers in metres."""
+        source_z_m = 1.0e-3 * (
+            min(z_mm for _, z_mm in self.carrier.cross_section)
+            + LED_RECESS_DEPTH_MM
+        )
+        return tuple(
+            (0.0, 1.0e-3 * y_mm, source_z_m)
+            for y_mm in LED_CENTERS_Y_MM
+        )
 
     def __post_init__(self) -> None:
         geometry = self.parameters.geometry

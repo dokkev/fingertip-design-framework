@@ -49,7 +49,6 @@ _SPHERE_RADIUS_M = 0.5e-3 * _SPHERE_DIAMETER_MM
 _CONTACT_STIFFNESS_N_M = 3.0e4
 _CONTACT_DAMPING_N_S_M = 0.28228017516945547
 _SOFT_CONTACT_MARGIN_M = 1.0e-4
-_CARRIER_CONTACT_STIFFNESS_N_M = 1.0e6
 _ELEMENT_SIZE_MM = 1.0
 _SLICE_HALF_WIDTH_MM = 0.75
 _CONTACTS_Y_MM = (
@@ -113,8 +112,11 @@ def _verify_geometry(fingertip_mesh) -> dict[str, float | int | list[float]]:
         fingertip_mesh.carrier.indices,
         dtype=np.int32,
     ).reshape(-1, 3)
-    led_y_mm = 1.0e3 * fingertip_mesh.led_centers_m[:, 1]
-    led_z_mm = 1.0e3 * fingertip_mesh.led_centers_m[:, 2]
+    led_source_centers_m = np.asarray(
+        fingertip_mesh.fingertip.led_source_centers_m
+    )
+    led_y_mm = 1.0e3 * led_source_centers_m[:, 1]
+    led_z_mm = 1.0e3 * led_source_centers_m[:, 2]
 
     if not np.allclose(
         (1.0e3 * vertices_m[:, 1].min(), 1.0e3 * vertices_m[:, 1].max()),
@@ -580,7 +582,6 @@ def _run_case(
         element_size_mm=_ELEMENT_SIZE_MM,
         iterations=_VBD_ITERATIONS,
         soft_contact_margin_m=_SOFT_CONTACT_MARGIN_M,
-        carrier_contact_stiffness_n_m=_CARRIER_CONTACT_STIFFNESS_N_M,
         contact_stiffness_n_m=_CONTACT_STIFFNESS_N_M,
         contact_damping_n_s_m=_CONTACT_DAMPING_N_S_M,
     ).run(inspect_checkpoint=inspect)
@@ -629,7 +630,6 @@ def _measure_initialization(
         soft_contact_margin_m=_SOFT_CONTACT_MARGIN_M,
         soft_contact_stiffness_n_m=_CONTACT_STIFFNESS_N_M,
         soft_contact_damping_n_s_m=_CONTACT_DAMPING_N_S_M,
-        carrier_contact_stiffness_n_m=_CARRIER_CONTACT_STIFFNESS_N_M,
     )
     wp.synchronize()
     initialization_s = perf_counter() - wall_start_s
@@ -928,11 +928,13 @@ def _plot_deformation_comparison(
             edgecolor="none",
         )
         axis.add_collection3d(carrier)
-        led_centers_mm = 1.0e3 * fingertip_mesh.led_centers_m
+        led_source_centers_mm = 1.0e3 * np.asarray(
+            fingertip_mesh.fingertip.led_source_centers_m
+        )
         axis.scatter(
-            led_centers_mm[:, 0],
-            led_centers_mm[:, 1],
-            led_centers_mm[:, 2],
+            led_source_centers_mm[:, 0],
+            led_source_centers_mm[:, 1],
+            led_source_centers_mm[:, 2],
             color="#38b000",
             s=15.0,
             depthshade=False,
@@ -1278,7 +1280,10 @@ def main() -> None:
             dtype=np.int32,
         ).reshape(-1, 3),
         bonded_vertex_indices=fingertip_mesh.bonded_vertex_indices,
-        led_centers_m=fingertip_mesh.led_centers_m,
+        led_source_centers_m=np.asarray(
+            fingertip.led_source_centers_m,
+            dtype=np.float64,
+        ),
     )
 
     sphere_resource = files("lumo").joinpath(

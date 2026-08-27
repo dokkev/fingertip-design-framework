@@ -195,7 +195,7 @@ def _validate_and_report(
 
     bonded_drift_m = np.linalg.norm(
         particle_q[bonded_indices]
-        - simulation.fingertip_model.bonded_local_positions.numpy(),
+        - simulation.fingertip_model.bonded_reference_positions.numpy(),
         axis=1,
     )
     max_bonded_drift_m = float(bonded_drift_m.max())

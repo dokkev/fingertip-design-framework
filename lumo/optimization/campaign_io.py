@@ -328,9 +328,7 @@ def build_run_config(campaign: CampaignDefinition) -> dict[str, object]:
                 "max_sim_time_s": campaign.max_sim_time_s,
                 "element_size_mm": evaluator._ELEMENT_SIZE_MM,
                 "soft_contact_margin_m": evaluator._SOFT_CONTACT_MARGIN_M,
-                "carrier_contact_stiffness_n_m": (
-                    evaluator._CARRIER_CONTACT_STIFFNESS_N_M
-                ),
+                "carrier_contact_stiffness_n_m": 1.0e6,
                 "indenter_contact_stiffness_n_m": (evaluator._CONTACT_STIFFNESS_N_M),
                 "indenter_contact_damping_n_s_m": (evaluator._CONTACT_DAMPING_N_S_M),
             },
@@ -473,7 +471,9 @@ def save_trial_result(
             tet_indices=np.asarray(evaluation.tet_indices),
             surface_triangles=np.asarray(evaluation.surface_triangles),
             bonded_vertex_indices=np.asarray(evaluation.bonded_vertex_indices),
-            led_centers_m=np.asarray(evaluation.led_centers_m),
+            led_source_centers_m=np.asarray(
+                evaluation.led_source_centers_m
+            ),
             no_contact_response=np.asarray(evaluation.no_contact_response),
             no_contact_energy=np.asarray(evaluation.no_contact_energy),
             no_contact_inside_roi_power=np.asarray(

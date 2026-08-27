@@ -7,6 +7,10 @@ from dataclasses import fields
 import pytest
 
 from lumo.fingertip import (
+    ACTIVE_Y_BOUNDS_MM,
+    LED_CENTERS_Y_MM,
+    LED_RECESS_DEPTH_MM,
+    TOTAL_Y_BOUNDS_MM,
     Fingertip,
     FingertipGeometry,
     FingertipParameters,
@@ -42,6 +46,25 @@ def test_stem_height_is_the_only_cavity_depth() -> None:
         field.name for field in fields(FingertipGeometry)
     }
     assert fingertip.silicone.cavity_bottom_z_mm == -7.0
+
+
+def test_hardware_layout_defines_led_source_centers() -> None:
+    fingertip = Fingertip()
+    centers_m = fingertip.led_source_centers_m
+    source_z_mm = (
+        min(z_mm for _, z_mm in fingertip.carrier.cross_section)
+        + LED_RECESS_DEPTH_MM
+    )
+
+    assert ACTIVE_Y_BOUNDS_MM == (-27.5, 27.5)
+    assert TOTAL_Y_BOUNDS_MM == (-27.5, 32.5)
+    assert tuple(
+        1.0e3 * center[1] for center in centers_m
+    ) == pytest.approx(LED_CENTERS_Y_MM)
+    assert all(center[0] == 0.0 for center in centers_m)
+    assert tuple(
+        1.0e3 * center[2] for center in centers_m
+    ) == pytest.approx((source_z_mm,) * len(LED_CENTERS_Y_MM))
 
 
 def test_invalid_geometry_raises_value_error() -> None:

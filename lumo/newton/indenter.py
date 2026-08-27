@@ -18,6 +18,10 @@ class Indenter:
 
     body_index: int
 
+    def __post_init__(self) -> None:
+        if self.body_index < 0:
+            raise ValueError("body_index must be non-negative")
+
     @classmethod
     def add_urdf(
         cls,
@@ -56,6 +60,8 @@ class Indenter:
                 builder.default_shape_cfg.kd = float(
                     contact_damping_n_s_m
                 )
+            # Import a free root so its world pose can be prescribed
+            # kinematically after fixed-joint collapse.
             builder.add_urdf(
                 str(path),
                 xform=tf,

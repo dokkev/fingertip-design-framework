@@ -92,8 +92,10 @@ remains an uncalibrated numerical input rather than a datasheet measurement.
 The type and its single `silicone` preset live in `mechanical_param.py`.
 
 `Fingertip` constructs the analytic fingertip assembly. Its `tip_z_m` property
-exposes the reference silicone tip coordinate in Newton-compatible metres so
-callers do not repeat the semiellipse endpoint calculation and unit conversion.
+exposes the reference silicone tip coordinate in Newton-compatible metres.
+`led_source_centers_m` exposes the five physical LED source-plane centers from
+the fixed longitudinal layout and carrier recess geometry. Neither property
+depends on mesh resolution.
 
 `layout.py` owns the fixed longitudinal hardware definition: the five LED
 centers, 55 mm active-section bounds, 5 mm distal end-cap, and physical LED
@@ -127,8 +129,7 @@ FingertipMesh
 ├── silicone
 ├── carrier
 ├── carrier_collision
-├── bonded_vertex_indices
-└── led_centers_m
+└── bonded_vertex_indices
 ```
 
 The silicone is discretized as a Newton-compatible tetrahedral mesh.
@@ -146,14 +147,15 @@ between particle vertices.
 `bonded_vertex_indices` identifies silicone vertices lying on
 `Fingertip.bonding_interface`. The mesh layer consumes its left and right
 polylines directly rather than deriving bond ownership from `Silicone`.
+`FingertipMesh` requires this array to be nonempty and nonnegative, normalizes
+it to unique indices, and verifies the silicone vertex range before Newton
+receives it.
 
 `make_fingertip_mesh()` is the only public construction path and always
-discretizes the complete current 60 mm, five-LED fingertip. The returned
-`FingertipMesh` stores the derived three-dimensional LED centers because their
-Z coordinate depends on the carrier recess geometry. Fixed active and total Y
-bounds remain in `lumo.fingertip.layout`; they are not repeated as
-mutable-looking mesh fields. Representative 11 mm slices are not production
-objects or design parameters.
+discretizes the complete current 60 mm, five-LED fingertip. Physical LED source
+centers and fixed active/total Y bounds remain owned by `lumo.fingertip`; they
+are not repeated as mutable-looking mesh fields. Representative 11 mm slices
+are not production objects or design parameters.
 
 The full-finger longitudinal construction is:
 
@@ -214,14 +216,13 @@ Use Newton's public API directly whenever practical.
 The full carrier shape has collision disabled. The collision proxy is attached
 to the same kinematic body with its rigid-shape pairs explicitly filtered and
 silicone particle/full-surface collision enabled. Bonded particles remain
-inactive, so the bond interface is controlled only by the prescribed kinematic
-bond. Silicone particle radius is explicitly zero at model construction;
+inactive, so the bond interface is controlled only by the fixed identity
+boundary. Silicone particle radius is explicitly zero at model construction;
 contact detection distance is supplied separately by `LumoSimulation` through
 the collision pipeline. The rigid carrier proxy uses a stiff shape-contact
 material while VBD still permits a small, measured penalty penetration. Its
-default normal contact stiffness is `1e6 N/m`; model construction exposes that
-scalar only so the numerical sensitivity benchmark can vary it without
-changing material parameters.
+normal contact stiffness is fixed at `1e6 N/m` by the Newton model. It is not a
+runtime or indentation-study input.
 
 `Indenter.add_urdf()` accepts optional normal-contact stiffness and damping
 overrides. Its default `None` values preserve Newton's shape material because
@@ -271,17 +272,17 @@ from Newton's default `256`-record limit.
 
 The current numerical construction defaults are a `1 mm` mesh element size,
 `1000 Hz` simulation frequency, `10` SolverVBD iterations, `1e-4 m` soft
-contact margin, and `1e6 N/m` carrier contact stiffness. Optional
-`soft_contact_stiffness_n_m` and `soft_contact_damping_n_s_m` values support the
-focused rigid-soft pair study; `None` preserves Newton's model defaults. There
-is no simulation-configuration abstraction.
+contact margin, and the Newton-owned `1e6 N/m` carrier contact stiffness.
+Optional `soft_contact_stiffness_n_m` and `soft_contact_damping_n_s_m` values
+support the focused rigid-soft pair study; `None` preserves Newton's model
+defaults. There is no simulation-configuration abstraction.
 
 `LumoSimulation(fingertip, builder=...)` is the high-level construction entry
 point. It meshes the fingertip, adds it to an optional caller-populated Newton
 builder, and finalizes the one shared Newton model. A caller adds external
 objects such as an `Indenter` to that builder before constructing the
 simulation. An optional caller-built `fingertip_mesh` lets the end-to-end
-evaluator give Newton and OptiX the same immutable discretization without
+evaluator give Newton and OptiX the same shared discretization without
 meshing twice. Lower-level mesh and Newton-model construction functions remain
 available to validations that inspect those stages directly.
 

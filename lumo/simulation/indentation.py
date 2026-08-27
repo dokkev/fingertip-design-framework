@@ -98,7 +98,6 @@ class IndentationStudy:
         element_size_mm: float = 1.0,
         iterations: int = 10,
         soft_contact_margin_m: float = 1.0e-4,
-        carrier_contact_stiffness_n_m: float = 1.0e6,
         contact_stiffness_n_m: float | None = None,
         contact_damping_n_s_m: float | None = None,
     ) -> None:
@@ -112,9 +111,6 @@ class IndentationStudy:
         require_positive("sim_frequency", sim_frequency)
         require_positive("element_size_mm", element_size_mm)
         require_nonnegative("soft_contact_margin_m", soft_contact_margin_m)
-        require_positive(
-            "carrier_contact_stiffness_n_m", carrier_contact_stiffness_n_m
-        )
         if contact_stiffness_n_m is not None:
             require_positive("contact_stiffness_n_m", contact_stiffness_n_m)
         if contact_damping_n_s_m is not None:
@@ -155,9 +151,6 @@ class IndentationStudy:
         self.element_size_mm = float(element_size_mm)
         self.iterations = iterations
         self.soft_contact_margin_m = float(soft_contact_margin_m)
-        self.carrier_contact_stiffness_n_m = float(
-            carrier_contact_stiffness_n_m
-        )
         self.contact_stiffness_n_m = (
             None if contact_stiffness_n_m is None else float(contact_stiffness_n_m)
         )
@@ -232,7 +225,6 @@ class IndentationStudy:
                 soft_contact_stiffness_n_m=self.contact_stiffness_n_m,
                 soft_contact_damping_n_s_m=self.contact_damping_n_s_m,
                 element_size_mm=self.element_size_mm,
-                carrier_contact_stiffness_n_m=self.carrier_contact_stiffness_n_m,
             )
             return simulation, indenter
 
@@ -248,7 +240,6 @@ class IndentationStudy:
                 soft_contact_stiffness_n_m=self.contact_stiffness_n_m,
                 soft_contact_damping_n_s_m=self.contact_damping_n_s_m,
                 element_size_mm=self.element_size_mm,
-                carrier_contact_stiffness_n_m=self.carrier_contact_stiffness_n_m,
             ),
             indenter,
         )
