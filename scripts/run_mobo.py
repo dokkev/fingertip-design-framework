@@ -1,6 +1,8 @@
 """Run the discrete 0.5 mm LUMO multi-objective BO campaign."""
 
+import logging
 import os
+import warnings
 from pathlib import Path
 
 from lumo.optimization.ax_bo import run
@@ -40,7 +42,32 @@ OUTPUT_DIRECTORY = (
 )
 
 
+def _quiet_third_party_output() -> None:
+    """Keep campaign progress while suppressing known dependency noise."""
+    import warp as wp
+    from ax.exceptions.core import AxOptimizationWarning
+    from ax.utils.common.logger import set_ax_logger_levels
+
+    set_ax_logger_levels(logging.WARNING)
+    wp.config.log_level = wp.LOG_WARNING
+    warnings.filterwarnings(
+        "ignore",
+        message=(
+            r"Encountered a `MultiObjective` without objective thresholds\."
+        ),
+        category=AxOptimizationWarning,
+        module=r"ax\.adapter\.transforms\.winsorize",
+    )
+    warnings.filterwarnings(
+        "ignore",
+        message=r"To copy construct from a tensor, it is recommended to use",
+        category=UserWarning,
+        module=r"ax\.generators\.torch\.botorch_moo_utils",
+    )
+
+
 def main() -> None:
+    _quiet_third_party_output()
     os.environ.setdefault("OTK_INCLUDE_DIR", str(OTK_INCLUDE_DIR))
     run(
         output_directory=OUTPUT_DIRECTORY,
