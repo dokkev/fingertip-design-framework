@@ -17,6 +17,8 @@ from typing import TYPE_CHECKING
 import numpy as np
 from ax.api.client import Client
 
+from lumo.newton.model import CARRIER_CONTACT_STIFFNESS_N_M
+
 from .design_space import (
     MAX_FINGERTIP_HEIGHT_MM,
     MINIMUM_SILICONE_THICKNESS_MM,
@@ -328,7 +330,9 @@ def build_run_config(campaign: CampaignDefinition) -> dict[str, object]:
                 "max_sim_time_s": campaign.max_sim_time_s,
                 "element_size_mm": evaluator._ELEMENT_SIZE_MM,
                 "soft_contact_margin_m": evaluator._SOFT_CONTACT_MARGIN_M,
-                "carrier_contact_stiffness_n_m": 1.0e6,
+                "carrier_contact_stiffness_n_m": (
+                    CARRIER_CONTACT_STIFFNESS_N_M
+                ),
                 "indenter_contact_stiffness_n_m": (evaluator._CONTACT_STIFFNESS_N_M),
                 "indenter_contact_damping_n_s_m": (evaluator._CONTACT_DAMPING_N_S_M),
             },

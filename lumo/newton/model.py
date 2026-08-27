@@ -17,15 +17,17 @@ if TYPE_CHECKING:
 
 # VBD rigid-soft contact is penalty-based. This is the validated fixed
 # carrier-contact stiffness used by the current model.
-_CARRIER_CONTACT_STIFFNESS_N_M = 1.0e6
+CARRIER_CONTACT_STIFFNESS_N_M = 1.0e6
 
 
 @wp.kernel
-def _set_fixed_carrier_pose(
+def _set_fixed_carrier_state(
     body_index: int,
     body_q: wp.array(dtype=wp.transform),
+    body_qd: wp.array(dtype=wp.spatial_vector),
 ):
     body_q[body_index] = wp.transform_identity()
+    body_qd[body_index] = wp.spatial_vector()
 
 
 @wp.kernel
@@ -88,16 +90,16 @@ class FingertipNewtonModel:
         state: newton.State,
     ) -> None:
         """Reset one state to the fixed carrier and bond boundary."""
-        if state.body_q is None:
-            raise ValueError("state must contain rigid-body poses")
+        if state.body_q is None or state.body_qd is None:
+            raise ValueError("state must contain rigid-body poses and velocities")
         if state.particle_q is None or state.particle_qd is None:
             raise ValueError("state must contain particle positions and velocities")
 
         wp.launch(
-            _set_fixed_carrier_pose,
+            _set_fixed_carrier_state,
             dim=1,
             inputs=[self.carrier_body],
-            outputs=[state.body_q],
+            outputs=[state.body_q, state.body_qd],
             device=self.model.device,
         )
         wp.launch(
@@ -231,7 +233,7 @@ def build_fingertip_newton_model(
     )
     carrier_collision_cfg = newton.ModelBuilder.ShapeConfig(
         density=0.0,
-        ke=_CARRIER_CONTACT_STIFFNESS_N_M,
+        ke=CARRIER_CONTACT_STIFFNESS_N_M,
         margin=0.0,
         is_solid=True,
         collision_group=1,

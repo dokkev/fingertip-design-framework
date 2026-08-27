@@ -28,8 +28,8 @@ def main() -> None:
     model = fingertip_newton.model
     state = model.state()
 
-    print("Newton full five-LED fingertip")
-    print("-------------------------------")
+    print("Newton fingertip")
+    print("------------------")
     print(f"silicone vertices:   {fingertip_mesh.silicone.vertex_count}")
     print(f"silicone tetrahedra: {fingertip_mesh.silicone.tet_count}")
     print(f"bonded vertices:     {len(fingertip_mesh.bonded_vertex_indices)}")
@@ -37,7 +37,7 @@ def main() -> None:
     led_source_centers_m = fingertip_mesh.fingertip.led_source_centers_m
     for index, center_m in enumerate(led_source_centers_m, start=1):
         print(f"  LED {index}: {list(center_m)}")
-    print("Green markers show the five LED reference positions.")
+    print("Green markers show the five LED source positions.")
 
     if model.particle_count != fingertip_mesh.silicone.vertex_count:
         raise RuntimeError("Newton particle count does not match the full mesh")

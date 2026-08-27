@@ -270,9 +270,10 @@ for `2048` records; the current kinematic indenter is not truncated by that
 dynamic-body list, but the larger capacity keeps dense future proxy use away
 from Newton's default `256`-record limit.
 
-The current numerical construction defaults are a `1 mm` mesh element size,
-`1000 Hz` simulation frequency, `10` SolverVBD iterations, `1e-4 m` soft
-contact margin, and the Newton-owned `1e6 N/m` carrier contact stiffness.
+The runtime defaults to a `1 mm` mesh element size, `10` SolverVBD iterations,
+and a `1e-4 m` soft-contact margin. Simulation frequency is an explicit
+required input; the production fingertip evaluator uses `100 Hz`. The
+Newton-owned carrier contact stiffness is fixed at `1e6 N/m`.
 Optional `soft_contact_stiffness_n_m` and `soft_contact_damping_n_s_m` values
 support the focused rigid-soft pair study; `None` preserves Newton's model
 defaults. There is no simulation-configuration abstraction.

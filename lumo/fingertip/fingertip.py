@@ -1,4 +1,4 @@
-"""Parametric 2D assembly of the LUMO fingertip."""
+"""Parametric analytic assembly of the LUMO fingertip."""
 
 from __future__ import annotations
 
@@ -145,7 +145,7 @@ class Carrier:
 
 @dataclass(frozen=True)
 class Fingertip:
-    """Constructed analytic 2D fingertip assembly.
+    """Constructed analytic fingertip assembly.
 
     ``parameters`` owns the physical inputs. ``silicone``, ``carrier``, and
     ``bonding_interface`` are derived analytic data consumed by downstream

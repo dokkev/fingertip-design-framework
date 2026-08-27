@@ -19,6 +19,11 @@ class Indenter:
     body_index: int
 
     def __post_init__(self) -> None:
+        if isinstance(self.body_index, bool) or not isinstance(
+            self.body_index,
+            int,
+        ):
+            raise TypeError("body_index must be an integer")
         if self.body_index < 0:
             raise ValueError("body_index must be non-negative")
 

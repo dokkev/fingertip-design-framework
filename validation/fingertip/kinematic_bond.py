@@ -38,6 +38,7 @@ def main() -> None:
     for state in (state_0, state_1):
         bonded_positions = state.particle_q.numpy()[bonded_indices]
         carrier_pose = state.body_q.numpy()[fingertip_newton.carrier_body]
+        carrier_velocity = state.body_qd.numpy()[fingertip_newton.carrier_body]
         np.testing.assert_allclose(
             bonded_positions,
             reference,
@@ -50,6 +51,7 @@ def main() -> None:
             rtol=0.0,
             atol=1.0e-7,
         )
+        np.testing.assert_array_equal(carrier_velocity, np.zeros(6))
 
     print("fixed fingertip bond: PASS")
     print(f"carrier body:             {fingertip_newton.carrier_body}")
