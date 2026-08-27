@@ -8,11 +8,11 @@ from pathlib import Path
 from lumo.optimization.ax_bo import run
 
 
-# User settings. Available mechanics: silicone.
+# User settings. Available mechanics: silicone and solaris.
 # Available optics: solaris_{low,nominal,high} and
 # dragon_skin_10_nv_{low,nominal,high}.
-MECHANICS_PRESET = "silicone"
-OPTICAL_PRESET = "dragon_skin_10_nv_nominal"
+MECHANICS_PRESET = "solaris"
+OPTICAL_PRESET = "solaris_nominal"
 OTK_INCLUDE_DIR = (
     Path(__file__).resolve().parents[2] / "optix-toolkit" / "ShaderUtil" / "include"
 )
@@ -38,7 +38,7 @@ OUTPUT_DIRECTORY = (
     Path(__file__).resolve().parents[1]
     / "output"
     / "optimization"
-    / "mobo_fingertip_contact_1_2_5_10_05mm"
+    / "mobo_fingertip_contact_1_2_5_10_05mm_solaris_nominal"
 )
 
 

@@ -89,7 +89,14 @@ The default passes `1070 kg/m³`, a `1.06e5 Pa` shear modulus, a
 Newton's damped Neo-Hookean tetrahedra. It is not a hereditary viscoelastic
 model and contains no Maxwell, Prony, or relaxation state. The damping value
 remains an uncalibrated numerical input rather than a datasheet measurement.
-The type and its single `silicone` preset live in `mechanical_param.py`.
+The generic `silicone` preset preserves this baseline. The `solaris` preset
+uses the manufacturer's cured density of `990 kg/m³` and a `9.85e4 Pa` shear
+modulus inferred from the reported `25 psi` stress at 100% elongation under an
+incompressible Neo-Hookean uniaxial assumption. Its `9.75e6 Pa` first Lamé
+parameter preserves the same numerical Poisson ratio of approximately `0.495`.
+Solaris damping remains the same uncalibrated `10 Pa·s`; the datasheet's
+uncured liquid viscosity is not a solid damping measurement. Both presets live
+in `mechanical_param.py`.
 
 `Fingertip` constructs the analytic fingertip assembly. Its `tip_z_m` property
 exposes the reference silicone tip coordinate in Newton-compatible metres.

@@ -25,13 +25,27 @@ class SiliconeMechanics:
 
 SILICONE_MECHANICS = SiliconeMechanics()
 
+# Smooth-On reports 0.99 g/cc cured density and 25 psi stress at 100%
+# elongation for Solaris.  For an incompressible Neo-Hookean solid at stretch
+# 2, P = 1.75 * mu, giving mu ~= 98.5 kPa.  Lambda retains the existing
+# numerical Poisson ratio of approximately 0.495.  The damping remains an
+# uncalibrated numerical input because the datasheet does not report it.
+SOLARIS_MECHANICS = SiliconeMechanics(
+    density_kg_m3=990.0,
+    shear_modulus_pa=9.85e4,
+    lame_lambda_pa=9.75e6,
+    damping_pa_s=10.0,
+)
+
 MECHANICS_PRESETS = {
     "silicone": SILICONE_MECHANICS,
+    "solaris": SOLARIS_MECHANICS,
 }
 
 
 __all__ = [
     "MECHANICS_PRESETS",
     "SILICONE_MECHANICS",
+    "SOLARIS_MECHANICS",
     "SiliconeMechanics",
 ]

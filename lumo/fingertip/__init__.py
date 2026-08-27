@@ -15,6 +15,7 @@ from .layout import (
 from .mechanical_param import (
     MECHANICS_PRESETS,
     SILICONE_MECHANICS,
+    SOLARIS_MECHANICS,
     SiliconeMechanics,
 )
 from .optical_param import (
@@ -38,6 +39,7 @@ __all__ = [
     "Carrier",
     "BondingInterface",
     "SILICONE_MECHANICS",
+    "SOLARIS_MECHANICS",
     "FingertipParameters",
     "FingertipGeometry",
     "LED_CENTERS_Y_MM",
