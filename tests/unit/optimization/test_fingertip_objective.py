@@ -84,29 +84,39 @@ def test_led_permutation_cannot_change_combined_field_or_objective() -> None:
 
 
 def test_contact_objective_components_match_definition() -> None:
-    reference_vertices = np.array(((0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0)))
+    reference_vertices = np.array(
+        ((0.0, 0.0, 0.0), (0.001, 0.0, 0.0), (0.0, 0.001, 0.0))
+    )
     contact_indices = np.tile((0, 1, 2, -1), (4, 1))
     offsets = np.array(((((0, 1), (1, 1), (2, 1), (3, 1))),))
+    vertices = np.tile(reference_vertices, (1, 4, 1, 1))
+    vertices[0, 1] *= 2.0
+    formation_area_m2 = 2.0e-6
 
     result = compute_contact_objective(
         reference_vertices_m=reference_vertices,
         surface_triangles=np.array(((0, 1, 2),)),
         scenario_names=("nominal",),
         sphere_diameters_mm=np.array((10.0,)),
-        force_targets_n=np.array((5.0, 10.0, 15.0, 20.0)),
-        actual_forces_n=np.array(((5.0, 10.0, 15.0, 20.0),)),
+        force_targets_n=np.array((1.0, 2.0, 5.0, 10.0)),
+        actual_forces_n=np.array(((1.0, 2.0, 5.0, 10.0),)),
         indentations_m=np.array(((0.001, 0.002, 0.0025, 0.00275),)),
         contact_record_offsets=offsets,
         contact_particle_indices=contact_indices,
         contact_normals_W=np.tile((0.0, 0.0, 1.0), (4, 1)),
-        silicone_vertices_m=np.tile(reference_vertices, (1, 4, 1, 1)),
+        silicone_vertices_m=vertices,
     )
 
-    assert result.q_form[0] == pytest.approx(1.0)
+    assert result.q_form[0] == pytest.approx(
+        np.sqrt(formation_area_m2 / (np.pi * 0.005**2))
+    )
+    assert result.patch_area_formation_m2[0] == pytest.approx(formation_area_m2)
     assert result.q_stable[0] == pytest.approx(1.0)
-    assert result.q_stiff[0] == pytest.approx(0.75)
+    assert result.q_stiff[0] == pytest.approx(0.95)
     assert result.q_normal[0] == pytest.approx(1.0)
-    assert result.J_contact == pytest.approx(np.cbrt(0.75))
+    assert result.J_contact == pytest.approx(
+        np.cbrt(result.q_form[0] * result.q_stiff[0])
+    )
 
 
 def test_longitudinal_roi_bins_plus_outside_equal_visible_power() -> None:

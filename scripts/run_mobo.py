@@ -22,7 +22,7 @@ PARAMETER_BOUNDS_MM = {
     "semiellipse_height_mm": (1.0, 20.0),
     "stem_width_mm": (4.0, 15.0),
     "stem_height_mm": (2.0, 15.0),
-    "void_width_mm": (0.0, 10.0),
+    "void_width_mm": (0.0, 7.5),
 }
 INDENTER_URDFS = (
     "sphere_10mm.urdf",
@@ -38,7 +38,7 @@ OUTPUT_DIRECTORY = (
     Path(__file__).resolve().parents[1]
     / "output"
     / "optimization"
-    / "mobo_fingertip_instantaneous_05mm"
+    / "mobo_fingertip_contact_1_2_5_10_05mm"
 )
 
 

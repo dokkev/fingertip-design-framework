@@ -21,7 +21,7 @@ _OUTPUT_DIRECTORY = (
     / "instantaneous_first_crossing"
 )
 _CONTACT_Y_MM = (-11.0, -5.5, 0.0, 11.0)
-_FORCE_TARGETS_N = (5.0, 10.0, 15.0, 20.0)
+_FORCE_TARGETS_N = (1.0, 2.0, 5.0, 10.0)
 _APPROACH_SPEED_M_S = 5.0e-3
 
 

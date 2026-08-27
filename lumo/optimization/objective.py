@@ -128,8 +128,8 @@ def _mean_contact_normal(normals: np.ndarray) -> np.ndarray:
 
 def _contact_force_targets(force_targets_n: np.ndarray) -> np.ndarray:
     targets = np.asarray(force_targets_n, dtype=np.float64)
-    if targets.ndim != 1 or len(targets) < 3:
-        raise ValueError("contact objective requires at least three force targets")
+    if targets.ndim != 1 or len(targets) != 4:
+        raise ValueError("contact objective requires exactly four force targets")
     if not np.all(np.isfinite(targets)) or np.any(targets <= 0.0):
         raise ValueError("force targets must be finite and positive")
     if np.any(np.diff(targets) <= 0.0):

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import ExitStack
 from importlib.resources import as_file, files
 from pathlib import Path
 from time import perf_counter
@@ -24,8 +25,20 @@ _RAW_PATH = _OUTPUT_DIRECTORY / "nominal_fingertip_objectives.npz"
 _RUN_CONFIG_PATH = _OUTPUT_DIRECTORY / "run_config.json"
 _REPORT_PATH = _OUTPUT_DIRECTORY / "report.md"
 _CONTACT_Y_MM = (-22.0, -11.0, -5.5, 0.0, 5.5, 11.0, 22.0)
-_SPHERE_DIAMETERS_MM = (5.0, 10.0, 20.0)
-_FORCE_TARGETS_N = (5.0, 10.0, 15.0, 20.0)
+_INDENTER_URDFS = (
+    "sphere_10mm.urdf",
+    "sphere_15mm.urdf",
+    "sphere_20mm.urdf",
+)
+_SPHERE_DIAMETERS_MM = (10.0, 15.0, 20.0)
+_FORCE_TARGETS_N = (1.0, 2.0, 5.0, 10.0)
+_PARAMETER_BOUNDS_MM = {
+    "flat_pad_height_mm": (2.0, 29.0),
+    "semiellipse_height_mm": (1.0, 20.0),
+    "stem_width_mm": (4.0, 15.0),
+    "stem_height_mm": (2.0, 15.0),
+    "void_width_mm": (0.0, 7.5),
+}
 _PARAMETERS = {
     "geometry.flat_pad_height_mm": 5.0,
     "geometry.semiellipse_height_mm": 9.0,
@@ -42,7 +55,7 @@ def _raw_arrays() -> dict[str, np.ndarray]:
 
 def _verify_raw(
     data: dict[str, np.ndarray],
-) -> tuple[object, object, dict[str, float | bool]]:
+) -> tuple[object, object, dict[str, float | int | bool]]:
     scenario_count = len(_SPHERE_DIAMETERS_MM) * len(_CONTACT_Y_MM)
     state_shape = (scenario_count, len(_FORCE_TARGETS_N))
     if data["response_matrix"].shape != (*state_shape, 5, 11):
@@ -57,6 +70,16 @@ def _verify_raw(
     targets = data["force_targets_n"]
     if np.any(data["actual_forces_n"] < targets[None, :]):
         raise RuntimeError("a checkpoint force is below its trigger threshold")
+    if not np.allclose(
+        data["force_overshoots_n"],
+        data["actual_forces_n"] - targets[None, :],
+        rtol=0.0,
+        atol=1.0e-12,
+    ):
+        raise RuntimeError("saved force overshoots do not match checkpoint forces")
+    checkpoint_step_gaps = np.diff(data["checkpoint_steps"], axis=1)
+    if np.any(checkpoint_step_gaps <= 0):
+        raise RuntimeError("checkpoint steps are not strictly increasing")
     if np.any(data["contact_buffer_overflow"] != 0):
         raise RuntimeError("a checkpoint overflowed the contact buffer")
     if np.any(data["inverted_tet_counts"] != 0):
@@ -160,6 +183,11 @@ def _verify_raw(
         "led_permutation_invariant": True,
         "roi_accounting_pass": True,
         "raw_recomputation_pass": True,
+        "maximum_1n_overshoot_n": float(np.max(data["force_overshoots_n"][:, 0])),
+        "maximum_2n_overshoot_n": float(np.max(data["force_overshoots_n"][:, 1])),
+        "minimum_1n_to_2n_step_gap": int(
+            np.min(data["checkpoint_steps"][:, 1] - data["checkpoint_steps"][:, 0])
+        ),
     }
     return contact, observation, metrics
 
@@ -167,7 +195,7 @@ def _verify_raw(
 def _write_report(
     contact: object,
     observation: object,
-    metrics: dict[str, float | bool],
+    metrics: dict[str, float | int | bool],
     runtime_s: float,
 ) -> None:
     lines = [
@@ -188,6 +216,7 @@ def _write_report(
         "- optics: five simultaneous unit-power LEDs at Y=[-22,-11,0,11,22] mm, 65,536 paths/LED, 24 bounces",
         "- observation: +X side, Y=[-27.5,+27.5] mm, 11 x 5 mm longitudinal bins",
         "- J_contact = min_s cbrt(q_form_s q_stable_s q_stiff_s); q_normal is diagnostic only",
+        "- J_contact checkpoints: q_form at 2 N, q_stable at 2/10 N, k_early at 1/2 N, k_late at 5/10 N",
         "- J_obs = min_(diameter,force,i!=j) ||((y_i-y0)/5)-((y_j-y0)/5)||_2; d_onset is diagnostic only",
         "",
         "## Regression validation",
@@ -214,6 +243,9 @@ def _write_report(
         f"- d_onset diagnostic: {observation.d_onset:.9f}",
         f"- maximum outside-ROI fraction: {float(metrics['max_outside_roi_power_fraction']):.6%}",
         f"- minimum det(F): {float(metrics['minimum_det_f']):.6f}; inversion count = 0; contact-buffer overflow = 0",
+        f"- maximum 1 N force overshoot: {float(metrics['maximum_1n_overshoot_n']):.6f} N",
+        f"- maximum 2 N force overshoot: {float(metrics['maximum_2n_overshoot_n']):.6f} N",
+        f"- minimum checkpoint separation from 1 to 2 N: {int(metrics['minimum_1n_to_2n_step_gap'])} ticks",
         f"- maximum optical energy closure error: {float(metrics['max_energy_closure_error']):.3e}",
         f"- total runtime: {runtime_s:.3f} s",
         "",
@@ -235,9 +267,14 @@ def _write_report(
 
 def main() -> None:
     campaign = build_campaign(
+        parameter_bounds_mm=_PARAMETER_BOUNDS_MM,
+        indenter_urdfs=_INDENTER_URDFS,
         sphere_diameters_mm=_SPHERE_DIAMETERS_MM,
         contact_y_mm=_CONTACT_Y_MM,
         force_targets_n=_FORCE_TARGETS_N,
+        initial_clearance_m=1.0e-3,
+        mechanics_preset="silicone",
+        optical_preset="dragon_skin_10_nv_nominal",
     )
     if not campaign.space.is_feasible(_PARAMETERS):
         raise RuntimeError("nominal morphology is analytically invalid")
@@ -250,14 +287,14 @@ def main() -> None:
     )
     resource_root = files("lumo").joinpath("assets", "objects", "urdf")
     start_s = perf_counter()
-    with (
-        as_file(resource_root.joinpath("sphere_5mm.urdf")) as sphere_5mm,
-        as_file(resource_root.joinpath("sphere_10mm.urdf")) as sphere_10mm,
-        as_file(resource_root.joinpath("sphere_20mm.urdf")) as sphere_20mm,
-    ):
+    with ExitStack() as stack:
+        sphere_paths = tuple(
+            stack.enter_context(as_file(resource_root.joinpath(filename)))
+            for filename in _INDENTER_URDFS
+        )
         evaluation = evaluate_fingertip(
             fingertip,
-            (sphere_5mm, sphere_10mm, sphere_20mm),
+            sphere_paths,
             _SPHERE_DIAMETERS_MM,
             _CONTACT_Y_MM,
             force_targets_n=_FORCE_TARGETS_N,

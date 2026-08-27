@@ -22,10 +22,27 @@ _BOUNDS_MM = {
     "stem_height_mm": (2.0, 15.0),
     "void_width_mm": (0.0, 4.0),
 }
+_INDENTER_URDFS = (
+    "sphere_10mm.urdf",
+    "sphere_15mm.urdf",
+    "sphere_20mm.urdf",
+)
+_SPHERE_DIAMETERS_MM = (10.0, 15.0, 20.0)
+_FORCE_TARGETS_N = (1.0, 2.0, 5.0, 10.0)
+_CONTACT_Y_MM = (-22.0, -11.0, -5.5, 0.0, 5.5, 11.0, 22.0)
 
 
 def _campaign():
-    return build_campaign(parameter_bounds_mm=_BOUNDS_MM)
+    return build_campaign(
+        parameter_bounds_mm=_BOUNDS_MM,
+        indenter_urdfs=_INDENTER_URDFS,
+        sphere_diameters_mm=_SPHERE_DIAMETERS_MM,
+        force_targets_n=_FORCE_TARGETS_N,
+        initial_clearance_m=1.0e-3,
+        contact_y_mm=_CONTACT_Y_MM,
+        mechanics_preset="silicone",
+        optical_preset="dragon_skin_10_nv_nominal",
+    )
 
 
 def _candidate(

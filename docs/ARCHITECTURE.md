@@ -371,12 +371,12 @@ Each trial specifies a normalized `motion_direction_W` and physical
 `approach_speed_m_s`. The pose increment is derived directly from that speed
 and the simulation timestep.
 
-The same trial runtime advances through the study's force targets without
-resetting Newton state. The production evaluator captures
-the first measured state at or above each configured force threshold; target
-tolerance is not an acceptance condition. At least three strictly increasing
-thresholds are required for the contact objective. The inspection callback
-receives that exact state from its device checkpoint slot.
+The same trial runtime advances through the study's four force targets without
+resetting Newton state. The production evaluator captures the first measured
+state at or above each configured force threshold; target tolerance is not an
+acceptance condition. Exactly four strictly increasing thresholds are required
+by the production objective. The inspection callback receives that exact state
+from its device checkpoint slot.
 
 The production first-crossing path is simply:
 
@@ -710,17 +710,6 @@ diagnostics. The focused four-world first-crossing validation passed with 16
 saved checkpoints, no inversion or contact-buffer overflow, and closed optical
 energy. The previous 21-scenario dwell artifact is historical and is not
 reused as an observation in this fresh Ax campaign.
-
-`validation/optomech/objective_prototype.py` is the read-only numerical
-prototype for those equations. It reconstructs a Lagrangian contact patch from
-the saved vertex/edge/triangle Newton records, evaluates the proposed contact
-components, and evaluates threshold-conditioned contact-location separation using
-the simultaneous +X 11-bin longitudinal response. `J_obs` is the worst
-same-threshold location separation. Contact-onset distance and within-location
-force variation remain diagnostics because QDD proprioception owns contact
-detection and force magnitude. Old +Y Q and labeled per-emitter responses are
-diagnostic only. The script does not register an objective or call Newton,
-OptiX, or Ax.
 
 ### `lumo/util/`
 

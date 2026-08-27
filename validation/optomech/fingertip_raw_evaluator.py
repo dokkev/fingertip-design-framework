@@ -18,7 +18,7 @@ _ARTIFACT_PATH = _OUTPUT_DIRECTORY / "nominal_fingertip_raw.npz"
 _REPORT_PATH = _OUTPUT_DIRECTORY / "report.md"
 _SPHERE_DIAMETER_MM = 15.0
 _CONTACT_Y_MM = (0.0, 5.5, 22.0)
-_FORCE_TARGETS_N = (5.0, 10.0, 15.0, 20.0)
+_FORCE_TARGETS_N = (1.0, 2.0, 5.0, 10.0)
 
 
 def _six_tet_volumes(
@@ -59,7 +59,9 @@ def _save(evaluation: FingertipEvaluation) -> None:
         force_targets_n=evaluation.force_targets_n,
         actual_forces_n=evaluation.actual_forces_n,
         indentations_m=evaluation.indentations_m,
+        checkpoint_steps=evaluation.checkpoint_steps,
         checkpoint_times_s=evaluation.checkpoint_times_s,
+        force_overshoots_n=evaluation.force_overshoots_n,
         maximum_particle_speeds_m_s=evaluation.maximum_particle_speeds_m_s,
         indenter_contact_counts=evaluation.indenter_contact_counts,
         total_contact_counts=evaluation.total_contact_counts,
@@ -112,6 +114,15 @@ def _reload_and_verify() -> dict[str, float | int]:
         LONGITUDINAL_SIDE_BIN_COUNT,
     ):
         raise RuntimeError("combined response derivation failed")
+    if np.any(np.diff(arrays["checkpoint_steps"], axis=1) <= 0):
+        raise RuntimeError("checkpoint steps are not strictly increasing")
+    if not np.allclose(
+        arrays["force_overshoots_n"],
+        arrays["actual_forces_n"] - arrays["force_targets_n"][None, :],
+        rtol=0.0,
+        atol=1.0e-12,
+    ):
+        raise RuntimeError("force overshoots cannot be reconstructed")
 
     energy_fields = tuple(str(value) for value in arrays["energy_fields"])
     closure_index = energy_fields.index("closure_error")
@@ -207,6 +218,9 @@ def _reload_and_verify() -> dict[str, float | int]:
         "contact_record_count": len(positions),
         "maximum_energy_closure_error": maximum_closure_error,
         "artifact_size_bytes": _ARTIFACT_PATH.stat().st_size,
+        "minimum_1n_to_2n_step_gap": int(
+            np.min(arrays["checkpoint_steps"][:, 1] - arrays["checkpoint_steps"][:, 0])
+        ),
     }
 
 
@@ -229,17 +243,20 @@ def _write_report(
         f"- artifact size: {verification['artifact_size_bytes']} bytes",
         f"- wall runtime: {wall_runtime_s:.3f} s",
         f"- maximum energy closure error: {verification['maximum_energy_closure_error']:.3e}",
+        f"- minimum checkpoint separation from 1 to 2 N: {verification['minimum_1n_to_2n_step_gap']} ticks",
         "",
         "## Checkpoints",
         "",
-        "| scenario | target [N] | actual [N] | indentation [mm] | contacts | min det(F) | inverted | vmax [m/s] |",
-        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        "| scenario | target [N] | actual [N] | overshoot [N] | step | indentation [mm] | contacts | min det(F) | inverted | vmax [m/s] |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for scenario_index, scenario_name in enumerate(evaluation.scenario_names):
         for force_index, target_force_n in enumerate(evaluation.force_targets_n):
             lines.append(
                 f"| {scenario_name} | {target_force_n:.1f} | "
                 f"{evaluation.actual_forces_n[scenario_index, force_index]:.6f} | "
+                f"{evaluation.force_overshoots_n[scenario_index, force_index]:.6f} | "
+                f"{evaluation.checkpoint_steps[scenario_index, force_index]} | "
                 f"{1.0e3 * evaluation.indentations_m[scenario_index, force_index]:.6f} | "
                 f"{evaluation.indenter_contact_counts[scenario_index, force_index]} | "
                 f"{evaluation.minimum_det_f[scenario_index, force_index]:.6f} | "

@@ -39,7 +39,6 @@ _CONTACT_STIFFNESS_N_M = 3.0e4
 _CONTACT_DAMPING_N_S_M = 0.28228017516945547
 _ELEMENT_SIZE_MM = 1.0
 _SOFT_CONTACT_MARGIN_M = 1.0e-4
-_FORCE_TARGETS_N = (5.0, 10.0, 15.0, 20.0)
 _ENERGY_FIELDS = (
     "emitted_power",
     "escaped_power",
@@ -349,7 +348,7 @@ def evaluate_fingertip(
     sphere_diameters_mm: Iterable[float],
     contact_y_mm: Iterable[float],
     *,
-    force_targets_n: Iterable[float] = _FORCE_TARGETS_N,
+    force_targets_n: Iterable[float],
     initial_clearance_m: float = 1.0e-3,
     approach_speed_m_s: float = 5.0e-3,
     max_sim_time_s: float = 60.0,
@@ -382,10 +381,10 @@ def evaluate_fingertip(
         raise ValueError("contact_y_mm must be unique")
 
     force_targets = tuple(float(target) for target in force_targets_n)
-    if len(force_targets) < 3 or any(
+    if len(force_targets) != 4 or any(
         not np.isfinite(target) or target <= 0.0 for target in force_targets
     ):
-        raise ValueError("force_targets_n must contain at least three positive values")
+        raise ValueError("force_targets_n must contain exactly four positive values")
     if any(
         current <= previous
         for previous, current in zip(force_targets, force_targets[1:])

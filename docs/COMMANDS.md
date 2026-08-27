@@ -127,8 +127,8 @@ on the 0.5 mm lattice, fixes `flat_pad_width_mm=30`, and maximizes `J_contact`
 and `J_obs` independently. Production mechanics use the fixed four-world GPU
 CUDA-graph checkpoint path: a constant `5 mm/s` approach and
 the first samples at or above each configured force threshold, with no servo
-or dwell. At least three strictly increasing force thresholds are required for
-the contact objective.
+or dwell. The production objective requires exactly four strictly increasing
+force thresholds.
 
 Do not mix an output directory with an older run-config schema. Ax state and one
 compressed raw NPZ per completed trial are written beneath the configured

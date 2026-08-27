@@ -71,24 +71,6 @@ _MAX_CUTOUT_WIDTH_STEPS = (
     )
     - 1
 )
-_DEFAULT_PARAMETER_BOUNDS_MM = {
-    "geometry.flat_pad_height_mm": (2.0, 29.0),
-    "geometry.semiellipse_height_mm": (1.0, 20.0),
-    "geometry.stem_width_mm": (6.0, 10.0),
-    "geometry.stem_height_mm": (4.0, 10.0),
-    "geometry.void_width_mm": (0.0, 4.0),
-}
-_DEFAULT_INDENTER_URDFS = (
-    "sphere_5mm.urdf",
-    "sphere_10mm.urdf",
-    "sphere_20mm.urdf",
-)
-_DEFAULT_SPHERE_DIAMETERS_MM = (5.0, 10.0, 20.0)
-_DEFAULT_FORCE_TARGETS_N = (5.0, 10.0, 15.0, 20.0)
-_DEFAULT_CONTACT_Y_MM = (-22.0, -11.0, -5.5, 0.0, 5.5, 11.0, 22.0)
-_DEFAULT_INITIAL_CLEARANCE_M = 1.0e-3
-_DEFAULT_MECHANICS_PRESET = "silicone"
-_DEFAULT_OPTICAL_PRESET = "dragon_skin_10_nv_nominal"
 _RANDOM_SEED = 20260823
 _INITIALIZATION_BUDGET = 13
 _ACQUISITION_POOL_SIZE = 256
@@ -192,23 +174,20 @@ class CampaignDefinition:
 
 
 def _parameter_bounds(
-    parameter_bounds_mm: Mapping[str, tuple[float, float]] | None,
+    parameter_bounds_mm: Mapping[str, tuple[float, float]],
 ) -> tuple[dict[str, tuple[float, float]], tuple[tuple[str, str, int, int], ...]]:
-    if parameter_bounds_mm is None:
-        qualified_bounds = dict(_DEFAULT_PARAMETER_BOUNDS_MM)
-    else:
-        expected = {
-            physical_name.removeprefix("geometry.")
-            for _, physical_name in _STEP_TO_PHYSICAL_NAMES
-        }
-        if set(parameter_bounds_mm) != expected:
-            raise ValueError(
-                f"parameter_bounds_mm must define exactly {sorted(expected)!r}"
-            )
-        qualified_bounds = {
-            f"geometry.{name}": tuple(bounds)
-            for name, bounds in parameter_bounds_mm.items()
-        }
+    expected = {
+        physical_name.removeprefix("geometry.")
+        for _, physical_name in _STEP_TO_PHYSICAL_NAMES
+    }
+    if set(parameter_bounds_mm) != expected:
+        raise ValueError(
+            f"parameter_bounds_mm must define exactly {sorted(expected)!r}"
+        )
+    qualified_bounds = {
+        f"geometry.{name}": tuple(bounds)
+        for name, bounds in parameter_bounds_mm.items()
+    }
 
     step_to_physical = []
     for step_name, physical_name in _STEP_TO_PHYSICAL_NAMES:
@@ -253,8 +232,8 @@ def _indenter_definitions(
 
 def _force_targets(force_targets_n: Iterable[float]) -> tuple[float, ...]:
     targets = tuple(float(target) for target in force_targets_n)
-    if len(targets) < 3:
-        raise ValueError("force_targets_n must contain at least three targets")
+    if len(targets) != 4:
+        raise ValueError("force_targets_n must contain exactly four targets")
     if any(not isfinite(target) or target <= 0.0 for target in targets):
         raise ValueError("force targets must be finite and positive")
     if any(current <= previous for previous, current in zip(targets, targets[1:])):
@@ -264,14 +243,14 @@ def _force_targets(force_targets_n: Iterable[float]) -> tuple[float, ...]:
 
 def build_campaign(
     *,
-    parameter_bounds_mm: Mapping[str, tuple[float, float]] | None = None,
-    indenter_urdfs: Iterable[str] = _DEFAULT_INDENTER_URDFS,
-    sphere_diameters_mm: Iterable[float] = _DEFAULT_SPHERE_DIAMETERS_MM,
-    force_targets_n: Iterable[float] = _DEFAULT_FORCE_TARGETS_N,
-    initial_clearance_m: float = _DEFAULT_INITIAL_CLEARANCE_M,
-    contact_y_mm: Iterable[float] = _DEFAULT_CONTACT_Y_MM,
-    mechanics_preset: str = _DEFAULT_MECHANICS_PRESET,
-    optical_preset: str = _DEFAULT_OPTICAL_PRESET,
+    parameter_bounds_mm: Mapping[str, tuple[float, float]],
+    indenter_urdfs: Iterable[str],
+    sphere_diameters_mm: Iterable[float],
+    force_targets_n: Iterable[float],
+    initial_clearance_m: float,
+    contact_y_mm: Iterable[float],
+    mechanics_preset: str,
+    optical_preset: str,
 ) -> CampaignDefinition:
     """Build the one current half-millimetre production campaign."""
     indenters = _indenter_definitions(indenter_urdfs)
@@ -553,14 +532,14 @@ def run(
     *,
     output_directory: Path,
     target_bo_trials: int,
-    parameter_bounds_mm: Mapping[str, tuple[float, float]] | None = None,
-    indenter_urdfs: Iterable[str] = _DEFAULT_INDENTER_URDFS,
-    sphere_diameters_mm: Iterable[float] = _DEFAULT_SPHERE_DIAMETERS_MM,
-    force_targets_n: Iterable[float] = _DEFAULT_FORCE_TARGETS_N,
-    initial_clearance_m: float = _DEFAULT_INITIAL_CLEARANCE_M,
-    contact_y_mm: Iterable[float] = _DEFAULT_CONTACT_Y_MM,
-    mechanics_preset: str = _DEFAULT_MECHANICS_PRESET,
-    optical_preset: str = _DEFAULT_OPTICAL_PRESET,
+    parameter_bounds_mm: Mapping[str, tuple[float, float]],
+    indenter_urdfs: Iterable[str],
+    sphere_diameters_mm: Iterable[float],
+    force_targets_n: Iterable[float],
+    initial_clearance_m: float,
+    contact_y_mm: Iterable[float],
+    mechanics_preset: str,
+    optical_preset: str,
 ) -> list[dict[str, object]]:
     """Create or resume the current sequential Ax campaign."""
     if target_bo_trials < 0:
