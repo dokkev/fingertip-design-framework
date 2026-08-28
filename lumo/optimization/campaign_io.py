@@ -36,8 +36,10 @@ SUMMARY_FILENAME = "run_summary.json"
 TRIAL_RESULT_DIRECTORY = "trials"
 
 _OBJECTIVE_NAMES = ("J_contact", "J_obs")
-_RUN_CONFIG_SCHEMA = 12
-_OBJECTIVE_DEFINITION = "fingertip-contact-and-threshold-conditioned-observation-v3"
+_RUN_CONFIG_SCHEMA = 14
+_OBJECTIVE_DEFINITION = (
+    "orientation-robust-fingertip-contact-and-observation-v4"
+)
 
 
 def _fieldnames(campaign: CampaignDefinition) -> list[str]:
@@ -50,7 +52,11 @@ def _fieldnames(campaign: CampaignDefinition) -> list[str]:
         *campaign.parameter_columns,
         *_OBJECTIVE_NAMES,
         "limiting_contact_scenario",
+        "limiting_contact_sphere_diameter_mm",
+        "limiting_contact_angle_deg",
+        "limiting_contact_y_mm",
         "limiting_obs_sphere_diameter_mm",
+        "limiting_obs_contact_angle_deg",
         "limiting_obs_force_n",
         "limiting_obs_contact_y_pair_mm",
         "d_onset_diagnostic",
@@ -66,7 +72,11 @@ def _empty_result_fields() -> dict[str, object]:
     return {
         **{name: "" for name in _OBJECTIVE_NAMES},
         "limiting_contact_scenario": "",
+        "limiting_contact_sphere_diameter_mm": "",
+        "limiting_contact_angle_deg": "",
+        "limiting_contact_y_mm": "",
         "limiting_obs_sphere_diameter_mm": "",
+        "limiting_obs_contact_angle_deg": "",
         "limiting_obs_force_n": "",
         "limiting_obs_contact_y_pair_mm": "",
         "d_onset_diagnostic": "",
@@ -114,7 +124,11 @@ def _read_trials(
             for name in (
                 *campaign.physical_parameter_names,
                 *_OBJECTIVE_NAMES,
+                "limiting_contact_sphere_diameter_mm",
+                "limiting_contact_angle_deg",
+                "limiting_contact_y_mm",
                 "limiting_obs_sphere_diameter_mm",
+                "limiting_obs_contact_angle_deg",
                 "limiting_obs_force_n",
                 "d_onset_diagnostic",
                 "max_outside_roi_power_fraction",
@@ -340,6 +354,17 @@ def build_run_config(campaign: CampaignDefinition) -> dict[str, object]:
                 "indenter_urdfs": [filename for filename, _ in campaign.indenters],
                 "indenter_names": list(campaign.indenter_names),
                 "sphere_diameters_mm": list(campaign.sphere_diameters_mm),
+                "theta_deg": list(campaign.indentation_angles_deg),
+                "orientation_axis": "world +Y",
+                "orientation_pivot": {"x_m": 0.0, "z_m": 0.0},
+                "relative_transform_convention": (
+                    "physical fingertip +theta about world Y; fixed-fingertip "
+                    "sphere trajectory rotates by -theta about X=0,Z=0"
+                ),
+                "ordered_product": (
+                    "sphere_diameters_mm major, theta_deg middle, "
+                    "contact_y_mm minor"
+                ),
                 "initial_clearance_m": campaign.initial_clearance_m,
                 "contact_x_mm": 0.0,
                 "contact_y_mm": list(campaign.contact_y_mm),
@@ -400,19 +425,37 @@ def build_run_config(campaign: CampaignDefinition) -> dict[str, object]:
                     campaign.space.base_parameters.geometry.link_thickness_mm
                 ),
             },
+            "initialization": {
+                "budget": campaign.initialization_budget,
+                "parameter_order": list(campaign.physical_parameter_names),
+                "initial_morphologies_mm": [
+                    list(values) for values in campaign.initial_morphologies_mm
+                ],
+                "initial_morphology_count": len(
+                    campaign.initial_morphologies_mm
+                ),
+                "fresh_sobol_count": (
+                    campaign.initialization_budget
+                    - len(campaign.initial_morphologies_mm)
+                ),
+                "use_existing_trials_for_initialization": True,
+                "old_objective_values_imported": False,
+            },
             "objectives": {
                 "names": list(_OBJECTIVE_NAMES),
                 "directions": ["maximize", "maximize"],
                 "definition": _OBJECTIVE_DEFINITION,
                 "J_contact": (
-                    "min over diameter/location scenarios of "
+                    "worst case over the full theta/sphere/contact-Y product: "
                     "cuberoot(q_form*q_stable*q_stiff); q_form uses the second "
                     "force, q_stable uses second/highest, and q_stiff compares "
                     "the first and last force intervals"
                 ),
                 "J_obs": (
-                    "min over diameter, force threshold, and distinct contact-Y "
-                    "pairs of L2((y-y0)/P_emit); d_onset is diagnostic only"
+                    "worst same-theta/same-sphere/same-force spatial separation "
+                    "between distinct contact-Y pairs: L2((y-y0)/P_emit); "
+                    "observations are never compared across theta; d_onset is "
+                    "diagnostic only"
                 ),
             },
             "ax_random_seed": campaign.random_seed,
@@ -539,10 +582,21 @@ def save_trial_result(
             ),
             scenario_names=np.asarray(evaluation.scenario_names),
             sphere_diameters_mm=np.asarray(evaluation.sphere_diameters_mm),
+            contact_angles_deg=np.asarray(evaluation.contact_angles_deg),
             contact_y_mm=np.asarray(evaluation.contact_y_mm),
+            zero_contact_travel_m=np.asarray(
+                evaluation.zero_contact_travel_m
+            ),
             force_targets_n=np.asarray(evaluation.force_targets_n),
             J_contact=np.asarray(details["J_contact"]),
             limiting_contact_scenario=np.asarray(contact.limiting_scenario),
+            limiting_contact_sphere_diameter_mm=np.asarray(
+                contact.limiting_sphere_diameter_mm
+            ),
+            limiting_contact_angle_deg=np.asarray(
+                contact.limiting_contact_angle_deg
+            ),
+            limiting_contact_y_mm=np.asarray(contact.limiting_contact_y_mm),
             q_form=np.asarray(contact.q_form),
             q_stable=np.asarray(contact.q_stable),
             q_stiff=np.asarray(contact.q_stiff),
@@ -555,6 +609,9 @@ def save_trial_result(
             limiting_obs_sphere_diameter_mm=np.asarray(
                 observation.limiting_sphere_diameter_mm
             ),
+            limiting_obs_contact_angle_deg=np.asarray(
+                observation.limiting_contact_angle_deg
+            ),
             limiting_obs_force_n=np.asarray(observation.limiting_force_n),
             limiting_obs_contact_y_pair_mm=np.asarray(
                 observation.limiting_contact_y_pair_mm
@@ -562,6 +619,9 @@ def save_trial_result(
             d_onset_diagnostic=np.asarray(observation.d_onset),
             normalized_observation=np.asarray(observation.normalized_response),
             observation_sphere_diameters_mm=np.asarray(observation.sphere_diameters_mm),
+            observation_contact_angles_deg=np.asarray(
+                observation.contact_angles_deg
+            ),
             observation_contact_y_mm=np.asarray(observation.contact_y_mm),
             same_force_location_separations=np.asarray(
                 observation.location_separations
@@ -591,7 +651,13 @@ def apply_result_to_row(
         J_contact=float(details["J_contact"]),
         J_obs=float(details["J_obs"]),
         limiting_contact_scenario=contact.limiting_scenario,
+        limiting_contact_sphere_diameter_mm=(
+            contact.limiting_sphere_diameter_mm
+        ),
+        limiting_contact_angle_deg=contact.limiting_contact_angle_deg,
+        limiting_contact_y_mm=contact.limiting_contact_y_mm,
         limiting_obs_sphere_diameter_mm=(observation.limiting_sphere_diameter_mm),
+        limiting_obs_contact_angle_deg=observation.limiting_contact_angle_deg,
         limiting_obs_force_n=observation.limiting_force_n,
         limiting_obs_contact_y_pair_mm=(
             f"{observation.limiting_contact_y_pair_mm[0]:g},"

@@ -354,6 +354,7 @@ def _objective(
         contact_y_mm=data["contact_y_mm"],
         force_targets_n=data["force_targets_n"],
         emitted_power=_EMITTED_POWER,
+        contact_angles_deg=np.zeros_like(data["sphere_diameters_mm"]),
     )
 
 

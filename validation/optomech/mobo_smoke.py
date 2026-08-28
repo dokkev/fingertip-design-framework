@@ -25,9 +25,11 @@ def _run(output_directory: Path) -> list[dict[str, object]]:
         parameter_bounds_mm=production.PARAMETER_BOUNDS_MM,
         indenter_urdfs=production.INDENTER_URDFS,
         sphere_diameters_mm=production.SPHERE_DIAMETERS_MM,
+        indentation_angles_deg=production.INDENTATION_ANGLES_DEG,
         contact_y_mm=production.CONTACT_Y_MM,
         initial_clearance_m=production.INITIAL_CLEARANCE_M,
         force_targets_n=production.FORCE_TARGETS_N,
+        initial_morphologies_mm=production.INITIAL_MORPHOLOGIES_MM,
     )
 
 

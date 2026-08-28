@@ -645,8 +645,13 @@ height and 5 mm minimum-silicone-thickness limits. The two Ax constraints are
 proposal-time mirrors, not independent scientific owners.
 
 Candidate generation derives a deterministic finite subset of the 0.5 mm
-lattice by retaining only points accepted by `DesignSpace.is_feasible()`. During
-initialization, one exact-feasible Sobol point is attached at a time. During
+lattice by retaining only points accepted by `DesignSpace.is_feasible()`. A
+fresh production campaign first attaches the five explicit
+`INITIAL_MORPHOLOGIES_MM` designs in their listed order and evaluates them under
+the current 75-scenario environment; no objective value from an older campaign
+is imported. Ax 1.3.1 counts these completed manual trials toward the fixed
+initialization budget of 13, so one exact-feasible Sobol point is then attached
+at a time until eight fresh Sobol observations complete initialization. During
 model-based generation, Ax fits its normal multi-objective surrogate and scores
 a fresh pool of 256 exact-feasible Sobol points through its public acquisition
 evaluation API. Only the best feasible point is attached as an Ax trial. Thus
@@ -659,8 +664,9 @@ proposal sequence.
 current fingertip campaign inputs,
 including explicit sphere diameters and longitudinal contact locations.
 It exposes separate mechanics and optical presets, physical parameter
-bounds, indenter URDF list, sequential force thresholds, initial clearance,
-output directory, and cumulative target morphology count. Mechanics and optical algorithms remain owned by their
+bounds, the ordered informed initial morphologies, indenter URDF list,
+sequential force thresholds, initial clearance, output directory, and
+cumulative target morphology count. Mechanics and optical algorithms remain owned by their
 production modules. `silicone` is the current mechanics preset.
 Optical selection independently exposes the existing Solaris and Dragon Skin
 10 NV low/nominal/high sensitivity presets, without claiming that Solaris uses
@@ -671,7 +677,7 @@ the undeformed pad. The entry script supplies its sibling
 explicitly exported environment value still takes precedence.
 The prepared production entry selects nominal Dragon Skin 10 NV optics and
 targets 120 cumulative successful morphologies in the fresh
-`mobo_fingertip_instantaneous_05mm` directory. Its
+`mobo_fingertip_orientation_robust_1_2_5_10_05mm` directory. Its
 run config records the finite `1.8 x 1.6 mm` package-window source and
 dependency/source hashes. Resume is refused if the
 scientific source, optimizer source, dependency versions, or serialized
@@ -688,7 +694,10 @@ and the sequential evaluation loop. It has no module CLI, continuous-campaign
 branch, historical warm-start observations, or startup self-test.
 `campaign_io.py` owns run-config provenance, atomic Ax/CSV/NPZ persistence,
 resume reconciliation, Pareto tables, plots, and summary output. A fresh
-campaign starts with no reused objective observations. The expensive one-trial
+campaign starts with no reused objective observations: its five informed
+designs are new evaluations whose `generation_node` is
+`INITIAL_MORPHOLOGY`. Generated initialization and model-based trials remain
+distinguishable as `FEASIBLE_Sobol` and `FEASIBLE_MBM`. The expensive one-trial
 save/resume verification remains solely in
 `validation/optomech/mobo_smoke.py`.
 
@@ -703,20 +712,32 @@ and late stiffness from `5` to `10 N`. It then defines
 The mean-normal score remains diagnostic only. `J_obs` first sums the LED axis,
 subtracts the no-contact simultaneous field, divides by total emitted power
 five, and takes the minimum 11D Euclidean separation over sphere diameter,
-force threshold, and distinct contact-Y pairs. Contact onset is diagnostic only; force
-variation is not penalized. Both reducers accept saved raw NPZ arrays and know
-nothing about Newton, OptiX, or Ax.
+contact angle, force threshold, and distinct contact-Y pairs. Location pairs
+are compared only within an identical angle, diameter, and force condition.
+Contact onset is diagnostic only; force variation is not penalized. Both
+reducers accept saved raw NPZ arrays and know nothing about Newton, OptiX, or
+Ax.
 
-The production Ax contract evaluates the exact Cartesian product of the sphere
-diameters and contact Y positions selected in `scripts/run_mobo.py`, with
-sequential instantaneous snapshots at its configured force thresholds.
+The orientation-aware production Ax contract evaluates the sphere-major,
+angle-middle, contact-Y-minor Cartesian product selected in
+`scripts/run_mobo.py`: `10/15/20 mm` spheres, `-30/-15/0/+15/+30 deg`, and
+`-11/-5.5/0/+5.5/+11 mm`, for 75 independent scenarios per morphology. Each
+scenario records sequential instantaneous first-crossing snapshots at
+`1/2/5/10 N`. The fingertip and carrier stay fixed in the Newton world. For
+each physical `+theta` fingertip angle, evaluator scenario construction rotates
+the sphere's initial center and normalized motion direction through `-theta`
+about the longitudinal world-Y line at `X=0, Z=0`.
+`J_contact` takes the worst case over all resulting scenarios. `J_obs` compares
+contact-Y locations only within the same diameter, angle, and force condition,
+then takes the worst case over those conditions.
 It maximizes only `J_contact` and `J_obs`, without scalarization or objective
 thresholds. Trial NPZ files retain raw mechanics, optical responses, component
 scores, limiting conditions, same-force separation matrices, onset and ROI
-diagnostics. The focused four-world first-crossing validation passed with 16
-saved checkpoints, no inversion or contact-buffer overflow, and closed optical
-energy. The previous 21-scenario dwell artifact is historical and is not
-reused as an observation in this fresh Ax campaign.
+diagnostics, and explicit `contact_angles_deg`. `run_config.json` records the
+orientation axis, pivot, inverse-relative transform convention, and complete
+ordered scenario support. Strict resume refuses a changed scientific contract,
+source hash, or dependency version. Neither completed 160-trial pad-normal
+campaign is imported into this fresh Ax campaign.
 
 ### `lumo/util/`
 
@@ -802,6 +823,17 @@ during that hold, reports force, active-particle speed, and sphere contact count
 at a throttled interval, and freezes the final held state until the viewer
 closes. It is a fixed-speed diagnostic and does not run the production force
 checkpoint workflow.
+
+`validation/contact-physics/angled_indentation_viewer.py` is the focused
+interactive check for the existing arbitrary-direction indentation contract.
+It keeps the fingertip and carrier fixed and represents a physical fingertip
+rotation about the longitudinal Y datum by applying the inverse rotation to
+both the sphere center and its normalized motion direction. The default
+Dragon Skin trial-117 scenario advances continuously through `5 N` and `10 N`,
+then renders the final pose without advancing Newton. Angles remain
+scenario-construction data: `IndentationTrial` retains only its concrete world
+pose and direction, while the production campaign may select angles and the
+evaluator converts them into those existing fields.
 
 `validation/contact-physics/force_traj.py` repeats that centered 15 mm sphere
 approach without a viewer, stops prescribed motion at the first transient

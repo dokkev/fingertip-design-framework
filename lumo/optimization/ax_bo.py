@@ -89,11 +89,13 @@ class CampaignDefinition:
     step_to_physical: tuple[tuple[str, str, int, int], ...]
     indenters: tuple[tuple[str, str], ...]
     sphere_diameters_mm: tuple[float, ...]
+    indentation_angles_deg: tuple[float, ...]
     force_targets_n: tuple[float, ...]
     initial_clearance_m: float
     contact_y_mm: tuple[float, ...]
     mechanics_preset: str
     optical_preset: str
+    initial_morphologies_mm: tuple[tuple[float, ...], ...]
     resolution_mm: float = _RESOLUTION_MM
     initialization_budget: int = _INITIALIZATION_BUDGET
     random_seed: int = _RANDOM_SEED
@@ -116,6 +118,14 @@ class CampaignDefinition:
     @property
     def indenter_names(self) -> tuple[str, ...]:
         return tuple(name for _, name in self.indenters)
+
+    @property
+    def initial_morphology_parameters(self) -> tuple[dict[str, float], ...]:
+        """Return informed initial designs in physical parameter order."""
+        return tuple(
+            dict(zip(self.physical_parameter_names, values, strict=True))
+            for values in self.initial_morphologies_mm
+        )
 
     def decode(self, raw_parameters: Mapping[str, object]) -> dict[str, float]:
         """Decode Ax integer steps into physical millimetres."""
@@ -246,11 +256,13 @@ def build_campaign(
     parameter_bounds_mm: Mapping[str, tuple[float, float]],
     indenter_urdfs: Iterable[str],
     sphere_diameters_mm: Iterable[float],
+    indentation_angles_deg: Iterable[float],
     force_targets_n: Iterable[float],
     initial_clearance_m: float,
     contact_y_mm: Iterable[float],
     mechanics_preset: str,
     optical_preset: str,
+    initial_morphologies_mm: Iterable[Iterable[float]] = (),
 ) -> CampaignDefinition:
     """Build the one current half-millimetre production campaign."""
     indenters = _indenter_definitions(indenter_urdfs)
@@ -264,6 +276,12 @@ def build_campaign(
     if len(set(diameters)) != len(diameters):
         raise ValueError("sphere_diameters_mm must be unique")
 
+    angles = tuple(float(value) for value in indentation_angles_deg)
+    if not angles or any(not isfinite(value) for value in angles):
+        raise ValueError("indentation_angles_deg must contain finite angles")
+    if len(set(angles)) != len(angles):
+        raise ValueError("indentation_angles_deg must be unique")
+
     locations = tuple(float(value) for value in contact_y_mm)
     if not locations or any(
         not isfinite(value) or not -27.5 <= value <= 27.5 for value in locations
@@ -275,8 +293,8 @@ def build_campaign(
         raise ValueError("contact_y_mm must be unique")
 
     clearance = float(initial_clearance_m)
-    if not isfinite(clearance) or clearance < 0.0:
-        raise ValueError("initial_clearance_m must be finite and nonnegative")
+    if not isfinite(clearance) or clearance <= 0.0:
+        raise ValueError("initial_clearance_m must be finite and positive")
     if mechanics_preset not in MECHANICS_PRESETS:
         raise ValueError(
             f"mechanics_preset must be one of {sorted(MECHANICS_PRESETS)!r}"
@@ -300,7 +318,16 @@ def build_campaign(
             for name, limits in bounds.items()
         },
     )
-    return CampaignDefinition(
+    initial_morphologies = tuple(
+        tuple(float(value) for value in morphology)
+        for morphology in initial_morphologies_mm
+    )
+    if len(initial_morphologies) > _INITIALIZATION_BUDGET:
+        raise ValueError(
+            "initial_morphologies_mm cannot exceed the initialization budget"
+        )
+
+    campaign = CampaignDefinition(
         space=space,
         ax_parameters=tuple(
             RangeParameterConfig(
@@ -317,12 +344,29 @@ def build_campaign(
         step_to_physical=step_to_physical,
         indenters=indenters,
         sphere_diameters_mm=diameters,
+        indentation_angles_deg=angles,
         force_targets_n=_force_targets(force_targets_n),
         initial_clearance_m=clearance,
         contact_y_mm=locations,
         mechanics_preset=mechanics_preset,
         optical_preset=optical_preset,
+        initial_morphologies_mm=initial_morphologies,
     )
+    for values in campaign.initial_morphologies_mm:
+        if len(values) != len(campaign.physical_parameter_names):
+            raise ValueError(
+                "each initial morphology must contain exactly five values in "
+                "flat-pad, semiellipse, stem-width, stem-height, void-width order"
+            )
+    seen_initial_steps: set[tuple[int, ...]] = set()
+    for parameters in campaign.initial_morphology_parameters:
+        raw_parameters = campaign.encode(parameters)
+        campaign.validate(raw_parameters, parameters)
+        steps = tuple(raw_parameters[name] for name in campaign.ax_parameter_names)
+        if steps in seen_initial_steps:
+            raise ValueError("initial_morphologies_mm must be unique")
+        seen_initial_steps.add(steps)
+    return campaign
 
 
 def new_client(campaign: CampaignDefinition) -> Client:
@@ -332,7 +376,8 @@ def new_client(campaign: CampaignDefinition) -> Client:
         name="lumo_fingertip_objectives_discrete_05mm",
         description=(
             "LUMO fingertip contact and observation optimization over "
-            f"indenters {campaign.indenter_names}, contact Y locations "
+            f"indenters {campaign.indenter_names}, indentation angles "
+            f"{campaign.indentation_angles_deg} deg, contact Y locations "
             f"{campaign.contact_y_mm} mm, and force states "
             f"{campaign.force_targets_n} N"
         ),
@@ -452,6 +497,28 @@ def propose_feasible_trial(
     )
 
 
+def propose_next_trial(
+    client: Client,
+    campaign: CampaignDefinition,
+) -> tuple[int, dict[str, int], dict[str, float], str]:
+    """Attach the next informed morphology, then use normal Ax generation."""
+    used = _used_step_tuples(client, campaign)
+    for parameters in campaign.initial_morphology_parameters:
+        raw_parameters = campaign.encode(parameters)
+        steps = tuple(raw_parameters[name] for name in campaign.ax_parameter_names)
+        if steps in used:
+            continue
+        campaign.validate(raw_parameters, parameters)
+        trial_index = client.attach_trial(parameters=raw_parameters)
+        return (
+            trial_index,
+            raw_parameters,
+            parameters,
+            "INITIAL_MORPHOLOGY",
+        )
+    return propose_feasible_trial(client, campaign)
+
+
 def _evaluate_candidate(
     campaign: CampaignDefinition,
     parameters: dict[str, float],
@@ -471,6 +538,7 @@ def _evaluate_candidate(
             campaign.sphere_diameters_mm,
             campaign.contact_y_mm,
             force_targets_n=campaign.force_targets_n,
+            indentation_angles_deg=campaign.indentation_angles_deg,
             initial_clearance_m=campaign.initial_clearance_m,
             approach_speed_m_s=campaign.approach_speed_m_s,
             max_sim_time_s=campaign.max_sim_time_s,
@@ -535,11 +603,13 @@ def run(
     parameter_bounds_mm: Mapping[str, tuple[float, float]],
     indenter_urdfs: Iterable[str],
     sphere_diameters_mm: Iterable[float],
+    indentation_angles_deg: Iterable[float],
     force_targets_n: Iterable[float],
     initial_clearance_m: float,
     contact_y_mm: Iterable[float],
     mechanics_preset: str,
     optical_preset: str,
+    initial_morphologies_mm: Iterable[Iterable[float]] = (),
 ) -> list[dict[str, object]]:
     """Create or resume the current sequential Ax campaign."""
     if target_bo_trials < 0:
@@ -550,11 +620,13 @@ def run(
         parameter_bounds_mm=parameter_bounds_mm,
         indenter_urdfs=indenter_urdfs,
         sphere_diameters_mm=sphere_diameters_mm,
+        indentation_angles_deg=indentation_angles_deg,
         force_targets_n=force_targets_n,
         initial_clearance_m=initial_clearance_m,
         contact_y_mm=contact_y_mm,
         mechanics_preset=mechanics_preset,
         optical_preset=optical_preset,
+        initial_morphologies_mm=initial_morphologies_mm,
     )
     campaign_exists = any(
         (output_directory / filename).exists()
@@ -579,8 +651,8 @@ def run(
                 "Ax did not produce enough successful candidates "
                 f"within {proposal_limit} proposals"
             )
-        trial_index, raw_parameters, parameters, generation_node = (
-            propose_feasible_trial(client, campaign)
+        trial_index, raw_parameters, parameters, generation_node = propose_next_trial(
+            client, campaign
         )
         row = running_row(
             trial_index,
@@ -674,5 +746,6 @@ __all__ = [
     "CampaignDefinition",
     "build_campaign",
     "objective_details",
+    "propose_next_trial",
     "run",
 ]

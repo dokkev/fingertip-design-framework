@@ -12,7 +12,7 @@ import numpy as np
 import warp as wp
 
 from lumo.fingertip import ACTIVE_Y_BOUNDS_MM, Fingertip
-from lumo.mesh import FingertipMesh, make_fingertip_mesh
+from lumo.mesh import make_fingertip_mesh
 from lumo.newton import Indenter
 from lumo.ray_tracing import (
     LED,
@@ -68,7 +68,9 @@ class FingertipEvaluation:
     no_contact_outside_roi_power_fraction: float
     scenario_names: tuple[str, ...]
     sphere_diameters_mm: np.ndarray
+    contact_angles_deg: np.ndarray
     contact_y_mm: np.ndarray
+    zero_contact_travel_m: np.ndarray
     force_targets_n: np.ndarray
     actual_forces_n: np.ndarray
     indentations_m: np.ndarray
@@ -342,6 +344,140 @@ def _indenter_contact_records(
     return local_indices, barycentric, points_W_m, normals_W, body_positions
 
 
+def _rotate_about_y(vector: np.ndarray, angle_deg: float) -> np.ndarray:
+    angle_rad = np.deg2rad(angle_deg)
+    cosine = float(np.cos(angle_rad))
+    sine = float(np.sin(angle_rad))
+    return np.array(
+        (
+            cosine * vector[0] + sine * vector[2],
+            vector[1],
+            -sine * vector[0] + cosine * vector[2],
+        ),
+        dtype=np.float64,
+    )
+
+
+def _indenter_trajectory(
+    fingertip: Fingertip,
+    *,
+    sphere_diameter_mm: float,
+    contact_y_mm: float,
+    fingertip_angle_deg: float,
+    initial_clearance_m: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return the inverse-relative sphere center and direction in world."""
+    radius_m = 0.5e-3 * sphere_diameter_mm
+    ordinary_center_m = np.array(
+        (
+            0.0,
+            1.0e-3 * contact_y_mm,
+            fingertip.tip_z_m - initial_clearance_m - radius_m,
+        ),
+        dtype=np.float64,
+    )
+    pivot_m = np.array((0.0, ordinary_center_m[1], 0.0), dtype=np.float64)
+    center_m = pivot_m + _rotate_about_y(
+        ordinary_center_m - pivot_m,
+        -fingertip_angle_deg,
+    )
+    direction = _rotate_about_y(
+        np.array((0.0, 0.0, 1.0), dtype=np.float64),
+        -fingertip_angle_deg,
+    )
+    direction /= np.linalg.norm(direction)
+    return center_m, direction
+
+
+def _zero_contact_travel_m(
+    fingertip: Fingertip,
+    *,
+    sphere_diameter_mm: float,
+    fingertip_angle_deg: float,
+    initial_clearance_m: float,
+) -> float:
+    """Return travel from the common start to undeformed X-Z tangency."""
+    silicone = fingertip.silicone
+    x_mm = np.linspace(
+        -silicone.ellipse_radius_x_mm,
+        silicone.ellipse_radius_x_mm,
+        20001,
+    )
+    normalized_x = x_mm / silicone.ellipse_radius_x_mm
+    ellipse_z_mm = silicone.ellipse_center_z_mm - (
+        silicone.ellipse_radius_z_mm
+        * np.sqrt(np.maximum(0.0, 1.0 - normalized_x**2))
+    )
+    side_z_mm = np.linspace(
+        silicone.ellipse_center_z_mm,
+        silicone.bond_top_z_mm,
+        4001,
+    )
+    boundary_xz_m = 1.0e-3 * np.concatenate(
+        (
+            np.column_stack((x_mm, ellipse_z_mm)),
+            np.column_stack(
+                (
+                    np.full_like(side_z_mm, -silicone.half_width_mm),
+                    side_z_mm,
+                )
+            ),
+            np.column_stack(
+                (
+                    np.full_like(side_z_mm, silicone.half_width_mm),
+                    side_z_mm,
+                )
+            ),
+        ),
+        axis=0,
+    )
+    direction_xz = _rotate_about_y(
+        np.array((0.0, 0.0, 1.0), dtype=np.float64),
+        -fingertip_angle_deg,
+    )[[0, 2]]
+    projected_m = boundary_xz_m @ direction_xz
+    perpendicular_squared_m2 = (
+        np.einsum("ij,ij->i", boundary_xz_m, boundary_xz_m)
+        - projected_m**2
+    )
+    radius_m = 0.5e-3 * sphere_diameter_mm
+    eligible = perpendicular_squared_m2 <= radius_m**2
+    if not np.any(eligible):
+        raise RuntimeError("angled sphere trajectory misses the fingertip outline")
+    first_center_coordinate_m = float(
+        np.min(
+            projected_m[eligible]
+            - np.sqrt(radius_m**2 - perpendicular_squared_m2[eligible])
+        )
+    )
+    initial_center_coordinate_m = (
+        fingertip.tip_z_m - initial_clearance_m - radius_m
+    )
+    travel_m = first_center_coordinate_m - initial_center_coordinate_m
+    if travel_m <= 0.0:
+        raise RuntimeError("angled sphere is not clear at its initial pose")
+    return travel_m
+
+
+def _scenario_specifications(
+    urdf_paths: tuple[Path, ...],
+    diameters_mm: tuple[float, ...],
+    angles_deg: tuple[float, ...],
+    locations_y_mm: tuple[float, ...],
+) -> tuple[tuple[Path, float, float, float], ...]:
+    """Return the deterministic sphere-major Cartesian scenario product."""
+    return tuple(
+        (urdf_path, diameter_mm, angle_deg, location_y_mm)
+        for urdf_path, diameter_mm in zip(
+            urdf_paths,
+            diameters_mm,
+            strict=True,
+        )
+        for angle_deg in angles_deg
+        for location_y_mm in locations_y_mm
+    )
+
+
 def evaluate_fingertip(
     fingertip: Fingertip,
     sphere_urdf_paths: Iterable[str | Path],
@@ -349,6 +485,7 @@ def evaluate_fingertip(
     contact_y_mm: Iterable[float],
     *,
     force_targets_n: Iterable[float],
+    indentation_angles_deg: Iterable[float] = (0.0,),
     initial_clearance_m: float = 1.0e-3,
     approach_speed_m_s: float = 5.0e-3,
     max_sim_time_s: float = 60.0,
@@ -356,14 +493,16 @@ def evaluate_fingertip(
     """Evaluate raw mechanics and five-emitter optics for one morphology.
 
     Sphere diameters and URDF paths are paired. Their Cartesian product with
-    ``contact_y_mm`` defines independent Newton scenarios. Increasing force
-    targets reuse one runtime within each scenario; different longitudinal
-    contact locations never share a runtime.
+    ``indentation_angles_deg`` and ``contact_y_mm`` defines independent Newton
+    scenarios. A physical positive fingertip angle about Y is represented with
+    the fingertip fixed by rotating the sphere trajectory through the negative
+    angle. Increasing force targets reuse one runtime within each scenario.
     """
     if not isinstance(fingertip, Fingertip):
         raise TypeError("fingertip must be a Fingertip")
     urdf_paths = tuple(Path(path) for path in sphere_urdf_paths)
     diameters_mm = tuple(float(value) for value in sphere_diameters_mm)
+    angles_deg = tuple(float(value) for value in indentation_angles_deg)
     locations_y_mm = tuple(float(value) for value in contact_y_mm)
     if not urdf_paths or len(urdf_paths) != len(diameters_mm):
         raise ValueError(
@@ -375,6 +514,10 @@ def evaluate_fingertip(
         raise ValueError("sphere diameters must be finite and positive")
     if len(set(diameters_mm)) != len(diameters_mm):
         raise ValueError("sphere diameters must be unique")
+    if not angles_deg or any(not np.isfinite(value) for value in angles_deg):
+        raise ValueError("indentation_angles_deg must contain finite angles")
+    if len(set(angles_deg)) != len(angles_deg):
+        raise ValueError("indentation_angles_deg must be unique")
     if not locations_y_mm or any(not np.isfinite(value) for value in locations_y_mm):
         raise ValueError("contact_y_mm must contain finite locations")
     if len(set(locations_y_mm)) != len(locations_y_mm):
@@ -457,30 +600,57 @@ def evaluate_fingertip(
 
     trials = []
     scenario_diameters_mm = []
+    scenario_angles_deg = []
     scenario_locations_y_mm = []
-    for urdf_path, diameter_mm in zip(urdf_paths, diameters_mm, strict=True):
-        radius_m = 0.5e-3 * diameter_mm
-        for location_y_mm in locations_y_mm:
-            trials.append(
-                IndentationTrial(
-                    name=f"sphere_{diameter_mm:g}mm_y{location_y_mm:+g}mm",
-                    urdf_path=urdf_path,
-                    initial_tf=wp.transform(
-                        wp.vec3(
-                            0.0,
-                            1.0e-3 * location_y_mm,
-                            fingertip.tip_z_m - initial_clearance_m - radius_m,
-                        ),
-                        wp.quat_identity(),
-                    ),
-                    motion_direction_W=wp.vec3(0.0, 0.0, 1.0),
-                    approach_speed_m_s=approach_speed_m_s,
-                    max_sim_time_s=max_sim_time_s,
-                    initial_clearance_m=initial_clearance_m,
-                )
+    scenario_zero_contact_travel_m = []
+    zero_contact_travel_by_condition: dict[tuple[float, float], float] = {}
+    for urdf_path, diameter_mm, angle_deg, location_y_mm in (
+        _scenario_specifications(
+            urdf_paths,
+            diameters_mm,
+            angles_deg,
+            locations_y_mm,
+        )
+    ):
+        condition = (diameter_mm, angle_deg)
+        zero_contact_travel_m = zero_contact_travel_by_condition.get(condition)
+        if zero_contact_travel_m is None:
+            zero_contact_travel_m = _zero_contact_travel_m(
+                fingertip,
+                sphere_diameter_mm=diameter_mm,
+                fingertip_angle_deg=angle_deg,
+                initial_clearance_m=initial_clearance_m,
             )
-            scenario_diameters_mm.append(diameter_mm)
-            scenario_locations_y_mm.append(location_y_mm)
+            zero_contact_travel_by_condition[condition] = zero_contact_travel_m
+        initial_center_m, motion_direction = _indenter_trajectory(
+            fingertip,
+            sphere_diameter_mm=diameter_mm,
+            contact_y_mm=location_y_mm,
+            fingertip_angle_deg=angle_deg,
+            initial_clearance_m=initial_clearance_m,
+        )
+        trials.append(
+            IndentationTrial(
+                name=(
+                    f"sphere_{diameter_mm:g}mm_"
+                    f"y{location_y_mm:+g}mm_"
+                    f"theta{angle_deg:+g}deg"
+                ),
+                urdf_path=urdf_path,
+                initial_tf=wp.transform(
+                    wp.vec3(*initial_center_m),
+                    wp.quat_identity(),
+                ),
+                motion_direction_W=wp.vec3(*motion_direction),
+                approach_speed_m_s=approach_speed_m_s,
+                max_sim_time_s=max_sim_time_s,
+                initial_clearance_m=zero_contact_travel_m,
+            )
+        )
+        scenario_diameters_mm.append(diameter_mm)
+        scenario_angles_deg.append(angle_deg)
+        scenario_locations_y_mm.append(location_y_mm)
+        scenario_zero_contact_travel_m.append(zero_contact_travel_m)
     trial_tuple = tuple(trials)
 
     scenario_count = len(trial_tuple)
@@ -611,7 +781,7 @@ def evaluate_fingertip(
 
         actual_forces_n[scenario_index, force_index] = completed_trial.reaction_force_n
         indentations_m[scenario_index, force_index] = (
-            completed_trial.travel_m - initial_clearance_m
+            completed_trial.travel_m - completed_trial.initial_clearance_m
         )
         checkpoint_steps[scenario_index, force_index] = completed_trial.step_count
         checkpoint_times_s[scenario_index, force_index] = (
@@ -717,7 +887,12 @@ def evaluate_fingertip(
         no_contact_outside_roi_power_fraction=(no_contact_outside_roi_power_fraction),
         scenario_names=tuple(trial.name for trial in trial_tuple),
         sphere_diameters_mm=np.asarray(scenario_diameters_mm, dtype=np.float64),
+        contact_angles_deg=np.asarray(scenario_angles_deg, dtype=np.float64),
         contact_y_mm=np.asarray(scenario_locations_y_mm, dtype=np.float64),
+        zero_contact_travel_m=np.asarray(
+            scenario_zero_contact_travel_m,
+            dtype=np.float64,
+        ),
         force_targets_n=np.asarray(force_targets, dtype=np.float64),
         actual_forces_n=actual_forces_n,
         indentations_m=indentations_m,

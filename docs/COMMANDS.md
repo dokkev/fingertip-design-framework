@@ -66,6 +66,14 @@ conda run --no-capture-output -n lit \
   python -u validation/fingertip/view_fingertip_newton.py
 ```
 
+View the mechanics-equivalent inverse-relative path for the default
+`+30 deg` angled indentation scenario:
+
+```bash
+conda run --no-capture-output -n lit \
+  python -u validation/contact-physics/angled_indentation_viewer.py
+```
+
 Run the short fingertip Newton compatibility smoke:
 
 ```bash
@@ -124,11 +132,30 @@ conda run --no-capture-output -n lit python -u scripts/run_mobo.py
 `scripts/run_mobo.py` is the only campaign entry; `ax_bo.py` is a library module
 and has no separate CLI. The campaign is sequential and resumable. It evaluates five geometry variables
 on the 0.5 mm lattice, fixes `flat_pad_width_mm=30`, and maximizes `J_contact`
-and `J_obs` independently. Production mechanics use the fixed four-world GPU
+and `J_obs` independently. `INDENTATION_ANGLES_DEG` selects the physical
+fingertip angles included in the scenario Cartesian product; `(0.0,)` is the
+ordinary pad-normal case. Angled campaigns need the conservative common air
+approach configured by `INITIAL_CLEARANCE_M`. Production mechanics use the fixed four-world GPU
 CUDA-graph checkpoint path: a constant `5 mm/s` approach and
 the first samples at or above each configured force threshold, with no servo
 or dwell. The production objective requires exactly four strictly increasing
 force thresholds.
+
+`INITIAL_MORPHOLOGIES_MM` lists informed physical designs in
+`(flat-pad height, semiellipse height, stem width, stem height, void width)`
+order. On a fresh campaign these designs are evaluated first under the current
+scientific contract; previous objective values are never imported. The five
+completed initial morphologies count toward Ax's initialization budget of 13,
+leaving eight fresh exact-feasible Sobol trials before `FEASIBLE_MBM` begins.
+
+The current Dragon Skin orientation-aware campaign uses 75 scenarios per
+morphology: `5 angles x 3 spheres x 5 contact-Y locations`. Before launching
+it, run the one-morphology trial-117 Newton-to-OptiX smoke:
+
+```bash
+conda run --no-capture-output -n lit \
+  python -u validation/optomech/orientation_aware_mobo_smoke.py
+```
 
 Do not mix an output directory with an older run-config schema. Ax state and one
 compressed raw NPZ per completed trial are written beneath the configured

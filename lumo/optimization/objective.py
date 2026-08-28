@@ -16,6 +16,9 @@ class ContactObjective:
     J_contact: float
     limiting_scenario_index: int
     scenario_names: tuple[str, ...]
+    limiting_sphere_diameter_mm: float
+    limiting_contact_angle_deg: float
+    limiting_contact_y_mm: float
     q_form: np.ndarray
     q_stable: np.ndarray
     q_stiff: np.ndarray
@@ -36,6 +39,7 @@ class ObservationObjective:
 
     J_obs: float
     limiting_sphere_diameter_mm: float
+    limiting_contact_angle_deg: float
     limiting_force_n: float
     limiting_contact_y_pair_mm: tuple[float, float]
     d_onset: float
@@ -43,6 +47,7 @@ class ObservationObjective:
     onset_force_n: float
     normalized_response: np.ndarray
     sphere_diameters_mm: np.ndarray
+    contact_angles_deg: np.ndarray
     contact_y_mm: np.ndarray
     force_targets_n: np.ndarray
     location_separations: np.ndarray
@@ -143,6 +148,8 @@ def compute_contact_objective(
     surface_triangles: np.ndarray,
     scenario_names: tuple[str, ...],
     sphere_diameters_mm: np.ndarray,
+    contact_angles_deg: np.ndarray,
+    contact_y_mm: np.ndarray,
     force_targets_n: np.ndarray,
     actual_forces_n: np.ndarray,
     indentations_m: np.ndarray,
@@ -159,6 +166,8 @@ def compute_contact_objective(
     triangles = np.asarray(surface_triangles, dtype=np.int32)
     reference_vertices = np.asarray(reference_vertices_m, dtype=np.float64)
     diameters = np.asarray(sphere_diameters_mm, dtype=np.float64)
+    angles = np.asarray(contact_angles_deg, dtype=np.float64)
+    locations = np.asarray(contact_y_mm, dtype=np.float64)
     forces = np.asarray(actual_forces_n, dtype=np.float64)
     indentations = np.asarray(indentations_m, dtype=np.float64)
     offsets = np.asarray(contact_record_offsets, dtype=np.int64)
@@ -168,8 +177,15 @@ def compute_contact_objective(
     expected_state_shape = (scenario_count, force_count)
     if triangles.ndim != 2 or triangles.shape[1] != 3:
         raise ValueError("surface_triangles must have shape (triangle, 3)")
-    if diameters.shape != (scenario_count,) or np.any(diameters <= 0.0):
-        raise ValueError("sphere diameters must be positive and match scenarios")
+    if (
+        diameters.shape != (scenario_count,)
+        or angles.shape != (scenario_count,)
+        or locations.shape != (scenario_count,)
+        or np.any(diameters <= 0.0)
+    ):
+        raise ValueError(
+            "sphere diameters, contact angles, and locations must match scenarios"
+        )
     if (
         forces.shape != expected_state_shape
         or indentations.shape != expected_state_shape
@@ -179,7 +195,16 @@ def compute_contact_objective(
         raise ValueError("contact_record_offsets has the wrong shape")
     if vertices.shape[:2] != expected_state_shape or vertices.shape[-1] != 3:
         raise ValueError("silicone_vertices_m has the wrong state shape")
-    numeric = (reference_vertices, diameters, forces, indentations, normals, vertices)
+    numeric = (
+        reference_vertices,
+        diameters,
+        angles,
+        locations,
+        forces,
+        indentations,
+        normals,
+        vertices,
+    )
     if any(not np.all(np.isfinite(value)) for value in numeric):
         raise ValueError("contact objective inputs must be finite")
 
@@ -285,6 +310,9 @@ def compute_contact_objective(
         J_contact=float(q_contact[limiting_index]),
         limiting_scenario_index=limiting_index,
         scenario_names=names,
+        limiting_sphere_diameter_mm=float(diameters[limiting_index]),
+        limiting_contact_angle_deg=float(angles[limiting_index]),
+        limiting_contact_y_mm=float(locations[limiting_index]),
         q_form=q_form,
         q_stable=q_stable,
         q_stiff=q_stiff,
@@ -309,8 +337,9 @@ def compute_observation_objective(
     contact_y_mm: np.ndarray,
     force_targets_n: np.ndarray,
     emitted_power: float,
+    contact_angles_deg: np.ndarray,
 ) -> ObservationObjective:
-    """Compute worst same-force location separation within each sphere size."""
+    """Compute worst same-force/location separation per sphere and angle."""
     combined = _combine_led_responses(response_matrix)
     baseline = _combine_led_responses(no_contact_response)
     if combined.ndim != 3:
@@ -320,12 +349,21 @@ def compute_observation_objective(
     names = tuple(str(name) for name in scenario_names)
     scenario_count, force_count, _ = combined.shape
     diameters = np.asarray(sphere_diameters_mm, dtype=np.float64)
+    angles = np.asarray(contact_angles_deg, dtype=np.float64)
     locations = np.asarray(contact_y_mm, dtype=np.float64)
     forces = np.asarray(force_targets_n, dtype=np.float64)
     if len(names) != scenario_count or len(set(names)) != scenario_count:
         raise ValueError("scenario names must be unique and match responses")
-    if diameters.shape != (scenario_count,) or locations.shape != (scenario_count,):
-        raise ValueError("sphere diameters and contact locations must match scenarios")
+    if (
+        diameters.shape != (scenario_count,)
+        or angles.shape != (scenario_count,)
+        or locations.shape != (scenario_count,)
+    ):
+        raise ValueError(
+            "sphere diameters, angles, and contact locations must match scenarios"
+        )
+    if not np.all(np.isfinite(angles)):
+        raise ValueError("indentation angles must be finite")
     if forces.shape != (force_count,) or not np.all(np.isfinite(forces)):
         raise ValueError("force targets must be finite and match responses")
     if not np.isfinite(emitted_power) or emitted_power <= 0.0:
@@ -333,26 +371,35 @@ def compute_observation_objective(
 
     normalized = (combined - baseline) / emitted_power
     unique_diameters = _ordered_unique(diameters)
+    unique_angles = _ordered_unique(angles)
     unique_locations = _ordered_unique(locations)
     if len(unique_locations) < 2:
         raise ValueError("at least two contact locations are required")
-    lookup: dict[tuple[float, float], int] = {}
-    for scenario_index, key in enumerate(zip(diameters, locations, strict=True)):
-        numeric_key = (float(key[0]), float(key[1]))
+    lookup: dict[tuple[float, float, float], int] = {}
+    for scenario_index, key in enumerate(
+        zip(diameters, angles, locations, strict=True)
+    ):
+        numeric_key = (float(key[0]), float(key[1]), float(key[2]))
         if numeric_key in lookup:
-            raise ValueError("sphere/contact-location scenarios must be unique")
+            raise ValueError(
+                "sphere/angle/contact-location scenarios must be unique"
+            )
         lookup[numeric_key] = scenario_index
-    expected = len(unique_diameters) * len(unique_locations)
+    expected = len(unique_diameters) * len(unique_angles) * len(unique_locations)
     if scenario_count != expected or any(
-        (float(diameter), float(location)) not in lookup
+        (float(diameter), float(angle), float(location)) not in lookup
         for diameter in unique_diameters
+        for angle in unique_angles
         for location in unique_locations
     ):
-        raise ValueError("responses must contain the full diameter/location product")
+        raise ValueError(
+            "responses must contain the full diameter/angle/location product"
+        )
 
     separations = np.zeros(
         (
             len(unique_diameters),
+            len(unique_angles),
             force_count,
             len(unique_locations),
             len(unique_locations),
@@ -360,34 +407,64 @@ def compute_observation_objective(
         dtype=np.float64,
     )
     minimum = float("inf")
-    limiting = (0, 0, 0, 1)
+    limiting = (0, 0, 0, 0, 1)
     for diameter_index, diameter in enumerate(unique_diameters):
-        for force_index in range(force_count):
-            for first, second in combinations(range(len(unique_locations)), 2):
-                first_index = lookup[(float(diameter), float(unique_locations[first]))]
-                second_index = lookup[
-                    (float(diameter), float(unique_locations[second]))
-                ]
-                distance = float(
-                    np.linalg.norm(
-                        normalized[first_index, force_index]
-                        - normalized[second_index, force_index]
+        for angle_index, angle in enumerate(unique_angles):
+            for force_index in range(force_count):
+                for first, second in combinations(range(len(unique_locations)), 2):
+                    first_index = lookup[
+                        (
+                            float(diameter),
+                            float(angle),
+                            float(unique_locations[first]),
+                        )
+                    ]
+                    second_index = lookup[
+                        (
+                            float(diameter),
+                            float(angle),
+                            float(unique_locations[second]),
+                        )
+                    ]
+                    distance = float(
+                        np.linalg.norm(
+                            normalized[first_index, force_index]
+                            - normalized[second_index, force_index]
+                        )
                     )
-                )
-                separations[diameter_index, force_index, first, second] = distance
-                separations[diameter_index, force_index, second, first] = distance
-                if distance < minimum:
-                    minimum = distance
-                    limiting = (diameter_index, force_index, first, second)
+                    separations[
+                        diameter_index,
+                        angle_index,
+                        force_index,
+                        first,
+                        second,
+                    ] = distance
+                    separations[
+                        diameter_index,
+                        angle_index,
+                        force_index,
+                        second,
+                        first,
+                    ] = distance
+                    if distance < minimum:
+                        minimum = distance
+                        limiting = (
+                            diameter_index,
+                            angle_index,
+                            force_index,
+                            first,
+                            second,
+                        )
 
     onset_distances = np.linalg.norm(normalized, axis=2)
     onset_index = np.unravel_index(
         int(np.argmin(onset_distances)), onset_distances.shape
     )
-    diameter_index, force_index, first, second = limiting
+    diameter_index, angle_index, force_index, first, second = limiting
     return ObservationObjective(
         J_obs=minimum,
         limiting_sphere_diameter_mm=float(unique_diameters[diameter_index]),
+        limiting_contact_angle_deg=float(unique_angles[angle_index]),
         limiting_force_n=float(forces[force_index]),
         limiting_contact_y_pair_mm=(
             float(unique_locations[first]),
@@ -398,6 +475,7 @@ def compute_observation_objective(
         onset_force_n=float(forces[onset_index[1]]),
         normalized_response=normalized,
         sphere_diameters_mm=unique_diameters,
+        contact_angles_deg=unique_angles,
         contact_y_mm=unique_locations,
         force_targets_n=forces,
         location_separations=separations,
@@ -429,6 +507,8 @@ def compute_objectives_from_raw(
         surface_triangles=np.asarray(data["surface_triangles"]),
         scenario_names=names,
         sphere_diameters_mm=np.asarray(data["sphere_diameters_mm"]),
+        contact_angles_deg=np.asarray(data["contact_angles_deg"]),
+        contact_y_mm=np.asarray(data["contact_y_mm"]),
         force_targets_n=np.asarray(data["force_targets_n"]),
         actual_forces_n=np.asarray(data["actual_forces_n"]),
         indentations_m=np.asarray(data["indentations_m"]),
@@ -445,6 +525,7 @@ def compute_objectives_from_raw(
         contact_y_mm=np.asarray(data["contact_y_mm"]),
         force_targets_n=np.asarray(data["force_targets_n"]),
         emitted_power=emitted_power,
+        contact_angles_deg=np.asarray(data["contact_angles_deg"]),
     )
     return contact, observation
 

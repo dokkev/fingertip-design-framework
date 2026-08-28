@@ -162,6 +162,7 @@ def _verify_raw(
         contact_y_mm=data["contact_y_mm"],
         force_targets_n=data["force_targets_n"],
         emitted_power=5.0,
+        contact_angles_deg=data["contact_angles_deg"],
     )
     if not np.isclose(
         permuted_observation.J_obs,
@@ -270,6 +271,7 @@ def main() -> None:
         parameter_bounds_mm=_PARAMETER_BOUNDS_MM,
         indenter_urdfs=_INDENTER_URDFS,
         sphere_diameters_mm=_SPHERE_DIAMETERS_MM,
+        indentation_angles_deg=(0.0,),
         contact_y_mm=_CONTACT_Y_MM,
         force_targets_n=_FORCE_TARGETS_N,
         initial_clearance_m=1.0e-3,
