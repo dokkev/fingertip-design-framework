@@ -3,23 +3,32 @@
 from __future__ import annotations
 
 from collections import deque
+from pathlib import Path
+import sys
 from time import perf_counter
 
 import cv2
 import numpy as np
 
-from lumo.fingertip import LED_CENTERS_Y_MM
-from lumo.hardware import RealSenseColorCamera
-from lumo.localization import (
+
+_REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+if str(_REPOSITORY_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPOSITORY_ROOT))
+
+from experiments.hardware import RealSenseColorCamera  # noqa: E402
+from experiments.localization import (  # noqa: E402
     LedArrayGeometry,
     brightest_red_features,
+    contact_image_point,
     detect_led_array,
     estimate_contact_position,
+    track_led_array,
 )
+from lumo.fingertip import LED_CENTERS_Y_MM  # noqa: E402
 
 
-CAMERA_WIDTH = 640
-CAMERA_HEIGHT = 480
+CAMERA_WIDTH = 1920
+CAMERA_HEIGHT = 1080
 CAMERA_FPS = 30
 CAMERA_SERIAL_NUMBER: str | None = None
 CALIBRATION_FRAME_COUNT = 30
@@ -58,6 +67,22 @@ def _draw_geometry(image: np.ndarray, geometry: LedArrayGeometry) -> None:
             1,
             cv2.LINE_AA,
         )
+
+
+def _draw_contact_point(image: np.ndarray, point_xy_px: np.ndarray) -> None:
+    center = tuple(np.rint(point_xy_px).astype(int))
+    cv2.circle(image, center, 10, (255, 255, 255), 3, cv2.LINE_AA)
+    cv2.circle(image, center, 7, (0, 70, 255), -1, cv2.LINE_AA)
+    cv2.putText(
+        image,
+        "contact",
+        (center[0] + 12, center[1] - 9),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.50,
+        (0, 70, 255),
+        2,
+        cv2.LINE_AA,
+    )
 
 
 def _draw_text(image: np.ndarray, lines: list[str]) -> None:
@@ -144,6 +169,7 @@ def main() -> None:
     geometry: LedArrayGeometry | None = None
     baseline: np.ndarray | None = None
     calibration_error: str | None = None
+    previous_rgb: np.ndarray | None = None
     previous_wall_time = perf_counter()
     displayed_fps = 0.0
 
@@ -168,6 +194,17 @@ def main() -> None:
                 features: np.ndarray | None = None
                 response: np.ndarray | None = None
                 lines = ["q/esc quit | r recalibrate | b unloaded baseline"]
+
+                if geometry is not None and previous_rgb is not None:
+                    try:
+                        geometry = track_led_array(previous_rgb, rgb, geometry)
+                    except RuntimeError as error:
+                        print(f"LED tracking lost: {error}; automatically recalibrating")
+                        geometry = None
+                        baseline = None
+                        calibration_error = None
+                        calibration_frames.clear()
+                        lines.append("Camera pose changed: automatically recalibrating LEDs")
 
                 if geometry is None:
                     if calibration_error is None:
@@ -197,6 +234,7 @@ def main() -> None:
                         )
                 else:
                     _draw_geometry(display, geometry)
+                    lines.append("LED image positions: tracking")
                     features = brightest_red_features(rgb, geometry)
                     if baseline is None:
                         lines.append("Press b with the fingertip unloaded")
@@ -207,6 +245,9 @@ def main() -> None:
                             LED_POSITIONS_IN_IMAGE_ORDER_MM,
                         )
                         response = estimate.response
+                        marker = contact_image_point(estimate, geometry)
+                        if marker is not None:
+                            _draw_contact_point(display, marker)
                         position_text = (
                             "unavailable"
                             if estimate.position_mm is None
@@ -230,10 +271,13 @@ def main() -> None:
                 cv2.imshow(WINDOW_NAME, visualization)
 
                 key = cv2.waitKey(1) & 0xFF
-                window_visible = cv2.getWindowProperty(
-                    WINDOW_NAME,
-                    cv2.WND_PROP_VISIBLE,
-                )
+                try:
+                    window_visible = cv2.getWindowProperty(
+                        WINDOW_NAME,
+                        cv2.WND_PROP_VISIBLE,
+                    )
+                except cv2.error:
+                    window_visible = 0.0
                 if key in (27, ord("q")) or window_visible < 1.0:
                     break
                 if key == ord("r"):
@@ -245,6 +289,7 @@ def main() -> None:
                 elif key == ord("b") and features is not None:
                     baseline = features.copy()
                     print(f"unloaded baseline set: {np.round(baseline, 3).tolist()}")
+                previous_rgb = rgb
     finally:
         camera.stop()
         cv2.destroyAllWindows()

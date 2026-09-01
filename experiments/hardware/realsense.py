@@ -35,8 +35,8 @@ class RealSenseColorCamera:
     def __init__(
         self,
         *,
-        width: int = 640,
-        height: int = 480,
+        width: int = 1920,
+        height: int = 1080,
         fps: int = 30,
         serial_number: str | None = None,
     ) -> None:

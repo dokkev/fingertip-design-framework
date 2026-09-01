@@ -1,4 +1,4 @@
-"""Concrete hardware interfaces used by LUMO applications."""
+"""Concrete hardware interfaces used by physical LUMO experiments."""
 
 from .realsense import ColorFrame, RealSenseColorCamera
 

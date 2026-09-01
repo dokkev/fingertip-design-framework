@@ -3,7 +3,7 @@
 import cv2
 import numpy as np
 
-from lumo.localization import (
+from experiments.localization import (
     brightest_red_features,
     detect_led_array,
     estimate_contact_position,

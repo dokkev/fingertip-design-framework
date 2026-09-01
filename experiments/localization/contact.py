@@ -20,6 +20,8 @@ _SEARCH_X_FRACTION = (0.50, 0.70)
 _SEARCH_Y_FRACTION = (0.28, 0.62)
 _COMPONENT_SEARCH_Y_FRACTION = (0.28, 0.70)
 _COMPONENT_PERCENTILE = 85.0
+_REFERENCE_IMAGE_WIDTH_PX = 640
+_REFERENCE_IMAGE_HEIGHT_PX = 480
 
 
 @dataclass(frozen=True)
@@ -84,8 +86,9 @@ def _rgb_frames(rgb_frames: np.ndarray) -> np.ndarray:
 
 def _red_high_pass(rgb: np.ndarray) -> np.ndarray:
     red = rgb[:, :, 0].astype(np.float32)
-    small = cv2.GaussianBlur(red, (0, 0), _SMALL_GAUSSIAN_SIGMA_PX)
-    background = cv2.GaussianBlur(red, (0, 0), _BROAD_GAUSSIAN_SIGMA_PX)
+    scale = rgb.shape[0] / _REFERENCE_IMAGE_HEIGHT_PX
+    small = cv2.GaussianBlur(red, (0, 0), scale * _SMALL_GAUSSIAN_SIGMA_PX)
+    background = cv2.GaussianBlur(red, (0, 0), scale * _BROAD_GAUSSIAN_SIGMA_PX)
     return np.maximum(small - background, 0.0)
 
 
@@ -132,7 +135,10 @@ def _landmarks_from_median(median_rgb: np.ndarray) -> np.ndarray:
     x_stop = round(_SEARCH_X_FRACTION[1] * width)
     y_start = round(_SEARCH_Y_FRACTION[0] * height)
     y_stop = round(_SEARCH_Y_FRACTION[1] * height)
-    profile = _smooth_profile(high_pass[:, x_start:x_stop].mean(axis=1), 1.4)
+    profile = _smooth_profile(
+        high_pass[:, x_start:x_stop].mean(axis=1),
+        1.4 * height / _REFERENCE_IMAGE_HEIGHT_PX,
+    )
     peak_y = _candidate_peaks(
         profile,
         y_start,
@@ -153,7 +159,7 @@ def _landmarks_from_median(median_rgb: np.ndarray) -> np.ndarray:
                 ),
                 x_start:x_stop,
             ].sum(axis=0),
-            1.5,
+            1.5 * width / _REFERENCE_IMAGE_WIDTH_PX,
         )
         peak_x.append(x_start + int(np.argmax(column_profile)))
         strengths.append(float(profile[y_coordinate]))
@@ -214,7 +220,23 @@ def _component_landmarks(median_rgb: np.ndarray) -> np.ndarray:
         raise RuntimeError("red component detector found no positive response")
     threshold = float(np.percentile(positive, _COMPONENT_PERCENTILE))
     mask = np.asarray(crop >= threshold, dtype=np.uint8) * 255
-    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+    kernel_size = max(
+        3,
+        round(
+            3
+            * min(
+                width / _REFERENCE_IMAGE_WIDTH_PX,
+                height / _REFERENCE_IMAGE_HEIGHT_PX,
+            )
+        ),
+    )
+    if kernel_size % 2 == 0:
+        kernel_size += 1
+    mask = cv2.morphologyEx(
+        mask,
+        cv2.MORPH_OPEN,
+        np.ones((kernel_size, kernel_size), np.uint8),
+    )
     component_count, _, stats, centroids = cv2.connectedComponentsWithStats(mask)
 
     minimum_area = max(8, round(2.0e-5 * height * width))
@@ -303,6 +325,24 @@ def _roi_polygons(landmarks: np.ndarray, image_shape: tuple[int, ...]) -> np.nda
     return polygons
 
 
+def _geometry_from_landmarks(
+    landmarks: np.ndarray,
+    image_shape: tuple[int, ...],
+) -> LedArrayGeometry:
+    landmarks = np.asarray(landmarks, dtype=np.float64)
+    if landmarks.shape != (_LED_COUNT, 2) or not np.all(np.isfinite(landmarks)):
+        raise RuntimeError("tracked LED landmarks are not a finite 5 x 2 array")
+    spacings = np.linalg.norm(np.diff(landmarks, axis=0), axis=1)
+    if np.any(spacings <= np.finfo(np.float64).eps):
+        raise RuntimeError("tracked LED landmarks contain coincident points")
+    spacing_px = float(np.median(spacings))
+    return LedArrayGeometry(
+        landmarks_xy_px=landmarks,
+        roi_polygons_xy_px=_roi_polygons(landmarks, image_shape),
+        median_spacing_px=spacing_px,
+    )
+
+
 def detect_led_array(rgb_frames: np.ndarray) -> LedArrayGeometry:
     """Detect the common five-LED array from one or more fixed-camera frames."""
 
@@ -318,13 +358,84 @@ def detect_led_array(rgb_frames: np.ndarray) -> LedArrayGeometry:
                 f"profile detector failed ({profile_error}); "
                 f"component detector failed ({component_error})"
             ) from component_error
-    polygons = _roi_polygons(landmarks, median_rgb.shape)
-    spacing_px = float(np.median(np.linalg.norm(np.diff(landmarks, axis=0), axis=1)))
-    return LedArrayGeometry(
-        landmarks_xy_px=landmarks,
-        roi_polygons_xy_px=polygons,
-        median_spacing_px=spacing_px,
+    return _geometry_from_landmarks(landmarks, median_rgb.shape)
+
+
+def track_led_array(
+    previous_rgb: np.ndarray,
+    current_rgb: np.ndarray,
+    previous_geometry: LedArrayGeometry,
+) -> LedArrayGeometry:
+    """Update the five image landmarks after a camera/fingertip pose change.
+
+    Pyramidal Lucas-Kanade flow follows the ordered LED landmarks. A
+    forward-backward check rejects a lost or ambiguous track so the caller can
+    explicitly reacquire the array instead of publishing stale geometry.
+    """
+
+    previous = np.asarray(previous_rgb)
+    current = np.asarray(current_rgb)
+    if (
+        previous.shape != current.shape
+        or previous.ndim != 3
+        or previous.shape[2] != 3
+        or previous.dtype != np.uint8
+        or current.dtype != np.uint8
+    ):
+        raise ValueError("previous_rgb and current_rgb must be equal-shape RGB uint8")
+
+    previous_gray = cv2.cvtColor(previous, cv2.COLOR_RGB2GRAY)
+    current_gray = cv2.cvtColor(current, cv2.COLOR_RGB2GRAY)
+    previous_points = np.asarray(
+        previous_geometry.landmarks_xy_px,
+        dtype=np.float32,
+    ).reshape(-1, 1, 2)
+    window_size = max(31, round(1.4 * previous_geometry.median_spacing_px))
+    if window_size % 2 == 0:
+        window_size += 1
+    flow_parameters = {
+        "winSize": (window_size, window_size),
+        "maxLevel": 3,
+        "criteria": (
+            cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT,
+            30,
+            0.01,
+        ),
+    }
+    current_points, forward_status, _ = cv2.calcOpticalFlowPyrLK(
+        previous_gray,
+        current_gray,
+        previous_points,
+        None,
+        **flow_parameters,
     )
+    if current_points is None or forward_status is None or not np.all(forward_status):
+        raise RuntimeError("forward LED optical flow lost one or more landmarks")
+    backward_points, backward_status, _ = cv2.calcOpticalFlowPyrLK(
+        current_gray,
+        previous_gray,
+        current_points,
+        None,
+        **flow_parameters,
+    )
+    if (
+        backward_points is None
+        or backward_status is None
+        or not np.all(backward_status)
+    ):
+        raise RuntimeError("backward LED optical flow lost one or more landmarks")
+
+    forward_backward_error = np.linalg.norm(
+        backward_points.reshape(-1, 2) - previous_points.reshape(-1, 2),
+        axis=1,
+    )
+    maximum_error_px = max(1.5, 0.12 * previous_geometry.median_spacing_px)
+    if float(np.max(forward_backward_error)) > maximum_error_px:
+        raise RuntimeError(
+            "LED optical-flow consistency failed: "
+            f"maximum error={np.max(forward_backward_error):.2f} px"
+        )
+    return _geometry_from_landmarks(current_points.reshape(-1, 2), current.shape)
 
 
 def brightest_red_features(
@@ -394,10 +505,26 @@ def estimate_contact_position(
     )
 
 
+def contact_image_point(
+    estimate: ContactEstimate,
+    geometry: LedArrayGeometry,
+) -> np.ndarray | None:
+    """Return the response-weighted contact marker in image pixel coordinates."""
+
+    positive = np.maximum(estimate.response, 0.0)
+    total_positive = float(np.sum(positive))
+    if total_positive <= np.finfo(np.float64).eps:
+        return None
+    roi_centers = np.mean(geometry.roi_polygons_xy_px, axis=1)
+    return np.sum(positive[:, None] * roi_centers, axis=0) / total_positive
+
+
 __all__ = [
     "ContactEstimate",
     "LedArrayGeometry",
     "brightest_red_features",
+    "contact_image_point",
     "detect_led_array",
     "estimate_contact_position",
+    "track_led_array",
 ]

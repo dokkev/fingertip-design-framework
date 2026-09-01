@@ -24,13 +24,13 @@ environment value takes precedence.
 Compile repository Python without launching a simulation:
 
 ```bash
-conda run -n lit python -m compileall -q algorithm lumo scripts validation tests
+conda run -n lit python -m compileall -q lumo scripts validation tests
 ```
 
 Run Ruff:
 
 ```bash
-conda run -n lit ruff check algorithm lumo scripts validation tests
+conda run -n lit ruff check lumo scripts validation tests
 ```
 
 ## Focused unit tests
@@ -42,22 +42,26 @@ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 conda run --no-capture-output -n lit \
 
 ## Live D435 contact localization
 
-Install the RealSense/OpenCV GUI dependencies and run the online color-image
-pipeline:
+Install the RealSense/OpenCV GUI dependencies once, then run the online
+color-image pipeline directly from the checkout:
 
 ```bash
 conda run --no-capture-output -n lit \
   python -m pip install -e ".[camera]"
 conda run --no-capture-output -n lit \
-  python -u algorithm/live_contact_localization.py
+  python -u scripts/live_contact_localization.py
 ```
 
-Keep the camera fixed during the initial 30-frame LED calibration. Press `b`
-while the fingertip is unloaded to set the required baseline, `r` to recalibrate
-after changing the camera pose, and `q` or Escape to exit. The viewer does not
-save frames or estimates. `LED_POSITIONS_IN_IMAGE_ORDER_MM` at the top of the
-script maps the detected top-to-bottom image order to the physical fingertip Y
-axis; reverse it when the camera is mounted from the opposite direction.
+The default D435 color stream is 1920 x 1080 at 30 FPS. Keep the camera fixed
+during the initial 30-frame LED calibration. After that,
+the five landmarks and contact dot follow gradual camera-pose changes every
+frame. If tracking is lost after a larger pose change, the viewer invalidates
+the old view-dependent baseline and automatically collects 30 new frames;
+press `b` again while unloaded. `r` explicitly starts recalibration, and `q`,
+Escape, or closing the window exits. The viewer does not save frames or
+estimates. `LED_POSITIONS_IN_IMAGE_ORDER_MM` at the top of the script maps the
+detected top-to-bottom image order to the physical fingertip Y axis; reverse it
+when the camera is mounted from the opposite direction.
 
 The fingertip objective and Ax search contract have focused tests:
 

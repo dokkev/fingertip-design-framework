@@ -58,9 +58,9 @@ The live physical localization path is independent of simulation:
 ```text
 RealSenseColorCamera
         ↓ owned RGB frame
- lumo.localization
+experiments.localization
         ↓ LED geometry + contact estimate
-algorithm/live_contact_localization.py
+scripts/live_contact_localization.py
         ↓ OpenCV display only
 ```
 
@@ -837,12 +837,16 @@ ordered scenario support. Strict resume refuses a changed scientific contract,
 source hash, or dependency version. Neither completed 160-trial pad-normal
 campaign is imported into this fresh Ax campaign.
 
-### `lumo/hardware/`
+### `experiments/`
 
-Owns concrete physical-device I/O and device lifecycles. The current
+Owns physical experiment hardware and image-processing algorithms outside the
+production `lumo` simulation/optimization package.
+
+`experiments/hardware/` owns concrete physical-device I/O and device
+lifecycles. The current
 `RealSenseColorCamera` is a thin owner of one `pyrealsense2` color pipeline. It
-configures a 640 x 480 RGB stream by default, returns an owned immutable RGB
-frame with device timestamp and frame number, and exposes explicit
+configures a 1920 x 1080 RGB stream at 30 FPS by default, returns an owned
+immutable RGB frame with device timestamp and frame number, and exposes explicit
 `start()`/`read()`/`stop()` plus context-manager cleanup. RealSense objects do
 not cross this package boundary. Depth acquisition is intentionally absent
 because the current localization algorithm consumes only color images.
@@ -851,9 +855,8 @@ The package does not select localization algorithms, render a GUI, write
 experimental files, or hide reconnect/retry policy. A later camera backend can
 provide the same small RGB-frame lifecycle without changing image localization.
 
-### `lumo/localization/`
-
-Owns pure NumPy/OpenCV image analysis for the physical fingertip. The current
+`experiments/localization/` owns pure NumPy/OpenCV image analysis for the
+physical fingertip. The current
 learning-free path detects the ordered five-LED array from a median of fixed
 camera frames, constructs spacing-scaled regions, measures the brightest 10%
 red-channel response, and estimates contact position from the positive
@@ -865,11 +868,16 @@ Localization receives RGB arrays and numerical calibration values. It does not
 import RealSense, own a camera lifecycle, show windows, save results, or depend
 on Newton, OptiX, or Ax.
 
-`algorithm/live_contact_localization.py` is the concrete online assembly. It
+`scripts/live_contact_localization.py` is the concrete online assembly. It
 collects 30 fixed-camera frames for LED geometry, lets the user capture an
 unloaded baseline with `b`, draws the detected landmarks/ROIs and live contact
-estimate, and exits on `q` or Escape. `r` explicitly restarts image calibration.
-It writes no result artifact.
+estimate, and exits on `q` or Escape. After initialization, forward-backward
+pyramidal optical flow updates all five image landmarks and their ROIs every
+frame when the camera-to-fingertip pose changes. A lost track invalidates the
+view-dependent baseline and automatically starts a new 30-frame detection;
+`r` starts the same process explicitly. The displayed contact marker is the
+positive-response-weighted point over the five ROI centers. The application
+writes no result artifact.
 
 ### `lumo/visualization/`
 
