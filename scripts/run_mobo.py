@@ -25,9 +25,9 @@ PARAMETER_BOUNDS_MM = {
     "void_width_mm": (0.0, 7.5),
 }
 # In order: flat-pad height, semiellipse height, stem width, stem height,
-# and void width [mm]. These old Dragon-campaign designs are re-evaluated
-# normally under this campaign's 75-scenario objective; no old objective value
-# is imported.
+# and void width [mm]. These five cross-material reference designs are
+# re-evaluated normally under this campaign's 75-scenario objective; no old
+# objective value is imported.
 INITIAL_MORPHOLOGIES_MM = (
     (14.5, 4.0, 5.0, 12.5, 5.0),  # old trial 117
     (13.5, 1.5, 7.0, 9.5, 5.5),  # old trial 19
@@ -48,7 +48,7 @@ CONTACT_Y_MM = (-11.0, -5.5, 0.0, 5.5, 11.0)
 # The angled trajectories share a conservative pre-contact starting distance.
 INITIAL_CLEARANCE_M = 10.0e-3
 FORCE_TARGETS_N = (1.0, 2.0, 5.0, 10.0)
-TARGET_MORPHOLOGIES = 120
+TARGET_MORPHOLOGIES = 160
 OUTPUT_DIRECTORY = (
     Path(__file__).resolve().parents[1]
     / "output"

@@ -189,6 +189,7 @@ class OptixScene:
         self,
         fingertip_mesh: FingertipMesh,
         *,
+        include_carrier: bool = True,
         optix_include_dir: str | Path | None = None,
         otk_include_dir: str | Path | None = None,
     ) -> None:
@@ -196,6 +197,9 @@ class OptixScene:
 
         if not isinstance(fingertip_mesh, FingertipMesh):
             raise TypeError("fingertip_mesh must be a FingertipMesh")
+        if not isinstance(include_carrier, bool):
+            raise TypeError("include_carrier must be bool")
+        self._include_carrier = include_carrier
         silicone_vertices = _vertices(
             fingertip_mesh.silicone.vertices,
             name="fingertip_mesh.silicone.vertices",
@@ -205,31 +209,32 @@ class OptixScene:
             vertex_count=len(silicone_vertices),
             name="fingertip_mesh.silicone.surface_tri_indices",
         )
-        bonded_indices = np.asarray(
-            fingertip_mesh.bonded_vertex_indices,
-            dtype=np.int64,
-        )
-        if bonded_indices.size and int(bonded_indices.max()) >= len(
-            silicone_vertices
-        ):
-            raise ValueError("bonded vertex index exceeds silicone vertex count")
-        bonded_vertices = np.zeros(len(silicone_vertices), dtype=bool)
-        bonded_vertices[bonded_indices] = True
-        silicone_triangles = np.ascontiguousarray(
-            silicone_triangles[
-                ~np.all(bonded_vertices[silicone_triangles], axis=1)
-            ]
-        )
+        if include_carrier:
+            bonded_indices = np.asarray(
+                fingertip_mesh.bonded_vertex_indices,
+                dtype=np.int64,
+            )
+            if bonded_indices.size and int(bonded_indices.max()) >= len(
+                silicone_vertices
+            ):
+                raise ValueError("bonded vertex index exceeds silicone vertex count")
+            bonded_vertices = np.zeros(len(silicone_vertices), dtype=bool)
+            bonded_vertices[bonded_indices] = True
+            silicone_triangles = np.ascontiguousarray(
+                silicone_triangles[
+                    ~np.all(bonded_vertices[silicone_triangles], axis=1)
+                ]
+            )
 
-        carrier_vertices = _vertices(
-            fingertip_mesh.carrier.vertices,
-            name="fingertip_mesh.carrier.vertices",
-        )
-        carrier_triangles = _triangles(
-            fingertip_mesh.carrier.indices,
-            vertex_count=len(carrier_vertices),
-            name="fingertip_mesh.carrier.indices",
-        )
+            carrier_vertices = _vertices(
+                fingertip_mesh.carrier.vertices,
+                name="fingertip_mesh.carrier.vertices",
+            )
+            carrier_triangles = _triangles(
+                fingertip_mesh.carrier.indices,
+                vertex_count=len(carrier_vertices),
+                name="fingertip_mesh.carrier.indices",
+            )
         try:
             import cupy as cp
             import optix
@@ -299,10 +304,11 @@ class OptixScene:
             silicone_vertices,
             silicone_triangles,
         )
-        self._carrier_gas_handle = self._build_triangle_gas(
-            carrier_vertices,
-            carrier_triangles,
-        )
+        if include_carrier:
+            self._carrier_gas_handle = self._build_triangle_gas(
+                carrier_vertices,
+                carrier_triangles,
+            )
         self._build_ias()
 
     def _log(self, level: int, tag: str, message: str) -> None:
@@ -443,18 +449,21 @@ class OptixScene:
             1.0,
             0.0,
         ]
-        instance_specs = (
+        instance_specs = [
             (
                 self._silicone_gas_handle,
                 _SILICONE_INSTANCE_ID,
                 _SILICONE_MASK,
-            ),
-            (
-                self._carrier_gas_handle,
-                _CARRIER_INSTANCE_ID,
-                _CARRIER_MASK,
-            ),
-        )
+            )
+        ]
+        if self._include_carrier:
+            instance_specs.append(
+                (
+                    self._carrier_gas_handle,
+                    _CARRIER_INSTANCE_ID,
+                    _CARRIER_MASK,
+                )
+            )
         instances = [
             optix.Instance(
                 transform=identity,
@@ -478,7 +487,7 @@ class OptixScene:
         self._geometry_buffers.append(self._ias_instances)
         self._ias_build_input = optix.BuildInputInstanceArray(
             instances=self._ias_instances.data.ptr,
-            numInstances=2,
+            numInstances=2 if self._include_carrier else 1,
         )
         build_flags = int(optix.BUILD_FLAG_PREFER_FAST_TRACE) | int(
             optix.BUILD_FLAG_ALLOW_UPDATE

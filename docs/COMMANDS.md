@@ -5,7 +5,7 @@ Run repository commands in the `lit` Conda environment.
 ## Install
 
 ```bash
-conda run -n lit python -m pip install -e ".[mesh,physics,ax,test]"
+conda run -n lit python -m pip install -e ".[mesh,physics,ax,visualization,test]"
 ```
 
 OptiX and CUDA are system dependencies. The ray tracer also needs the
@@ -24,13 +24,13 @@ environment value takes precedence.
 Compile repository Python without launching a simulation:
 
 ```bash
-conda run -n lit python -m compileall -q lumo scripts validation tests
+conda run -n lit python -m compileall -q algorithm lumo scripts validation tests
 ```
 
 Run Ruff:
 
 ```bash
-conda run -n lit ruff check lumo scripts validation tests
+conda run -n lit ruff check algorithm lumo scripts validation tests
 ```
 
 ## Focused unit tests
@@ -40,6 +40,25 @@ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 conda run --no-capture-output -n lit \
   pytest -q tests/unit
 ```
 
+## Live D435 contact localization
+
+Install the RealSense/OpenCV GUI dependencies and run the online color-image
+pipeline:
+
+```bash
+conda run --no-capture-output -n lit \
+  python -m pip install -e ".[camera]"
+conda run --no-capture-output -n lit \
+  python -u algorithm/live_contact_localization.py
+```
+
+Keep the camera fixed during the initial 30-frame LED calibration. Press `b`
+while the fingertip is unloaded to set the required baseline, `r` to recalibrate
+after changing the camera pose, and `q` or Escape to exit. The viewer does not
+save frames or estimates. `LED_POSITIONS_IN_IMAGE_ORDER_MM` at the top of the
+script maps the detected top-to-bottom image order to the physical fingertip Y
+axis; reverse it when the camera is mounted from the opposite direction.
+
 The fingertip objective and Ax search contract have focused tests:
 
 ```bash
@@ -48,6 +67,131 @@ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 conda run --no-capture-output -n lit \
     tests/unit/optimization/test_fingertip_objective.py \
     tests/unit/optimization/test_design_space.py
 ```
+
+The publication visualization toolkit has one focused headless test:
+
+```bash
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 conda run --no-capture-output -n lit \
+  pytest -q tests/unit/visualization/test_publication_toolkit.py
+```
+
+## Publication visualization demo
+
+Render one standalone panel and one composed 2 x 3 example as PDF/PNG, with an
+additional SVG export for the composed figure:
+
+```bash
+conda run --no-capture-output -n lit \
+  python -u validation/visualization/publication_toolkit_demo.py
+```
+
+The generated files are written beneath
+`output/validation/publication_toolkit_demo/`.
+
+Export the current fingertip X-Z parameterization as PDF, SVG, and PNG:
+
+```bash
+conda run --no-capture-output -n lit \
+  python -u validation/visualization/fingertip_parameterization.py
+```
+
+The files are written beneath `output/publication/`.
+
+Compose the double-column Figure 2 optomechanical pipeline from the frozen
+production Newton state and a deterministic OptiX replay:
+
+```bash
+conda run --no-capture-output -n lit \
+  python -u figures/fig2.py
+```
+
+The script writes `fig2.pdf`, `fig2.svg`, and `fig2.png` beside its source in
+`figures/` and does not rerun Newton.
+
+Smoke-test each structural mechanics ablation through its 2 N checkpoint:
+
+```bash
+for case in soft_only bonded_t lumo; do
+  conda run --no-capture-output -n lit \
+    python -u validation/contact-physics/simulation_ablation_study.py \
+      --smoke "$case"
+done
+```
+
+Run the matched Figure 3 Newton study. Then smoke the controlled optical replay,
+run production OptiX on the exact saved mechanics states, and compose the figure
+from the extended NPZ without rerunning Newton:
+
+```bash
+conda run --no-capture-output -n lit \
+  python -u validation/contact-physics/simulation_ablation_study.py
+conda run --no-capture-output -n lit \
+  python -u validation/contact-physics/simulation_ablation_study.py \
+    --optical-smoke
+conda run --no-capture-output -n lit \
+  python -u validation/contact-physics/simulation_ablation_study.py \
+    --optics
+conda run --no-capture-output -n lit \
+  python -u validation/visualization/figure_3_hybrid_mechanics_ablation.py
+```
+
+The study writes structured mechanics and optical NPZ/CSV/JSON, Newton renders,
+and a technical report beneath
+`output/validation/hybrid_mechanics_ablation/`. The composition writes PDF,
+SVG, and high-resolution PNG beneath `output/figures/`.
+
+The production `--optics` replay also writes
+`gap_sensitivity_samples.csv` and matching NPZ/JSON fields for the controlled
+LUMO effective-gap values `0.01/0.19/0.50 mm`. It reuses the saved nominal
+Newton vertices and varies only the recess floor plus LED source plane; it does
+not rerun mechanics or change the BO search space.
+
+Run the primary multi-design paper Figure 3 study. `--prepare` writes the complete
+640-design campaign catalog and deterministic 40-design/120-variant manifest;
+`--smoke` checks one Dragon and one Solaris morphology through 2 N. The full
+command checkpoints 95 unique mechanics states, reusing compatible saved states,
+and performs matched production
+OptiX replay, computes paired effects, and then composes the double-column
+figure:
+
+```bash
+conda run --no-capture-output -n lit \
+  python -u validation/contact-physics/multi_design_void_ablation.py --prepare
+conda run --no-capture-output -n lit \
+  python -u validation/contact-physics/multi_design_void_ablation.py --smoke
+conda run --no-capture-output -n lit \
+  python -u validation/contact-physics/multi_design_void_ablation.py --all
+conda run --no-capture-output -n lit \
+  python -u figures/fig3.py
+```
+
+The primary study writes its catalog, manifest, per-variant raw NPZ states,
+paired CSV, JSON summary, and report beneath
+`output/validation/multi_design_void_ablation/`. The finalized composition
+source and its `fig3.pdf`/`fig3.svg`/`fig3.png` exports live together beneath
+`figures/`. `figures/fig3.py` also reads the four completed 160-observation BO
+trial tables, validates their objective directions, recomputes empirical
+Pareto membership and balanced trials, and writes `figure3_validation.md` next
+to the ablation report. It uses four Pareto small multiples because the
+standard and orientation-robust objective domains are not directly comparable.
+All ablation source designs, including those from orientation-robust campaigns,
+use the identical theta=0 fixed scenario. Campaign and material provenance
+remain in metadata and are intentionally omitted from the ablation panels. The
+one-location optical diagnostic `D(F)` is not `J_obs`.
+
+Generate the learning-free brightest-10% red-channel heatmap from the current
+5 mm experimental contact sweep:
+
+```bash
+conda run --no-capture-output -n lit \
+  python -u figures/brightest10_red_contact_sweep.py
+```
+
+The script discovers `p0_Color.png` through `p6_Color.png` beneath
+`output/experiments/`, detects the common five-LED array from their fixed-camera
+median frame, and writes PDF/PNG plus a ROI debug montage beneath `figures/`.
+When no matching unloaded image is present, the output filename and plot are
+explicitly marked `median_centered` and `exploratory`.
 
 ## Geometry and mechanics viewers
 

@@ -190,11 +190,15 @@ def _optical_samples(
 def _emissions(
     scene: OptixScene,
     leds: tuple[LED, ...],
+    *,
+    sample_side_count: int = _SAMPLE_SIDE_COUNT,
 ) -> tuple[np.ndarray, ...]:
     """Emit the production finite-area deterministic path set."""
+    if not isinstance(sample_side_count, int) or sample_side_count < 1:
+        raise ValueError("sample_side_count must be a positive integer")
     coordinate = (
-        np.arange(_SAMPLE_SIDE_COUNT, dtype=np.float64) + 0.5
-    ) / _SAMPLE_SIDE_COUNT
+        np.arange(sample_side_count, dtype=np.float64) + 0.5
+    ) / sample_side_count
     angular_u1, angular_u2 = np.meshgrid(
         coordinate,
         coordinate,

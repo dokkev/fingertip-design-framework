@@ -19,6 +19,14 @@ validation = [
   "scipy>=1.11",
   "matplotlib>=3.8",
 ]
+visualization = [
+  "matplotlib>=3.8",
+  "opencv-python>=5.0",
+]
+camera = [
+  "opencv-python>=5.0",
+  "pyrealsense2==2.58.4.10922",
+]
 optix = [
   "pyoptix==9.1.0",
   "cupy-cuda13x",

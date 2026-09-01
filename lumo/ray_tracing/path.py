@@ -27,12 +27,26 @@ _ESCAPED_RAY_DTYPE = np.dtype(
     ]
 )
 
+_PATH_SEGMENT_DTYPE = np.dtype(
+    [
+        ("ray_id", np.int64),
+        ("bounce", np.int64),
+        ("origin_W_m", np.float64, (3,)),
+        ("end_W_m", np.float64, (3,)),
+        ("power_start", np.float64),
+        ("power_end", np.float64),
+        ("inside_silicone", np.bool_),
+        ("hit_instance_id", np.int32),
+    ]
+)
+
 
 @dataclass(frozen=True)
 class PathTraceResult:
-    """Escaped paths and scalar power accounting."""
+    """Escaped paths, optional finite segments, and scalar power accounting."""
 
     escaped_rays: np.ndarray
+    path_segments: np.ndarray
     emitted_power: float
     escaped_power: float
     absorbed_power: float
@@ -112,6 +126,7 @@ def trace_bounded_paths(
     dielectric_branch_u: np.ndarray,
     carrier_u1: np.ndarray,
     carrier_u2: np.ndarray,
+    record_segments: bool = False,
 ) -> PathTraceResult:
     """Trace one sampled optical path per input ray for a bounded depth.
 
@@ -123,6 +138,8 @@ def trace_bounded_paths(
     origins = np.asarray(origins_W_m, dtype=np.float64)
     directions = np.asarray(directions_W, dtype=np.float64)
     power = np.asarray(power, dtype=np.float64)
+    if not isinstance(record_segments, bool):
+        raise TypeError("record_segments must be a bool")
     if origins.ndim != 2 or origins.shape[1:] != (3,):
         raise ValueError("origins_W_m must have shape (N, 3)")
     if directions.shape != origins.shape:
@@ -192,12 +209,14 @@ def trace_bounded_paths(
     power = power.copy()
     ray_id = np.arange(ray_count, dtype=np.int64)
     escaped_batches: list[np.ndarray] = []
+    segment_batches: list[np.ndarray] = []
     absorbed_power = 0.0
     bulk_loss_power = 0.0
     unresolved_internal_miss_power = 0.0
 
     for bounce in range(max_bounces):
         hits = scene.trace_closest(origins, directions, mask=_ALL_MASK)
+        power_start = power.copy() if record_segments else None
         silicone_segment = inside & hits["hit"]
         if np.any(silicone_segment):
             segment_length_m = np.asarray(
@@ -217,6 +236,22 @@ def trace_bounded_paths(
             bulk_loss_power += float(
                 (power_before - power[silicone_segment]).sum()
             )
+
+        if record_segments and np.any(hits["hit"]):
+            assert power_start is not None
+            present = hits["hit"]
+            segments = np.empty(np.count_nonzero(present), dtype=_PATH_SEGMENT_DTYPE)
+            segments["ray_id"] = ray_id[present]
+            segments["bounce"] = bounce
+            segments["origin_W_m"] = origins[present]
+            segments["end_W_m"] = (
+                origins[present] + hits["t"][present, None] * directions[present]
+            )
+            segments["power_start"] = power_start[present]
+            segments["power_end"] = power[present]
+            segments["inside_silicone"] = inside[present]
+            segments["hit_instance_id"] = hits["instance_id"][present]
+            segment_batches.append(segments)
 
         miss = ~hits["hit"]
         external_miss = miss & ~inside
@@ -328,6 +363,11 @@ def trace_bounded_paths(
         if escaped_batches
         else np.empty(0, dtype=_ESCAPED_RAY_DTYPE)
     )
+    path_segments = (
+        np.concatenate(segment_batches)
+        if segment_batches
+        else np.empty(0, dtype=_PATH_SEGMENT_DTYPE)
+    )
     escaped_power = float(escaped["power"].sum())
     remaining_power = float(power.sum())
     accounted_power = (
@@ -344,6 +384,7 @@ def trace_bounded_paths(
 
     return PathTraceResult(
         escaped_rays=escaped,
+        path_segments=path_segments,
         emitted_power=emitted_power,
         escaped_power=escaped_power,
         absorbed_power=absorbed_power,

@@ -48,6 +48,22 @@ Later validated mechanics results may be consumed by:
    optimization
 ```
 
+Prepared simulation, optimization, and experimental arrays may also be passed
+to `lumo.visualization` for standalone publication panels or composed figures.
+The visualization layer does not load scientific artifacts or own simulation
+policy.
+
+The live physical localization path is independent of simulation:
+
+```text
+RealSenseColorCamera
+        ↓ owned RGB frame
+ lumo.localization
+        ↓ LED geometry + contact estimate
+algorithm/live_contact_localization.py
+        ↓ OpenCV display only
+```
+
 Each layer must be usable and validated before downstream layers depend on it.
 
 ## Package ownership
@@ -230,6 +246,14 @@ the collision pipeline. The rigid carrier proxy uses a stiff shape-contact
 material while VBD still permits a small, measured penalty penetration. Its
 normal contact stiffness is fixed at `1e6 N/m` by the Newton model. It is not a
 runtime or indentation-study input.
+
+`build_fingertip_newton_model()` defaults to this production contact model. It
+also exposes two concrete structural modes used only by the hybrid-mechanics
+ablation: `bonded` keeps the visible carrier, disables carrier penalty contact,
+and accepts the exact fixed silicone-interface indices; `absent` omits carrier
+shapes while retaining the kinematic identity anchor required by the shared
+fixed-boundary update. These modes reuse Newton model construction and do not
+create an alternate simulation runtime or loading protocol.
 
 `Indenter.add_urdf()` accepts optional normal-contact stiffness and damping
 overrides. Its default `None` values preserve Newton's shape material because
@@ -418,10 +442,16 @@ OptiX is the ray-tracing backend.
 
 `OptixScene` is the first concrete OptiX 9.1 runtime component. It owns one
 persistent CUDA stream, the OptiX context and pipeline resources, device
-geometry buffers, two triangle GASes for silicone and carrier, and the IAS
-containing those two instances. Silicone/carrier instance IDs and visibility
+geometry buffers, triangle GASes for silicone and the production carrier, and
+the IAS containing those instances. Silicone/carrier instance IDs and visibility
 masks are fixed backend details owned inside `scene.py`; callers construct the
 scene from one reference `FingertipMesh` and do not allocate IAS identities.
+The default always includes the production carrier. The controlled Soft-only
+optical ablation passes `include_carrier=False`, which omits the carrier GAS/IAS
+instance and retains the complete silicone boundary instead of removing faces
+normally hidden by the carrier. This is a structural validation switch, not an
+alternate transport model; materials, masks, rays, and transport remain the
+production path.
 Its only query `trace_closest()` returns hit
 state, distance, instance ID, primitive ID, triangle barycentrics, and the
 world-frame geometric normal `normal_W`.
@@ -442,6 +472,71 @@ copies them into the persistent silicone vertex buffer, and performs an in-place
 silicone GAS UPDATE followed by IAS UPDATE. The two acceleration structures
 reuse their original output buffers and dedicated persistent update scratch
 buffers. The carrier GAS remains static.
+
+The finalized paper Figure 3 study samples ten deterministic void-width-covering
+designs from each of the current Dragon Skin normal, Dragon Skin angled,
+Solaris normal, and Solaris angled campaigns. Within each campaign it selects
+without replacement the lowest-trial-ID valid design nearest each empirical
+`w_void` quantile at 0/12.5/25/37.5/50/62.5/75/87.5/100%, then adds the balanced
+trial and deduplicates. Campaign type is provenance only: every sample is
+re-evaluated under the same 20 mm sphere, Y=-5.5 mm, theta=0 deg contact and
+production 1/2/5/10 N loading path. Each morphology produces the three named
+conditions Soft-only, No-void carrier, and LUMO morphology. Natural zero-void
+designs reuse the identical No-void carrier/LUMO morphology state as a
+consistency check. The exact saved
+Newton meshes are replayed through OptiX with one common finite-area five-LED
+emission array and deterministic branch samples per base design. Because this
+controlled study has only one contact-Y location, production `J_obs` is
+undefined: it reports normalized state-change `D(F)`, visible power, channels,
+and energy data without inventing an ablation objective.
+
+The main-paper Figure 3 visualization intentionally removes material and source
+campaign encoding from its three ablation panels. It presents the 40
+morphologies as one controlled paired sample: a structural counterfactual
+schematic, a carrier identity comparison, and a coupled scatter of the
+lateral-void changes in fixed-scenario `J_contact` and `D(1 N)`. `D(1 N)`
+remains a low-load optical state-change diagnostic, not `J_obs`.
+
+A right-side fourth panel reads the four completed 160-observation BO datasets directly
+from their saved trial tables. The standard and orientation-robust datasets use
+different objective domains, while Dragon Skin and Solaris use different
+mechanics and optical presets, so their raw objective values are not merged
+into one quantitative Pareto cloud. Figure 3 instead shows four separately
+scaled empirical Pareto small multiples. The composition recomputes
+non-dominance, requires exact agreement with both stored `is_pareto` flags and
+`pareto.csv`, and recomputes each post-hoc equal-relative-performance balanced
+trial. Pareto solutions share the same blue-to-purple `w_void` encoding as the
+ablation void-effect panel; all other evaluations remain neutral gray. The
+final composition uses two visually bounded super-panels. Paired structural
+analysis groups the structural counterfactual with stacked carrier and
+lateral-void evidence; morphology optimization groups the 2 x 2 Pareto block.
+Within them, all six quantitative axes occupy one shared 2 x 3 board and
+therefore share exact row, column, and physical-size alignment. One `w_void`
+color scale beside the coupled-void panel applies to both its scatter and the
+optimized Pareto points.
+
+Reusable axes-only panel functions live in `lumo.visualization.ablation`;
+`figures/fig3.py` alone loads the completed ablation and optimization artifacts,
+validates their contracts, composes the nested GridSpec, writes the validation
+summary, and exports the paper artifacts.
+
+The older single-design Soft-only/Bonded-T/LUMO study remains a supplementary
+mechanistic diagnostic. Bonded-T changes the carrier-silicone boundary
+condition and is deliberately excluded from the primary void-width
+counterfactual, which keeps production carrier contact and changes geometry
+only.
+
+The same procedural study also performs a controlled effective-gap optical
+sensitivity for the LUMO structure. It holds the nominal saved silicone states
+fixed and rebuilds only the carrier recess floor and its coincident LED source
+plane at `0.01`, `0.19`, and `0.50 mm`. This is deliberately not a production
+geometry option, mechanics re-evaluation, or BO dimension: `h_void` remains
+absent/fixed zero, void width remains the search variable, and `0.19 mm` remains
+the fabrication-informed production recess depth. The comparison isolates how
+that physical gap changes the source/interface boundary condition. It stores
+raw 5-by-11 response, energy, visible-power, outside-ROI, and source-medium
+diagnostics for every fixed Newton state. `J_obs` remains undefined for this
+one-location sensitivity as well.
 
 `interface_transport()` in `transport.py` is the first concrete optical
 operation. It normalizes a batch of incident directions and geometric normals,
@@ -506,8 +601,11 @@ for translucent Dragon Skin 10 NV; volumetric scattering is not modeled. This
 is a bounded concrete fingertip path operation, not a renderer.
 
 `PathTraceResult` lives beside `trace_bounded_paths()` in `path.py`. It owns the
-escaped-ray array and explicit scalar power ledger. The path algorithm does not
-retain segment history, change tuple arity, or expose a string-keyed statistics
+escaped-ray array, explicit scalar power ledger, and an optional finite-segment
+array requested with `record_segments=True`. Each recorded segment contains its
+endpoints and start/end power after the same Beer-Lambert transport used by the
+ledger. Ordinary evaluation leaves segment recording disabled and allocates no
+segment history. The result does not expose a string-keyed statistics
 dictionary.
 OptiX hit layouts remain next to their CUDA decoding in `scene.py`, while the
 short-lived vectorized Fresnel and Lambertian result layouts remain next to the
@@ -675,9 +773,9 @@ diameter and places its center one radius plus the configured clearance below
 the undeformed pad. The entry script supplies its sibling
 `optix-toolkit/ShaderUtil/include` as the default `OTK_INCLUDE_DIR`; an
 explicitly exported environment value still takes precedence.
-The prepared production entry selects nominal Dragon Skin 10 NV optics and
-targets 120 cumulative successful morphologies in the fresh
-`mobo_fingertip_orientation_robust_1_2_5_10_05mm` directory. Its
+The prepared production entry selects silicone mechanics and nominal Dragon
+Skin 10 NV optics and targets 160 cumulative successful morphologies by
+resuming `mobo_fingertip_orientation_robust_1_2_5_10_05mm`. Its
 run config records the finite `1.8 x 1.6 mm` package-window source and
 dependency/source hashes. Resume is refused if the
 scientific source, optimizer source, dependency versions, or serialized
@@ -738,6 +836,88 @@ orientation axis, pivot, inverse-relative transform convention, and complete
 ordered scenario support. Strict resume refuses a changed scientific contract,
 source hash, or dependency version. Neither completed 160-trial pad-normal
 campaign is imported into this fresh Ax campaign.
+
+### `lumo/hardware/`
+
+Owns concrete physical-device I/O and device lifecycles. The current
+`RealSenseColorCamera` is a thin owner of one `pyrealsense2` color pipeline. It
+configures a 640 x 480 RGB stream by default, returns an owned immutable RGB
+frame with device timestamp and frame number, and exposes explicit
+`start()`/`read()`/`stop()` plus context-manager cleanup. RealSense objects do
+not cross this package boundary. Depth acquisition is intentionally absent
+because the current localization algorithm consumes only color images.
+
+The package does not select localization algorithms, render a GUI, write
+experimental files, or hide reconnect/retry policy. A later camera backend can
+provide the same small RGB-frame lifecycle without changing image localization.
+
+### `lumo/localization/`
+
+Owns pure NumPy/OpenCV image analysis for the physical fingertip. The current
+learning-free path detects the ordered five-LED array from a median of fixed
+camera frames, constructs spacing-scaled regions, measures the brightest 10%
+red-channel response, and estimates contact position from the positive
+baseline-relative response weighted by the known physical LED positions. It
+requires an explicit unloaded baseline; it does not silently infer contact
+from an arbitrary initial frame.
+
+Localization receives RGB arrays and numerical calibration values. It does not
+import RealSense, own a camera lifecycle, show windows, save results, or depend
+on Newton, OptiX, or Ax.
+
+`algorithm/live_contact_localization.py` is the concrete online assembly. It
+collects 30 fixed-camera frames for LED geometry, lets the user capture an
+unloaded baseline with `b`, draws the detected landmarks/ROIs and live contact
+estimate, and exits on `q` or Escape. `r` explicitly restarts image calibration.
+It writes no result artifact.
+
+### `lumo/visualization/`
+
+Owns the small reusable Matplotlib grammar for publication figures. Scientific
+panel functions receive an existing `Axes` and prepared arrays, render only
+their own content, and never create, display, close, or save a figure. The
+initial panels cover Pareto objectives, force-displacement, contact area,
+incremental stiffness, optical response, prepared images, the current
+parametric fingertip X-Z cross-section, and the controlled carrier/void
+ablation panels used by Figure 3. The geometry panel receives one
+constructed `Fingertip`; it derives every outline and dimension from that
+object and shows the fixed LED-station recess rather than duplicating geometry
+constants in a figure script.
+
+`style.py` is the sole source for final-size single- and double-column widths,
+typography, line and marker dimensions, semantic colors, and design-status
+markers. Green denotes optical signal, orange denotes external mechanics,
+neutral milky white denotes compliant silicone, and charcoal denotes the rigid
+carrier. Dragon Skin and Solaris use a purple/blue pair so material identity
+does not consume the optical green channel.
+
+`layout.py` creates uniform axes arrays or caller-owned Matplotlib `GridSpec`
+layouts, adds bold panel labels, renders one panel standalone, and saves PDF,
+SVG, or high-resolution PNG output. Its `add_figure_box()` helper owns the one
+rounded white-panel frame used by both Figure 2 and Figure 3, including border
+color, stroke, padding, and corner radius. Figure composition owns panel labels
+and file output; panel functions remain unaware of both.
+
+The package accepts already prepared numerical arrays or image arrays. It does
+not contain experiment-specific paths, campaign loading, data preprocessing,
+Newton, OptiX, or Ax calls. A caller may therefore use the same panels with
+simulation results, experimental measurements, standalone inspection, and
+multi-panel paper figures.
+
+`figures/fig2.py` is the finalized paper Figure 2 composition using this
+contract. It loads one frozen Newton state, replays the unloaded and loaded
+meshes through OptiX with common deterministic samples, and composes the
+existing parameterization, mechanics, optical, and Bayesian-optimization
+panels. Artifact loading, transport replay, inter-panel arrows, and export
+remain in the figure composition; the reusable plotting layer stays free of
+simulation ownership.
+
+One-off experimental figure scripts own their artifact discovery and figure
+composition rather than adding experiment paths to `lumo.visualization`.
+`figures/brightest10_red_contact_sweep.py` is one such script: it detects the
+fixed-camera five-LED array, measures the brightest-10% red response in
+spacing-scaled ROIs, and explicitly falls back to a median-centered exploratory
+view when the experiment directory has no unloaded frame.
 
 ### `lumo/util/`
 
@@ -981,6 +1161,8 @@ Important constraints:
 - `lumo.simulation` may compose the concrete Newton runtime but must not import
   validation or optimization policy.
 - `lumo.ray_tracing` must not import Newton solver implementation.
+- `lumo.visualization` must not load simulation, optimization, or experimental
+  artifacts; callers prepare the arrays supplied to its panels.
 - production packages must not import `validation/` or `tests/`.
 - optional heavy dependencies should enter only at their owning execution
   boundary.
@@ -1065,7 +1247,8 @@ In particular, do not introduce without a concrete present need:
 - solver factories or registries;
 - generic ray-tracing frameworks;
 - compatibility layers for removed internal APIs;
-- production visualization frameworks;
+- a general-purpose visualization framework beyond the concrete publication
+  panels and composition helpers in `lumo.visualization`;
 - reusable validation frameworks.
 
 Legacy code may be consulted for scientific intent and failure history, but it

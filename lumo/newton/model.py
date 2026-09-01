@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 import numpy as np
 import newton
@@ -18,6 +18,7 @@ if TYPE_CHECKING:
 # VBD rigid-soft contact is penalty-based. This is the validated fixed
 # carrier-contact stiffness used by the current model.
 CARRIER_CONTACT_STIFFNESS_N_M = 1.0e6
+CarrierInteraction = Literal["contact", "bonded", "absent"]
 
 
 @wp.kernel
@@ -150,18 +151,43 @@ def build_fingertip_newton_model(
     fingertip_mesh: FingertipMesh,
     *,
     builder: newton.ModelBuilder | None = None,
+    carrier_interaction: CarrierInteraction = "contact",
+    bonded_vertex_indices: np.ndarray | None = None,
 ) -> FingertipNewtonModel:
     """Build the Newton model for one fingertip mesh.
 
-    The carrier is a kinematic rigid body at the identity pose. Its full mesh
-    is visualization-only, while a second mesh exposes only the cavity-facing
-    particle-contact surface and closes through the carrier interior. A caller
-    may supply a builder already containing external scene bodies; this
-    function adds the fingertip and finalizes that builder.
+    The production ``contact`` mode uses a kinematic carrier at the identity
+    pose. Its full mesh is visualization-only, while a second mesh exposes the
+    cavity-facing contact surface. The mechanics-ablation ``bonded`` mode keeps
+    the visible carrier but disables its penalty contact, and ``absent`` keeps
+    only the kinematic anchor needed by the shared fixed-boundary update. A
+    caller may replace the usual bond-index set for a true fixed interface.
+
+    A caller may supply a builder already containing external scene bodies;
+    this function adds the fingertip and finalizes that builder.
     """
     if not isinstance(fingertip_mesh, FingertipMesh):
         raise TypeError("fingertip_mesh must be a FingertipMesh")
-    local_indices = fingertip_mesh.bonded_vertex_indices
+    if carrier_interaction not in {"contact", "bonded", "absent"}:
+        raise ValueError(
+            "carrier_interaction must be 'contact', 'bonded', or 'absent'"
+        )
+    local_indices = np.asarray(
+        fingertip_mesh.bonded_vertex_indices
+        if bonded_vertex_indices is None
+        else bonded_vertex_indices,
+        dtype=np.int32,
+    )
+    if (
+        local_indices.ndim != 1
+        or local_indices.size == 0
+        or np.any(local_indices < 0)
+        or np.any(local_indices >= fingertip_mesh.silicone.vertex_count)
+    ):
+        raise ValueError(
+            "bonded_vertex_indices must be nonempty valid silicone indices"
+        )
+    local_indices = np.unique(local_indices)
 
     parameters = fingertip_mesh.fingertip.parameters
     material = parameters.mechanics
@@ -204,7 +230,10 @@ def build_fingertip_newton_model(
     # Full-surface rigid/soft contact catches tetrahedral faces that can pass
     # between particle vertices.  Build the carrier proxy SDF once per mesh;
     # the collision pipeline consumes it after finalization.
-    if fingertip_mesh.carrier_collision.sdf is None:
+    if (
+        carrier_interaction == "contact"
+        and fingertip_mesh.carrier_collision.sdf is None
+    ):
         fingertip_mesh.carrier_collision.build_sdf(
             max_resolution=256,
             margin=5.0e-4,
@@ -225,37 +254,39 @@ def build_fingertip_newton_model(
         has_particle_collision=False,
         is_visible=True,
     )
-    builder.add_shape_mesh(
-        body=carrier_body,
-        mesh=fingertip_mesh.carrier,
-        cfg=carrier_cfg,
-        label="fingertip_carrier_surface",
-    )
-    carrier_collision_cfg = newton.ModelBuilder.ShapeConfig(
-        density=0.0,
-        ke=CARRIER_CONTACT_STIFFNESS_N_M,
-        margin=0.0,
-        is_solid=True,
-        collision_group=1,
-        # Newton's full-surface soft contact path requires a provisioned SDF
-        # on a participating mesh shape.  Rigid shape pairs are filtered
-        # below; particle contact remains the only physical carrier contact.
-        has_shape_collision=True,
-        has_particle_collision=True,
-        is_visible=False,
-    )
-    existing_shape_indices = tuple(range(builder.shape_count))
-    carrier_collision_shape = builder.add_shape_mesh(
-        body=carrier_body,
-        mesh=fingertip_mesh.carrier_collision,
-        cfg=carrier_collision_cfg,
-        label="fingertip_carrier_collision_surface",
-    )
-    for shape_index in existing_shape_indices:
-        builder.add_shape_collision_filter_pair(
-            shape_index,
-            carrier_collision_shape,
+    if carrier_interaction != "absent":
+        builder.add_shape_mesh(
+            body=carrier_body,
+            mesh=fingertip_mesh.carrier,
+            cfg=carrier_cfg,
+            label="fingertip_carrier_surface",
         )
+    if carrier_interaction == "contact":
+        carrier_collision_cfg = newton.ModelBuilder.ShapeConfig(
+            density=0.0,
+            ke=CARRIER_CONTACT_STIFFNESS_N_M,
+            margin=0.0,
+            is_solid=True,
+            collision_group=1,
+            # Newton's full-surface soft contact path requires a provisioned SDF
+            # on a participating mesh shape.  Rigid shape pairs are filtered
+            # below; particle contact remains the only physical carrier contact.
+            has_shape_collision=True,
+            has_particle_collision=True,
+            is_visible=False,
+        )
+        existing_shape_indices = tuple(range(builder.shape_count))
+        carrier_collision_shape = builder.add_shape_mesh(
+            body=carrier_body,
+            mesh=fingertip_mesh.carrier_collision,
+            cfg=carrier_collision_cfg,
+            label="fingertip_carrier_collision_surface",
+        )
+        for shape_index in existing_shape_indices:
+            builder.add_shape_collision_filter_pair(
+                shape_index,
+                carrier_collision_shape,
+            )
 
     builder.color()
     model = builder.finalize(requires_grad=False)
@@ -283,4 +314,8 @@ def build_fingertip_newton_model(
     )
 
 
-__all__ = ["FingertipNewtonModel", "build_fingertip_newton_model"]
+__all__ = [
+    "CarrierInteraction",
+    "FingertipNewtonModel",
+    "build_fingertip_newton_model",
+]
