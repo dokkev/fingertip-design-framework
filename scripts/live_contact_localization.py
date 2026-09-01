@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import deque
 from pathlib import Path
 import sys
-from time import perf_counter
+from time import perf_counter, sleep
 
 import cv2
 import numpy as np
@@ -15,7 +15,7 @@ _REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 if str(_REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPOSITORY_ROOT))
 
-from experiments.hardware import RealSenseColorCamera  # noqa: E402
+from experiments.hardware import ColorFrame, RealSenseColorCamera  # noqa: E402
 from experiments.localization import (  # noqa: E402
     LedArrayGeometry,
     brightest_red_features,
@@ -23,6 +23,7 @@ from experiments.localization import (  # noqa: E402
     detect_led_array,
     estimate_contact_position,
     track_led_array,
+    unloaded_baseline_statistics,
 )
 from lumo.fingertip import LED_CENTERS_Y_MM  # noqa: E402
 
@@ -31,11 +32,62 @@ CAMERA_WIDTH = 1920
 CAMERA_HEIGHT = 1080
 CAMERA_FPS = 30
 CAMERA_SERIAL_NUMBER: str | None = None
+PHOTOMETRIC_WARMUP_FRAME_COUNT = 30
 CALIBRATION_FRAME_COUNT = 30
+BASELINE_FRAME_COUNT = 30
+FEATURE_MEDIAN_WINDOW = 3
+CAMERA_FRAME_TIMEOUT_MS = 2000
+CAMERA_RECONNECT_ATTEMPTS = 10
+CAMERA_RECONNECT_DELAY_S = 1.0
 # Physical positions corresponding to landmarks ordered top-to-bottom in the
 # displayed camera image. Reverse this tuple if the camera is mounted opposite.
 LED_POSITIONS_IN_IMAGE_ORDER_MM = np.asarray(LED_CENTERS_Y_MM, dtype=np.float64)
 WINDOW_NAME = "LUMO live contact localization"
+
+
+def _warm_up_and_lock_photometric_controls(
+    camera: RealSenseColorCamera,
+) -> dict[str, float | None]:
+    print(
+        "settling automatic camera controls: "
+        f"{PHOTOMETRIC_WARMUP_FRAME_COUNT} frames"
+    )
+    for _ in range(PHOTOMETRIC_WARMUP_FRAME_COUNT):
+        camera.read(timeout_ms=CAMERA_FRAME_TIMEOUT_MS)
+    controls = camera.lock_color_photometric_controls()
+    print("photometric controls locked:")
+    for name in ("exposure", "gain", "white_balance"):
+        value = controls[name]
+        print(f"  {name} = {'unsupported' if value is None else value}")
+    return controls
+
+
+def _read_with_reconnect(
+    camera: RealSenseColorCamera,
+) -> tuple[ColorFrame, bool]:
+    try:
+        return camera.read(timeout_ms=CAMERA_FRAME_TIMEOUT_MS), False
+    except RuntimeError as error:
+        last_error = error
+        camera.stop()
+
+    for attempt in range(1, CAMERA_RECONNECT_ATTEMPTS + 1):
+        print(
+            "RealSense stream lost; reconnecting "
+            f"{attempt}/{CAMERA_RECONNECT_ATTEMPTS}: {last_error}"
+        )
+        sleep(CAMERA_RECONNECT_DELAY_S)
+        try:
+            camera.start()
+            _warm_up_and_lock_photometric_controls(camera)
+            return camera.read(timeout_ms=CAMERA_FRAME_TIMEOUT_MS), True
+        except RuntimeError as error:
+            last_error = error
+            camera.stop()
+    raise RuntimeError(
+        "RealSense reconnect budget exhausted after "
+        f"{CAMERA_RECONNECT_ATTEMPTS} attempts: {last_error}"
+    ) from last_error
 
 
 def _draw_geometry(image: np.ndarray, geometry: LedArrayGeometry) -> None:
@@ -166,8 +218,12 @@ def _draw_response_panel(
 
 def main() -> None:
     calibration_frames: deque[np.ndarray] = deque(maxlen=CALIBRATION_FRAME_COUNT)
+    baseline_samples: deque[np.ndarray] = deque(maxlen=BASELINE_FRAME_COUNT)
+    feature_history: deque[np.ndarray] = deque(maxlen=FEATURE_MEDIAN_WINDOW)
     geometry: LedArrayGeometry | None = None
     baseline: np.ndarray | None = None
+    unloaded_noise_sigma: np.ndarray | None = None
+    baseline_collecting = False
     calibration_error: str | None = None
     previous_rgb: np.ndarray | None = None
     previous_wall_time = perf_counter()
@@ -186,14 +242,30 @@ def main() -> None:
                 f"camera: {camera.device_name}, serial={camera.serial_number}, "
                 f"{CAMERA_WIDTH}x{CAMERA_HEIGHT}@{CAMERA_FPS}"
             )
+            _warm_up_and_lock_photometric_controls(camera)
             print("keys: b=set unloaded baseline, r=recalibrate LEDs, q/esc=quit")
             while True:
-                frame = camera.read()
+                frame, reconnected = _read_with_reconnect(camera)
+                if reconnected:
+                    print(
+                        f"camera reconnected: {camera.device_name}, "
+                        f"serial={camera.serial_number}"
+                    )
+                    geometry = None
+                    baseline = None
+                    unloaded_noise_sigma = None
+                    baseline_collecting = False
+                    calibration_error = None
+                    previous_rgb = None
+                    calibration_frames.clear()
+                    baseline_samples.clear()
+                    feature_history.clear()
                 rgb = frame.rgb
                 display = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
                 features: np.ndarray | None = None
                 response: np.ndarray | None = None
                 lines = ["q/esc quit | r recalibrate | b unloaded baseline"]
+                lines.append("Photometric controls: locked")
 
                 if geometry is not None and previous_rgb is not None:
                     try:
@@ -202,16 +274,21 @@ def main() -> None:
                         print(f"LED tracking lost: {error}; automatically recalibrating")
                         geometry = None
                         baseline = None
+                        unloaded_noise_sigma = None
+                        baseline_collecting = False
                         calibration_error = None
                         calibration_frames.clear()
-                        lines.append("Camera pose changed: automatically recalibrating LEDs")
+                        baseline_samples.clear()
+                        feature_history.clear()
+                        lines.append("LED geometry: lost; automatically recalibrating")
 
                 if geometry is None:
                     if calibration_error is None:
                         calibration_frames.append(rgb)
                         count = len(calibration_frames)
                         lines.append(
-                            f"LED calibration: {count}/{CALIBRATION_FRAME_COUNT} - hold camera still"
+                            "LED geometry: calibrating "
+                            f"{count}/{CALIBRATION_FRAME_COUNT} - hold camera still"
                         )
                         if count == CALIBRATION_FRAME_COUNT:
                             try:
@@ -228,44 +305,86 @@ def main() -> None:
                     else:
                         lines.extend(
                             (
-                                f"LED calibration failed: {calibration_error}",
+                                f"LED geometry: calibration failed: {calibration_error}",
                                 "Reframe the five visible LEDs, then press r",
                             )
                         )
+                    lines.append("Unloaded baseline: not set")
                 else:
                     _draw_geometry(display, geometry)
-                    lines.append("LED image positions: tracking")
+                    lines.append("LED geometry: tracking")
                     features = brightest_red_features(rgb, geometry)
-                    if baseline is None:
-                        lines.append("Press b with the fingertip unloaded")
+                    if baseline_collecting:
+                        baseline_samples.append(features)
+                        count = len(baseline_samples)
+                        lines.append(
+                            f"Unloaded baseline: collecting {count}/{BASELINE_FRAME_COUNT}"
+                        )
+                        if count == BASELINE_FRAME_COUNT:
+                            baseline, unloaded_noise_sigma = (
+                                unloaded_baseline_statistics(
+                                    np.stack(baseline_samples),
+                                )
+                            )
+                            baseline_collecting = False
+                            baseline_samples.clear()
+                            feature_history.clear()
+                            lines[-1] = "Unloaded baseline: ready"
+                            print(
+                                "unloaded baseline set: "
+                                f"{np.round(baseline, 3).tolist()}"
+                            )
+                            print(
+                                "unloaded feature noise sigma [DN]: "
+                                f"{np.round(unloaded_noise_sigma, 3).tolist()}"
+                            )
+                    elif baseline is None:
+                        lines.append("Unloaded baseline: not set - press b while unloaded")
                     else:
+                        feature_history.append(features)
+                        filtered_features = np.median(
+                            np.stack(feature_history),
+                            axis=0,
+                        )
+                        if unloaded_noise_sigma is None:
+                            raise RuntimeError(
+                                "unloaded baseline is missing its noise estimate"
+                            )
                         estimate = estimate_contact_position(
-                            features,
+                            filtered_features,
                             baseline,
+                            unloaded_noise_sigma,
                             LED_POSITIONS_IN_IMAGE_ORDER_MM,
                         )
                         response = estimate.response
-                        marker = contact_image_point(estimate, geometry)
-                        if marker is not None:
-                            _draw_contact_point(display, marker)
-                        position_text = (
-                            "unavailable"
-                            if estimate.position_mm is None
-                            else f"{estimate.position_mm:+.2f} mm"
-                        )
-                        lines.extend(
-                            (
-                                f"Contact position: {position_text}",
-                                f"Peak LED: {estimate.predicted_led_index + 1} | "
-                                f"top-2 margin: {estimate.top_two_margin:.2f} DN",
+                        lines.append("Unloaded baseline: ready")
+                        if not estimate.contact_detected:
+                            lines.append("Contact: No contact")
+                        else:
+                            marker = contact_image_point(estimate, geometry)
+                            if marker is not None:
+                                _draw_contact_point(display, marker)
+                            position_text = (
+                                "unavailable"
+                                if estimate.position_mm is None
+                                else f"{estimate.position_mm:+.2f} mm"
                             )
-                        )
+                            lines.extend(
+                                (
+                                    f"Contact position: {position_text}",
+                                    f"Peak LED: {estimate.predicted_led_index + 1} | "
+                                    f"top-2 margin: {estimate.top_two_margin:.2f} DN",
+                                )
+                            )
 
                 now = perf_counter()
                 instantaneous_fps = 1.0 / max(now - previous_wall_time, 1.0e-9)
                 previous_wall_time = now
                 displayed_fps = 0.90 * displayed_fps + 0.10 * instantaneous_fps
-                lines.append(f"Frame {frame.frame_number} | {displayed_fps:.1f} FPS")
+                lines.append(
+                    f"Frame {frame.frame_number} | {CAMERA_WIDTH}x{CAMERA_HEIGHT} "
+                    f"| {displayed_fps:.1f}/{CAMERA_FPS} FPS"
+                )
                 _draw_text(display, lines)
                 visualization = _draw_response_panel(display, response)
                 cv2.imshow(WINDOW_NAME, visualization)
@@ -283,12 +402,23 @@ def main() -> None:
                 if key == ord("r"):
                     geometry = None
                     baseline = None
+                    unloaded_noise_sigma = None
+                    baseline_collecting = False
                     calibration_error = None
                     calibration_frames.clear()
+                    baseline_samples.clear()
+                    feature_history.clear()
                     print("recalibrating LED geometry")
                 elif key == ord("b") and features is not None:
-                    baseline = features.copy()
-                    print(f"unloaded baseline set: {np.round(baseline, 3).tolist()}")
+                    baseline = None
+                    unloaded_noise_sigma = None
+                    baseline_collecting = True
+                    baseline_samples.clear()
+                    feature_history.clear()
+                    print(
+                        "collecting unloaded baseline: "
+                        f"0/{BASELINE_FRAME_COUNT}"
+                    )
                 previous_rgb = rgb
     finally:
         camera.stop()

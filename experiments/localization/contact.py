@@ -22,6 +22,13 @@ _COMPONENT_SEARCH_Y_FRACTION = (0.28, 0.70)
 _COMPONENT_PERCENTILE = 85.0
 _REFERENCE_IMAGE_WIDTH_PX = 640
 _REFERENCE_IMAGE_HEIGHT_PX = 480
+FEATURE_NOISE_FLOOR_DN = 0.75
+CONTACT_Z_THRESHOLD = 4.0
+_MINIMUM_RIGID_TRACK_CORRESPONDENCES = 4
+_RANSAC_REPROJECTION_IN_LED_SPACINGS = 0.15
+_MAXIMUM_INLIER_RESIDUAL_IN_LED_SPACINGS = 0.20
+_MINIMUM_FRAME_SCALE = 0.80
+_MAXIMUM_FRAME_SCALE = 1.25
 
 
 @dataclass(frozen=True)
@@ -54,6 +61,7 @@ class ContactEstimate:
     """Baseline-relative LED response and its response-weighted position."""
 
     response: np.ndarray
+    contact_detected: bool
     predicted_led_index: int
     position_mm: float | None
     top_two_margin: float
@@ -62,6 +70,8 @@ class ContactEstimate:
         response = np.asarray(self.response, dtype=np.float64)
         if response.shape != (_LED_COUNT,) or not np.all(np.isfinite(response)):
             raise ValueError("response must be a finite length-five vector")
+        if not isinstance(self.contact_detected, bool):
+            raise ValueError("contact_detected must be a bool")
         if not 0 <= self.predicted_led_index < _LED_COUNT:
             raise ValueError("predicted_led_index is outside the LED array")
         if self.position_mm is not None and not np.isfinite(self.position_mm):
@@ -361,6 +371,77 @@ def detect_led_array(rgb_frames: np.ndarray) -> LedArrayGeometry:
     return _geometry_from_landmarks(landmarks, median_rgb.shape)
 
 
+def constrain_led_array_motion(
+    previous_landmarks_xy_px: np.ndarray,
+    candidate_landmarks_xy_px: np.ndarray,
+    valid_correspondences: np.ndarray,
+    median_spacing_px: float,
+) -> np.ndarray:
+    """Fit one robust similarity motion and transform the full LED array."""
+
+    previous = np.asarray(previous_landmarks_xy_px, dtype=np.float64)
+    candidates = np.asarray(candidate_landmarks_xy_px, dtype=np.float64)
+    valid = np.asarray(valid_correspondences, dtype=bool)
+    if previous.shape != (_LED_COUNT, 2) or not np.all(np.isfinite(previous)):
+        raise ValueError("previous_landmarks_xy_px must be a finite 5 x 2 array")
+    if candidates.shape != (_LED_COUNT, 2):
+        raise ValueError("candidate_landmarks_xy_px must be a 5 x 2 array")
+    if valid.shape != (_LED_COUNT,):
+        raise ValueError("valid_correspondences must be a length-five vector")
+    if not np.isfinite(median_spacing_px) or median_spacing_px <= 0.0:
+        raise ValueError("median_spacing_px must be finite and positive")
+
+    valid &= np.all(np.isfinite(candidates), axis=1)
+    if np.count_nonzero(valid) < _MINIMUM_RIGID_TRACK_CORRESPONDENCES:
+        raise RuntimeError(
+            "rigid LED tracking requires at least four valid correspondences"
+        )
+
+    transform, ransac_inliers = cv2.estimateAffinePartial2D(
+        previous[valid],
+        candidates[valid],
+        method=cv2.RANSAC,
+        ransacReprojThreshold=(
+            _RANSAC_REPROJECTION_IN_LED_SPACINGS * median_spacing_px
+        ),
+        maxIters=2000,
+        confidence=0.99,
+        refineIters=10,
+    )
+    if transform is None or ransac_inliers is None:
+        raise RuntimeError("could not fit one similarity motion to the LED array")
+    transform = np.asarray(transform, dtype=np.float64)
+    if transform.shape != (2, 3) or not np.all(np.isfinite(transform)):
+        raise RuntimeError("LED similarity transform is not finite")
+
+    scale = float(np.hypot(transform[0, 0], transform[1, 0]))
+    if not _MINIMUM_FRAME_SCALE <= scale <= _MAXIMUM_FRAME_SCALE:
+        raise RuntimeError(f"LED similarity scale change is unreasonable: {scale:.3f}")
+
+    inliers = np.asarray(ransac_inliers, dtype=bool).reshape(-1)
+    if np.count_nonzero(inliers) < _MINIMUM_RIGID_TRACK_CORRESPONDENCES:
+        raise RuntimeError("LED similarity fit retained fewer than four inliers")
+
+    homogeneous = np.column_stack((previous, np.ones(_LED_COUNT)))
+    constrained = homogeneous @ transform.T
+    if not np.all(np.isfinite(constrained)):
+        raise RuntimeError("constrained LED landmarks are not finite")
+
+    residuals = np.linalg.norm(
+        constrained[valid][inliers] - candidates[valid][inliers],
+        axis=1,
+    )
+    maximum_residual_px = (
+        _MAXIMUM_INLIER_RESIDUAL_IN_LED_SPACINGS * median_spacing_px
+    )
+    if float(np.max(residuals)) > maximum_residual_px:
+        raise RuntimeError(
+            "LED similarity inlier residual is too large: "
+            f"{np.max(residuals):.2f} px"
+        )
+    return constrained
+
+
 def track_led_array(
     previous_rgb: np.ndarray,
     current_rgb: np.ndarray,
@@ -368,9 +449,9 @@ def track_led_array(
 ) -> LedArrayGeometry:
     """Update the five image landmarks after a camera/fingertip pose change.
 
-    Pyramidal Lucas-Kanade flow follows the ordered LED landmarks. A
-    forward-backward check rejects a lost or ambiguous track so the caller can
-    explicitly reacquire the array instead of publishing stale geometry.
+    Pyramidal Lucas-Kanade flow proposes point-wise correspondences. Valid
+    forward-backward tracks robustly fit one partial-affine similarity motion,
+    which is then applied to the previous rigid five-landmark array.
     """
 
     previous = np.asarray(previous_rgb)
@@ -409,33 +490,74 @@ def track_led_array(
         None,
         **flow_parameters,
     )
-    if current_points is None or forward_status is None or not np.all(forward_status):
-        raise RuntimeError("forward LED optical flow lost one or more landmarks")
-    backward_points, backward_status, _ = cv2.calcOpticalFlowPyrLK(
+    if current_points is None or forward_status is None:
+        raise RuntimeError("forward LED optical flow returned no landmarks")
+    candidates = current_points.reshape(-1, 2)
+    forward_valid = np.asarray(forward_status, dtype=bool).reshape(-1)
+    forward_valid &= np.all(np.isfinite(candidates), axis=1)
+    if np.count_nonzero(forward_valid) < _MINIMUM_RIGID_TRACK_CORRESPONDENCES:
+        raise RuntimeError("forward LED optical flow retained fewer than four points")
+
+    forward_indices = np.flatnonzero(forward_valid)
+    backward_subset, backward_status, _ = cv2.calcOpticalFlowPyrLK(
         current_gray,
         previous_gray,
-        current_points,
+        current_points[forward_indices],
         None,
         **flow_parameters,
     )
-    if (
-        backward_points is None
-        or backward_status is None
-        or not np.all(backward_status)
-    ):
-        raise RuntimeError("backward LED optical flow lost one or more landmarks")
+    if backward_subset is None or backward_status is None:
+        raise RuntimeError("backward LED optical flow returned no landmarks")
 
+    backward_points = np.full((_LED_COUNT, 2), np.nan, dtype=np.float64)
+    backward_points[forward_indices] = backward_subset.reshape(-1, 2)
+    backward_valid = np.zeros(_LED_COUNT, dtype=bool)
+    backward_valid[forward_indices] = np.asarray(
+        backward_status,
+        dtype=bool,
+    ).reshape(-1)
+    backward_valid &= np.all(np.isfinite(backward_points), axis=1)
     forward_backward_error = np.linalg.norm(
-        backward_points.reshape(-1, 2) - previous_points.reshape(-1, 2),
+        backward_points - previous_points.reshape(-1, 2),
         axis=1,
     )
     maximum_error_px = max(1.5, 0.12 * previous_geometry.median_spacing_px)
-    if float(np.max(forward_backward_error)) > maximum_error_px:
-        raise RuntimeError(
-            "LED optical-flow consistency failed: "
-            f"maximum error={np.max(forward_backward_error):.2f} px"
-        )
-    return _geometry_from_landmarks(current_points.reshape(-1, 2), current.shape)
+    valid = (
+        forward_valid
+        & backward_valid
+        & (forward_backward_error <= maximum_error_px)
+    )
+    constrained = constrain_led_array_motion(
+        previous_geometry.landmarks_xy_px,
+        candidates,
+        valid,
+        previous_geometry.median_spacing_px,
+    )
+    return _geometry_from_landmarks(constrained, current.shape)
+
+
+def unloaded_baseline_statistics(
+    feature_samples: np.ndarray,
+    *,
+    noise_floor_dn: float = FEATURE_NOISE_FLOOR_DN,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return per-LED temporal medians and robust unloaded noise scales."""
+
+    samples = np.asarray(feature_samples, dtype=np.float64)
+    if (
+        samples.ndim != 2
+        or samples.shape[1:] != (_LED_COUNT,)
+        or not len(samples)
+        or not np.all(np.isfinite(samples))
+    ):
+        raise ValueError("feature_samples must be a finite nonempty N x 5 array")
+    if not np.isfinite(noise_floor_dn) or noise_floor_dn <= 0.0:
+        raise ValueError("noise_floor_dn must be finite and positive")
+
+    baseline = np.median(samples, axis=0)
+    median_absolute_deviation = np.median(np.abs(samples - baseline), axis=0)
+    noise_sigma = np.maximum(1.4826 * median_absolute_deviation, noise_floor_dn)
+    return baseline, noise_sigma
 
 
 def brightest_red_features(
@@ -463,21 +585,25 @@ def brightest_red_features(
 def estimate_contact_position(
     features: np.ndarray,
     unloaded_baseline: np.ndarray,
+    unloaded_noise_sigma: np.ndarray,
     led_positions_mm: np.ndarray,
 ) -> ContactEstimate:
-    """Estimate contact from positive baseline-relative red-response changes.
+    """Estimate noise-gated contact from baseline-relative red response.
 
-    The discrete estimate is the maximum response channel. The continuous
-    estimate is the positive-response-weighted centroid of the physical LED
-    positions; it is unavailable when no channel increased from baseline.
+    Contact is active when at least one positive response reaches four robust
+    unloaded-noise standard deviations. The continuous estimate is the
+    positive-response-weighted centroid of the physical LED positions and is
+    unavailable while contact is inactive.
     """
 
     current = np.asarray(features, dtype=np.float64)
     baseline = np.asarray(unloaded_baseline, dtype=np.float64)
+    noise_sigma = np.asarray(unloaded_noise_sigma, dtype=np.float64)
     positions = np.asarray(led_positions_mm, dtype=np.float64)
     for name, values in (
         ("features", current),
         ("unloaded_baseline", baseline),
+        ("unloaded_noise_sigma", noise_sigma),
         ("led_positions_mm", positions),
     ):
         if values.shape != (_LED_COUNT,) or not np.all(np.isfinite(values)):
@@ -485,20 +611,26 @@ def estimate_contact_position(
     position_steps = np.diff(positions)
     if not (np.all(position_steps > 0.0) or np.all(position_steps < 0.0)):
         raise ValueError("led_positions_mm must be strictly ordered")
+    if np.any(noise_sigma < 0.0):
+        raise ValueError("unloaded_noise_sigma must be nonnegative")
 
     response = current - baseline
+    standardized_positive = np.maximum(response, 0.0) / np.maximum(
+        noise_sigma,
+        FEATURE_NOISE_FLOOR_DN,
+    )
+    contact_detected = bool(np.max(standardized_positive) >= CONTACT_Z_THRESHOLD)
     predicted = int(np.argmax(response))
     sorted_response = np.sort(response)
     margin = float(sorted_response[-1] - sorted_response[-2])
     positive = np.maximum(response, 0.0)
     total_positive = float(np.sum(positive))
-    position = (
-        None
-        if total_positive <= np.finfo(np.float64).eps
-        else float(np.dot(positive, positions) / total_positive)
-    )
+    position = None
+    if contact_detected and total_positive > np.finfo(np.float64).eps:
+        position = float(np.dot(positive, positions) / total_positive)
     return ContactEstimate(
         response=response,
+        contact_detected=contact_detected,
         predicted_led_index=predicted,
         position_mm=position,
         top_two_margin=margin,
@@ -511,6 +643,8 @@ def contact_image_point(
 ) -> np.ndarray | None:
     """Return the response-weighted contact marker in image pixel coordinates."""
 
+    if not estimate.contact_detected:
+        return None
     positive = np.maximum(estimate.response, 0.0)
     total_positive = float(np.sum(positive))
     if total_positive <= np.finfo(np.float64).eps:
@@ -520,11 +654,15 @@ def contact_image_point(
 
 
 __all__ = [
+    "CONTACT_Z_THRESHOLD",
+    "FEATURE_NOISE_FLOOR_DN",
     "ContactEstimate",
     "LedArrayGeometry",
     "brightest_red_features",
+    "constrain_led_array_motion",
     "contact_image_point",
     "detect_led_array",
     "estimate_contact_position",
     "track_led_array",
+    "unloaded_baseline_statistics",
 ]

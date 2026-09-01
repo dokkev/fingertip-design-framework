@@ -5,8 +5,10 @@ import numpy as np
 
 from experiments.localization import (
     brightest_red_features,
+    constrain_led_array_motion,
     detect_led_array,
     estimate_contact_position,
+    unloaded_baseline_statistics,
 )
 
 
@@ -52,9 +54,98 @@ def test_contact_position_is_positive_response_weighted_centroid() -> None:
     estimate = estimate_contact_position(
         features=np.array((10.0, 12.0, 18.0, 14.0, 10.0)),
         unloaded_baseline=np.full(5, 10.0),
+        unloaded_noise_sigma=np.ones(5),
         led_positions_mm=np.array((-22.0, -11.0, 0.0, 11.0, 22.0)),
     )
 
+    assert estimate.contact_detected
     assert estimate.predicted_led_index == 2
     assert np.isclose(estimate.position_mm, 22.0 / 14.0)
     assert np.isclose(estimate.top_two_margin, 4.0)
+
+
+def test_rigid_led_motion_rejects_one_corrupted_candidate() -> None:
+    previous = np.column_stack((np.full(5, 100.0), np.arange(5) * 20.0 + 100.0))
+    angle = np.deg2rad(4.0)
+    scale = 1.03
+    rotation = scale * np.array(
+        ((np.cos(angle), -np.sin(angle)), (np.sin(angle), np.cos(angle)))
+    )
+    expected = previous @ rotation.T + np.array((7.0, -3.0))
+    candidates = expected.copy()
+    candidates[2] += np.array((35.0, -28.0))
+
+    constrained = constrain_led_array_motion(
+        previous,
+        candidates,
+        np.ones(5, dtype=bool),
+        median_spacing_px=20.0,
+    )
+
+    assert np.allclose(constrained, expected, atol=1.0e-6)
+    assert np.linalg.norm(constrained[2] - candidates[2]) > 20.0
+    assert np.all(np.diff(constrained[:, 1]) > 0.0)
+    assert np.allclose(
+        np.linalg.norm(np.diff(constrained, axis=0), axis=1),
+        scale * 20.0,
+    )
+
+
+def test_rigid_led_motion_requires_four_valid_correspondences() -> None:
+    landmarks = np.column_stack((np.full(5, 100.0), np.arange(5) * 20.0 + 100.0))
+
+    with np.testing.assert_raises_regex(RuntimeError, "at least four"):
+        constrain_led_array_motion(
+            landmarks,
+            landmarks,
+            np.array((True, True, True, False, False)),
+            median_spacing_px=20.0,
+        )
+
+
+def test_unloaded_baseline_uses_robust_per_led_statistics() -> None:
+    samples = np.tile(np.array((40.0, 50.0, 60.0, 70.0, 80.0)), (30, 1))
+    samples[4] += 100.0
+
+    baseline, noise_sigma = unloaded_baseline_statistics(samples)
+
+    assert np.array_equal(baseline, (40.0, 50.0, 60.0, 70.0, 80.0))
+    assert np.all(np.isfinite(noise_sigma))
+    assert np.all(noise_sigma > 0.0)
+
+
+def test_contact_gate_rejects_unloaded_noise() -> None:
+    estimate = estimate_contact_position(
+        features=np.array((10.2, 10.4, 10.1, 10.3, 10.0)),
+        unloaded_baseline=np.full(5, 10.0),
+        unloaded_noise_sigma=np.ones(5),
+        led_positions_mm=np.array((-22.0, -11.0, 0.0, 11.0, 22.0)),
+    )
+
+    assert not estimate.contact_detected
+    assert estimate.position_mm is None
+
+
+def test_contact_gate_accepts_clear_response() -> None:
+    estimate = estimate_contact_position(
+        features=np.array((10.0, 10.0, 15.0, 10.0, 10.0)),
+        unloaded_baseline=np.full(5, 10.0),
+        unloaded_noise_sigma=np.ones(5),
+        led_positions_mm=np.array((-22.0, -11.0, 0.0, 11.0, 22.0)),
+    )
+
+    assert estimate.contact_detected
+    assert estimate.predicted_led_index == 2
+
+
+def test_contact_gate_keeps_equal_neighbor_response_active() -> None:
+    estimate = estimate_contact_position(
+        features=np.array((10.0, 15.0, 15.0, 10.0, 10.0)),
+        unloaded_baseline=np.full(5, 10.0),
+        unloaded_noise_sigma=np.ones(5),
+        led_positions_mm=np.array((-22.0, -11.0, 0.0, 11.0, 22.0)),
+    )
+
+    assert estimate.contact_detected
+    assert np.isclose(estimate.top_two_margin, 0.0)
+    assert np.isclose(estimate.position_mm, -5.5)

@@ -847,9 +847,13 @@ lifecycles. The current
 `RealSenseColorCamera` is a thin owner of one `pyrealsense2` color pipeline. It
 configures a 1920 x 1080 RGB stream at 30 FPS by default, returns an owned
 immutable RGB frame with device timestamp and frame number, and exposes explicit
-`start()`/`read()`/`stop()` plus context-manager cleanup. RealSense objects do
-not cross this package boundary. Depth acquisition is intentionally absent
-because the current localization algorithm consumes only color images.
+`start()`/`read()`/`stop()` plus context-manager cleanup. It also exposes one
+explicit operation that reads the current RGB exposure, gain, and white balance,
+disables their available automatic controllers, reapplies those values, and
+reports the locked settings. The application owns when to warm up and invoke
+that operation. RealSense objects do not cross this package boundary. Depth
+acquisition is intentionally absent because the current localization algorithm
+consumes only color images.
 
 The package does not select localization algorithms, render a GUI, write
 experimental files, or hide reconnect/retry policy. A later camera backend can
@@ -860,24 +864,33 @@ physical fingertip. The current
 learning-free path detects the ordered five-LED array from a median of fixed
 camera frames, constructs spacing-scaled regions, measures the brightest 10%
 red-channel response, and estimates contact position from the positive
-baseline-relative response weighted by the known physical LED positions. It
-requires an explicit unloaded baseline; it does not silently infer contact
-from an arbitrary initial frame.
+baseline-relative response weighted by the known physical LED positions. The
+five local Lucas-Kanade correspondences update the array only through one robust
+translation/rotation/uniform-scale fit, so one distorted optical landmark cannot
+independently move its ROI. An explicit 30-sample unloaded feature median and
+per-LED MAD noise scale define the baseline and the 4-sigma contact/no-contact
+gate. It does not silently infer contact from an arbitrary initial frame.
 
 Localization receives RGB arrays and numerical calibration values. It does not
 import RealSense, own a camera lifecycle, show windows, save results, or depend
 on Newton, OptiX, or Ax.
 
 `scripts/live_contact_localization.py` is the concrete online assembly. It
-collects 30 fixed-camera frames for LED geometry, lets the user capture an
-unloaded baseline with `b`, draws the detected landmarks/ROIs and live contact
-estimate, and exits on `q` or Escape. After initialization, forward-backward
-pyramidal optical flow updates all five image landmarks and their ROIs every
-frame when the camera-to-fingertip pose changes. A lost track invalidates the
-view-dependent baseline and automatically starts a new 30-frame detection;
-`r` starts the same process explicitly. The displayed contact marker is the
-positive-response-weighted point over the five ROI centers. The application
-writes no result artifact.
+discards 30 warmup frames, freezes the settled RGB photometric settings, then
+collects 30 fixed-camera frames for LED geometry. The user captures an unloaded
+30-feature baseline with `b`; normal operation applies only a three-frame median
+to the final feature vector before noise-gated localization. The script draws
+the detected landmarks/ROIs and live contact estimate and exits on `q` or
+Escape. A lost rigid-array track invalidates the view-dependent baseline and
+automatically starts a new 30-frame detection; `r` starts the same geometry
+process explicitly without re-enabling automatic exposure or white balance.
+The displayed contact marker is the positive-response-weighted point over the
+five ROI centers and is absent while the measured response remains within the
+unloaded-noise gate. The application writes no result artifact. A frame timeout
+remains a reported hardware failure;
+the application, not the RealSense adapter, owns a bounded ten-attempt reconnect
+loop. Successful reconnect repeats photometric warmup/locking and discards the
+old LED geometry and baseline before localization resumes.
 
 ### `lumo/visualization/`
 

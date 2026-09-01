@@ -24,20 +24,20 @@ environment value takes precedence.
 Compile repository Python without launching a simulation:
 
 ```bash
-conda run -n lit python -m compileall -q lumo scripts validation tests
+conda run -n lit python -m compileall -q experiments lumo scripts validation tests
 ```
 
 Run Ruff:
 
 ```bash
-conda run -n lit ruff check lumo scripts validation tests
+conda run -n lit ruff check experiments lumo scripts validation tests
 ```
 
 ## Focused unit tests
 
 ```bash
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 conda run --no-capture-output -n lit \
-  pytest -q tests/unit
+  python -m pytest -q tests/unit
 ```
 
 ## Live D435 contact localization
@@ -52,22 +52,36 @@ conda run --no-capture-output -n lit \
   python -u scripts/live_contact_localization.py
 ```
 
-The default D435 color stream is 1920 x 1080 at 30 FPS. Keep the camera fixed
-during the initial 30-frame LED calibration. After that,
+The default D435 color stream is 1920 x 1080 at 30 FPS. The application first
+lets automatic color controls settle for 30 frames, then freezes the current
+exposure, gain, and white balance before beginning the 30-frame LED calibration.
+Keep the camera fixed during that geometry calibration. After that,
 the five landmarks and contact dot follow gradual camera-pose changes every
 frame. If tracking is lost after a larger pose change, the viewer invalidates
 the old view-dependent baseline and automatically collects 30 new frames;
-press `b` again while unloaded. `r` explicitly starts recalibration, and `q`,
-Escape, or closing the window exits. The viewer does not save frames or
-estimates. `LED_POSITIONS_IN_IMAGE_ORDER_MM` at the top of the script maps the
-detected top-to-bottom image order to the physical fingertip Y axis; reverse it
-when the camera is mounted from the opposite direction.
+press `b` again while unloaded. Pressing `b` collects 30 feature vectors and
+uses their per-LED temporal median as the unloaded baseline; pressing it again
+during collection restarts the acquisition. `r` explicitly starts geometry
+recalibration without re-enabling automatic camera controls, and `q`, Escape,
+or closing the window exits. The viewer does not save frames or estimates.
+`LED_POSITIONS_IN_IMAGE_ORDER_MM` at the top of the script maps the detected
+top-to-bottom image order to the physical fingertip Y axis; reverse it when the
+camera is mounted from the opposite direction. A frame timeout triggers up to
+ten explicit one-second reconnect attempts. A successful reconnect repeats the
+photometric warmup/lock and clears the view-dependent baseline, so press `b`
+again after LED recalibration.
+
+For quantitative optical-response comparisons, exposure and gain must remain
+fixed, and white balance should remain fixed when the color sensor supports it.
+Acquire a new unloaded baseline after each intentional camera-viewpoint or
+environmental-light change. Do not retune localization parameters between
+contact locations.
 
 The fingertip objective and Ax search contract have focused tests:
 
 ```bash
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 conda run --no-capture-output -n lit \
-  pytest -q \
+  python -m pytest -q \
     tests/unit/optimization/test_fingertip_objective.py \
     tests/unit/optimization/test_design_space.py
 ```
@@ -76,7 +90,7 @@ The publication visualization toolkit has one focused headless test:
 
 ```bash
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 conda run --no-capture-output -n lit \
-  pytest -q tests/unit/visualization/test_publication_toolkit.py
+  python -m pytest -q tests/unit/visualization/test_publication_toolkit.py
 ```
 
 ## Publication visualization demo
