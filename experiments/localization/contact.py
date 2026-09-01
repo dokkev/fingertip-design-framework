@@ -29,6 +29,7 @@ _RANSAC_REPROJECTION_IN_LED_SPACINGS = 0.15
 _MAXIMUM_INLIER_RESIDUAL_IN_LED_SPACINGS = 0.20
 _MINIMUM_FRAME_SCALE = 0.80
 _MAXIMUM_FRAME_SCALE = 1.25
+_MAXIMUM_REANCHOR_CORRECTION_IN_LED_SPACINGS = 0.50
 
 
 @dataclass(frozen=True)
@@ -551,6 +552,24 @@ def reanchor_led_array(
         np.ones(_LED_COUNT, dtype=bool),
         previous_geometry.median_spacing_px,
     )
+    maximum_correction_px = float(
+        np.max(
+            np.linalg.norm(
+                constrained - previous_geometry.landmarks_xy_px,
+                axis=1,
+            )
+        )
+    )
+    maximum_allowed_px = (
+        _MAXIMUM_REANCHOR_CORRECTION_IN_LED_SPACINGS
+        * previous_geometry.median_spacing_px
+    )
+    if maximum_correction_px > maximum_allowed_px:
+        raise RuntimeError(
+            "absolute LED re-anchor correction is too large: "
+            f"{maximum_correction_px / previous_geometry.median_spacing_px:.3f} "
+            "LED spacings"
+        )
     return _geometry_from_landmarks(constrained, np.asarray(rgb).shape)
 
 

@@ -871,6 +871,9 @@ local Lucas-Kanade correspondences update the array only through one robust
 translation/rotation/uniform-scale fit, so one distorted optical landmark cannot
 independently move its ROI. During confirmed no-contact operation, the absolute
 red detector periodically re-anchors that rigid array to limit recursive drift.
+The correction is accepted only when every constrained landmark moves by at
+most half the current median LED spacing, preventing a different regular
+five-peak constellation from causing a detector jump.
 An explicit 30-sample unloaded feature median and per-LED MAD noise scale define
 the baseline and the 4-sigma contact/no-contact gate. It does not silently infer
 contact from an arbitrary initial frame.

@@ -2,12 +2,16 @@
 
 import cv2
 import numpy as np
+import pytest
 
+import experiments.localization.contact as contact_module
 from experiments.localization import (
+    LedArrayGeometry,
     brightest_red_features,
     constrain_led_array_motion,
     detect_led_array,
     estimate_contact_position,
+    reanchor_led_array,
     track_led_array,
     unloaded_baseline_statistics,
 )
@@ -154,6 +158,43 @@ def test_track_led_array_survives_one_failed_backward_status(monkeypatch) -> Non
         expected_points.reshape(-1, 2),
         atol=1.0e-6,
     )
+
+
+def test_reanchor_rejects_large_detector_jump(monkeypatch) -> None:
+    image = _synthetic_led_image()
+    geometry = detect_led_array(image)
+
+    def shifted_detection(spacing_fraction: float) -> LedArrayGeometry:
+        shift = np.asarray(
+            (spacing_fraction * geometry.median_spacing_px, 0.0)
+        )
+        return LedArrayGeometry(
+            landmarks_xy_px=geometry.landmarks_xy_px + shift,
+            roi_polygons_xy_px=geometry.roi_polygons_xy_px + shift,
+            median_spacing_px=geometry.median_spacing_px,
+        )
+
+    small_detection = shifted_detection(0.25)
+    monkeypatch.setattr(
+        contact_module,
+        "detect_led_array",
+        lambda _rgb: small_detection,
+    )
+    reanchored = reanchor_led_array(image, geometry)
+    assert np.allclose(
+        reanchored.landmarks_xy_px,
+        small_detection.landmarks_xy_px,
+    )
+
+    wrong_detection = shifted_detection(0.75)
+    monkeypatch.setattr(
+        contact_module,
+        "detect_led_array",
+        lambda _rgb: wrong_detection,
+    )
+
+    with pytest.raises(RuntimeError, match="correction is too large"):
+        reanchor_led_array(image, geometry)
 
 
 def test_unloaded_baseline_uses_robust_per_led_statistics() -> None:

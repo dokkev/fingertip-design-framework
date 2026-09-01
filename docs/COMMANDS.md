@@ -58,7 +58,8 @@ exposure, gain, and white balance before beginning the 30-frame LED calibration.
 Keep the camera fixed during that geometry calibration. After that,
 the five landmarks and contact dot follow gradual camera-pose changes every
 frame. During confirmed no-contact operation, the absolute red detector
-re-anchors the rigid array every 30 frames to limit recursive tracking drift.
+re-anchors the rigid array every 30 frames to limit recursive tracking drift;
+corrections larger than half the current LED spacing are rejected.
 If tracking is lost after a larger pose change, the viewer invalidates the old
 view-dependent baseline and automatically collects 30 new frames;
 press `b` again while unloaded. Pressing `b` collects 30 feature vectors and
