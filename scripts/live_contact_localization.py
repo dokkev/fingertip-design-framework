@@ -17,11 +17,14 @@ if str(_REPOSITORY_ROOT) not in sys.path:
 
 from experiments.hardware import ColorFrame, RealSenseColorCamera  # noqa: E402
 from experiments.localization import (  # noqa: E402
+    CONTACT_Z_THRESHOLD,
+    FEATURE_NOISE_FLOOR_DN,
     LedArrayGeometry,
     brightest_red_features,
     contact_image_point,
     detect_led_array,
     estimate_contact_position,
+    reanchor_led_array,
     track_led_array,
     unloaded_baseline_statistics,
 )
@@ -36,6 +39,8 @@ PHOTOMETRIC_WARMUP_FRAME_COUNT = 30
 CALIBRATION_FRAME_COUNT = 30
 BASELINE_FRAME_COUNT = 30
 FEATURE_MEDIAN_WINDOW = 3
+NO_CONTACT_REANCHOR_FRAME_COUNT = 30
+RESPONSE_PANEL_MAX_Z = 8.0
 CAMERA_FRAME_TIMEOUT_MS = 2000
 CAMERA_RECONNECT_ATTEMPTS = 10
 CAMERA_RECONNECT_DELAY_S = 1.0
@@ -158,12 +163,13 @@ def _draw_text(image: np.ndarray, lines: list[str]) -> None:
 def _draw_response_panel(
     image: np.ndarray,
     response: np.ndarray | None,
+    unloaded_noise_sigma: np.ndarray | None,
 ) -> np.ndarray:
-    panel_width = 250
+    panel_width = 340
     panel = np.full((image.shape[0], panel_width, 3), 26, dtype=np.uint8)
     cv2.putText(
         panel,
-        "Baseline-relative red response",
+        "Red response: fixed unloaded-noise scale",
         (14, 30),
         cv2.FONT_HERSHEY_SIMPLEX,
         0.47,
@@ -171,7 +177,7 @@ def _draw_response_panel(
         1,
         cv2.LINE_AA,
     )
-    if response is None:
+    if response is None or unloaded_noise_sigma is None:
         cv2.putText(
             panel,
             "Press b while unloaded",
@@ -184,14 +190,53 @@ def _draw_response_panel(
         )
         return np.hstack((image, panel))
 
-    scale = max(float(np.max(np.abs(response))), 1.0)
-    center_x = 112
-    for index, value in enumerate(response):
+    noise_sigma = np.asarray(unloaded_noise_sigma, dtype=np.float64)
+    if noise_sigma.shape != (5,) or not np.all(np.isfinite(noise_sigma)):
+        raise ValueError("unloaded_noise_sigma must be a finite length-five vector")
+    standardized = np.asarray(response, dtype=np.float64) / np.maximum(
+        noise_sigma,
+        FEATURE_NOISE_FLOOR_DN,
+    )
+    zero_x = 165
+    scale_width = 95
+    for tick_z in (0.0, 2.0, CONTACT_Z_THRESHOLD, RESPONSE_PANEL_MAX_Z):
+        x = zero_x + round(scale_width * tick_z / RESPONSE_PANEL_MAX_Z)
+        color = (
+            (0, 150, 255)
+            if tick_z == CONTACT_Z_THRESHOLD
+            else (90, 90, 90)
+        )
+        cv2.line(panel, (x, 54), (x, 372), color, 1, cv2.LINE_AA)
+        if tick_z == 0.0:
+            label = "0"
+        elif tick_z == CONTACT_Z_THRESHOLD:
+            label = "4 gate"
+        elif tick_z == RESPONSE_PANEL_MAX_Z:
+            label = "8+"
+        else:
+            label = f"{tick_z:g}"
+        cv2.putText(
+            panel,
+            label,
+            (x - 7, 50),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.38,
+            (185, 185, 185),
+            1,
+            cv2.LINE_AA,
+        )
+
+    for index, (value, z_score) in enumerate(
+        zip(response, standardized, strict=True)
+    ):
         y = 82 + 66 * index
-        length = round(88.0 * abs(float(value)) / scale)
+        clipped_z = float(
+            np.clip(z_score, -RESPONSE_PANEL_MAX_Z, RESPONSE_PANEL_MAX_Z)
+        )
+        length = round(scale_width * abs(clipped_z) / RESPONSE_PANEL_MAX_Z)
         color = (50, 210, 80) if value >= 0.0 else (60, 90, 230)
-        endpoint = center_x + length if value >= 0.0 else center_x - length
-        cv2.line(panel, (center_x, y), (endpoint, y), color, 12, cv2.LINE_AA)
+        endpoint = zero_x + length if clipped_z >= 0.0 else zero_x - length
+        cv2.line(panel, (zero_x, y), (endpoint, y), color, 12, cv2.LINE_AA)
         cv2.putText(
             panel,
             f"LED {index + 1}",
@@ -205,14 +250,13 @@ def _draw_response_panel(
         cv2.putText(
             panel,
             f"{value:+.1f}",
-            (180, y + 5),
+            (278, y + 5),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.43,
             color,
             1,
             cv2.LINE_AA,
         )
-    cv2.line(panel, (center_x, 54), (center_x, 372), (115, 115, 115), 1)
     return np.hstack((image, panel))
 
 
@@ -224,6 +268,7 @@ def main() -> None:
     baseline: np.ndarray | None = None
     unloaded_noise_sigma: np.ndarray | None = None
     baseline_collecting = False
+    no_contact_frame_count = 0
     calibration_error: str | None = None
     previous_rgb: np.ndarray | None = None
     previous_wall_time = perf_counter()
@@ -255,6 +300,7 @@ def main() -> None:
                     baseline = None
                     unloaded_noise_sigma = None
                     baseline_collecting = False
+                    no_contact_frame_count = 0
                     calibration_error = None
                     previous_rgb = None
                     calibration_frames.clear()
@@ -276,6 +322,7 @@ def main() -> None:
                         baseline = None
                         unloaded_noise_sigma = None
                         baseline_collecting = False
+                        no_contact_frame_count = 0
                         calibration_error = None
                         calibration_frames.clear()
                         baseline_samples.clear()
@@ -327,6 +374,7 @@ def main() -> None:
                                 )
                             )
                             baseline_collecting = False
+                            no_contact_frame_count = 0
                             baseline_samples.clear()
                             feature_history.clear()
                             lines[-1] = "Unloaded baseline: ready"
@@ -360,7 +408,21 @@ def main() -> None:
                         lines.append("Unloaded baseline: ready")
                         if not estimate.contact_detected:
                             lines.append("Contact: No contact")
+                            no_contact_frame_count += 1
+                            if (
+                                no_contact_frame_count
+                                >= NO_CONTACT_REANCHOR_FRAME_COUNT
+                            ):
+                                try:
+                                    geometry = reanchor_led_array(rgb, geometry)
+                                except RuntimeError as error:
+                                    print(f"LED absolute re-anchor skipped: {error}")
+                                else:
+                                    feature_history.clear()
+                                    lines.append("LED geometry: absolute re-anchor")
+                                no_contact_frame_count = 0
                         else:
+                            no_contact_frame_count = 0
                             marker = contact_image_point(estimate, geometry)
                             if marker is not None:
                                 _draw_contact_point(display, marker)
@@ -386,7 +448,11 @@ def main() -> None:
                     f"| {displayed_fps:.1f}/{CAMERA_FPS} FPS"
                 )
                 _draw_text(display, lines)
-                visualization = _draw_response_panel(display, response)
+                visualization = _draw_response_panel(
+                    display,
+                    response,
+                    unloaded_noise_sigma,
+                )
                 cv2.imshow(WINDOW_NAME, visualization)
 
                 key = cv2.waitKey(1) & 0xFF
@@ -404,6 +470,7 @@ def main() -> None:
                     baseline = None
                     unloaded_noise_sigma = None
                     baseline_collecting = False
+                    no_contact_frame_count = 0
                     calibration_error = None
                     calibration_frames.clear()
                     baseline_samples.clear()
@@ -413,6 +480,7 @@ def main() -> None:
                     baseline = None
                     unloaded_noise_sigma = None
                     baseline_collecting = True
+                    no_contact_frame_count = 0
                     baseline_samples.clear()
                     feature_history.clear()
                     print(

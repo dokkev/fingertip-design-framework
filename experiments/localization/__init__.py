@@ -10,6 +10,7 @@ from .contact import (
     contact_image_point,
     detect_led_array,
     estimate_contact_position,
+    reanchor_led_array,
     track_led_array,
     unloaded_baseline_statistics,
 )
@@ -24,6 +25,7 @@ __all__ = [
     "contact_image_point",
     "detect_led_array",
     "estimate_contact_position",
+    "reanchor_led_array",
     "track_led_array",
     "unloaded_baseline_statistics",
 ]

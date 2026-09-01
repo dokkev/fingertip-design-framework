@@ -863,13 +863,17 @@ provide the same small RGB-frame lifecycle without changing image localization.
 physical fingertip. The current
 learning-free path detects the ordered five-LED array from a median of fixed
 camera frames, constructs spacing-scaled regions, measures the brightest 10%
-red-channel response, and estimates contact position from the positive
-baseline-relative response weighted by the known physical LED positions. The
-five local Lucas-Kanade correspondences update the array only through one robust
+red-channel response in small polygon bounding crops, and estimates contact
+position from the positive baseline-relative response weighted by the known
+physical LED positions. The crop-local implementation preserves the exact
+brightest-10% definition without five full-frame masks per video frame. The five
+local Lucas-Kanade correspondences update the array only through one robust
 translation/rotation/uniform-scale fit, so one distorted optical landmark cannot
-independently move its ROI. An explicit 30-sample unloaded feature median and
-per-LED MAD noise scale define the baseline and the 4-sigma contact/no-contact
-gate. It does not silently infer contact from an arbitrary initial frame.
+independently move its ROI. During confirmed no-contact operation, the absolute
+red detector periodically re-anchors that rigid array to limit recursive drift.
+An explicit 30-sample unloaded feature median and per-LED MAD noise scale define
+the baseline and the 4-sigma contact/no-contact gate. It does not silently infer
+contact from an arbitrary initial frame.
 
 Localization receives RGB arrays and numerical calibration values. It does not
 import RealSense, own a camera lifecycle, show windows, save results, or depend
@@ -886,8 +890,9 @@ automatically starts a new 30-frame detection; `r` starts the same geometry
 process explicitly without re-enabling automatic exposure or white balance.
 The displayed contact marker is the positive-response-weighted point over the
 five ROI centers and is absent while the measured response remains within the
-unloaded-noise gate. The application writes no result artifact. A frame timeout
-remains a reported hardware failure;
+unloaded-noise gate. Its response bars use a fixed z-score axis rather than
+renormalizing every frame; raw DN values remain visible. The application writes
+no result artifact. A frame timeout remains a reported hardware failure;
 the application, not the RealSense adapter, owns a bounded ten-attempt reconnect
 loop. Successful reconnect repeats photometric warmup/locking and discards the
 old LED geometry and baseline before localization resumes.

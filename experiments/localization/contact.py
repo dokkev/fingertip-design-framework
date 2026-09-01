@@ -357,7 +357,9 @@ def detect_led_array(rgb_frames: np.ndarray) -> LedArrayGeometry:
     """Detect the common five-LED array from one or more fixed-camera frames."""
 
     frames = _rgb_frames(rgb_frames)
-    median_rgb = np.median(frames, axis=0).astype(np.uint8)
+    median_rgb = (
+        frames[0] if len(frames) == 1 else np.median(frames, axis=0).astype(np.uint8)
+    )
     try:
         landmarks = _landmarks_from_median(median_rgb)
     except RuntimeError as profile_error:
@@ -536,6 +538,22 @@ def track_led_array(
     return _geometry_from_landmarks(constrained, current.shape)
 
 
+def reanchor_led_array(
+    rgb: np.ndarray,
+    previous_geometry: LedArrayGeometry,
+) -> LedArrayGeometry:
+    """Re-anchor a rigid tracked array to absolute red-image landmarks."""
+
+    detected = detect_led_array(rgb)
+    constrained = constrain_led_array_motion(
+        previous_geometry.landmarks_xy_px,
+        detected.landmarks_xy_px,
+        np.ones(_LED_COUNT, dtype=bool),
+        previous_geometry.median_spacing_px,
+    )
+    return _geometry_from_landmarks(constrained, np.asarray(rgb).shape)
+
+
 def unloaded_baseline_statistics(
     feature_samples: np.ndarray,
     *,
@@ -569,12 +587,15 @@ def brightest_red_features(
     image = np.asarray(rgb)
     if image.ndim != 3 or image.shape[2] != 3 or image.dtype != np.uint8:
         raise ValueError("rgb must be an H x W x 3 uint8 array")
-    red = image[:, :, 0].astype(np.float64)
     values = []
     for polygon in geometry.roi_polygons_xy_px:
-        mask = np.zeros(red.shape, dtype=np.uint8)
-        cv2.fillConvexPoly(mask, np.rint(polygon).astype(np.int32), 255)
-        pixels = red[mask > 0]
+        rounded_polygon = np.rint(polygon).astype(np.int32)
+        x, y, width, height = cv2.boundingRect(rounded_polygon)
+        local_polygon = rounded_polygon - np.asarray((x, y), dtype=np.int32)
+        mask = np.zeros((height, width), dtype=np.uint8)
+        cv2.fillConvexPoly(mask, local_polygon, 255)
+        red_crop = image[y : y + height, x : x + width, 0]
+        pixels = red_crop[mask > 0]
         if pixels.size == 0:
             raise RuntimeError("an LED ROI contains no pixels")
         count = max(1, int(np.ceil(_TOP_FRACTION * pixels.size)))
@@ -663,6 +684,7 @@ __all__ = [
     "contact_image_point",
     "detect_led_array",
     "estimate_contact_position",
+    "reanchor_led_array",
     "track_led_array",
     "unloaded_baseline_statistics",
 ]

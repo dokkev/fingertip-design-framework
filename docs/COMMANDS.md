@@ -57,8 +57,10 @@ lets automatic color controls settle for 30 frames, then freezes the current
 exposure, gain, and white balance before beginning the 30-frame LED calibration.
 Keep the camera fixed during that geometry calibration. After that,
 the five landmarks and contact dot follow gradual camera-pose changes every
-frame. If tracking is lost after a larger pose change, the viewer invalidates
-the old view-dependent baseline and automatically collects 30 new frames;
+frame. During confirmed no-contact operation, the absolute red detector
+re-anchors the rigid array every 30 frames to limit recursive tracking drift.
+If tracking is lost after a larger pose change, the viewer invalidates the old
+view-dependent baseline and automatically collects 30 new frames;
 press `b` again while unloaded. Pressing `b` collects 30 feature vectors and
 uses their per-LED temporal median as the unloaded baseline; pressing it again
 during collection restarts the acquisition. `r` explicitly starts geometry
@@ -75,7 +77,11 @@ For quantitative optical-response comparisons, exposure and gain must remain
 fixed, and white balance should remain fixed when the color sensor supports it.
 Acquire a new unloaded baseline after each intentional camera-viewpoint or
 environmental-light change. Do not retune localization parameters between
-contact locations.
+contact locations. This protocol supports comparison with the same fixed
+learning-free algorithm and a condition-specific unloaded reference; it is not
+viewpoint invariance without recalibration. The response panel uses a fixed
+unloaded-noise z scale with the 4-sigma contact gate marked, while retaining raw
+DN values beside each LED bar.
 
 The fingertip objective and Ax search contract have focused tests:
 

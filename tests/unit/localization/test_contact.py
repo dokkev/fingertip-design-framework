@@ -8,6 +8,7 @@ from experiments.localization import (
     constrain_led_array_motion,
     detect_led_array,
     estimate_contact_position,
+    track_led_array,
     unloaded_baseline_statistics,
 )
 
@@ -29,6 +30,30 @@ def test_detects_ordered_five_led_array_and_measures_features() -> None:
     assert np.isclose(geometry.median_spacing_px, 20.0, atol=1.5)
     assert features.shape == (5,)
     assert np.all(features > 0.0)
+
+
+def test_local_roi_feature_matches_full_frame_mask_definition() -> None:
+    geometry = detect_led_array(_synthetic_led_image())
+    image = np.random.default_rng(17).integers(
+        0,
+        256,
+        size=(480, 640, 3),
+        dtype=np.uint8,
+    )
+    expected = []
+    red = image[:, :, 0].astype(np.float64)
+    for polygon in geometry.roi_polygons_xy_px:
+        mask = np.zeros(red.shape, dtype=np.uint8)
+        cv2.fillConvexPoly(mask, np.rint(polygon).astype(np.int32), 255)
+        pixels = red[mask > 0]
+        count = max(1, int(np.ceil(0.10 * pixels.size)))
+        expected.append(
+            float(np.mean(np.partition(pixels, pixels.size - count)[-count:]))
+        )
+
+    actual = brightest_red_features(image, geometry)
+
+    assert np.array_equal(actual, expected)
 
 
 def test_component_fallback_handles_oblique_led_spacing() -> None:
@@ -101,6 +126,34 @@ def test_rigid_led_motion_requires_four_valid_correspondences() -> None:
             np.array((True, True, True, False, False)),
             median_spacing_px=20.0,
         )
+
+
+def test_track_led_array_survives_one_failed_backward_status(monkeypatch) -> None:
+    image = _synthetic_led_image()
+    geometry = detect_led_array(image)
+    previous_points = geometry.landmarks_xy_px.astype(np.float32).reshape(-1, 1, 2)
+    expected_points = previous_points + np.asarray((3.0, -2.0), dtype=np.float32)
+    call_count = 0
+
+    def fake_lk(*_args, **_kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return expected_points.copy(), np.ones((5, 1), dtype=np.uint8), None
+        status = np.ones((5, 1), dtype=np.uint8)
+        status[2] = 0
+        return previous_points.copy(), status, None
+
+    monkeypatch.setattr(cv2, "calcOpticalFlowPyrLK", fake_lk)
+
+    tracked = track_led_array(image, image, geometry)
+
+    assert call_count == 2
+    assert np.allclose(
+        tracked.landmarks_xy_px,
+        expected_points.reshape(-1, 2),
+        atol=1.0e-6,
+    )
 
 
 def test_unloaded_baseline_uses_robust_per_led_statistics() -> None:
