@@ -8,6 +8,13 @@ from dataclasses import dataclass
 import cv2
 import numpy as np
 
+from .contact_observers import (
+    CONTACT_Z_THRESHOLD,
+    FEATURE_NOISE_FLOOR_DN,
+    ContactEstimate,
+    estimate_contact_position,
+    unloaded_baseline_statistics,
+)
 from .fingertip_boundary import detect_fingertip_boundary
 
 
@@ -21,8 +28,6 @@ _BROAD_GAUSSIAN_SIGMA_PX = 14.0
 _COMPONENT_PERCENTILE = 85.0
 _REFERENCE_IMAGE_WIDTH_PX = 640
 _REFERENCE_IMAGE_HEIGHT_PX = 480
-FEATURE_NOISE_FLOOR_DN = 0.75
-CONTACT_Z_THRESHOLD = 4.0
 _MINIMUM_RIGID_TRACK_CORRESPONDENCES = 4
 _RANSAC_REPROJECTION_IN_LED_SPACINGS = 0.15
 _MAXIMUM_INLIER_RESIDUAL_IN_LED_SPACINGS = 0.20
@@ -55,33 +60,6 @@ class LedArrayGeometry:
         polygons.setflags(write=False)
         object.__setattr__(self, "landmarks_xy_px", landmarks)
         object.__setattr__(self, "roi_polygons_xy_px", polygons)
-
-
-@dataclass(frozen=True)
-class ContactEstimate:
-    """Baseline-relative LED response and its response-weighted position."""
-
-    response: np.ndarray
-    contact_detected: bool
-    predicted_led_index: int
-    position_mm: float | None
-    top_two_margin: float
-
-    def __post_init__(self) -> None:
-        response = np.asarray(self.response, dtype=np.float64)
-        if response.shape != (_LED_COUNT,) or not np.all(np.isfinite(response)):
-            raise ValueError("response must be a finite length-five vector")
-        if not isinstance(self.contact_detected, bool):
-            raise ValueError("contact_detected must be a bool")
-        if not 0 <= self.predicted_led_index < _LED_COUNT:
-            raise ValueError("predicted_led_index is outside the LED array")
-        if self.position_mm is not None and not np.isfinite(self.position_mm):
-            raise ValueError("position_mm must be finite when available")
-        if not np.isfinite(self.top_two_margin):
-            raise ValueError("top_two_margin must be finite")
-        response = response.copy()
-        response.setflags(write=False)
-        object.__setattr__(self, "response", response)
 
 
 def _rgb_frames(rgb_frames: np.ndarray) -> np.ndarray:
@@ -616,30 +594,6 @@ def reanchor_led_array(
     return _geometry_from_landmarks(constrained, image.shape)
 
 
-def unloaded_baseline_statistics(
-    feature_samples: np.ndarray,
-    *,
-    noise_floor_dn: float = FEATURE_NOISE_FLOOR_DN,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Return per-LED temporal medians and robust unloaded noise scales."""
-
-    samples = np.asarray(feature_samples, dtype=np.float64)
-    if (
-        samples.ndim != 2
-        or samples.shape[1:] != (_LED_COUNT,)
-        or not len(samples)
-        or not np.all(np.isfinite(samples))
-    ):
-        raise ValueError("feature_samples must be a finite nonempty N x 5 array")
-    if not np.isfinite(noise_floor_dn) or noise_floor_dn <= 0.0:
-        raise ValueError("noise_floor_dn must be finite and positive")
-
-    baseline = np.median(samples, axis=0)
-    median_absolute_deviation = np.median(np.abs(samples - baseline), axis=0)
-    noise_sigma = np.maximum(1.4826 * median_absolute_deviation, noise_floor_dn)
-    return baseline, noise_sigma
-
-
 def brightest_red_features(
     rgb: np.ndarray,
     geometry: LedArrayGeometry,
@@ -663,61 +617,6 @@ def brightest_red_features(
         count = max(1, int(np.ceil(_TOP_FRACTION * pixels.size)))
         values.append(float(np.mean(np.partition(pixels, pixels.size - count)[-count:])))
     return np.asarray(values, dtype=np.float64)
-
-
-def estimate_contact_position(
-    features: np.ndarray,
-    unloaded_baseline: np.ndarray,
-    unloaded_noise_sigma: np.ndarray,
-    led_positions_mm: np.ndarray,
-) -> ContactEstimate:
-    """Estimate noise-gated contact from baseline-relative red response.
-
-    Contact is active when at least one positive response reaches four robust
-    unloaded-noise standard deviations. The continuous estimate is the
-    positive-response-weighted centroid of the physical LED positions and is
-    unavailable while contact is inactive.
-    """
-
-    current = np.asarray(features, dtype=np.float64)
-    baseline = np.asarray(unloaded_baseline, dtype=np.float64)
-    noise_sigma = np.asarray(unloaded_noise_sigma, dtype=np.float64)
-    positions = np.asarray(led_positions_mm, dtype=np.float64)
-    for name, values in (
-        ("features", current),
-        ("unloaded_baseline", baseline),
-        ("unloaded_noise_sigma", noise_sigma),
-        ("led_positions_mm", positions),
-    ):
-        if values.shape != (_LED_COUNT,) or not np.all(np.isfinite(values)):
-            raise ValueError(f"{name} must be a finite length-five vector")
-    position_steps = np.diff(positions)
-    if not (np.all(position_steps > 0.0) or np.all(position_steps < 0.0)):
-        raise ValueError("led_positions_mm must be strictly ordered")
-    if np.any(noise_sigma < 0.0):
-        raise ValueError("unloaded_noise_sigma must be nonnegative")
-
-    response = current - baseline
-    standardized_positive = np.maximum(response, 0.0) / np.maximum(
-        noise_sigma,
-        FEATURE_NOISE_FLOOR_DN,
-    )
-    contact_detected = bool(np.max(standardized_positive) >= CONTACT_Z_THRESHOLD)
-    predicted = int(np.argmax(response))
-    sorted_response = np.sort(response)
-    margin = float(sorted_response[-1] - sorted_response[-2])
-    positive = np.maximum(response, 0.0)
-    total_positive = float(np.sum(positive))
-    position = None
-    if contact_detected and total_positive > np.finfo(np.float64).eps:
-        position = float(np.dot(positive, positions) / total_positive)
-    return ContactEstimate(
-        response=response,
-        contact_detected=contact_detected,
-        predicted_led_index=predicted,
-        position_mm=position,
-        top_two_margin=margin,
-    )
 
 
 def contact_image_point(

@@ -5,11 +5,11 @@ import numpy as np
 import pytest
 
 from experiments.localization import detect_fingertip_boundary
-from experiments.localization.fingertip_boundary import (
+from experiments.localization.fingertip_segmentation import (
     _LineFit,
-    _detect_fingertip_boundary_with_diagnostics,
     _detect_paired_lsd_prior,
     _paired_boundaries,
+    segment_fingertip,
 )
 
 
@@ -170,8 +170,8 @@ def test_search_mask_remains_strictly_between_fitted_boundaries() -> None:
 
 def test_high_resolution_geometry_is_mapped_back_to_camera_coordinates() -> None:
     image = _synthetic_side_view(internal_streaks_and_fins=True)
-    native = _detect_fingertip_boundary_with_diagnostics(image)
-    high_resolution = _detect_fingertip_boundary_with_diagnostics(
+    native = segment_fingertip(image)
+    high_resolution = segment_fingertip(
         cv2.resize(image, (1280, 960), interpolation=cv2.INTER_NEAREST)
     )
 
@@ -190,7 +190,7 @@ def test_high_resolution_geometry_is_mapped_back_to_camera_coordinates() -> None
 
 
 def test_saturated_luminous_interior_is_filled() -> None:
-    diagnostics = _detect_fingertip_boundary_with_diagnostics(
+    diagnostics = segment_fingertip(
         _synthetic_side_view(saturated_center=True)
     )
 
@@ -198,7 +198,7 @@ def test_saturated_luminous_interior_is_filled() -> None:
 
 
 def test_thin_bridge_does_not_extend_the_final_fingertip() -> None:
-    diagnostics = _detect_fingertip_boundary_with_diagnostics(
+    diagnostics = segment_fingertip(
         _synthetic_side_view(horizontal_bridge=True)
     )
 
@@ -207,7 +207,7 @@ def test_thin_bridge_does_not_extend_the_final_fingertip() -> None:
 
 
 def test_brighter_distant_object_is_not_selected() -> None:
-    diagnostics = _detect_fingertip_boundary_with_diagnostics(
+    diagnostics = segment_fingertip(
         _synthetic_side_view(brighter_distant_object=True)
     )
     rows, columns = np.nonzero(diagnostics.final_mask)
@@ -217,7 +217,7 @@ def test_brighter_distant_object_is_not_selected() -> None:
 
 
 def test_regularized_contour_is_closed_finite_and_has_no_extreme_spike() -> None:
-    diagnostics = _detect_fingertip_boundary_with_diagnostics(
+    diagnostics = segment_fingertip(
         _synthetic_side_view(
             saturated_center=True,
             horizontal_bridge=True,

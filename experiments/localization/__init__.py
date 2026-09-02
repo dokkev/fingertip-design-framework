@@ -1,5 +1,12 @@
 """Camera-image localization for physical LUMO experiments."""
 
+from .canonical import (
+    CanonicalFingerMap,
+    build_canonical_finger_map,
+    similarity_from_landmarks,
+    transform_canonical_map,
+    warp_to_canonical,
+)
 from .contact import (
     CONTACT_Z_THRESHOLD,
     FEATURE_NOISE_FLOOR_DN,
@@ -14,24 +21,66 @@ from .contact import (
     track_led_array,
     unloaded_baseline_statistics,
 )
+from .contact_observers import (
+    AffineCentroidModel,
+    DensePositionEstimate,
+    DenseTemplateModel,
+    build_dense_template_model,
+    estimate_affine_position_from_centroid,
+    estimate_dense_template_position,
+    fit_affine_position_from_centroid,
+    load_dense_template_model,
+    response_centroid,
+    save_dense_template_model,
+)
 from .fingertip_boundary import (
     FingertipBoundaryRegion,
     detect_fingertip_boundary,
 )
+from .fingertip_segmentation import FingertipSegmentation, segment_fingertip
+from .optical_features import (
+    DenseProfileConfig,
+    extract_dense_profile,
+    extract_dense_response_profile,
+    mean_center_l2,
+    robust_zscore,
+)
 
 __all__ = [
+    "AffineCentroidModel",
     "CONTACT_Z_THRESHOLD",
+    "CanonicalFingerMap",
+    "DensePositionEstimate",
+    "DenseProfileConfig",
+    "DenseTemplateModel",
     "FEATURE_NOISE_FLOOR_DN",
     "ContactEstimate",
     "FingertipBoundaryRegion",
+    "FingertipSegmentation",
     "LedArrayGeometry",
     "brightest_red_features",
+    "build_canonical_finger_map",
+    "build_dense_template_model",
     "constrain_led_array_motion",
     "contact_image_point",
     "detect_fingertip_boundary",
     "detect_led_array",
+    "estimate_affine_position_from_centroid",
     "estimate_contact_position",
+    "estimate_dense_template_position",
+    "extract_dense_profile",
+    "extract_dense_response_profile",
+    "fit_affine_position_from_centroid",
+    "load_dense_template_model",
+    "mean_center_l2",
     "reanchor_led_array",
+    "response_centroid",
+    "robust_zscore",
+    "save_dense_template_model",
+    "segment_fingertip",
+    "similarity_from_landmarks",
     "track_led_array",
+    "transform_canonical_map",
     "unloaded_baseline_statistics",
+    "warp_to_canonical",
 ]

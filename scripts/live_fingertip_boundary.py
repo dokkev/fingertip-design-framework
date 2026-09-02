@@ -15,9 +15,7 @@ if str(_REPOSITORY_ROOT) not in sys.path:
 
 from experiments.hardware import RealSenseColorCamera  # noqa: E402
 from experiments.localization import detect_led_array  # noqa: E402
-from experiments.localization.fingertip_boundary import (  # noqa: E402
-    _detect_fingertip_boundary_with_diagnostics,
-)
+from experiments.localization.fingertip_segmentation import segment_fingertip  # noqa: E402
 
 
 CAMERA_WIDTH = 1920
@@ -84,7 +82,7 @@ def main() -> None:
                 rgb = frame.rgb
                 bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
                 try:
-                    diagnostics = _detect_fingertip_boundary_with_diagnostics(rgb)
+                    diagnostics = segment_fingertip(rgb)
                 except RuntimeError as error:
                     coarse_view = np.zeros_like(bgr)
                     raw_view = np.zeros_like(bgr)

@@ -14,9 +14,7 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 if str(REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(REPOSITORY_ROOT))
 
-from experiments.localization.fingertip_boundary import (  # noqa: E402
-    _detect_fingertip_boundary_with_diagnostics,
-)
+from experiments.localization.fingertip_segmentation import segment_fingertip  # noqa: E402
 
 
 IMAGE_DIRECTORY = REPOSITORY_ROOT / "experiments" / "img"
@@ -34,6 +32,14 @@ def _load_rgb(path: Path) -> np.ndarray:
     if bgr is None:
         raise RuntimeError(f"could not read reference image: {path}")
     return cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+
+
+def _image_path(*filenames: str) -> Path:
+    for filename in filenames:
+        path = IMAGE_DIRECTORY / filename
+        if path.is_file():
+            return path
+    return IMAGE_DIRECTORY / filenames[0]
 
 
 def _centroid(mask: np.ndarray) -> tuple[float, float]:
@@ -120,19 +126,32 @@ def _annotated_tile(rgb: np.ndarray, diagnostics, name: str) -> np.ndarray:
 def main() -> None:
     sequences = {
         "Normal p0-p6": [
-            IMAGE_DIRECTORY / f"p{index}_Color.png" for index in range(7)
+            _image_path("solaris_p1_Color.png", "p0_Color.png"),
+            _image_path("solaris_p2_Color.png", "p1_Color.png"),
+            _image_path("solaris_p3_Color.png", "p2_Color.png"),
+            _image_path("p3_Color.png"),
+            _image_path("solaris_p4_Color.png", "p4_Color.png"),
+            _image_path("solaris_p5_Color.png", "p5_Color.png"),
+            _image_path("solaris_p6_Color.png", "p6_Color.png"),
         ],
         "Dragon Skin p0d-p5d": [
-            IMAGE_DIRECTORY / f"p{index}d_Color.png" for index in range(6)
+            _image_path("dragonskin_unloaded_Color.png", "p0d_Color.png"),
+            _image_path("dragonskin_p1_Color.png", "p1d_Color.png"),
+            _image_path("dragonskin_p3_Color.png", "p2d_Color.png"),
+            _image_path("dragonskin_p4_Color.png", "p3d_Color.png"),
+            _image_path("dragonskin_p5_Color.png", "p4d_Color.png"),
+            _image_path("dragonskin_p6_Color.png", "p5d_Color.png"),
         ],
-        "Dark room": [IMAGE_DIRECTORY / "noload_dark_Color.png"],
+        "Dark room": [
+            _image_path("solaris_unloaded_dark_Color.png", "noload_dark_Color.png")
+        ],
     }
     paths = [path for sequence in sequences.values() for path in sequence]
     missing = [str(path) for path in paths if not path.is_file()]
     if missing:
         raise FileNotFoundError("missing reference images: " + ", ".join(missing))
 
-    _detect_fingertip_boundary_with_diagnostics(_load_rgb(paths[0]))
+    segment_fingertip(_load_rgb(paths[0]))
     sequence_masks: dict[str, list[np.ndarray]] = {}
     sequence_runtimes: dict[str, list[float]] = {}
     tile_rows: list[np.ndarray] = []
@@ -144,7 +163,7 @@ def main() -> None:
         tiles = []
         for path in sequence_paths:
             rgb = _load_rgb(path)
-            diagnostics = _detect_fingertip_boundary_with_diagnostics(rgb)
+            diagnostics = segment_fingertip(rgb)
             masks.append(diagnostics.final_mask)
             runtimes_ms.append(diagnostics.runtime_ms)
             tiles.append(_annotated_tile(rgb, diagnostics, path.name))

@@ -50,6 +50,25 @@ conda run --no-capture-output -n lit \
   python -u validation/validate_fingertip_boundary.py
 ```
 
+Characterize contact representations with one fixed canonical map per recorded
+sequence, write CSV/PNG/PDF evidence, and optionally compare the five fixed
+dense feature definitions:
+
+```bash
+conda run --no-capture-output -n lit \
+  python -u validation/validate_contact_localization.py
+conda run --no-capture-output -n lit \
+  python -u validation/validate_contact_localization.py --compare-features
+```
+
+Export a Solaris dense-template model for online replay:
+
+```bash
+conda run --no-capture-output -n lit \
+  python -u validation/validate_contact_localization.py \
+    --export-template output/validation/contact_localization/solaris_dense_top10.npz
+```
+
 Develop and inspect the camera-extrinsic-independent fingertip boundary before
 running contact localization:
 
@@ -75,10 +94,22 @@ conda run --no-capture-output -n lit \
   python -u scripts/live_contact_localization.py
 ```
 
+Select one shared dense observer and optionally load an offline-generated
+template model:
+
+```bash
+conda run --no-capture-output -n lit \
+  python -u scripts/live_contact_localization.py --observer dense-top10
+conda run --no-capture-output -n lit \
+  python -u scripts/live_contact_localization.py \
+    --observer dense-top10 \
+    --template-model output/validation/contact_localization/solaris_dense_top10.npz
+```
+
 The default D435 color stream is 1920 x 1080 at 30 FPS. The application first
 discards 30 frames while the camera's default automatic exposure and white
-balance settle, then begins the 30-frame LED calibration without changing any
-photometric controls.
+balance settle, then begins the 30-frame global fingertip/LED calibration
+without changing any photometric controls.
 Keep the camera fixed during that geometry calibration. After that,
 the five landmarks and contact dot follow gradual camera-pose changes every
 frame. During confirmed no-contact operation, the absolute red detector
@@ -86,12 +117,18 @@ re-anchors the rigid array every 30 frames inside a dilation of the current five
 ROI polygons; it does not rerun global segmentation. Corrections larger than
 half the current LED spacing are rejected. Full emissive-fingertip segmentation
 runs only for initial acquisition, explicit recalibration, and recovery. Normal
-30 Hz motion continues to use grayscale LK plus one rigid similarity fit.
+30 Hz motion continues to use grayscale LK plus one rigid similarity fit. Dense
+modes additionally move the reference canonical map, remap the RGB frame,
+extract one profile, and run template correlation when a model is loaded. The
+UI reports rolling stage medians; initialization/recovery latency is separate
+from normal processing.
 If tracking is lost after a larger pose change, the viewer invalidates the old
 view-dependent baseline and automatically collects 30 new frames;
-press `b` again while unloaded. Pressing `b` collects 30 feature vectors and
-uses their per-LED temporal median as the unloaded baseline; pressing it again
-during collection restarts the acquisition. `r` explicitly starts geometry
+press `b` again while unloaded for the `led-top10` or `dense-highpass` observer.
+For LED mode, `b` collects 30 feature vectors and their temporal median/MAD.
+For dense high-pass mode it collects 30 canonical RGB frames and their median,
+so subtraction precedes spatial high-pass filtering. Pressing `b` again during
+collection restarts the acquisition. `r` explicitly starts geometry
 recalibration without changing camera controls, and `q`, Escape,
 or closing the window exits. The viewer does not save frames or estimates.
 `LED_POSITIONS_IN_IMAGE_ORDER_MM` at the top of the script maps the detected

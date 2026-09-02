@@ -857,24 +857,51 @@ The package does not select localization algorithms, render a GUI, write
 experimental files, or hide reconnect/retry policy. A later camera backend can
 provide the same small RGB-frame lifecycle without changing image localization.
 
-`experiments/localization/` owns pure NumPy/OpenCV image analysis for the
-physical fingertip. `detect_fingertip_boundary()` returns the smooth luminous
-silicone silhouette in original camera coordinates. Geometry processing is
-limited to a maximum image height of 480 pixels. A private paired-LSD stage
-first distinguishes the neutral-to-cyan dorsal edge and illuminated-to-dark
-palmar edge from carrier lines, optical streaks, and repetitive fins. Those
-robustly fitted lines supply only object identity, width, and an approximate
-prior; they are not the final boundary.
+`experiments/localization/` owns shared pure NumPy/OpenCV algorithms for the
+physical fingertip. Offline characterization and online execution import these
+same functions; neither entry point has a private copy of feature or observer
+equations.
 
-Within a local envelope around that prior, a fixed cyan/bright emission score
-recovers vertical support and seeds mask-initialized GrabCut. Component
-selection is tied to overlap with both the coarse prior and conservative
-emissive core. Hole filling, radial clipping against the coarse shape, a
-nine-sample circular median, and 2.5-sample circular Gaussian smoothing produce
-one star-convex physical silhouette. `FingertipBoundaryRegion` extracts its
-ordered row boundaries, stable core span, width, and inset LED search mask from
-that final silhouette. Lab, HSV, emission, and GrabCut data are geometry-only;
-the contact feature still reads untouched full-resolution red-channel values.
+`fingertip_boundary.py` is the small public facade.
+`detect_fingertip_boundary()` returns the smooth luminous silicone silhouette
+in original camera coordinates. The verified implementation lives in
+`fingertip_segmentation.py`. Geometry processing is limited to a maximum image
+height of 480 pixels. Its paired-LSD stage first distinguishes the
+neutral-to-cyan dorsal edge and illuminated-to-dark palmar edge from carrier
+lines, optical streaks, and repetitive fins. Those robust fits supply only
+object identity, width, and an approximate prior; they are not the final
+boundary. A fixed emission score then recovers vertical support and seeds
+mask-initialized GrabCut. Component selection, hole filling, radial clipping,
+circular median filtering, and circular Gaussian smoothing produce the final
+star-convex silhouette. `FingertipSegmentation` retains intermediate masks,
+the contour, scale, and runtime for offline validation and debug display. No
+verified segmentation parameter changes between offline and online use.
+
+`canonical.py` owns motion-independent finger coordinates. A
+`CanonicalFingerMap` contains only two OpenCV remap arrays. It samples the final
+smooth dorsal/palmar boundaries using normalized transverse coordinate
+`u in [0,1]` and normalized longitudinal coordinate `v in [0,1]`.
+`build_canonical_finger_map()` builds one reference map;
+`similarity_from_landmarks()` and `transform_canonical_map()` move it with the
+tracked rigid LED array; `warp_to_canonical()` samples the current RGB frame.
+Fixed-camera offline sequences reuse one reference map for every frame rather
+than re-segmenting contact-deformed images.
+
+`optical_features.py` owns pure feature extraction. `DenseProfileConfig`
+selects brightest-10% red, mean red, absolute high-pass red, red gradient, or
+red fraction. Extraction and normalization are separate calls. The
+unloaded-relative diffuse-material path subtracts the unloaded canonical RGB
+image before spatial high-pass, absolute-value, and brightest-fraction
+aggregation. The established five-ROI feature remains the mean of the
+brightest 10% of untouched raw-red pixels and remains implemented once in
+`contact.py`.
+
+`contact_observers.py` owns inference from extracted arrays. It contains the
+existing median/MAD-gated five-LED estimator, a normalized-correlation
+`DenseTemplateModel`, and the explicit unloaded-relative response-centroid plus
+affine-position fit. Dense template models serialize as compressed NPZ arrays
+containing positions, templates, canonical shape, feature configuration, and
+normalization metadata; pickle is never enabled.
 
 `scripts/live_fingertip_boundary.py` displays the RGB frame, paired-LSD prior,
 raw selected GrabCut component, final emissive mask, smooth closed contour, and
@@ -909,12 +936,33 @@ Localization receives RGB arrays and numerical calibration values. It does not
 import RealSense, own a camera lifecycle, show windows, save results, or depend
 on Newton, OptiX, or Ax.
 
+`validation/validate_fingertip_boundary.py` answers the offline segmentation
+question: whether one fixed geometry detector remains stable across recorded
+views. `validation/validate_contact_localization.py` answers the separate
+observer question. It reuses one canonical map per fixed-camera sequence,
+characterizes dense representations, performs sequence-order and
+leave-one-position-out checks, writes CSV/PNG/PDF evidence, and can export a
+dense-template NPZ. Validation owns dataset filenames and physical labels;
+shared localization modules know neither.
+
 `scripts/live_contact_localization.py` is the concrete online assembly. It
 discards 30 warmup frames without changing the D435's default automatic
-photometric controls, then collects 30 fixed-camera frames for LED geometry.
-The user captures an unloaded
-30-feature baseline with `b`; normal operation applies only a three-frame median
-to the final feature vector before noise-gated localization. The script draws
+photometric controls, then collects 30 fixed-camera frames for global
+segmentation, canonical-map construction, and LED geometry. This expensive
+global stage runs only during initialization, explicit recalibration, or
+recovery. The normal loop uses rigid LK tracking and one selected optical
+feature/observer; dense modes additionally move the canonical map and perform
+one remap.
+`--observer` selects `led-top10`, `dense-top10`, `dense-highpass`, or
+`dense-gradient` without a plugin framework. Dense template inference is
+enabled only when an explicit `--template-model` NPZ is loaded; otherwise the
+UI displays the live profile and reports that no model is loaded. The LED and
+dense-highpass modes retain explicit `b`-key unloaded acquisition.
+
+For `led-top10`, the user captures an unloaded 30-feature baseline with `b`;
+normal operation applies a three-frame feature median before MAD-gated
+localization. For `dense-highpass`, the same explicit key captures a median
+canonical RGB reference before unloaded-relative extraction. The script draws
 the detected landmarks/ROIs and live contact estimate and exits on `q` or
 Escape. A lost rigid-array track invalidates the view-dependent baseline and
 automatically starts a new 30-frame detection; `r` starts the same geometry
@@ -931,6 +979,11 @@ comparisons under fixed camera settings are a separate acquisition contract:
 they require explicit
 user-selected manual exposure, gain, and white-balance values held identical
 across morphologies, not values inferred from a running automatic mode.
+
+The UI reports rolling medians for acquisition, tracking, canonical warp,
+feature extraction, observer inference, and total processing excluding
+acquisition. Initialization/recovery segmentation latency is reported
+separately and is not part of a normal-loop latency claim.
 
 Fingertip-boundary detection scales geometry to at most 480 pixels high, then
 maps the smooth mask, contour, boundaries, and width back to the camera image
