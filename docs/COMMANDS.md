@@ -42,6 +42,19 @@ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 conda run --no-capture-output -n lit \
 
 ## Live D435 contact localization
 
+Develop and inspect the camera-extrinsic-independent fingertip boundary before
+running contact localization:
+
+```bash
+conda run --no-capture-output -n lit \
+  python -u scripts/live_fingertip_boundary.py
+```
+
+The geometry viewer shows the RGB image, detected fingertip interior mask,
+magenta dorsal boundary, yellow dynamic-programming palmar boundary, and the
+existing red-detector LED centers and response ROIs. It does not run contact
+photometry, tracking, or localization and writes no files.
+
 Install the RealSense/OpenCV GUI dependencies once, then run the online
 color-image pipeline directly from the checkout:
 
@@ -53,8 +66,9 @@ conda run --no-capture-output -n lit \
 ```
 
 The default D435 color stream is 1920 x 1080 at 30 FPS. The application first
-lets automatic color controls settle for 30 frames, then freezes the current
-exposure, gain, and white balance before beginning the 30-frame LED calibration.
+discards 30 frames while the camera's default automatic exposure and white
+balance settle, then begins the 30-frame LED calibration without changing any
+photometric controls.
 Keep the camera fixed during that geometry calibration. After that,
 the five landmarks and contact dot follow gradual camera-pose changes every
 frame. During confirmed no-contact operation, the absolute red detector
@@ -65,17 +79,20 @@ view-dependent baseline and automatically collects 30 new frames;
 press `b` again while unloaded. Pressing `b` collects 30 feature vectors and
 uses their per-LED temporal median as the unloaded baseline; pressing it again
 during collection restarts the acquisition. `r` explicitly starts geometry
-recalibration without re-enabling automatic camera controls, and `q`, Escape,
+recalibration without changing camera controls, and `q`, Escape,
 or closing the window exits. The viewer does not save frames or estimates.
 `LED_POSITIONS_IN_IMAGE_ORDER_MM` at the top of the script maps the detected
 top-to-bottom image order to the physical fingertip Y axis; reverse it when the
 camera is mounted from the opposite direction. A frame timeout triggers up to
 ten explicit one-second reconnect attempts. A successful reconnect repeats the
-photometric warmup/lock and clears the view-dependent baseline, so press `b`
+camera warmup and clears the view-dependent baseline, so press `b`
 again after LED recalibration.
 
-For quantitative optical-response comparisons, exposure and gain must remain
-fixed, and white balance should remain fixed when the color sensor supports it.
+This live command intentionally retains the D435's default automatic exposure
+and white balance and is not the acquisition protocol for absolute optical-power
+comparisons between morphologies. Such a quantitative comparison must use one
+explicit user-selected manual exposure, gain, and white balance for every
+fingertip; it must not capture nominal manual values from a running auto mode.
 Acquire a new unloaded baseline after each intentional camera-viewpoint or
 environmental-light change. Do not retune localization parameters between
 contact locations. This protocol supports comparison with the same fixed

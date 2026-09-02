@@ -847,11 +847,9 @@ lifecycles. The current
 `RealSenseColorCamera` is a thin owner of one `pyrealsense2` color pipeline. It
 configures a 1920 x 1080 RGB stream at 30 FPS by default, returns an owned
 immutable RGB frame with device timestamp and frame number, and exposes explicit
-`start()`/`read()`/`stop()` plus context-manager cleanup. It also exposes one
-explicit operation that reads the current RGB exposure, gain, and white balance,
-disables their available automatic controllers, reapplies those values, and
-reports the locked settings. The application owns when to warm up and invoke
-that operation. RealSense objects do not cross this package boundary. Depth
+`start()`/`read()`/`stop()` plus context-manager cleanup. It does not alter
+exposure, gain, white balance, or their automatic controllers. RealSense objects
+do not cross this package boundary. Depth
 acquisition is intentionally absent because the current localization algorithm
 consumes only color images.
 
@@ -860,13 +858,41 @@ experimental files, or hide reconnect/retry policy. A later camera backend can
 provide the same small RGB-frame lifecycle without changing image localization.
 
 `experiments/localization/` owns pure NumPy/OpenCV image analysis for the
-physical fingertip. The current
-learning-free path detects the ordered five-LED array from a median of fixed
-camera frames, constructs spacing-scaled regions, measures the brightest 10%
-red-channel response in small polygon bounding crops, and estimates contact
-position from the positive baseline-relative response weighted by the known
-physical LED positions. The crop-local implementation preserves the exact
-brightest-10% definition without five full-frame masks per video frame. The five
+physical fingertip. `detect_fingertip_boundary()` is a side-view geometry
+stage. It detects the long positive horizontal cyan transition at the bonded
+dorsal side. A broad one-sided support check requires non-cyan structure to its
+left and a thick cyan interior to its right, rejecting long internal optical
+streaks that satisfy the local transition test. Nearby glare-separated edge
+fragments are grouped with a tall, narrow dilation, but the final curve uses
+only the original transition pixels and interpolates missing rows. The stage
+then estimates the pad width from sustained low-cyan runs and solves one smooth
+dynamic-programming path through combined grayscale/cyan edge evidence for the
+palmar side. `FingertipBoundaryRegion` owns those two ordered curves and the
+image mask strictly between them. This construction does not select the largest
+illuminated blob, so cyan reflections on the fixture and repetitive fins do not
+enlarge the LED search domain.
+
+Spatial kernels, sampling offsets, and the dorsal chromatic-gradient threshold
+scale from a 640 x 480 reference. The derivative threshold scales inversely
+with image resolution because it measures chromatic change per pixel; this
+keeps the physical transition criterion consistent at the live 1920 x 1080
+resolution.
+
+`scripts/live_fingertip_boundary.py` displays the dorsal curve in magenta, the
+palmar curve in yellow, the translucent fingertip search mask, and the existing
+red-detector LED centers and response ROIs. It writes no files. This expensive
+absolute geometry stage runs during initial LED acquisition, periodic
+no-contact re-anchoring, and recovery after tracking loss. Normal frame updates
+remain the existing grayscale pyramidal-LK and rigid similarity-fit path.
+
+The current learning-free contact path detects the ordered five-LED array from
+a median of fixed camera frames after masking its unchanged red-high-pass
+detector with `FingertipBoundaryRegion.search_mask`. It then constructs
+spacing-scaled regions, measures the brightest 10% red-channel
+response in small polygon bounding crops, and estimates contact position from
+the positive baseline-relative response weighted by the known physical LED
+positions. The crop-local implementation preserves the exact brightest-10%
+definition without five full-frame masks per video frame. The five
 local Lucas-Kanade correspondences update the array only through one robust
 translation/rotation/uniform-scale fit, so one distorted optical landmark cannot
 independently move its ROI. During confirmed no-contact operation, the absolute
@@ -883,22 +909,26 @@ import RealSense, own a camera lifecycle, show windows, save results, or depend
 on Newton, OptiX, or Ax.
 
 `scripts/live_contact_localization.py` is the concrete online assembly. It
-discards 30 warmup frames, freezes the settled RGB photometric settings, then
-collects 30 fixed-camera frames for LED geometry. The user captures an unloaded
+discards 30 warmup frames without changing the D435's default automatic
+photometric controls, then collects 30 fixed-camera frames for LED geometry.
+The user captures an unloaded
 30-feature baseline with `b`; normal operation applies only a three-frame median
 to the final feature vector before noise-gated localization. The script draws
 the detected landmarks/ROIs and live contact estimate and exits on `q` or
 Escape. A lost rigid-array track invalidates the view-dependent baseline and
 automatically starts a new 30-frame detection; `r` starts the same geometry
-process explicitly without re-enabling automatic exposure or white balance.
+process explicitly without changing camera controls.
 The displayed contact marker is the positive-response-weighted point over the
 five ROI centers and is absent while the measured response remains within the
 unloaded-noise gate. Its response bars use a fixed z-score axis rather than
 renormalizing every frame; raw DN values remain visible. The application writes
 no result artifact. A frame timeout remains a reported hardware failure;
 the application, not the RealSense adapter, owns a bounded ten-attempt reconnect
-loop. Successful reconnect repeats photometric warmup/locking and discards the
-old LED geometry and baseline before localization resumes.
+loop. Successful reconnect repeats the camera warmup and discards the old LED
+geometry and baseline before localization resumes. Absolute optical-power
+comparisons are a separate acquisition contract: they require explicit
+user-selected manual exposure, gain, and white-balance values held identical
+across morphologies, not values inferred from a running automatic mode.
 
 ### `lumo/visualization/`
 

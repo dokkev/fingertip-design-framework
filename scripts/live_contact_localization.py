@@ -35,7 +35,7 @@ CAMERA_WIDTH = 1920
 CAMERA_HEIGHT = 1080
 CAMERA_FPS = 30
 CAMERA_SERIAL_NUMBER: str | None = None
-PHOTOMETRIC_WARMUP_FRAME_COUNT = 30
+CAMERA_WARMUP_FRAME_COUNT = 30
 CALIBRATION_FRAME_COUNT = 30
 BASELINE_FRAME_COUNT = 30
 FEATURE_MEDIAN_WINDOW = 3
@@ -50,21 +50,13 @@ LED_POSITIONS_IN_IMAGE_ORDER_MM = np.asarray(LED_CENTERS_Y_MM, dtype=np.float64)
 WINDOW_NAME = "LUMO live contact localization"
 
 
-def _warm_up_and_lock_photometric_controls(
-    camera: RealSenseColorCamera,
-) -> dict[str, float | None]:
+def _warm_up_camera(camera: RealSenseColorCamera) -> None:
     print(
-        "settling automatic camera controls: "
-        f"{PHOTOMETRIC_WARMUP_FRAME_COUNT} frames"
+        "warming camera with automatic photometric controls: "
+        f"{CAMERA_WARMUP_FRAME_COUNT} frames"
     )
-    for _ in range(PHOTOMETRIC_WARMUP_FRAME_COUNT):
+    for _ in range(CAMERA_WARMUP_FRAME_COUNT):
         camera.read(timeout_ms=CAMERA_FRAME_TIMEOUT_MS)
-    controls = camera.lock_color_photometric_controls()
-    print("photometric controls locked:")
-    for name in ("exposure", "gain", "white_balance"):
-        value = controls[name]
-        print(f"  {name} = {'unsupported' if value is None else value}")
-    return controls
 
 
 def _read_with_reconnect(
@@ -84,7 +76,7 @@ def _read_with_reconnect(
         sleep(CAMERA_RECONNECT_DELAY_S)
         try:
             camera.start()
-            _warm_up_and_lock_photometric_controls(camera)
+            _warm_up_camera(camera)
             return camera.read(timeout_ms=CAMERA_FRAME_TIMEOUT_MS), True
         except RuntimeError as error:
             last_error = error
@@ -287,7 +279,7 @@ def main() -> None:
                 f"camera: {camera.device_name}, serial={camera.serial_number}, "
                 f"{CAMERA_WIDTH}x{CAMERA_HEIGHT}@{CAMERA_FPS}"
             )
-            _warm_up_and_lock_photometric_controls(camera)
+            _warm_up_camera(camera)
             print("keys: b=set unloaded baseline, r=recalibrate LEDs, q/esc=quit")
             while True:
                 frame, reconnected = _read_with_reconnect(camera)
@@ -311,7 +303,7 @@ def main() -> None:
                 features: np.ndarray | None = None
                 response: np.ndarray | None = None
                 lines = ["q/esc quit | r recalibrate | b unloaded baseline"]
-                lines.append("Photometric controls: locked")
+                lines.append("Camera photometrics: automatic")
 
                 if geometry is not None and previous_rgb is not None:
                     try:

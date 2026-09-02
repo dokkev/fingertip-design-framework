@@ -52,9 +52,7 @@ class RealSenseColorCamera:
         self.requested_serial_number = serial_number
         self.device_name: str | None = None
         self.serial_number: str | None = None
-        self._rs: Any | None = None
         self._pipeline: Any | None = None
-        self._color_sensor: Any | None = None
 
     @property
     def is_running(self) -> bool:
@@ -92,91 +90,9 @@ class RealSenseColorCamera:
             raise RuntimeError(f"failed to start RealSense color stream: {error}") from error
 
         device = profile.get_device()
-        try:
-            color_sensor = device.first_color_sensor()
-        except Exception as error:
-            pipeline.stop()
-            raise RuntimeError(
-                f"RealSense device did not expose a color sensor: {error}"
-            ) from error
         self.device_name = str(device.get_info(rs.camera_info.name))
         self.serial_number = str(device.get_info(rs.camera_info.serial_number))
-        self._rs = rs
         self._pipeline = pipeline
-        self._color_sensor = color_sensor
-
-    def lock_color_photometric_controls(self) -> dict[str, float | None]:
-        """Freeze the current RGB exposure, gain, and white balance.
-
-        Automatic controls must be allowed to settle before this method is
-        called. The returned values are read back after locking. A ``None``
-        value means that the color sensor did not expose that optional control.
-        """
-
-        if (
-            self._pipeline is None
-            or self._rs is None
-            or self._color_sensor is None
-        ):
-            raise RuntimeError("RealSense camera is not running")
-
-        rs = self._rs
-        sensor = self._color_sensor
-        auto_exposure = rs.option.enable_auto_exposure
-        exposure = rs.option.exposure
-        gain = rs.option.gain
-        auto_white_balance = rs.option.enable_auto_white_balance
-        white_balance = rs.option.white_balance
-
-        if not sensor.supports(auto_exposure) or not sensor.supports(exposure):
-            raise RuntimeError(
-                "RealSense color sensor cannot freeze exposure: "
-                "enable_auto_exposure and exposure controls are required"
-            )
-
-        retained_exposure = float(sensor.get_option(exposure))
-        retained_gain = float(sensor.get_option(gain)) if sensor.supports(gain) else None
-        can_lock_white_balance = sensor.supports(
-            auto_white_balance
-        ) and sensor.supports(white_balance)
-        retained_white_balance = (
-            float(sensor.get_option(white_balance))
-            if can_lock_white_balance
-            else None
-        )
-
-        try:
-            sensor.set_option(auto_exposure, 0.0)
-            sensor.set_option(exposure, retained_exposure)
-            if retained_gain is not None:
-                sensor.set_option(gain, retained_gain)
-            if retained_white_balance is not None:
-                sensor.set_option(auto_white_balance, 0.0)
-                sensor.set_option(white_balance, retained_white_balance)
-        except Exception as error:
-            raise RuntimeError(
-                f"failed to lock RealSense color photometric controls: {error}"
-            ) from error
-
-        if sensor.get_option(auto_exposure) != 0.0:
-            raise RuntimeError("RealSense color auto exposure remained enabled")
-        if (
-            retained_white_balance is not None
-            and sensor.get_option(auto_white_balance) != 0.0
-        ):
-            raise RuntimeError("RealSense color auto white balance remained enabled")
-
-        return {
-            "exposure": float(sensor.get_option(exposure)),
-            "gain": (
-                float(sensor.get_option(gain)) if retained_gain is not None else None
-            ),
-            "white_balance": (
-                float(sensor.get_option(white_balance))
-                if retained_white_balance is not None
-                else None
-            ),
-        }
 
     def read(self, *, timeout_ms: int = 5000) -> ColorFrame:
         """Block for the next color frame and return an owned RGB copy."""
@@ -212,8 +128,6 @@ class RealSenseColorCamera:
 
         pipeline = self._pipeline
         self._pipeline = None
-        self._color_sensor = None
-        self._rs = None
         if pipeline is not None:
             pipeline.stop()
 

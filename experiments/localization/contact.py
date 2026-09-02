@@ -8,6 +8,8 @@ from dataclasses import dataclass
 import cv2
 import numpy as np
 
+from .fingertip_boundary import detect_fingertip_boundary
+
 
 _LED_COUNT = 5
 _TOP_FRACTION = 0.10
@@ -16,9 +18,6 @@ _ROI_HEIGHT_IN_LED_SPACINGS = 0.76
 _ROI_INWARD_SHIFT_IN_LED_SPACINGS = 0.35
 _SMALL_GAUSSIAN_SIGMA_PX = 1.2
 _BROAD_GAUSSIAN_SIGMA_PX = 14.0
-_SEARCH_X_FRACTION = (0.50, 0.70)
-_SEARCH_Y_FRACTION = (0.28, 0.62)
-_COMPONENT_SEARCH_Y_FRACTION = (0.28, 0.70)
 _COMPONENT_PERCENTILE = 85.0
 _REFERENCE_IMAGE_WIDTH_PX = 640
 _REFERENCE_IMAGE_HEIGHT_PX = 480
@@ -139,15 +138,19 @@ def _candidate_peaks(
     return np.asarray(sorted(kept), dtype=np.int32)
 
 
-def _landmarks_from_median(median_rgb: np.ndarray) -> np.ndarray:
+def _landmarks_from_median(
+    median_rgb: np.ndarray,
+    search_mask: np.ndarray,
+) -> np.ndarray:
     high_pass = _red_high_pass(median_rgb)
-    height, width = high_pass.shape
-    x_start = round(_SEARCH_X_FRACTION[0] * width)
-    x_stop = round(_SEARCH_X_FRACTION[1] * width)
-    y_start = round(_SEARCH_Y_FRACTION[0] * height)
-    y_stop = round(_SEARCH_Y_FRACTION[1] * height)
+    masked_high_pass = high_pass * search_mask
+    height, width = masked_high_pass.shape
+    search_rows = np.flatnonzero(np.any(search_mask, axis=1))
+    y_start = int(search_rows[0])
+    y_stop = int(search_rows[-1]) + 1
+    row_support = np.maximum(np.count_nonzero(search_mask, axis=1), 1)
     profile = _smooth_profile(
-        high_pass[:, x_start:x_stop].mean(axis=1),
+        masked_high_pass.sum(axis=1) / row_support,
         1.4 * height / _REFERENCE_IMAGE_HEIGHT_PX,
     )
     peak_y = _candidate_peaks(
@@ -164,15 +167,14 @@ def _landmarks_from_median(median_rgb: np.ndarray) -> np.ndarray:
     row_half_width = round(0.012 * height)
     for y_coordinate in peak_y:
         column_profile = _smooth_profile(
-            high_pass[
+            masked_high_pass[
                 max(0, y_coordinate - row_half_width) : min(
                     height, y_coordinate + row_half_width + 1
                 ),
-                x_start:x_stop,
             ].sum(axis=0),
             1.5 * width / _REFERENCE_IMAGE_WIDTH_PX,
         )
-        peak_x.append(x_start + int(np.argmax(column_profile)))
+        peak_x.append(int(np.argmax(column_profile)))
         strengths.append(float(profile[y_coordinate]))
 
     peak_x_array = np.asarray(peak_x, dtype=np.float64)
@@ -216,21 +218,22 @@ def _landmarks_from_median(median_rgb: np.ndarray) -> np.ndarray:
     return landmarks
 
 
-def _component_landmarks(median_rgb: np.ndarray) -> np.ndarray:
+def _component_landmarks(
+    median_rgb: np.ndarray,
+    search_mask: np.ndarray,
+) -> np.ndarray:
     """Fallback for oblique views whose projected LED spacing is nonlinear."""
 
     high_pass = _red_high_pass(median_rgb)
     height, width = high_pass.shape
-    x_start = round(_SEARCH_X_FRACTION[0] * width)
-    x_stop = round(_SEARCH_X_FRACTION[1] * width)
-    y_start = round(_COMPONENT_SEARCH_Y_FRACTION[0] * height)
-    y_stop = round(_COMPONENT_SEARCH_Y_FRACTION[1] * height)
-    crop = high_pass[y_start:y_stop, x_start:x_stop]
-    positive = crop[crop > 0.0]
+    positive = high_pass[search_mask & (high_pass > 0.0)]
     if not positive.size:
         raise RuntimeError("red component detector found no positive response")
     threshold = float(np.percentile(positive, _COMPONENT_PERCENTILE))
-    mask = np.asarray(crop >= threshold, dtype=np.uint8) * 255
+    mask = np.asarray(
+        search_mask & (high_pass >= threshold),
+        dtype=np.uint8,
+    ) * 255
     kernel_size = max(
         3,
         round(
@@ -257,8 +260,7 @@ def _component_landmarks(median_rgb: np.ndarray) -> np.ndarray:
         area = int(stats[component, cv2.CC_STAT_AREA])
         if area < minimum_area:
             continue
-        centroid = centroids[component] + np.asarray((x_start, y_start))
-        candidates.append(centroid)
+        candidates.append(centroids[component])
         areas.append(area)
     if len(candidates) < _LED_COUNT:
         raise RuntimeError(
@@ -354,18 +356,28 @@ def _geometry_from_landmarks(
     )
 
 
-def detect_led_array(rgb_frames: np.ndarray) -> LedArrayGeometry:
+def detect_led_array(
+    rgb_frames: np.ndarray,
+    *,
+    search_mask: np.ndarray | None = None,
+) -> LedArrayGeometry:
     """Detect the common five-LED array from one or more fixed-camera frames."""
 
     frames = _rgb_frames(rgb_frames)
     median_rgb = (
         frames[0] if len(frames) == 1 else np.median(frames, axis=0).astype(np.uint8)
     )
+    if search_mask is None:
+        search_mask = detect_fingertip_boundary(median_rgb).search_mask
+    else:
+        search_mask = np.asarray(search_mask, dtype=bool)
+        if search_mask.shape != median_rgb.shape[:2] or not np.any(search_mask):
+            raise ValueError("search_mask must be a nonempty mask matching the RGB image")
     try:
-        landmarks = _landmarks_from_median(median_rgb)
+        landmarks = _landmarks_from_median(median_rgb, search_mask)
     except RuntimeError as profile_error:
         try:
-            landmarks = _component_landmarks(median_rgb)
+            landmarks = _component_landmarks(median_rgb, search_mask)
         except RuntimeError as component_error:
             raise RuntimeError(
                 f"profile detector failed ({profile_error}); "

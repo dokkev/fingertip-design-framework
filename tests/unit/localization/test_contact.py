@@ -19,6 +19,7 @@ from experiments.localization import (
 
 def _synthetic_led_image() -> np.ndarray:
     image = np.zeros((480, 640, 3), dtype=np.uint8)
+    cv2.ellipse(image, (320, 210), (120, 165), 0, 0, 360, (40, 180, 190), -1)
     for y_coordinate in (150, 170, 190, 210, 230):
         cv2.circle(image, (390, y_coordinate), 4, (255, 80, 50), -1)
     return image
@@ -62,6 +63,7 @@ def test_local_roi_feature_matches_full_frame_mask_definition() -> None:
 
 def test_component_fallback_handles_oblique_led_spacing() -> None:
     image = np.zeros((480, 640, 3), dtype=np.uint8)
+    cv2.ellipse(image, (320, 210), (120, 165), 0, 0, 360, (40, 180, 190), -1)
     for x_coordinate, y_coordinate in zip(
         (390, 391, 393, 396, 400),
         (150, 168, 191, 220, 266),
