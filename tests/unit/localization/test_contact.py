@@ -17,11 +17,23 @@ from experiments.localization import (
 )
 
 
-def _synthetic_led_image() -> np.ndarray:
-    image = np.zeros((480, 640, 3), dtype=np.uint8)
-    cv2.ellipse(image, (320, 210), (120, 165), 0, 0, 360, (40, 180, 190), -1)
-    for y_coordinate in (150, 170, 190, 210, 230):
-        cv2.circle(image, (390, y_coordinate), 4, (255, 80, 50), -1)
+def _synthetic_led_image(
+    landmarks: tuple[tuple[int, int], ...] = (
+        (390, 150),
+        (390, 170),
+        (390, 190),
+        (390, 210),
+        (390, 230),
+    ),
+) -> np.ndarray:
+    image = np.full((480, 640, 3), 45, dtype=np.uint8)
+    for row in range(70, 411):
+        dorsal_x = round(250.0 + 0.035 * (row - 70))
+        palmar_x = round(445.0 + 0.010 * (row - 70))
+        image[row, :dorsal_x] = (155, 155, 155)
+        image[row, dorsal_x:palmar_x] = (40, 180, 190)
+    for x_coordinate, y_coordinate in landmarks:
+        cv2.circle(image, (x_coordinate, y_coordinate), 4, (255, 80, 50), -1)
     return image
 
 
@@ -62,14 +74,15 @@ def test_local_roi_feature_matches_full_frame_mask_definition() -> None:
 
 
 def test_component_fallback_handles_oblique_led_spacing() -> None:
-    image = np.zeros((480, 640, 3), dtype=np.uint8)
-    cv2.ellipse(image, (320, 210), (120, 165), 0, 0, 360, (40, 180, 190), -1)
-    for x_coordinate, y_coordinate in zip(
-        (390, 391, 393, 396, 400),
-        (150, 168, 191, 220, 266),
-        strict=True,
-    ):
-        cv2.circle(image, (x_coordinate, y_coordinate), 5, (255, 80, 50), -1)
+    image = _synthetic_led_image(
+        (
+            (390, 150),
+            (391, 168),
+            (393, 191),
+            (396, 220),
+            (400, 266),
+        )
+    )
 
     geometry = detect_led_array(np.repeat(image[None, ...], 7, axis=0))
 

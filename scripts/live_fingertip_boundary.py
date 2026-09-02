@@ -119,6 +119,22 @@ def main() -> None:
                         3,
                         cv2.LINE_AA,
                     )
+                    dorsal_support_px = (
+                        boundary.core_y_span[1] - boundary.core_y_span[0]
+                    )
+                    cv2.putText(
+                        boundary_view,
+                        (
+                            f"pad width={boundary.estimated_pad_width_px:.1f} px  "
+                            f"dorsal support={dorsal_support_px} px"
+                        ),
+                        (30, 55),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.65,
+                        (255, 255, 255),
+                        2,
+                        cv2.LINE_AA,
+                    )
                     try:
                         geometry = detect_led_array(
                             rgb,
@@ -128,7 +144,7 @@ def main() -> None:
                         cv2.putText(
                             boundary_view,
                             f"LED detection: {error}",
-                            (30, 90),
+                            (30, 95),
                             cv2.FONT_HERSHEY_SIMPLEX,
                             0.65,
                             (0, 0, 255),

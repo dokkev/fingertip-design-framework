@@ -859,31 +859,24 @@ provide the same small RGB-frame lifecycle without changing image localization.
 
 `experiments/localization/` owns pure NumPy/OpenCV image analysis for the
 physical fingertip. `detect_fingertip_boundary()` is a side-view geometry
-stage. It detects the long positive horizontal cyan transition at the bonded
-dorsal side. A broad one-sided support check requires non-cyan structure to its
-left and a thick cyan interior to its right, rejecting long internal optical
-streaks that satisfy the local transition test. Nearby glare-separated edge
-fragments are grouped with a tall, narrow dilation, but the final curve uses
-only the original transition pixels and interpolates missing rows. The stage
-then estimates the pad width from sustained low-cyan runs and solves one smooth
-dynamic-programming path through combined grayscale/cyan edge evidence for the
-palmar side. `FingertipBoundaryRegion` owns those two ordered curves and the
-image mask strictly between them. This construction does not select the largest
-illuminated blob, so cyan reflections on the fixture and repetitive fins do not
-enlarge the LED search domain.
-
-Spatial kernels, sampling offsets, and the dorsal chromatic-gradient threshold
-scale from a 640 x 480 reference. The derivative threshold scales inversely
-with image resolution because it measures chromatic change per pixel; this
-keeps the physical transition criterion consistent at the live 1920 x 1080
-resolution.
+stage. It weakly smooths the Lab-a and grayscale geometry channels and runs
+OpenCV's standard-refinement line-segment detector on both. Segment-side
+samples from Lab-a, HSV saturation, and HSV value distinguish the physical
+neutral-to-cyan dorsal edge and illuminated-to-dark palmar edge from carrier
+lines, internal optical streaks, and repetitive fins. Dorsal and palmar
+fragments are clustered without requiring one connected component, robustly
+fitted with Huber `cv2.fitLine`, and accepted only as a positive, reasonably
+stable paired width. `FingertipBoundaryRegion` owns the resulting two ordered
+line curves and the image mask strictly between them. Converted color channels
+are geometry-only and never enter contact photometry.
 
 `scripts/live_fingertip_boundary.py` displays the dorsal curve in magenta, the
-palmar curve in yellow, the translucent fingertip search mask, and the existing
-red-detector LED centers and response ROIs. It writes no files. This expensive
-absolute geometry stage runs during initial LED acquisition, periodic
-no-contact re-anchoring, and recovery after tracking loss. Normal frame updates
-remain the existing grayscale pyramidal-LK and rigid similarity-fit path.
+palmar curve in yellow, the translucent fingertip search mask, fitted pad width
+and dorsal support, and the existing red-detector LED centers and response
+ROIs. It writes no files. Full paired-LSD geometry runs only during initial LED
+acquisition, periodic no-contact re-anchoring, and recovery after tracking loss.
+Normal frame updates remain the existing grayscale pyramidal-LK and rigid
+similarity-fit path.
 
 The current learning-free contact path detects the ordered five-LED array from
 a median of fixed camera frames after masking its unchanged red-high-pass
