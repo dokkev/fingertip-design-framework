@@ -26,7 +26,6 @@ from experiments.localization import (  # noqa: E402
     detect_fingertip_boundary,
     detect_led_array,
     estimate_contact_position,
-    estimate_dense_template_position,
     extract_dense_profile,
     extract_dense_response_profile,
     fit_affine_position_from_centroid,
@@ -41,24 +40,22 @@ OUTPUT_DIRECTORY = REPOSITORY_ROOT / "output" / "validation" / "contact_localiza
 
 # Experiment metadata is explicit rather than inferred from filename digits.
 SOLARIS_SEQUENCE = (
-    (("solaris_p1_Color.png", "p0_Color.png"), 0.0),
-    (("solaris_p2_Color.png", "p1_Color.png"), 5.0),
-    (("solaris_p3_Color.png", "p2_Color.png"), 10.0),
-    (("p3_Color.png",), 15.0),
-    (("solaris_p4_Color.png", "p4_Color.png"), 20.0),
-    (("solaris_p5_Color.png", "p5_Color.png"), 25.0),
-    (("solaris_p6_Color.png", "p6_Color.png"), 30.0),
+    (("solaris_p1_Color.png",), 0.0),
+    (("solaris_p2_Color.png",), 5.0),
+    (("solaris_p3_Color.png",), 10.0),
+    (("solaris_p4_Color.png",), 20.0),
+    (("solaris_p5_Color.png",), 25.0),
+    (("solaris_p6_Color.png",), 30.0),
 )
 DRAGON_UNLOADED_FILES = (
     "dragonskin_unloaded_Color.png",
-    "p0d_Color.png",
 )
 DRAGON_LOADED_SEQUENCE = (
-    (("dragonskin_p1_Color.png", "p1d_Color.png"), 5.0),
-    (("dragonskin_p3_Color.png", "p2d_Color.png"), 10.0),
-    (("dragonskin_p4_Color.png", "p3d_Color.png"), 15.0),
-    (("dragonskin_p5_Color.png", "p4d_Color.png"), 20.0),
-    (("dragonskin_p6_Color.png", "p5d_Color.png"), 25.0),
+    (("dragonskin_p1_Color.png",), 5.0),
+    (("dragonskin_p3_Color.png",), 10.0),
+    (("dragonskin_p4_Color.png",), 15.0),
+    (("dragonskin_p5_Color.png",), 20.0),
+    (("dragonskin_p6_Color.png",), 25.0),
 )
 INDEPENDENT_VIEW_FILES = {
     "unloaded": "unloaded_Color.png",
@@ -148,28 +145,19 @@ def _solaris_metrics(
         scores *= -1.0
         pca_spearman *= -1.0
 
-    loo_predictions = []
-    for index in range(len(profiles)):
-        keep = np.arange(len(profiles)) != index
-        model = build_dense_template_model(
-            profiles[keep],
-            positions_mm[keep],
-            normalization="none",
-        )
-        estimate = estimate_dense_template_position(profiles[index], model)
-        loo_predictions.append(estimate.position_mm)
-
     return {
         "feature_distances": feature_distances_array,
         "physical_distances": physical_distances_array,
         "distance_spearman": distance_spearman,
         "nearest_indices": np.asarray(nearest_indices, dtype=np.int64),
         "nearest_separations_mm": np.asarray(nearest_separations),
-        "adjacent_nearest_count": int(np.count_nonzero(np.asarray(nearest_separations) == 5.0)),
+        "adjacent_nearest_count": int(
+            np.count_nonzero(
+                np.abs(np.asarray(nearest_indices) - np.arange(len(profiles))) == 1
+            )
+        ),
         "pca_scores": scores,
         "pca_spearman": pca_spearman,
-        "loo_predictions_mm": np.asarray(loo_predictions),
-        "loo_mae_mm": float(np.mean(np.abs(np.asarray(loo_predictions) - positions_mm))),
     }
 
 
@@ -246,7 +234,11 @@ def _write_figure(
         solaris_profiles, solaris_positions, colors, strict=True
     ):
         axes[0, 0].plot(profile, color=color, label=f"{position:g} mm")
-    axes[0, 0].set(title="Solaris dense top-10% red", xlabel="Canonical longitudinal sample", ylabel="Normalized response")
+    axes[0, 0].set(
+        title="Solaris dense top-10% red (central 70%)",
+        xlabel="Canonical longitudinal sample",
+        ylabel="Normalized response",
+    )
     axes[0, 0].legend(ncol=2, fontsize=8)
 
     axes[0, 1].scatter(
@@ -306,7 +298,7 @@ def _write_csv(
                 (
                     "Solaris",
                     position,
-                    solaris_metrics["loo_predictions_mm"][index],
+                    "",
                     solaris_metrics["nearest_separations_mm"][index],
                 )
             )
@@ -340,7 +332,13 @@ def main() -> None:
     ]
     solaris_positions = np.asarray([position for _, position in SOLARIS_SEQUENCE])
     solaris_images, canonical_shape = _canonical_sequence(solaris_filenames)
-    solaris_config = DenseProfileConfig(mode="top10_red")
+    solaris_config = DenseProfileConfig(
+        mode="top10_red",
+        transverse_start_fraction=0.15,
+        transverse_stop_fraction=0.85,
+        top_fraction=0.10,
+        longitudinal_smoothing_sigma_px=2.0,
+    )
     solaris_raw_profiles = np.vstack(
         [extract_dense_profile(image, solaris_config) for image in solaris_images]
     )
@@ -354,7 +352,12 @@ def main() -> None:
     ]
     dragon_positions = np.asarray([position for _, position in DRAGON_LOADED_SEQUENCE])
     dragon_images, _ = _canonical_sequence(dragon_filenames)
-    dragon_config = DenseProfileConfig(mode="abs_highpass_red")
+    dragon_config = DenseProfileConfig(
+        mode="abs_highpass_red",
+        transverse_start_fraction=0.0,
+        transverse_stop_fraction=0.95,
+        transverse_reduction="mean",
+    )
     dragon_profiles = np.vstack(
         [
             extract_dense_response_profile(
@@ -367,15 +370,14 @@ def main() -> None:
     )
     dragon_result = _dragon_metrics(dragon_profiles, dragon_positions)
 
-    print("Solaris dense top-10% red:")
+    print("Solaris dense top-10% red (central 70%, longitudinal sigma=2 px):")
     print(f"  pairwise distance/physical-distance Spearman: {solaris_result['distance_spearman']:.6f}")
     print(
-        "  nearest other frame is adjacent 5 mm: "
+        "  nearest other frame is adjacent in sequence: "
         f"{solaris_result['adjacent_nearest_count']}/{len(solaris_positions)}"
     )
     print(f"  PCA-1 ordering Spearman: {solaris_result['pca_spearman']:.6f}")
-    print(f"  leave-one-position-out template MAE: {solaris_result['loo_mae_mm']:.3f} mm")
-    print("Dragon Skin unloaded-relative dense high-pass response:")
+    print("Dragon Skin unloaded-relative dense high-pass mean response:")
     print(f"  leave-one-position-out centroid MAE: {dragon_result['loo_mae_mm']:.3f} mm")
     print(
         "  nearest labelled position: "

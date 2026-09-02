@@ -62,7 +62,7 @@ def test_baseline_dependent_centroid_fails_without_valid_response() -> None:
         np.array((0.0, 10.0)),
     )
 
-    with pytest.raises(ValueError, match="no positive response"):
+    with pytest.raises(ValueError, match="no robust positive response"):
         estimate_affine_position_from_centroid(
             np.ones(8),
             np.ones(8),
@@ -71,7 +71,11 @@ def test_baseline_dependent_centroid_fails_without_valid_response() -> None:
 
 
 def test_dense_template_npz_round_trip_uses_explicit_metadata(tmp_path) -> None:
-    config = DenseProfileConfig(mode="mean_red", top_fraction=0.2)
+    config = DenseProfileConfig(
+        mode="mean_red",
+        transverse_reduction="mean",
+        top_fraction=0.2,
+    )
     model = build_dense_template_model(
         np.array(((0.0, 1.0, 0.0), (0.0, 0.0, 1.0))),
         np.array((2.0, 7.0)),
@@ -89,3 +93,11 @@ def test_dense_template_npz_round_trip_uses_explicit_metadata(tmp_path) -> None:
     assert loaded.feature_config == config
     assert loaded.normalization == model.normalization
 
+
+def test_response_centroid_ignores_low_response_background() -> None:
+    response = np.full(11, 2.0)
+    response[7:9] = (12.0, 8.0)
+
+    centroid = response_centroid(response)
+
+    assert centroid > 0.65

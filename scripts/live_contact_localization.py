@@ -87,29 +87,37 @@ def _arguments() -> argparse.Namespace:
 
 
 def _dense_config(observer_name: str) -> DenseProfileConfig | None:
-    modes = {
-        "dense-top10": "top10_red",
-        "dense-highpass": "abs_highpass_red",
-        "dense-gradient": "red_gradient",
+    configs = {
+        "dense-top10": DenseProfileConfig(
+            mode="top10_red",
+            transverse_start_fraction=0.15,
+            transverse_stop_fraction=0.85,
+            longitudinal_smoothing_sigma_px=2.0,
+        ),
+        "dense-highpass": DenseProfileConfig(
+            mode="abs_highpass_red",
+            transverse_stop_fraction=0.95,
+            transverse_reduction="mean",
+        ),
+        "dense-gradient": DenseProfileConfig(mode="red_gradient"),
     }
-    mode = modes.get(observer_name)
-    return None if mode is None else DenseProfileConfig(mode=mode)
+    return configs.get(observer_name)
 
 
 def _load_observer_model(
     path: Path | None,
     config: DenseProfileConfig | None,
-) -> DenseTemplateModel | None:
+) -> tuple[DenseProfileConfig | None, DenseTemplateModel | None]:
     if path is None:
-        return None
+        return config, None
     if config is None:
         raise ValueError("--template-model is valid only for a dense observer")
     model = load_dense_template_model(path)
-    if model.feature_config != config:
+    if model.feature_config.mode != config.mode:
         raise ValueError(
-            "template feature configuration does not match the selected observer"
+            "template feature mode does not match the selected observer"
         )
-    return model
+    return model.feature_config, model
 
 
 def _timing_lines(timings_ms: dict[str, deque[float]]) -> list[str]:
@@ -364,7 +372,7 @@ def _draw_dense_panel(
     elif position_mm is None:
         status = "position unavailable"
     else:
-        status = f"position: {position_mm:+.2f} mm"
+        status = f"optical position: {position_mm:+.2f} mm"
     cv2.putText(
         panel,
         status,
@@ -393,10 +401,15 @@ def _draw_dense_panel(
 def main() -> None:
     arguments = _arguments()
     dense_config = _dense_config(arguments.observer)
-    dense_model = _load_observer_model(arguments.template_model, dense_config)
-    observer_requires_baseline = arguments.observer in (
-        "led-top10",
-        "dense-highpass",
+    dense_config, dense_model = _load_observer_model(
+        arguments.template_model,
+        dense_config,
+    )
+    dense_requires_baseline = (
+        dense_config is not None and dense_config.mode == "abs_highpass_red"
+    )
+    observer_requires_baseline = (
+        arguments.observer == "led-top10" or dense_requires_baseline
     )
     calibration_frames: deque[np.ndarray] = deque(maxlen=CALIBRATION_FRAME_COUNT)
     baseline_samples: deque[np.ndarray] = deque(maxlen=BASELINE_FRAME_COUNT)
@@ -597,7 +610,7 @@ def main() -> None:
                         )
                         stage_start = perf_counter()
                         if (
-                            arguments.observer == "dense-highpass"
+                            dense_requires_baseline
                             and unloaded_canonical_rgb is not None
                         ):
                             dense_profile = extract_dense_response_profile(
@@ -618,7 +631,7 @@ def main() -> None:
                     if baseline_collecting:
                         baseline_samples.append(
                             canonical_rgb
-                            if arguments.observer == "dense-highpass"
+                            if dense_requires_baseline
                             else features
                         )
                         count = len(baseline_samples)
@@ -632,7 +645,7 @@ def main() -> None:
                                         np.stack(baseline_samples),
                                     )
                                 )
-                            elif arguments.observer == "dense-highpass":
+                            elif dense_requires_baseline:
                                 unloaded_canonical_rgb = np.median(
                                     np.stack(baseline_samples),
                                     axis=0,
@@ -662,7 +675,7 @@ def main() -> None:
                     elif observer_requires_baseline and (
                         (arguments.observer == "led-top10" and baseline is None)
                         or (
-                            arguments.observer == "dense-highpass"
+                            dense_requires_baseline
                             and unloaded_canonical_rgb is None
                         )
                     ):
@@ -686,8 +699,9 @@ def main() -> None:
                                 dense_position_mm = dense_estimate.position_mm
                                 dense_similarities = dense_estimate.similarities
                                 lines.append(
-                                    f"Contact position: {dense_position_mm:+.2f} mm"
+                                    f"Optical position: {dense_position_mm:+.2f} mm"
                                 )
+                            lines.append("Contact gate: unavailable")
                             lines.append(
                                 "Unloaded baseline: ready"
                                 if observer_requires_baseline

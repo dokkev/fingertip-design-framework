@@ -27,6 +27,11 @@ camera = [
   "opencv-python>=5.0",
   "pyrealsense2==2.58.4.10922",
 ]
+acquisition = [
+  "opencv-python>=5.0",
+  "pyrealsense2==2.58.4.10922",
+  "pyserial>=3.5",
+]
 optix = [
   "pyoptix==9.1.0",
   "cupy-cuda13x",

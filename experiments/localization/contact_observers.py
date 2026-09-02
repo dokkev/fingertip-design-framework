@@ -95,7 +95,7 @@ class DenseTemplateModel:
 
 @dataclass(frozen=True)
 class DensePositionEstimate:
-    """Best template position and all normalized correlation scores."""
+    """Conditional optical position and all normalized correlation scores."""
 
     position_mm: float
     matched_index: int
@@ -262,7 +262,7 @@ def estimate_dense_template_position(
     profile: np.ndarray,
     model: DenseTemplateModel,
 ) -> DensePositionEstimate:
-    """Return the physical position of the most correlated stored template."""
+    """Return the optical position conditional on an external contact gate."""
 
     normalized = _normalize(profile, model.normalization)
     if normalized.shape != (model.templates.shape[1],):
@@ -286,15 +286,17 @@ def estimate_dense_template_position(
 
 
 def response_centroid(response_profile: np.ndarray) -> float:
-    """Return the positive-response centroid in normalized longitudinal units."""
+    """Return the robust response centroid in normalized longitudinal units."""
 
     response = np.asarray(response_profile, dtype=np.float64)
     if response.ndim != 1 or len(response) < 2 or not np.all(np.isfinite(response)):
         raise ValueError("response_profile must be a finite vector of length >= 2")
-    weights = np.maximum(response, 0.0)
+    positive = np.maximum(response - np.percentile(response, 10.0), 0.0)
+    threshold = float(np.percentile(positive, 60.0))
+    weights = np.maximum(positive - threshold, 0.0)
     total = float(np.sum(weights))
     if total <= np.finfo(np.float64).eps:
-        raise ValueError("response_profile has no positive response")
+        raise ValueError("response_profile has no robust positive response")
     coordinates = np.linspace(0.0, 1.0, len(response))
     return float(np.dot(weights, coordinates) / total)
 
@@ -363,6 +365,11 @@ def load_dense_template_model(path: str | Path) -> DenseTemplateModel:
             ),
             transverse_stop_fraction=float(
                 data["feature_transverse_stop_fraction"].item()
+            ),
+            transverse_reduction=(
+                str(data["feature_transverse_reduction"].item())
+                if "feature_transverse_reduction" in data
+                else "top_fraction"
             ),
             top_fraction=float(data["feature_top_fraction"].item()),
             longitudinal_smoothing_sigma_px=float(

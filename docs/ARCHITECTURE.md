@@ -64,6 +64,21 @@ scripts/live_contact_localization.py
         ↓ OpenCV display only
 ```
 
+Raw physical-contact acquisition is a separate path from localization:
+
+```text
+RealSenseColorCamera ── owned RGB frame ─┐
+                                        ├─ collect_contact_dataset.py
+BotaSerialSensor ─ timestamped FT sample┘          │
+                    ForceSequenceController ───────┤
+                                                   ↓
+                                          ContactDatasetWriter
+```
+
+The collector never imports segmentation, LED detection, or contact observers.
+It preserves raw camera RGB and synchronized force/torque measurements for
+later offline analysis.
+
 Each layer must be usable and validated before downstream layers depend on it.
 
 ## Package ownership
@@ -853,9 +868,39 @@ do not cross this package boundary. Depth
 acquisition is intentionally absent because the current localization algorithm
 consumes only color images.
 
-The package does not select localization algorithms, render a GUI, write
-experimental files, or hide reconnect/retry policy. A later camera backend can
-provide the same small RGB-frame lifecycle without changing image localization.
+`BotaSerialSensor` owns one Bota Rokubi serial connection, the proven binary
+protocol, CRC validation, one background reader thread, six-axis tare offsets,
+a latest sample, and a short host-monotonic timestamp ring. It contains no
+experiment sequence or GUI policy.
+
+`experiments/hardware/` does not select localization algorithms, render a GUI,
+write experimental files, or hide reconnect/retry policy. A later camera
+backend can provide the same small RGB-frame lifecycle without changing its
+data consumers.
+
+`experiments/data_collection/` owns the hardware-independent physical
+acquisition contract. `ForceSequenceController` accepts only monotonic host
+time and force magnitude. It requires a continuous in-band settle followed by
+a continuous in-band recording at 2, 5, 10, and 15 N; it never requires release
+between successful targets. `UnloadedCaptureController` separately requires
+force at or below 0.3 N throughout its settle and recording intervals.
+
+`ContactDatasetWriter` owns session/run directories, lossless PNG and CSV
+writing, summaries, atomic completed-segment publication, aborted-run metadata,
+and a metadata-backed completed-run iterator. One worker thread performs image
+and metadata I/O. A bounded frame-slot budget makes overload explicit; a frame
+is never silently omitted from an otherwise successful target. Incomplete
+attempts retain `.partial` names until they are discarded and are ignored by
+the reader.
+
+`scripts/collect_contact_dataset.py` owns the one Tkinter experiment GUI and
+orchestration only. A camera reader thread keeps blocking RealSense calls
+outside Tk's event loop. For each accepted camera frame, the GUI records host
+monotonic time and selects the nearest Bota sample by its independent
+host-monotonic timestamp. RealSense and Rokubi device timestamps remain
+separate. The displayed preview is derived from the raw RGB; saved frames
+contain no overlays. Mock-force mode is visually explicit and writes only
+beneath a separate `mock/MOCK_*` session namespace.
 
 `experiments/localization/` owns shared pure NumPy/OpenCV algorithms for the
 physical fingertip. Offline characterization and online execution import these
@@ -889,12 +934,16 @@ than re-segmenting contact-deformed images.
 
 `optical_features.py` owns pure feature extraction. `DenseProfileConfig`
 selects brightest-10% red, mean red, absolute high-pass red, red gradient, or
-red fraction. Extraction and normalization are separate calls. The
-unloaded-relative diffuse-material path subtracts the unloaded canonical RGB
-image before spatial high-pass, absolute-value, and brightest-fraction
-aggregation. The established five-ROI feature remains the mean of the
-brightest 10% of untouched raw-red pixels and remains implemented once in
-`contact.py`.
+red fraction. Extraction and normalization are separate calls. The verified
+Solaris setting uses the central 15--85% transverse interval, brightest-10%
+red reduction, and 2-pixel longitudinal smoothing. The unloaded-relative
+Dragon Skin setting subtracts the unloaded canonical red image before spatial
+high-pass and absolute value, excludes the final 5% of the transverse span,
+and averages the remaining width. Its response centroid removes the 10th
+percentile floor and retains only response above the 60th percentile of that
+positive residual. `red_gradient` is the two-dimensional Sobel magnitude. The
+established five-ROI feature remains the mean of the brightest 10% of untouched
+raw-red pixels and remains implemented once in `contact.py`.
 
 `contact_observers.py` owns inference from extracted arrays. It contains the
 existing median/MAD-gated five-LED estimator, a normalized-correlation
@@ -902,6 +951,9 @@ existing median/MAD-gated five-LED estimator, a normalized-correlation
 affine-position fit. Dense template models serialize as compressed NPZ arrays
 containing positions, templates, canonical shape, feature configuration, and
 normalization metadata; pickle is never enabled.
+Dense template inference is a position estimate conditional on contact being
+established by an external force or proprioceptive signal; it is not an
+optical contact/no-contact classifier.
 
 `scripts/live_fingertip_boundary.py` displays the RGB frame, paired-LSD prior,
 raw selected GrabCut component, final emissive mask, smooth closed contour, and
@@ -940,8 +992,10 @@ on Newton, OptiX, or Ax.
 question: whether one fixed geometry detector remains stable across recorded
 views. `validation/validate_contact_localization.py` answers the separate
 observer question. It reuses one canonical map per fixed-camera sequence,
-characterizes dense representations, performs sequence-order and
-leave-one-position-out checks, writes CSV/PNG/PDF evidence, and can export a
+characterizes dense representations, evaluates Solaris pairwise and
+nearest-neighbor ordering without treating a one-sample-per-position template
+holdout as an accuracy estimate, performs the Dragon Skin affine-centroid
+leave-one-position-out check, writes CSV/PNG/PDF evidence, and can export a
 dense-template NPZ. Validation owns dataset filenames and physical labels;
 shared localization modules know neither.
 
@@ -956,7 +1010,10 @@ one remap.
 `--observer` selects `led-top10`, `dense-top10`, `dense-highpass`, or
 `dense-gradient` without a plugin framework. Dense template inference is
 enabled only when an explicit `--template-model` NPZ is loaded; otherwise the
-UI displays the live profile and reports that no model is loaded. The LED and
+UI displays the live profile and reports that no model is loaded. When a model
+is loaded, its complete stored feature configuration is authoritative online;
+the selected observer only checks the feature mode. Dense output is labelled
+as optical position with contact gating unavailable. The LED and
 dense-highpass modes retain explicit `b`-key unloaded acquisition.
 
 For `led-top10`, the user captures an unloaded 30-feature baseline with `b`;

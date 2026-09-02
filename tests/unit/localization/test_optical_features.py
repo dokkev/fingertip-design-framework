@@ -66,3 +66,44 @@ def test_unloaded_relative_highpass_is_zero_only_without_image_change() -> None:
     assert np.array_equal(unchanged, np.zeros(25))
     assert np.all(np.isfinite(response))
     assert np.max(response) > 0.0
+
+
+def test_unloaded_relative_highpass_supports_verified_transverse_mean() -> None:
+    rng = np.random.default_rng(19)
+    unloaded = rng.integers(0, 160, size=(21, 20, 3), dtype=np.uint8)
+    loaded = rng.integers(0, 256, size=(21, 20, 3), dtype=np.uint8)
+    config = DenseProfileConfig(
+        mode="abs_highpass_red",
+        transverse_start_fraction=0.0,
+        transverse_stop_fraction=0.95,
+        transverse_reduction="mean",
+        longitudinal_smoothing_sigma_px=0.0,
+    )
+    difference = (
+        loaded[:, :, 0].astype(np.float32)
+        - unloaded[:, :, 0].astype(np.float32)
+    )
+    smooth = cv2.GaussianBlur(
+        difference,
+        (0, 0),
+        config.highpass_sigma_px,
+        config.highpass_sigma_px,
+    )
+    expected = np.mean(np.abs(difference[:, :19] - smooth[:, :19]), axis=1)
+
+    assert np.allclose(
+        extract_dense_response_profile(loaded, unloaded, config),
+        expected,
+    )
+
+
+def test_red_gradient_uses_two_dimensional_magnitude() -> None:
+    image = np.zeros((19, 23, 3), dtype=np.uint8)
+    image[:, 12:, 0] = 200
+
+    profile = extract_dense_profile(
+        image,
+        DenseProfileConfig(mode="red_gradient"),
+    )
+
+    assert np.all(profile > 0.0)

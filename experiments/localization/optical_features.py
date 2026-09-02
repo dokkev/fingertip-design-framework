@@ -15,6 +15,7 @@ _DENSE_PROFILE_MODES = (
     "red_gradient",
     "red_fraction",
 )
+_TRANSVERSE_REDUCTIONS = ("mean", "top_fraction")
 
 
 @dataclass(frozen=True)
@@ -24,6 +25,7 @@ class DenseProfileConfig:
     mode: str = "top10_red"
     transverse_start_fraction: float = 0.0
     transverse_stop_fraction: float = 1.0
+    transverse_reduction: str = "top_fraction"
     top_fraction: float = 0.10
     longitudinal_smoothing_sigma_px: float = 0.0
     highpass_sigma_px: float = 5.0
@@ -39,6 +41,11 @@ class DenseProfileConfig:
             <= 1.0
         ):
             raise ValueError("transverse fractions must define a nonempty subset")
+        if self.transverse_reduction not in _TRANSVERSE_REDUCTIONS:
+            raise ValueError(
+                "transverse_reduction must be one of "
+                + ", ".join(_TRANSVERSE_REDUCTIONS)
+            )
         if not 0.0 < self.top_fraction <= 1.0:
             raise ValueError("top_fraction must be in (0, 1]")
         for name, value in (
@@ -78,6 +85,15 @@ def _brightest_fraction_profile(values: np.ndarray, fraction: float) -> np.ndarr
     return np.mean(np.partition(values, start, axis=1)[:, start:], axis=1)
 
 
+def _reduce_transverse(
+    values: np.ndarray,
+    config: DenseProfileConfig,
+) -> np.ndarray:
+    if config.transverse_reduction == "mean":
+        return np.mean(values, axis=1)
+    return _brightest_fraction_profile(values, config.top_fraction)
+
+
 def _smooth_longitudinal(
     profile: np.ndarray,
     sigma_px: float,
@@ -112,13 +128,15 @@ def extract_dense_profile(
             config.highpass_sigma_px,
             config.highpass_sigma_px,
         )
-        profile = _brightest_fraction_profile(
+        profile = _reduce_transverse(
             np.abs(red[:, columns] - smooth[:, columns]),
-            config.top_fraction,
+            config,
         )
     elif config.mode == "red_gradient":
-        gradient = cv2.Sobel(red, cv2.CV_32F, 0, 1, ksize=3)
-        profile = np.mean(np.abs(gradient[:, columns]), axis=1)
+        gradient_x = cv2.Sobel(red, cv2.CV_32F, 1, 0, ksize=3)
+        gradient_y = cv2.Sobel(red, cv2.CV_32F, 0, 1, ksize=3)
+        gradient = cv2.magnitude(gradient_x, gradient_y)
+        profile = np.mean(gradient[:, columns], axis=1)
     else:
         rgb = image[:, columns].astype(np.float32)
         denominator = np.sum(rgb, axis=2) + np.finfo(np.float32).eps
@@ -160,7 +178,7 @@ def extract_dense_response_profile(
         config.highpass_sigma_px,
     )
     response = np.abs(red_difference[:, columns] - smooth[:, columns])
-    profile = _brightest_fraction_profile(response, config.top_fraction)
+    profile = _reduce_transverse(response, config)
     return _smooth_longitudinal(
         profile,
         config.longitudinal_smoothing_sigma_px,

@@ -40,6 +40,59 @@ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 conda run --no-capture-output -n lit \
   python -m pytest -q tests/unit
 ```
 
+## Physical contact dataset collection
+
+Install the D435, OpenCV, and Bota Rokubi serial dependencies:
+
+```bash
+conda run --no-capture-output -n lit \
+  python -m pip install -e ".[acquisition]"
+```
+
+On Ubuntu, give the user access to the Rokubi serial device once, then log out
+and back in so the group membership takes effect:
+
+```bash
+sudo usermod -aG dialout "$USER"
+```
+
+Launch the collector with the standard 1920 x 1080, 30 FPS D435 stream and
+Rokubi at `/dev/ttyUSB0`:
+
+```bash
+conda run --no-capture-output -n lit \
+  python -u scripts/collect_contact_dataset.py \
+    --bota-port /dev/ttyUSB0 \
+    --output output/contact_dataset
+```
+
+Keep the Rokubi completely unloaded during startup tare and every manual
+`TARE`. The loaded sequence is a continuous 2 → 5 → 10 → 15 N progression at
+one indenter/hole configuration; do not release between successful targets.
+Hole 1 is distal and Hole 6 is proximal. At each target the accepted band is
+`target ± max(0.2 N, 0.05 × target)`, with 0.5 s continuous settling followed
+by 2.0 s continuous recording. Losing the band resets and discards only that
+incomplete target attempt. After 15 N completes, release the indenter.
+
+Use `CAPTURE UNLOADED` separately for the current morphology, indenter, and
+camera pose. It requires `F_mag ≤ 0.3 N` continuously for 0.5 s settling and
+2.0 s recording; an unloaded reference is not required before every loaded
+run. Sessions are written beneath `output/contact_dataset/` with `session.json`,
+lossless PNG sequences, per-frame synchronized FT CSV files, and per-segment
+summaries. Aborted runs retain completed targets, while `.partial` attempts are
+not exposed by the default reader.
+
+Exercise the complete GUI and D435 without a physical Rokubi using the prominent
+manual-force mock mode:
+
+```bash
+conda run --no-capture-output -n lit \
+  python -u scripts/collect_contact_dataset.py --mock
+```
+
+Mock sessions cannot enter the physical dataset namespace: they are written
+under `output/contact_dataset/mock/MOCK_*` and carry `sensor_mode: mock`.
+
 ## Live D435 contact localization
 
 Replay the smooth emissive segmentation on the checked-in 14-image reference
@@ -105,6 +158,11 @@ conda run --no-capture-output -n lit \
     --observer dense-top10 \
     --template-model output/validation/contact_localization/solaris_dense_top10.npz
 ```
+
+The loaded model's serialized transverse interval, reduction, smoothing, and
+other feature parameters are used directly online. The observer name selects
+and verifies only the descriptor mode. Dense estimates report optical position
+conditional on contact; this camera-only viewer has no contact-existence gate.
 
 The default D435 color stream is 1920 x 1080 at 30 FPS. The application first
 discards 30 frames while the camera's default automatic exposure and white
