@@ -42,8 +42,8 @@ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 conda run --no-capture-output -n lit \
 
 ## Live D435 contact localization
 
-Replay the paired-boundary detector on the checked-in 13-image reference set,
-report its runtime, and regenerate the visual regression montage:
+Replay the smooth emissive segmentation on the checked-in 14-image reference
+set, report fixed-extrinsic stability/runtime, and regenerate its overlays:
 
 ```bash
 conda run --no-capture-output -n lit \
@@ -58,11 +58,12 @@ conda run --no-capture-output -n lit \
   python -u scripts/live_fingertip_boundary.py
 ```
 
-The geometry viewer shows the RGB image, paired-LSD fingertip interior mask,
-magenta dorsal boundary, yellow palmar boundary, fitted pad width and dorsal
-support, and the existing red-detector LED centers and response ROIs. Lab-a,
-grayscale, and HSV are used only to score geometry line segments. The viewer
-does not run contact photometry, tracking, or localization and writes no files.
+The geometry viewer shows RGB, the coarse paired-LSD prior, raw selected
+GrabCut component, final emissive fingertip mask, smooth contour, and the
+existing red-detector LED centers/response ROIs. It reports pad width, mask
+area, geometry scale, and segmentation runtime. Lab-a, grayscale, HSV, and the
+emission score are geometry-only. The viewer does not run contact photometry,
+tracking, or localization and writes no files.
 
 Install the RealSense/OpenCV GUI dependencies once, then run the online
 color-image pipeline directly from the checkout:
@@ -81,11 +82,11 @@ photometric controls.
 Keep the camera fixed during that geometry calibration. After that,
 the five landmarks and contact dot follow gradual camera-pose changes every
 frame. During confirmed no-contact operation, the absolute red detector
-re-anchors the rigid array every 30 frames to limit recursive tracking drift;
-corrections larger than half the current LED spacing are rejected.
-Full paired-LSD boundary detection runs only for initial acquisition, this
-periodic no-contact re-anchor, and recovery. Normal 30 Hz motion continues to
-use grayscale LK plus one rigid similarity fit and does not rerun LSD.
+re-anchors the rigid array every 30 frames inside a dilation of the current five
+ROI polygons; it does not rerun global segmentation. Corrections larger than
+half the current LED spacing are rejected. Full emissive-fingertip segmentation
+runs only for initial acquisition, explicit recalibration, and recovery. Normal
+30 Hz motion continues to use grayscale LK plus one rigid similarity fit.
 If tracking is lost after a larger pose change, the viewer invalidates the old
 view-dependent baseline and automatically collects 30 new frames;
 press `b` again while unloaded. Pressing `b` collects 30 feature vectors and

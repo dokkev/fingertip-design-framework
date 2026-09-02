@@ -29,6 +29,7 @@ _MAXIMUM_INLIER_RESIDUAL_IN_LED_SPACINGS = 0.20
 _MINIMUM_FRAME_SCALE = 0.80
 _MAXIMUM_FRAME_SCALE = 1.25
 _MAXIMUM_REANCHOR_CORRECTION_IN_LED_SPACINGS = 0.50
+_LOCAL_REANCHOR_DILATION_IN_LED_SPACINGS = 0.50
 
 
 @dataclass(frozen=True)
@@ -555,9 +556,39 @@ def reanchor_led_array(
     rgb: np.ndarray,
     previous_geometry: LedArrayGeometry,
 ) -> LedArrayGeometry:
-    """Re-anchor a rigid tracked array to absolute red-image landmarks."""
+    """Re-anchor a tracked array with local absolute red-image landmarks."""
 
-    detected = detect_led_array(rgb)
+    image = np.asarray(rgb)
+    if image.ndim != 3 or image.shape[2] != 3 or image.dtype != np.uint8:
+        raise ValueError("rgb must be an H x W x 3 uint8 array")
+    local_mask = np.zeros(image.shape[:2], dtype=np.uint8)
+    cv2.fillPoly(
+        local_mask,
+        [
+            np.rint(polygon).astype(np.int32)
+            for polygon in previous_geometry.roi_polygons_xy_px
+        ],
+        1,
+    )
+    dilation_size = max(
+        3,
+        round(
+            2.0
+            * _LOCAL_REANCHOR_DILATION_IN_LED_SPACINGS
+            * previous_geometry.median_spacing_px
+        )
+        + 1,
+    )
+    if dilation_size % 2 == 0:
+        dilation_size += 1
+    local_mask = cv2.dilate(
+        local_mask,
+        cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE,
+            (dilation_size, dilation_size),
+        ),
+    ).astype(bool)
+    detected = detect_led_array(image, search_mask=local_mask)
     constrained = constrain_led_array_motion(
         previous_geometry.landmarks_xy_px,
         detected.landmarks_xy_px,
@@ -582,7 +613,7 @@ def reanchor_led_array(
             f"{maximum_correction_px / previous_geometry.median_spacing_px:.3f} "
             "LED spacings"
         )
-    return _geometry_from_landmarks(constrained, np.asarray(rgb).shape)
+    return _geometry_from_landmarks(constrained, image.shape)
 
 
 def unloaded_baseline_statistics(

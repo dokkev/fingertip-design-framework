@@ -14,9 +14,9 @@ if str(_REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPOSITORY_ROOT))
 
 from experiments.hardware import RealSenseColorCamera  # noqa: E402
-from experiments.localization import (  # noqa: E402
-    detect_fingertip_boundary,
-    detect_led_array,
+from experiments.localization import detect_led_array  # noqa: E402
+from experiments.localization.fingertip_boundary import (  # noqa: E402
+    _detect_fingertip_boundary_with_diagnostics,
 )
 
 
@@ -29,7 +29,7 @@ WINDOW_NAME = "LUMO fingertip boundary"
 
 
 def _panel(image: np.ndarray, title: str) -> np.ndarray:
-    panel = cv2.resize(image, (640, 360), interpolation=cv2.INTER_AREA)
+    panel = cv2.resize(image, (384, 216), interpolation=cv2.INTER_AREA)
     cv2.putText(
         panel,
         title,
@@ -53,6 +53,16 @@ def _panel(image: np.ndarray, title: str) -> np.ndarray:
     return panel
 
 
+def _mask_overlay(
+    bgr: np.ndarray,
+    mask: np.ndarray,
+    color: tuple[int, int, int],
+) -> np.ndarray:
+    overlay = bgr.copy()
+    overlay[mask] = color
+    return cv2.addWeighted(bgr, 0.72, overlay, 0.28, 0.0)
+
+
 def main() -> None:
     camera = RealSenseColorCamera(
         width=CAMERA_WIDTH,
@@ -74,9 +84,11 @@ def main() -> None:
                 rgb = frame.rgb
                 bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
                 try:
-                    boundary = detect_fingertip_boundary(rgb)
+                    diagnostics = _detect_fingertip_boundary_with_diagnostics(rgb)
                 except RuntimeError as error:
-                    mask_view = np.zeros_like(bgr)
+                    coarse_view = np.zeros_like(bgr)
+                    raw_view = np.zeros_like(bgr)
+                    final_view = np.zeros_like(bgr)
                     boundary_view = bgr.copy()
                     cv2.putText(
                         boundary_view,
@@ -89,44 +101,38 @@ def main() -> None:
                         cv2.LINE_AA,
                     )
                 else:
-                    mask_view = np.zeros_like(bgr)
-                    mask_view[boundary.search_mask] = (180, 180, 180)
+                    boundary = diagnostics.region
+                    coarse_view = _mask_overlay(
+                        bgr,
+                        diagnostics.coarse_prior_mask,
+                        (255, 150, 40),
+                    )
+                    raw_view = _mask_overlay(
+                        bgr,
+                        diagnostics.raw_component_mask,
+                        (40, 170, 255),
+                    )
+                    final_view = _mask_overlay(
+                        bgr,
+                        diagnostics.final_mask,
+                        (70, 190, 70),
+                    )
                     boundary_view = bgr.copy()
-                    band_overlay = boundary_view.copy()
-                    band_overlay[boundary.search_mask] = (255, 170, 0)
-                    boundary_view = cv2.addWeighted(
-                        boundary_view,
-                        0.78,
-                        band_overlay,
-                        0.22,
-                        0.0,
-                    )
-                    dorsal = np.rint(boundary.dorsal_boundary_xy_px).astype(np.int32)
-                    palmar = np.rint(boundary.palmar_boundary_xy_px).astype(np.int32)
                     cv2.polylines(
                         boundary_view,
-                        [dorsal],
-                        False,
-                        (255, 0, 255),
-                        3,
-                        cv2.LINE_AA,
-                    )
-                    cv2.polylines(
-                        boundary_view,
-                        [palmar],
-                        False,
+                        [np.rint(diagnostics.contour_xy_px).astype(np.int32)],
+                        True,
                         (0, 255, 255),
                         3,
                         cv2.LINE_AA,
-                    )
-                    dorsal_support_px = (
-                        boundary.core_y_span[1] - boundary.core_y_span[0]
                     )
                     cv2.putText(
                         boundary_view,
                         (
                             f"pad width={boundary.estimated_pad_width_px:.1f} px  "
-                            f"dorsal support={dorsal_support_px} px"
+                            f"area={np.count_nonzero(diagnostics.final_mask)} px  "
+                            f"scale={diagnostics.geometry_scale:.3f}  "
+                            f"runtime={diagnostics.runtime_ms:.0f} ms"
                         ),
                         (30, 55),
                         cv2.FONT_HERSHEY_SIMPLEX,
@@ -174,8 +180,10 @@ def main() -> None:
                 display = np.hstack(
                     (
                         _panel(bgr, "RGB"),
-                        _panel(mask_view, "fingertip search mask"),
-                        _panel(boundary_view, "dorsal / palmar / LED ROIs"),
+                        _panel(coarse_view, "coarse paired-LSD prior"),
+                        _panel(raw_view, "raw GrabCut component"),
+                        _panel(final_view, "emissive fingertip mask"),
+                        _panel(boundary_view, "smooth contour / LED ROIs"),
                     )
                 )
                 cv2.imshow(WINDOW_NAME, display)

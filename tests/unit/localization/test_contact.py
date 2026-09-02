@@ -190,22 +190,31 @@ def test_reanchor_rejects_large_detector_jump(monkeypatch) -> None:
         )
 
     small_detection = shifted_detection(0.25)
-    monkeypatch.setattr(
-        contact_module,
-        "detect_led_array",
-        lambda _rgb: small_detection,
-    )
+    search_masks = []
+
+    def small_redetection(_rgb, *, search_mask):
+        search_masks.append(search_mask)
+        return small_detection
+
+    monkeypatch.setattr(contact_module, "detect_led_array", small_redetection)
     reanchored = reanchor_led_array(image, geometry)
     assert np.allclose(
         reanchored.landmarks_xy_px,
         small_detection.landmarks_xy_px,
+    )
+    assert len(search_masks) == 1
+    assert np.any(search_masks[0])
+    assert not np.all(search_masks[0])
+    assert all(
+        search_masks[0][tuple(np.rint(point).astype(int)[::-1])]
+        for point in geometry.landmarks_xy_px
     )
 
     wrong_detection = shifted_detection(0.75)
     monkeypatch.setattr(
         contact_module,
         "detect_led_array",
-        lambda _rgb: wrong_detection,
+        lambda _rgb, *, search_mask: wrong_detection,
     )
 
     with pytest.raises(RuntimeError, match="correction is too large"):

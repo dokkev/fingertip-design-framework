@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from time import perf_counter
 
 import cv2
 import numpy as np
@@ -50,8 +51,48 @@ _MAXIMUM_WIDTH_CV = 0.35
 _BOUNDARY_EXTENSION_WIDTH_FRACTION = 0.12
 _SEARCH_MASK_INSET_WIDTH_FRACTION = 0.025
 
-_HIGH_RESOLUTION_HEIGHT_THRESHOLD_PX = 720
-_HIGH_RESOLUTION_GEOMETRY_SCALE = 0.5
+_GEOMETRY_MAXIMUM_HEIGHT_PX = 480
+
+_EMISSIVE_ROW_PERCENTILE = 70.0
+_EMISSIVE_CORRIDOR_HALF_WIDTH_FRACTION = 0.65
+_EMISSIVE_ROW_CLOSE_WIDTH_FRACTION = 0.08
+_SUPPORT_TOP_EXTENSION_WIDTH_FRACTION = 0.04
+_SUPPORT_BOTTOM_EXTENSION_WIDTH_FRACTION = 0.02
+
+_ENVELOPE_DILATION_WIDTH_FRACTION = 0.22
+_ENVELOPE_DILATION_HEIGHT_FRACTION = 0.12
+_ENVELOPE_LEFT_EXTENSION_WIDTH_FRACTION = 0.12
+_ENVELOPE_RIGHT_EXTENSION_WIDTH_FRACTION = 0.16
+_ENVELOPE_TOP_EXTENSION_WIDTH_FRACTION = 0.08
+_ENVELOPE_BOTTOM_EXTENSION_WIDTH_FRACTION = 0.02
+
+_CORE_CYAN_PERCENTILE = 40.0
+_CORE_VALUE_PERCENTILE = 10.0
+_CORE_LAB_A_PERCENTILE = 55.0
+_CORE_MINIMUM_CYAN = 0.03
+_CORE_MINIMUM_VALUE_DN = 50.0
+_CORE_BOTTOM_EXCLUSION_FRACTION = 0.12
+_CORE_EROSION_WIDTH_FRACTION = 0.025
+_CORE_MINIMUM_AREA_PRIOR_FRACTION = 0.005
+_CORE_FALLBACK_CYAN_PERCENTILE = 70.0
+_GRABCUT_ITERATIONS = 4
+
+_BRIDGE_OPEN_WIDTH_FRACTION = 0.035
+_BRIDGE_OPEN_HEIGHT_FRACTION = 0.09
+_COMPONENT_CORE_WEIGHT = 3.0
+_COMPONENT_AREA_WEIGHT = 0.01
+_COMPONENT_MINIMUM_PRIOR_OVERLAP_FRACTION = 0.03
+
+_RADIAL_PRIOR_EROSION_WIDTH_FRACTION = 0.15
+_RADIAL_MAXIMUM_LENGTH_WIDTH_FRACTION = 2.7
+_RADIAL_HOLE_CLOSE_WIDTH_FRACTION = 0.025
+_CONTOUR_ANGLE_COUNT = 256
+_RADIAL_MINIMUM_PRIOR_FRACTION = 0.45
+_RADIAL_INWARD_ALLOWANCE_WIDTH_FRACTION = 0.22
+_RADIAL_OUTWARD_ALLOWANCE_WIDTH_FRACTION = 0.18
+_CIRCULAR_MEDIAN_WINDOW = 9
+_CIRCULAR_GAUSSIAN_SIGMA = 2.5
+_CORE_MINIMUM_ROW_WIDTH_FRACTION = 0.50
 
 
 @dataclass(frozen=True)
@@ -134,6 +175,24 @@ class _LineFit:
     def x_at(self, y: np.ndarray | float) -> np.ndarray:
         y_array = np.asarray(y, dtype=np.float64)
         return self.x0 + (self.vx / self.vy) * (y_array - self.y0)
+
+
+@dataclass(frozen=True)
+class _PairedLsdPrior:
+    region: FingertipBoundaryRegion
+    dorsal_fit: _LineFit
+    palmar_fit: _LineFit
+
+
+@dataclass(frozen=True)
+class _SegmentationDiagnostics:
+    region: FingertipBoundaryRegion
+    coarse_prior_mask: np.ndarray
+    raw_component_mask: np.ndarray
+    final_mask: np.ndarray
+    contour_xy_px: np.ndarray
+    geometry_scale: float
+    runtime_ms: float
 
 
 def _prepare_channels(
@@ -584,7 +643,7 @@ def _paired_boundaries(
     )
 
 
-def _detect_native(image: np.ndarray) -> FingertipBoundaryRegion:
+def _detect_paired_lsd_prior(image: np.ndarray) -> _PairedLsdPrior:
     gray, lab_a, saturation, value = _prepare_channels(image)
     segments = _detect_segments(gray, lab_a, saturation, value)
     _, dorsal_fit, dorsal_support = _select_dorsal_segments(
@@ -603,68 +662,593 @@ def _detect_native(image: np.ndarray) -> FingertipBoundaryRegion:
         palmar_fit,
         palmar_support,
     )
-    return FingertipBoundaryRegion(
-        dorsal_boundary_xy_px=dorsal,
-        palmar_boundary_xy_px=palmar,
-        search_mask=mask,
-        core_y_span=core_y_span,
-        estimated_pad_width_px=median_width,
+    return _PairedLsdPrior(
+        region=FingertipBoundaryRegion(
+            dorsal_boundary_xy_px=dorsal,
+            palmar_boundary_xy_px=palmar,
+            search_mask=mask,
+            core_y_span=core_y_span,
+            estimated_pad_width_px=median_width,
+        ),
+        dorsal_fit=dorsal_fit,
+        palmar_fit=palmar_fit,
     )
 
 
-def _map_region_to_image(
-    region: FingertipBoundaryRegion,
-    image_shape: tuple[int, int],
-) -> FingertipBoundaryRegion:
-    target_height, target_width = image_shape
-    source_height, source_width = region.search_mask.shape
-    scale_x = target_width / source_width
-    scale_y = target_height / source_height
-    coordinate_scale = np.array((scale_x, scale_y), dtype=np.float64)
-    coordinate_offset = 0.5 * coordinate_scale - 0.5
+def _odd_kernel_size(value: float, *, minimum: int = 1) -> int:
+    size = max(minimum, int(round(value)))
+    return size if size % 2 == 1 else size + 1
 
-    dorsal = region.dorsal_boundary_xy_px * coordinate_scale + coordinate_offset
-    palmar = region.palmar_boundary_xy_px * coordinate_scale + coordinate_offset
-    search_mask = cv2.resize(
-        region.search_mask.astype(np.uint8),
-        (target_width, target_height),
+
+def _emission_score(rgb: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    normalized = np.asarray(rgb, dtype=np.float32) / 255.0
+    red, green, blue = np.moveaxis(normalized, -1, 0)
+    green_blue = np.minimum(green, blue)
+    cyan = np.clip(
+        (green_blue - red) / (red + green + blue + 1.0e-6),
+        0.0,
+        0.5,
+    ) / 0.5
+    bright_core = np.clip((green_blue - 0.50) / 0.50, 0.0, 1.0)
+    emission = green_blue * (0.25 + 0.75 * cyan) + 0.10 * bright_core
+    return emission, cyan
+
+
+def _true_runs(values: np.ndarray) -> tuple[tuple[int, int], ...]:
+    active = np.asarray(values, dtype=bool)
+    changes = np.diff(np.pad(active.astype(np.int8), (1, 1)))
+    starts = np.flatnonzero(changes == 1)
+    stops = np.flatnonzero(changes == -1)
+    return tuple(zip(starts.tolist(), stops.tolist(), strict=True))
+
+
+def _recover_vertical_support(
+    emission: np.ndarray,
+    prior: _PairedLsdPrior,
+) -> tuple[int, int]:
+    height, width = emission.shape
+    pad_width = prior.region.estimated_pad_width_px
+    rows = np.arange(height, dtype=np.float64)
+    centers = 0.5 * (
+        prior.dorsal_fit.x_at(rows) + prior.palmar_fit.x_at(rows)
+    )
+    corridor_half_width = _EMISSIVE_CORRIDOR_HALF_WIDTH_FRACTION * pad_width
+    profile = np.zeros(height, dtype=np.float32)
+    for row, center_x in enumerate(centers):
+        start = max(0, int(np.floor(center_x - corridor_half_width)))
+        stop = min(width, int(np.ceil(center_x + corridor_half_width)) + 1)
+        if start < stop:
+            profile[row] = np.percentile(
+                emission[row, start:stop],
+                _EMISSIVE_ROW_PERCENTILE,
+            )
+    profile_range = float(np.ptp(profile))
+    if profile_range <= np.finfo(np.float32).eps:
+        raise RuntimeError("emissive row profile has no usable contrast")
+    normalized_profile = np.rint(
+        255.0 * (profile - float(np.min(profile))) / profile_range
+    ).astype(np.uint8)
+    _, active_rows = cv2.threshold(
+        normalized_profile[:, None],
+        0,
+        255,
+        cv2.THRESH_BINARY | cv2.THRESH_OTSU,
+    )
+    close_length = _odd_kernel_size(
+        _EMISSIVE_ROW_CLOSE_WIDTH_FRACTION * pad_width,
+        minimum=3,
+    )
+    active_rows = cv2.morphologyEx(
+        active_rows,
+        cv2.MORPH_CLOSE,
+        np.ones((close_length, 1), dtype=np.uint8),
+    ).ravel() > 0
+
+    lsd_start, lsd_stop = prior.region.core_y_span
+    candidates = []
+    for start, stop in _true_runs(active_rows):
+        overlap = max(0, min(stop, lsd_stop) - max(start, lsd_start))
+        if overlap:
+            candidates.append((overlap, stop - start, start, stop))
+    if not candidates:
+        raise RuntimeError("emissive row support does not overlap the LSD prior")
+    _, _, start, stop = max(candidates)
+    start = max(
+        0,
+        start - round(_SUPPORT_TOP_EXTENSION_WIDTH_FRACTION * pad_width),
+    )
+    stop = min(
+        height,
+        stop + round(_SUPPORT_BOTTOM_EXTENSION_WIDTH_FRACTION * pad_width),
+    )
+    if stop - start < 2:
+        raise RuntimeError("recovered emissive support is too short")
+    return start, stop
+
+
+def _mask_between_lines(
+    image_shape: tuple[int, int],
+    dorsal_fit: _LineFit,
+    palmar_fit: _LineFit,
+    vertical_support: tuple[int, int],
+) -> np.ndarray:
+    height, width = image_shape
+    start, stop = vertical_support
+    rows = np.arange(start, stop, dtype=np.float64)
+    dorsal_x = dorsal_fit.x_at(rows)
+    palmar_x = palmar_fit.x_at(rows)
+    if np.any(dorsal_x >= palmar_x):
+        raise RuntimeError("coarse fingertip prior boundaries cross")
+    mask = np.zeros((height, width), dtype=bool)
+    for row, left, right in zip(
+        rows.astype(np.int32),
+        dorsal_x,
+        palmar_x,
+        strict=True,
+    ):
+        left_index = max(0, int(np.ceil(left)))
+        right_index = min(width, int(np.floor(right)) + 1)
+        if left_index < right_index:
+            mask[row, left_index:right_index] = True
+    if not np.any(mask):
+        raise RuntimeError("coarse fingertip prior is empty")
+    return mask
+
+
+def _segmentation_envelope(prior_mask: np.ndarray, pad_width: float) -> np.ndarray:
+    height, width = prior_mask.shape
+    kernel_width = _odd_kernel_size(
+        _ENVELOPE_DILATION_WIDTH_FRACTION * pad_width,
+        minimum=3,
+    )
+    kernel_height = _odd_kernel_size(
+        _ENVELOPE_DILATION_HEIGHT_FRACTION * pad_width,
+        minimum=3,
+    )
+    dilated = cv2.dilate(
+        prior_mask.astype(np.uint8),
+        cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE,
+            (kernel_width, kernel_height),
+        ),
+    ).astype(bool)
+    active_y, active_x = np.nonzero(prior_mask)
+    left = max(
+        0,
+        int(np.min(active_x) - _ENVELOPE_LEFT_EXTENSION_WIDTH_FRACTION * pad_width),
+    )
+    right = min(
+        width,
+        int(
+            np.max(active_x)
+            + 1
+            + _ENVELOPE_RIGHT_EXTENSION_WIDTH_FRACTION * pad_width
+        ),
+    )
+    top = max(
+        0,
+        int(np.min(active_y) - _ENVELOPE_TOP_EXTENSION_WIDTH_FRACTION * pad_width),
+    )
+    bottom = min(
+        height,
+        int(
+            np.max(active_y)
+            + 1
+            + _ENVELOPE_BOTTOM_EXTENSION_WIDTH_FRACTION * pad_width
+        ),
+    )
+    rectangle = np.zeros_like(prior_mask)
+    rectangle[top:bottom, left:right] = True
+    return dilated & rectangle
+
+
+def _definite_emissive_core(
+    rgb: np.ndarray,
+    cyan: np.ndarray,
+    prior_mask: np.ndarray,
+    vertical_support: tuple[int, int],
+    pad_width: float,
+) -> np.ndarray:
+    hsv_value = cv2.cvtColor(rgb, cv2.COLOR_RGB2HSV)[:, :, 2]
+    lab_a = cv2.cvtColor(rgb, cv2.COLOR_RGB2LAB)[:, :, 1]
+    cyan_threshold = max(
+        _CORE_MINIMUM_CYAN,
+        float(np.percentile(cyan[prior_mask], _CORE_CYAN_PERCENTILE)),
+    )
+    value_threshold = max(
+        _CORE_MINIMUM_VALUE_DN,
+        float(np.percentile(hsv_value[prior_mask], _CORE_VALUE_PERCENTILE)),
+    )
+    lab_a_threshold = float(
+        np.percentile(lab_a[prior_mask], _CORE_LAB_A_PERCENTILE)
+    )
+    core = (
+        prior_mask
+        & (hsv_value > value_threshold)
+        & ((cyan > cyan_threshold) | (lab_a < lab_a_threshold - 1.0))
+    )
+    start, stop = vertical_support
+    excluded_start = int(
+        np.floor(stop - _CORE_BOTTOM_EXCLUSION_FRACTION * (stop - start))
+    )
+    core[excluded_start:stop] = False
+    kernel_size = _odd_kernel_size(
+        _CORE_EROSION_WIDTH_FRACTION * pad_width,
+        minimum=3,
+    )
+    kernel = cv2.getStructuringElement(
+        cv2.MORPH_ELLIPSE,
+        (kernel_size, kernel_size),
+    )
+    eroded = cv2.erode(core.astype(np.uint8), kernel).astype(bool)
+    minimum_area = max(
+        8,
+        round(_CORE_MINIMUM_AREA_PRIOR_FRACTION * np.count_nonzero(prior_mask)),
+    )
+    if np.count_nonzero(eroded) >= minimum_area:
+        return eroded
+
+    fallback_threshold = float(
+        np.percentile(cyan[prior_mask], _CORE_FALLBACK_CYAN_PERCENTILE)
+    )
+    fallback = prior_mask & (hsv_value >= value_threshold) & (
+        cyan >= fallback_threshold
+    )
+    fallback[excluded_start:stop] = False
+    fallback = cv2.erode(fallback.astype(np.uint8), kernel).astype(bool)
+    if np.count_nonzero(fallback) < minimum_area:
+        raise RuntimeError("emissive fingertip has no reliable foreground seed")
+    return fallback
+
+
+def _grabcut_foreground(
+    rgb: np.ndarray,
+    prior_mask: np.ndarray,
+    envelope: np.ndarray,
+    definite_core: np.ndarray,
+) -> np.ndarray:
+    labels = np.full(prior_mask.shape, cv2.GC_BGD, dtype=np.uint8)
+    labels[envelope] = cv2.GC_PR_BGD
+    labels[prior_mask] = cv2.GC_PR_FGD
+    labels[definite_core] = cv2.GC_FGD
+    background_model = np.zeros((1, 65), dtype=np.float64)
+    foreground_model = np.zeros((1, 65), dtype=np.float64)
+    cv2.grabCut(
+        rgb,
+        labels,
+        None,
+        background_model,
+        foreground_model,
+        _GRABCUT_ITERATIONS,
+        cv2.GC_INIT_WITH_MASK,
+    )
+    foreground = (labels == cv2.GC_FGD) | (labels == cv2.GC_PR_FGD)
+    return foreground & envelope
+
+
+def _remove_bridge_and_select_component(
+    foreground: np.ndarray,
+    prior_mask: np.ndarray,
+    definite_core: np.ndarray,
+    pad_width: float,
+) -> np.ndarray:
+    kernel_width = _odd_kernel_size(
+        _BRIDGE_OPEN_WIDTH_FRACTION * pad_width,
+        minimum=3,
+    )
+    kernel_height = _odd_kernel_size(
+        _BRIDGE_OPEN_HEIGHT_FRACTION * pad_width,
+        minimum=3,
+    )
+    opened = cv2.morphologyEx(
+        foreground.astype(np.uint8),
+        cv2.MORPH_OPEN,
+        cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE,
+            (kernel_width, kernel_height),
+        ),
+    )
+    component_count, labels, stats, _ = cv2.connectedComponentsWithStats(opened)
+    minimum_prior_overlap = max(
+        8,
+        round(
+            _COMPONENT_MINIMUM_PRIOR_OVERLAP_FRACTION
+            * np.count_nonzero(prior_mask)
+        ),
+    )
+    best: tuple[float, int] | None = None
+    for component in range(1, component_count):
+        component_mask = labels == component
+        prior_overlap = int(np.count_nonzero(component_mask & prior_mask))
+        if prior_overlap < minimum_prior_overlap:
+            continue
+        core_overlap = int(np.count_nonzero(component_mask & definite_core))
+        area = int(stats[component, cv2.CC_STAT_AREA])
+        score = (
+            prior_overlap
+            + _COMPONENT_CORE_WEIGHT * core_overlap
+            + _COMPONENT_AREA_WEIGHT * area
+        )
+        if best is None or score > best[0]:
+            best = (score, component)
+    if best is None:
+        raise RuntimeError("GrabCut found no component tied to the fingertip prior")
+    return labels == best[1]
+
+
+def _fill_internal_holes(mask: np.ndarray) -> np.ndarray:
+    binary = np.asarray(mask, dtype=np.uint8)
+    padded = cv2.copyMakeBorder(binary, 1, 1, 1, 1, cv2.BORDER_CONSTANT, value=0)
+    exterior = (1 - padded).copy()
+    cv2.floodFill(exterior, None, (0, 0), 2)
+    holes = exterior == 1
+    return (padded.astype(bool) | holes)[1:-1, 1:-1]
+
+
+def _radial_center(prior_mask: np.ndarray, pad_width: float) -> tuple[float, float]:
+    erosion_size = _odd_kernel_size(
+        _RADIAL_PRIOR_EROSION_WIDTH_FRACTION * pad_width,
+        minimum=3,
+    )
+    eroded = cv2.erode(
+        prior_mask.astype(np.uint8),
+        cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE,
+            (erosion_size, erosion_size),
+        ),
+    )
+    center_mask = eroded if np.any(eroded) else prior_mask.astype(np.uint8)
+    moments = cv2.moments(center_mask)
+    if moments["m00"] <= 0.0:
+        raise RuntimeError("coarse fingertip prior has no radial center")
+    return moments["m10"] / moments["m00"], moments["m01"] / moments["m00"]
+
+
+def _radial_extent(
+    mask: np.ndarray,
+    center_xy: tuple[float, float],
+    angles: np.ndarray,
+    radial_samples: np.ndarray,
+    radial_close_size: int,
+) -> np.ndarray:
+    center_x, center_y = center_xy
+    map_x = center_x + np.cos(angles)[:, None] * radial_samples[None, :]
+    map_y = center_y + np.sin(angles)[:, None] * radial_samples[None, :]
+    sampled = cv2.remap(
+        mask.astype(np.uint8),
+        map_x.astype(np.float32),
+        map_y.astype(np.float32),
+        cv2.INTER_NEAREST,
+        borderMode=cv2.BORDER_CONSTANT,
+        borderValue=0,
+    )
+    sampled = cv2.morphologyEx(
+        sampled,
+        cv2.MORPH_CLOSE,
+        np.ones((1, radial_close_size), dtype=np.uint8),
+    ).astype(bool)
+    connected = np.logical_and.accumulate(sampled, axis=1)
+    sample_count = np.count_nonzero(connected, axis=1)
+    indices = np.maximum(sample_count - 1, 0)
+    return radial_samples[indices]
+
+
+def _circular_smooth(values: np.ndarray) -> np.ndarray:
+    half_median = _CIRCULAR_MEDIAN_WINDOW // 2
+    padded = np.pad(values, (half_median, half_median), mode="wrap")
+    windows = np.lib.stride_tricks.sliding_window_view(
+        padded,
+        _CIRCULAR_MEDIAN_WINDOW,
+    )
+    median_filtered = np.median(windows, axis=1)
+
+    gaussian_size = _odd_kernel_size(6.0 * _CIRCULAR_GAUSSIAN_SIGMA, minimum=3)
+    gaussian = cv2.getGaussianKernel(
+        gaussian_size,
+        _CIRCULAR_GAUSSIAN_SIGMA,
+    ).ravel()
+    half_gaussian = gaussian_size // 2
+    padded_median = np.pad(
+        median_filtered,
+        (half_gaussian, half_gaussian),
+        mode="wrap",
+    )
+    return np.convolve(padded_median, gaussian, mode="valid")
+
+
+def _regularize_contour(
+    component_mask: np.ndarray,
+    prior_mask: np.ndarray,
+    pad_width: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    center = _radial_center(prior_mask, pad_width)
+    center_index = tuple(np.rint(center).astype(int)[::-1])
+    if not component_mask[center_index]:
+        raise RuntimeError("selected fingertip component excludes the coarse-prior center")
+    angles = np.linspace(-np.pi, np.pi, _CONTOUR_ANGLE_COUNT, endpoint=False)
+    radial_samples = np.arange(
+        0.0,
+        _RADIAL_MAXIMUM_LENGTH_WIDTH_FRACTION * pad_width + 1.0,
+        1.0,
+    )
+    radial_close_size = _odd_kernel_size(
+        _RADIAL_HOLE_CLOSE_WIDTH_FRACTION * pad_width,
+        minimum=3,
+    )
+    prior_radius = _radial_extent(
+        prior_mask,
+        center,
+        angles,
+        radial_samples,
+        radial_close_size,
+    )
+    observed_radius = _radial_extent(
+        component_mask,
+        center,
+        angles,
+        radial_samples,
+        radial_close_size,
+    )
+    minimum_radius = np.maximum(
+        _RADIAL_MINIMUM_PRIOR_FRACTION * prior_radius,
+        prior_radius - _RADIAL_INWARD_ALLOWANCE_WIDTH_FRACTION * pad_width,
+    )
+    maximum_radius = (
+        prior_radius + _RADIAL_OUTWARD_ALLOWANCE_WIDTH_FRACTION * pad_width
+    )
+    radius = _circular_smooth(
+        np.clip(observed_radius, minimum_radius, maximum_radius)
+    )
+    contour = np.column_stack(
+        (
+            center[0] + radius * np.cos(angles),
+            center[1] + radius * np.sin(angles),
+        )
+    )
+    height, width = component_mask.shape
+    contour[:, 0] = np.clip(contour[:, 0], 0.0, width - 1.0)
+    contour[:, 1] = np.clip(contour[:, 1], 0.0, height - 1.0)
+    final_mask = np.zeros_like(component_mask, dtype=np.uint8)
+    cv2.fillPoly(final_mask, [np.rint(contour).astype(np.int32)], 1)
+    return contour, final_mask.astype(bool)
+
+
+def _longest_run(values: np.ndarray) -> tuple[int, int]:
+    runs = _true_runs(values)
+    if not runs:
+        raise RuntimeError("fingertip mask has no stable central row run")
+    return max(runs, key=lambda run: run[1] - run[0])
+
+
+def _region_from_mask(mask: np.ndarray) -> FingertipBoundaryRegion:
+    silhouette = np.asarray(mask, dtype=bool)
+    height, width = silhouette.shape
+    row_counts = np.count_nonzero(silhouette, axis=1)
+    rows = np.flatnonzero(row_counts >= 2)
+    if rows.size < 2:
+        raise RuntimeError("smooth fingertip mask has insufficient row support")
+    dorsal_x = np.empty(rows.size, dtype=np.float64)
+    palmar_x = np.empty(rows.size, dtype=np.float64)
+    for index, row in enumerate(rows):
+        active_x = np.flatnonzero(silhouette[row])
+        dorsal_x[index] = active_x[0]
+        palmar_x[index] = active_x[-1]
+    widths = palmar_x - dorsal_x + 1.0
+    reference_width = float(np.median(widths))
+    stable_on_rows = widths >= _CORE_MINIMUM_ROW_WIDTH_FRACTION * reference_width
+    run_start, run_stop = _longest_run(stable_on_rows)
+    core_rows = rows[run_start:run_stop]
+    core_y_span = (int(core_rows[0]), int(core_rows[-1]) + 1)
+    estimated_width = float(np.median(widths[run_start:run_stop]))
+
+    inset_size = _odd_kernel_size(
+        _SEARCH_MASK_INSET_WIDTH_FRACTION * estimated_width,
+        minimum=3,
+    )
+    search_mask = cv2.erode(
+        silhouette.astype(np.uint8),
+        cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE,
+            (inset_size, inset_size),
+        ),
+    ).astype(bool)
+    if not np.any(search_mask):
+        raise RuntimeError("smooth fingertip mask produced an empty LED search mask")
+    return FingertipBoundaryRegion(
+        dorsal_boundary_xy_px=np.column_stack((dorsal_x, rows)),
+        palmar_boundary_xy_px=np.column_stack((palmar_x, rows)),
+        search_mask=search_mask,
+        core_y_span=core_y_span,
+        estimated_pad_width_px=estimated_width,
+    )
+
+
+def _resize_mask(mask: np.ndarray, image_shape: tuple[int, int]) -> np.ndarray:
+    height, width = image_shape
+    return cv2.resize(
+        mask.astype(np.uint8),
+        (width, height),
         interpolation=cv2.INTER_NEAREST,
     ).astype(bool)
-    core_start, core_stop = region.core_y_span
-    mapped_core_span = (
-        max(0, int(np.floor(core_start * scale_y))),
-        min(target_height, int(np.ceil(core_stop * scale_y))),
+
+
+def _detect_fingertip_boundary_with_diagnostics(
+    rgb: np.ndarray,
+) -> _SegmentationDiagnostics:
+    start_time = perf_counter()
+    image = np.asarray(rgb)
+    if image.ndim != 3 or image.shape[2] != 3 or image.dtype != np.uint8:
+        raise ValueError("rgb must be an H x W x 3 uint8 array")
+    geometry_scale = min(1.0, _GEOMETRY_MAXIMUM_HEIGHT_PX / image.shape[0])
+    if geometry_scale < 1.0:
+        geometry_image = cv2.resize(
+            image,
+            (
+                max(1, round(image.shape[1] * geometry_scale)),
+                max(1, round(image.shape[0] * geometry_scale)),
+            ),
+            interpolation=cv2.INTER_AREA,
+        )
+    else:
+        geometry_image = image
+
+    prior = _detect_paired_lsd_prior(geometry_image)
+    emission, cyan = _emission_score(geometry_image)
+    vertical_support = _recover_vertical_support(emission, prior)
+    prior_mask = _mask_between_lines(
+        geometry_image.shape[:2],
+        prior.dorsal_fit,
+        prior.palmar_fit,
+        vertical_support,
     )
-    return FingertipBoundaryRegion(
-        dorsal_boundary_xy_px=dorsal,
-        palmar_boundary_xy_px=palmar,
-        search_mask=search_mask,
-        core_y_span=mapped_core_span,
-        estimated_pad_width_px=region.estimated_pad_width_px * scale_x,
+    pad_width = prior.region.estimated_pad_width_px
+    envelope = _segmentation_envelope(prior_mask, pad_width)
+    definite_core = _definite_emissive_core(
+        geometry_image,
+        cyan,
+        prior_mask,
+        vertical_support,
+        pad_width,
+    )
+    foreground = _grabcut_foreground(
+        geometry_image,
+        prior_mask,
+        envelope,
+        definite_core,
+    )
+    component = _remove_bridge_and_select_component(
+        foreground,
+        prior_mask,
+        definite_core,
+        pad_width,
+    )
+    component = _fill_internal_holes(component)
+    contour, final_mask = _regularize_contour(component, prior_mask, pad_width)
+
+    if geometry_scale < 1.0:
+        prior_mask = _resize_mask(prior_mask, image.shape[:2])
+        component = _resize_mask(component, image.shape[:2])
+        final_mask = _resize_mask(final_mask, image.shape[:2])
+        scale_x = image.shape[1] / geometry_image.shape[1]
+        scale_y = image.shape[0] / geometry_image.shape[0]
+        contour_scale = np.array((scale_x, scale_y), dtype=np.float64)
+        contour = (contour + 0.5) * contour_scale - 0.5
+    region = _region_from_mask(final_mask)
+    return _SegmentationDiagnostics(
+        region=region,
+        coarse_prior_mask=prior_mask,
+        raw_component_mask=component,
+        final_mask=final_mask,
+        contour_xy_px=contour,
+        geometry_scale=geometry_scale,
+        runtime_ms=1000.0 * (perf_counter() - start_time),
     )
 
 
 def detect_fingertip_boundary(rgb: np.ndarray) -> FingertipBoundaryRegion:
-    """Detect paired dorsal and palmar side-view boundaries from one RGB frame."""
+    """Detect the smooth emissive silicone silhouette from one RGB frame."""
 
-    image = np.asarray(rgb)
-    if image.ndim != 3 or image.shape[2] != 3 or image.dtype != np.uint8:
-        raise ValueError("rgb must be an H x W x 3 uint8 array")
-    if image.shape[0] <= _HIGH_RESOLUTION_HEIGHT_THRESHOLD_PX:
-        return _detect_native(image)
-
-    geometry_image = cv2.resize(
-        image,
-        (
-            max(1, round(image.shape[1] * _HIGH_RESOLUTION_GEOMETRY_SCALE)),
-            max(1, round(image.shape[0] * _HIGH_RESOLUTION_GEOMETRY_SCALE)),
-        ),
-        interpolation=cv2.INTER_AREA,
-    )
-    return _map_region_to_image(
-        _detect_native(geometry_image),
-        image.shape[:2],
-    )
+    return _detect_fingertip_boundary_with_diagnostics(rgb).region
 
 
 __all__ = ["FingertipBoundaryRegion", "detect_fingertip_boundary"]

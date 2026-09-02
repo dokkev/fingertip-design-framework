@@ -858,25 +858,31 @@ experimental files, or hide reconnect/retry policy. A later camera backend can
 provide the same small RGB-frame lifecycle without changing image localization.
 
 `experiments/localization/` owns pure NumPy/OpenCV image analysis for the
-physical fingertip. `detect_fingertip_boundary()` is a side-view geometry
-stage. It weakly smooths the Lab-a and grayscale geometry channels and runs
-OpenCV's standard-refinement line-segment detector on both. Segment-side
-samples from Lab-a, HSV saturation, and HSV value distinguish the physical
-neutral-to-cyan dorsal edge and illuminated-to-dark palmar edge from carrier
-lines, internal optical streaks, and repetitive fins. Dorsal and palmar
-fragments are clustered without requiring one connected component, robustly
-fitted with Huber `cv2.fitLine`, and accepted only as a positive, reasonably
-stable paired width. `FingertipBoundaryRegion` owns the resulting two ordered
-line curves and the image mask strictly between them. Converted color channels
-are geometry-only and never enter contact photometry.
+physical fingertip. `detect_fingertip_boundary()` returns the smooth luminous
+silicone silhouette in original camera coordinates. Geometry processing is
+limited to a maximum image height of 480 pixels. A private paired-LSD stage
+first distinguishes the neutral-to-cyan dorsal edge and illuminated-to-dark
+palmar edge from carrier lines, optical streaks, and repetitive fins. Those
+robustly fitted lines supply only object identity, width, and an approximate
+prior; they are not the final boundary.
 
-`scripts/live_fingertip_boundary.py` displays the dorsal curve in magenta, the
-palmar curve in yellow, the translucent fingertip search mask, fitted pad width
-and dorsal support, and the existing red-detector LED centers and response
-ROIs. It writes no files. Full paired-LSD geometry runs only during initial LED
-acquisition, periodic no-contact re-anchoring, and recovery after tracking loss.
-Normal frame updates remain the existing grayscale pyramidal-LK and rigid
-similarity-fit path.
+Within a local envelope around that prior, a fixed cyan/bright emission score
+recovers vertical support and seeds mask-initialized GrabCut. Component
+selection is tied to overlap with both the coarse prior and conservative
+emissive core. Hole filling, radial clipping against the coarse shape, a
+nine-sample circular median, and 2.5-sample circular Gaussian smoothing produce
+one star-convex physical silhouette. `FingertipBoundaryRegion` extracts its
+ordered row boundaries, stable core span, width, and inset LED search mask from
+that final silhouette. Lab, HSV, emission, and GrabCut data are geometry-only;
+the contact feature still reads untouched full-resolution red-channel values.
+
+`scripts/live_fingertip_boundary.py` displays the RGB frame, paired-LSD prior,
+raw selected GrabCut component, final emissive mask, smooth closed contour, and
+the existing red-detector LED centers and response ROIs. It also reports pad
+width, mask area, geometry scale, and segmentation runtime. It writes no files.
+The full global segmentation is used only for initial LED acquisition,
+explicit recalibration, and recovery after tracking loss. Normal frame updates
+remain the existing grayscale pyramidal-LK and rigid similarity-fit path.
 
 The current learning-free contact path detects the ordered five-LED array from
 a median of fixed camera frames after masking its unchanged red-high-pass
@@ -889,7 +895,9 @@ definition without five full-frame masks per video frame. The five
 local Lucas-Kanade correspondences update the array only through one robust
 translation/rotation/uniform-scale fit, so one distorted optical landmark cannot
 independently move its ROI. During confirmed no-contact operation, the absolute
-red detector periodically re-anchors that rigid array to limit recursive drift.
+red detector periodically re-anchors that rigid array inside a dilation of the
+five currently tracked ROI polygons. This local redetection does not rerun
+global fingertip segmentation.
 The correction is accepted only when every constrained landmark moves by at
 most half the current median LED spacing, preventing a different regular
 five-peak constellation from causing a detector jump.
@@ -924,11 +932,10 @@ they require explicit
 user-selected manual exposure, gain, and white-balance values held identical
 across morphologies, not values inferred from a running automatic mode.
 
-Fingertip-boundary detection runs its image geometry at half resolution for
-frames taller than 720 pixels, then maps the paired boundaries and search mask
-back to the camera image. Raw-red LED features are still measured from the
-original RGB frame. This keeps the periodic no-contact absolute re-anchor out
-of the 1080p full-frame LSD cost without changing the photometric measurement.
+Fingertip-boundary detection scales geometry to at most 480 pixels high, then
+maps the smooth mask, contour, boundaries, and width back to the camera image
+with nearest-neighbor mask interpolation. Raw-red LED features are still
+measured from the original RGB frame.
 
 ### `lumo/visualization/`
 
