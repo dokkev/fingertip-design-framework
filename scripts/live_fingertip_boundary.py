@@ -76,7 +76,7 @@ def main() -> None:
                 try:
                     boundary = detect_fingertip_boundary(rgb)
                 except RuntimeError as error:
-                    cyan_view = np.zeros_like(bgr)
+                    mask_view = np.zeros_like(bgr)
                     boundary_view = bgr.copy()
                     cv2.putText(
                         boundary_view,
@@ -89,8 +89,8 @@ def main() -> None:
                         cv2.LINE_AA,
                     )
                 else:
-                    cyan_view = np.zeros_like(bgr)
-                    cyan_view[boundary.search_mask] = (180, 180, 180)
+                    mask_view = np.zeros_like(bgr)
+                    mask_view[boundary.search_mask] = (180, 180, 180)
                     boundary_view = bgr.copy()
                     band_overlay = boundary_view.copy()
                     band_overlay[boundary.search_mask] = (255, 170, 0)
@@ -174,7 +174,7 @@ def main() -> None:
                 display = np.hstack(
                     (
                         _panel(bgr, "RGB"),
-                        _panel(cyan_view, "fingertip search mask"),
+                        _panel(mask_view, "fingertip search mask"),
                         _panel(boundary_view, "dorsal / palmar / LED ROIs"),
                     )
                 )

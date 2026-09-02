@@ -42,6 +42,14 @@ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 conda run --no-capture-output -n lit \
 
 ## Live D435 contact localization
 
+Replay the paired-boundary detector on the checked-in 13-image reference set,
+report its runtime, and regenerate the visual regression montage:
+
+```bash
+conda run --no-capture-output -n lit \
+  python -u validation/validate_fingertip_boundary.py
+```
+
 Develop and inspect the camera-extrinsic-independent fingertip boundary before
 running contact localization:
 
@@ -93,8 +101,9 @@ camera warmup and clears the view-dependent baseline, so press `b`
 again after LED recalibration.
 
 This live command intentionally retains the D435's default automatic exposure
-and white balance and is not the acquisition protocol for absolute optical-power
-comparisons between morphologies. Such a quantitative comparison must use one
+and white balance and is not the acquisition protocol for absolute
+camera-intensity comparisons between morphologies. Such a quantitative
+comparison must use one
 explicit user-selected manual exposure, gain, and white balance for every
 fingertip; it must not capture nominal manual values from a running auto mode.
 Acquire a new unloaded baseline after each intentional camera-viewpoint or

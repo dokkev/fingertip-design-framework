@@ -149,3 +149,23 @@ def test_search_mask_remains_strictly_between_fitted_boundaries() -> None:
         assert active_x.size
         assert active_x[0] > dorsal_x
         assert active_x[-1] < palmar_x
+
+
+def test_high_resolution_geometry_is_mapped_back_to_camera_coordinates() -> None:
+    image = _synthetic_side_view(internal_streaks_and_fins=True)
+    native = detect_fingertip_boundary(image)
+    high_resolution = detect_fingertip_boundary(
+        cv2.resize(image, (1280, 960), interpolation=cv2.INTER_NEAREST)
+    )
+
+    expected_dorsal = 2.0 * native.dorsal_boundary_xy_px + 0.5
+    expected_palmar = 2.0 * native.palmar_boundary_xy_px + 0.5
+    assert np.allclose(high_resolution.dorsal_boundary_xy_px, expected_dorsal)
+    assert np.allclose(high_resolution.palmar_boundary_xy_px, expected_palmar)
+    assert high_resolution.search_mask.shape == (960, 1280)
+    assert high_resolution.core_y_span == tuple(
+        2 * coordinate for coordinate in native.core_y_span
+    )
+    assert high_resolution.estimated_pad_width_px == pytest.approx(
+        2.0 * native.estimated_pad_width_px
+    )

@@ -918,10 +918,17 @@ renormalizing every frame; raw DN values remain visible. The application writes
 no result artifact. A frame timeout remains a reported hardware failure;
 the application, not the RealSense adapter, owns a bounded ten-attempt reconnect
 loop. Successful reconnect repeats the camera warmup and discards the old LED
-geometry and baseline before localization resumes. Absolute optical-power
-comparisons are a separate acquisition contract: they require explicit
+geometry and baseline before localization resumes. Absolute camera-intensity
+comparisons under fixed camera settings are a separate acquisition contract:
+they require explicit
 user-selected manual exposure, gain, and white-balance values held identical
 across morphologies, not values inferred from a running automatic mode.
+
+Fingertip-boundary detection runs its image geometry at half resolution for
+frames taller than 720 pixels, then maps the paired boundaries and search mask
+back to the camera image. Raw-red LED features are still measured from the
+original RGB frame. This keeps the periodic no-contact absolute re-anchor out
+of the 1080p full-frame LSD cost without changing the photometric measurement.
 
 ### `lumo/visualization/`
 

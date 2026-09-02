@@ -50,6 +50,9 @@ _MAXIMUM_WIDTH_CV = 0.35
 _BOUNDARY_EXTENSION_WIDTH_FRACTION = 0.12
 _SEARCH_MASK_INSET_WIDTH_FRACTION = 0.025
 
+_HIGH_RESOLUTION_HEIGHT_THRESHOLD_PX = 720
+_HIGH_RESOLUTION_GEOMETRY_SCALE = 0.5
+
 
 @dataclass(frozen=True)
 class FingertipBoundaryRegion:
@@ -581,12 +584,7 @@ def _paired_boundaries(
     )
 
 
-def detect_fingertip_boundary(rgb: np.ndarray) -> FingertipBoundaryRegion:
-    """Detect paired dorsal and palmar side-view boundaries from one RGB frame."""
-
-    image = np.asarray(rgb)
-    if image.ndim != 3 or image.shape[2] != 3 or image.dtype != np.uint8:
-        raise ValueError("rgb must be an H x W x 3 uint8 array")
+def _detect_native(image: np.ndarray) -> FingertipBoundaryRegion:
     gray, lab_a, saturation, value = _prepare_channels(image)
     segments = _detect_segments(gray, lab_a, saturation, value)
     _, dorsal_fit, dorsal_support = _select_dorsal_segments(
@@ -611,6 +609,61 @@ def detect_fingertip_boundary(rgb: np.ndarray) -> FingertipBoundaryRegion:
         search_mask=mask,
         core_y_span=core_y_span,
         estimated_pad_width_px=median_width,
+    )
+
+
+def _map_region_to_image(
+    region: FingertipBoundaryRegion,
+    image_shape: tuple[int, int],
+) -> FingertipBoundaryRegion:
+    target_height, target_width = image_shape
+    source_height, source_width = region.search_mask.shape
+    scale_x = target_width / source_width
+    scale_y = target_height / source_height
+    coordinate_scale = np.array((scale_x, scale_y), dtype=np.float64)
+    coordinate_offset = 0.5 * coordinate_scale - 0.5
+
+    dorsal = region.dorsal_boundary_xy_px * coordinate_scale + coordinate_offset
+    palmar = region.palmar_boundary_xy_px * coordinate_scale + coordinate_offset
+    search_mask = cv2.resize(
+        region.search_mask.astype(np.uint8),
+        (target_width, target_height),
+        interpolation=cv2.INTER_NEAREST,
+    ).astype(bool)
+    core_start, core_stop = region.core_y_span
+    mapped_core_span = (
+        max(0, int(np.floor(core_start * scale_y))),
+        min(target_height, int(np.ceil(core_stop * scale_y))),
+    )
+    return FingertipBoundaryRegion(
+        dorsal_boundary_xy_px=dorsal,
+        palmar_boundary_xy_px=palmar,
+        search_mask=search_mask,
+        core_y_span=mapped_core_span,
+        estimated_pad_width_px=region.estimated_pad_width_px * scale_x,
+    )
+
+
+def detect_fingertip_boundary(rgb: np.ndarray) -> FingertipBoundaryRegion:
+    """Detect paired dorsal and palmar side-view boundaries from one RGB frame."""
+
+    image = np.asarray(rgb)
+    if image.ndim != 3 or image.shape[2] != 3 or image.dtype != np.uint8:
+        raise ValueError("rgb must be an H x W x 3 uint8 array")
+    if image.shape[0] <= _HIGH_RESOLUTION_HEIGHT_THRESHOLD_PX:
+        return _detect_native(image)
+
+    geometry_image = cv2.resize(
+        image,
+        (
+            max(1, round(image.shape[1] * _HIGH_RESOLUTION_GEOMETRY_SCALE)),
+            max(1, round(image.shape[0] * _HIGH_RESOLUTION_GEOMETRY_SCALE)),
+        ),
+        interpolation=cv2.INTER_AREA,
+    )
+    return _map_region_to_image(
+        _detect_native(geometry_image),
+        image.shape[:2],
     )
 
 

@@ -405,13 +405,30 @@ def main() -> None:
                                 no_contact_frame_count
                                 >= NO_CONTACT_REANCHOR_FRAME_COUNT
                             ):
+                                reanchor_start = perf_counter()
                                 try:
                                     geometry = reanchor_led_array(rgb, geometry)
                                 except RuntimeError as error:
-                                    print(f"LED absolute re-anchor skipped: {error}")
+                                    reanchor_ms = 1000.0 * (
+                                        perf_counter() - reanchor_start
+                                    )
+                                    print(
+                                        "LED absolute re-anchor skipped "
+                                        f"after {reanchor_ms:.1f} ms: {error}"
+                                    )
                                 else:
+                                    reanchor_ms = 1000.0 * (
+                                        perf_counter() - reanchor_start
+                                    )
                                     feature_history.clear()
-                                    lines.append("LED geometry: absolute re-anchor")
+                                    lines.append(
+                                        "LED geometry: absolute re-anchor "
+                                        f"({reanchor_ms:.0f} ms)"
+                                    )
+                                    print(
+                                        "LED absolute re-anchor completed in "
+                                        f"{reanchor_ms:.1f} ms"
+                                    )
                                 no_contact_frame_count = 0
                         else:
                             no_contact_frame_count = 0
