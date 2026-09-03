@@ -47,12 +47,17 @@ from .fixed_finger_calibration import (
     warp_with_fixed_finger_calibration,
 )
 from .fingertip_segmentation import FingertipSegmentation, segment_fingertip
+from .led_localization_common import LedLocalizationResult
 from .optical_features import (
     DenseProfileConfig,
     extract_dense_profile,
     extract_dense_response_profile,
     mean_center_l2,
     robust_zscore,
+)
+from .solaris_led_localization import (
+    localize_solaris_leds,
+    solaris_physical_led_layout,
 )
 
 __all__ = [
@@ -69,6 +74,7 @@ __all__ = [
     "FingertipSegmentation",
     "FixedFingerCalibration",
     "LedArrayGeometry",
+    "LedLocalizationResult",
     "brightest_red_features",
     "build_canonical_finger_map",
     "build_dense_template_model",
@@ -85,6 +91,7 @@ __all__ = [
     "fit_affine_position_from_centroid",
     "load_dense_template_model",
     "load_fixed_finger_calibration",
+    "localize_solaris_leds",
     "mean_center_l2",
     "reanchor_led_array",
     "project_longitudinal_positions",
@@ -94,6 +101,7 @@ __all__ = [
     "save_fixed_finger_calibration",
     "segment_fingertip",
     "similarity_from_landmarks",
+    "solaris_physical_led_layout",
     "track_led_array",
     "transform_canonical_map",
     "unloaded_baseline_statistics",

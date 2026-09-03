@@ -973,6 +973,28 @@ one-dimensional positive-red profile, verifies that the stored line score is
 exactly the sum of the five expected-window maxima, and plots those windows and
 maxima. Whole-line mean contrast is reported only as a non-scored diagnostic.
 
+Solaris also has a separate material-specific offline localizer. The small
+`LedLocalizationResult` contract contains five distal-to-proximal physical/image
+correspondences, fitted side and LED lines, the distal limit, projective
+vanishing geometry, the reference mask, five LED-center responses, four
+inter-LED midpoint responses, and the fitted distal image scale.
+`localize_solaris_leds()` segments one fixed reference image once, derives its
+PCA side geometry, and searches only two image unknowns: the transverse LED-line
+coordinate `alpha` and the local longitudinal scale at the distal end.
+
+For each candidate, the raw red profile is sampled only on the physical LED 1
+through LED 5 interval and converted to signed contrast by subtracting a broad
+one-dimensional Gaussian background. The periodic match score is the mean of
+five equal-width LED-center responses minus the mean of four equal-width
+inter-LED midpoint responses. Samples after LED 5 make exactly zero contribution.
+The physical distances `[10.5, 21.5, 32.5, 43.5, 54.5] mm` come from the hardware
+layout and are mapped from the distal limit through the shared longitudinal
+vanishing point. The exact 11 mm pitch and 44 mm span remain one rigid projective
+array: no LED receives an independent position variable or local refinement.
+The segmented proximal endpoint is neither stored nor used for longitudinal
+scaling. This Solaris module does not dispatch on material and no Dragon Skin
+counterpart exists yet.
+
 `experiments/optical_morphology_analysis.py` owns the corresponding small
 offline measurement path. It remaps one unloaded image and loaded frames with
 the same fixed calibration, computes signed red-channel difference in camera
@@ -1056,6 +1078,13 @@ blob detector. `validation/validate_optical_morphology_analysis.py` reports
 Dragon Skin response magnitudes, longitudinal signatures, and the full
 pairwise-distance matrix. Solaris is not evaluated there because the checked-in
 images do not contain a same-condition unloaded reference.
+`validation/validate_solaris_led_localization.py` separately exercises only the
+Solaris localizer on representative and dark-room images. It plots the
+silhouette, side/distal-limit/LED lines, the exact 44 mm rigid array, and the raw
+and signed-red profiles over the LED 1--LED 5 score interval. All five LED
+centers and four inter-LED midpoints are marked and reported.
+Optional manually clicked labels report Euclidean, longitudinal, and transverse
+pixel errors without becoming algorithm inputs or defining a paper threshold.
 `validation/validate_contact_localization.py` answers the separate
 observer question. It reuses one canonical map per fixed-camera sequence,
 characterizes dense representations, evaluates Solaris pairwise and

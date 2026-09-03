@@ -124,6 +124,28 @@ conda run --no-capture-output -n lit \
   python -u validation/validate_fixed_finger_calibration.py --diagnostic-only
 ```
 
+Run the separate Solaris-only full-periodic-array LED localizer on the saved
+normal and dark-room reference images:
+
+```bash
+conda run --no-capture-output -n lit \
+  python -u validation/validate_solaris_led_localization.py
+```
+
+The command writes a PNG, PDF, summary CSV, and per-LED ground-truth error CSV
+beneath `output/validation/solaris_led_localization/`. The score uses the signed
+red responses at all five 11-mm-spaced LED centers minus the four inter-LED
+midpoint responses, and samples nothing beyond LED 5. The proximal silhouette
+endpoint is not used for scale. Without manual labels it reports accuracy as
+`UNMEASURED`. Record optional validation-only labels by clicking LED 1 through
+LED 5 in distal-to-proximal order:
+
+```bash
+conda run --no-capture-output -n lit \
+  python -u validation/validate_solaris_led_localization.py \
+  --label-ground-truth
+```
+
 Characterize unloaded-relative Dragon Skin optical magnitude, longitudinal
 signatures, and pairwise RMS separation with the fixed sampling strip:
 
