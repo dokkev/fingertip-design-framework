@@ -19,6 +19,7 @@ if str(_REPOSITORY_ROOT) not in sys.path:
 from experiments.hardware import ColorFrame, RealSenseColorCamera  # noqa: E402
 from experiments.localization import (  # noqa: E402
     CONTACT_Z_THRESHOLD,
+    CanonicalFingerConfig,
     CanonicalFingerMap,
     DenseProfileConfig,
     DenseTemplateModel,
@@ -98,6 +99,7 @@ def _dense_config(observer_name: str) -> DenseProfileConfig | None:
             mode="abs_highpass_red",
             transverse_stop_fraction=0.95,
             transverse_reduction="mean",
+            longitudinal_smoothing_sigma_px=2.0,
         ),
         "dense-gradient": DenseProfileConfig(mode="red_gradient"),
     }
@@ -539,15 +541,14 @@ def main() -> None:
                                     axis=0,
                                 ).astype(np.uint8)
                                 boundary = detect_fingertip_boundary(calibration_rgb)
-                                output_shape = (
-                                    dense_model.canonical_shape
+                                canonical_config = (
+                                    dense_model.canonical_config
                                     if dense_model is not None
-                                    else (256, 128)
+                                    else CanonicalFingerConfig()
                                 )
                                 reference_canonical_map = build_canonical_finger_map(
                                     boundary,
-                                    output_height=output_shape[0],
-                                    output_width=output_shape[1],
+                                    canonical_config,
                                 )
                                 geometry = detect_led_array(
                                     calibration_rgb,

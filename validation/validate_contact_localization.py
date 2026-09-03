@@ -19,6 +19,7 @@ if str(REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(REPOSITORY_ROOT))
 
 from experiments.localization import (  # noqa: E402
+    CanonicalFingerConfig,
     DenseProfileConfig,
     brightest_red_features,
     build_canonical_finger_map,
@@ -90,16 +91,19 @@ def _resolve_filename(candidates: tuple[str, ...]) -> str:
     )
 
 
-def _canonical_sequence(filenames: list[str]) -> tuple[list[np.ndarray], tuple[int, int]]:
+def _canonical_sequence(
+    filenames: list[str],
+) -> tuple[list[np.ndarray], CanonicalFingerConfig]:
     images = [_load_rgb(filename) for filename in filenames]
     # GrabCut initialization uses OpenCV's process-global RNG. Reset it per
     # sequence so this offline characterization is reproducible and independent
     # of which material sequence runs first.
     cv2.setRNGSeed(0)
     reference_region = detect_fingertip_boundary(images[0])
-    canonical_map = build_canonical_finger_map(reference_region)
+    canonical_config = CanonicalFingerConfig()
+    canonical_map = build_canonical_finger_map(reference_region, canonical_config)
     canonical_images = [warp_to_canonical(image, canonical_map) for image in images]
-    return canonical_images, canonical_images[0].shape[:2]
+    return canonical_images, canonical_config
 
 
 def _normalized_profiles(
@@ -331,7 +335,7 @@ def main() -> None:
         _resolve_filename(filenames) for filenames, _ in SOLARIS_SEQUENCE
     ]
     solaris_positions = np.asarray([position for _, position in SOLARIS_SEQUENCE])
-    solaris_images, canonical_shape = _canonical_sequence(solaris_filenames)
+    solaris_images, canonical_config = _canonical_sequence(solaris_filenames)
     solaris_config = DenseProfileConfig(
         mode="top10_red",
         transverse_start_fraction=0.15,
@@ -357,6 +361,7 @@ def main() -> None:
         transverse_start_fraction=0.0,
         transverse_stop_fraction=0.95,
         transverse_reduction="mean",
+        longitudinal_smoothing_sigma_px=2.0,
     )
     dragon_profiles = np.vstack(
         [
@@ -407,7 +412,7 @@ def main() -> None:
         model = build_dense_template_model(
             solaris_raw_profiles,
             solaris_positions,
-            canonical_shape=canonical_shape,
+            canonical_config=canonical_config,
             feature_config=solaris_config,
             normalization="mean_center_l2",
         )
@@ -423,6 +428,19 @@ def main() -> None:
         dragon_positions,
     )
     print(f"Artifacts: {OUTPUT_DIRECTORY}")
+
+    dragon_failures = []
+    if not np.all(np.diff(dragon_result["centroids"]) > 0.0):
+        dragon_failures.append("response centroids are not strictly monotonic")
+    if dragon_result["nearest_position_count"] < 4:
+        dragon_failures.append("fewer than 4/5 nearest labelled positions are correct")
+    if dragon_result["loo_mae_mm"] >= 3.0:
+        dragon_failures.append("leave-one-position-out MAE is not below 3 mm")
+    if dragon_failures:
+        raise RuntimeError(
+            "Dragon full-span regression failed: " + "; ".join(dragon_failures)
+        )
+    print("Dragon full-span regression: PASS")
 
 
 if __name__ == "__main__":

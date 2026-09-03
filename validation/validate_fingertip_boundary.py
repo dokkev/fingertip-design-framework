@@ -23,7 +23,7 @@ OUTPUT_PATH = (
     / "output"
     / "validation"
     / "emissive_fingertip_segmentation"
-    / "segmentation_14_image_validation.png"
+    / "segmentation_13_image_validation.png"
 )
 
 
@@ -32,14 +32,6 @@ def _load_rgb(path: Path) -> np.ndarray:
     if bgr is None:
         raise RuntimeError(f"could not read reference image: {path}")
     return cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-
-
-def _image_path(*filenames: str) -> Path:
-    for filename in filenames:
-        path = IMAGE_DIRECTORY / filename
-        if path.is_file():
-            return path
-    return IMAGE_DIRECTORY / filenames[0]
 
 
 def _centroid(mask: np.ndarray) -> tuple[float, float]:
@@ -125,25 +117,20 @@ def _annotated_tile(rgb: np.ndarray, diagnostics, name: str) -> np.ndarray:
 
 def main() -> None:
     sequences = {
-        "Normal p0-p6": [
-            _image_path("solaris_p1_Color.png", "p0_Color.png"),
-            _image_path("solaris_p2_Color.png", "p1_Color.png"),
-            _image_path("solaris_p3_Color.png", "p2_Color.png"),
-            _image_path("p3_Color.png"),
-            _image_path("solaris_p4_Color.png", "p4_Color.png"),
-            _image_path("solaris_p5_Color.png", "p5_Color.png"),
-            _image_path("solaris_p6_Color.png", "p6_Color.png"),
+        "Solaris p1-p6": [
+            IMAGE_DIRECTORY / f"solaris_p{index}_Color.png"
+            for index in range(1, 7)
         ],
-        "Dragon Skin p0d-p5d": [
-            _image_path("dragonskin_unloaded_Color.png", "p0d_Color.png"),
-            _image_path("dragonskin_p1_Color.png", "p1d_Color.png"),
-            _image_path("dragonskin_p3_Color.png", "p2d_Color.png"),
-            _image_path("dragonskin_p4_Color.png", "p3d_Color.png"),
-            _image_path("dragonskin_p5_Color.png", "p4d_Color.png"),
-            _image_path("dragonskin_p6_Color.png", "p5d_Color.png"),
+        "Dragon Skin unloaded/p1/p3-p6": [
+            IMAGE_DIRECTORY / "dragonskin_unloaded_Color.png",
+            IMAGE_DIRECTORY / "dragonskin_p1_Color.png",
+            *(
+                IMAGE_DIRECTORY / f"dragonskin_p{index}_Color.png"
+                for index in range(3, 7)
+            ),
         ],
         "Dark room": [
-            _image_path("solaris_unloaded_dark_Color.png", "noload_dark_Color.png")
+            IMAGE_DIRECTORY / "solaris_unloaded_dark_Color.png"
         ],
     }
     paths = [path for sequence in sequences.values() for path in sequence]
@@ -179,14 +166,14 @@ def main() -> None:
         tile_rows.append(np.hstack(tiles))
 
     _report_stability(
-        "Normal p0-p6",
-        sequence_masks["Normal p0-p6"],
-        sequence_runtimes["Normal p0-p6"],
+        "Solaris p1-p6",
+        sequence_masks["Solaris p1-p6"],
+        sequence_runtimes["Solaris p1-p6"],
     )
     _report_stability(
-        "Dragon Skin p0d-p5d",
-        sequence_masks["Dragon Skin p0d-p5d"],
-        sequence_runtimes["Dragon Skin p0d-p5d"],
+        "Dragon Skin unloaded/p1/p3-p6",
+        sequence_masks["Dragon Skin unloaded/p1/p3-p6"],
+        sequence_runtimes["Dragon Skin unloaded/p1/p3-p6"],
     )
     dark_runtime = sequence_runtimes["Dark room"][0]
     print(f"Dark-room execution: PASS, runtime={dark_runtime:.3f} ms")
@@ -194,7 +181,7 @@ def main() -> None:
     OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     cv2.imwrite(str(OUTPUT_PATH), np.vstack(tile_rows))
     print(f"artifact: {OUTPUT_PATH}")
-    print(f"Result: PASS ({success_count}/14 fixed-parameter executions)")
+    print(f"Result: PASS ({success_count}/13 fixed-parameter executions)")
 
 
 if __name__ == "__main__":

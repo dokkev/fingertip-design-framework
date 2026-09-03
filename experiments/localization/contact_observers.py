@@ -7,6 +7,7 @@ from pathlib import Path
 
 import numpy as np
 
+from .canonical import CanonicalFingerConfig
 from .optical_features import (
     DenseProfileConfig,
     mean_center_l2,
@@ -52,7 +53,7 @@ class DenseTemplateModel:
 
     positions_mm: np.ndarray
     templates: np.ndarray
-    canonical_shape: tuple[int, int]
+    canonical_config: CanonicalFingerConfig
     feature_config: DenseProfileConfig
     normalization: str = "mean_center_l2"
 
@@ -72,15 +73,12 @@ class DenseTemplateModel:
             or not np.all(np.isfinite(templates))
         ):
             raise ValueError("templates must be a finite positions x features array")
-        if (
-            len(self.canonical_shape) != 2
-            or any(
-                not isinstance(value, int) or isinstance(value, bool) or value < 1
-                for value in self.canonical_shape
+        if not isinstance(self.canonical_config, CanonicalFingerConfig):
+            raise TypeError("canonical_config must be a CanonicalFingerConfig")
+        if templates.shape[1] != self.canonical_config.output_height:
+            raise ValueError(
+                "canonical output height must match the template profile length"
             )
-            or templates.shape[1] != self.canonical_shape[0]
-        ):
-            raise ValueError("canonical_shape must match the template profile length")
         if self.normalization not in _NORMALIZATION_MODES:
             raise ValueError(
                 f"normalization must be one of {', '.join(_NORMALIZATION_MODES)}"
@@ -91,6 +89,13 @@ class DenseTemplateModel:
         templates.setflags(write=False)
         object.__setattr__(self, "positions_mm", positions)
         object.__setattr__(self, "templates", templates)
+
+    @property
+    def canonical_shape(self) -> tuple[int, int]:
+        return (
+            self.canonical_config.output_height,
+            self.canonical_config.output_width,
+        )
 
 
 @dataclass(frozen=True)
@@ -218,7 +223,7 @@ def build_dense_template_model(
     positions_mm: np.ndarray,
     *,
     aggregation: str = "median",
-    canonical_shape: tuple[int, int] | None = None,
+    canonical_config: CanonicalFingerConfig,
     feature_config: DenseProfileConfig | None = None,
     normalization: str = "mean_center_l2",
 ) -> DenseTemplateModel:
@@ -247,12 +252,10 @@ def build_dense_template_model(
         [np.median(normalized[positions == position], axis=0) for position in unique_positions]
     )
     templates = np.vstack([_normalize(template, normalization) for template in templates])
-    if canonical_shape is None:
-        canonical_shape = (values.shape[1], 1)
     return DenseTemplateModel(
         positions_mm=unique_positions,
         templates=templates,
-        canonical_shape=canonical_shape,
+        canonical_config=canonical_config,
         feature_config=feature_config or DenseProfileConfig(),
         normalization=normalization,
     )
@@ -349,6 +352,12 @@ def save_dense_template_model(path: str | Path, model: DenseTemplateModel) -> No
         positions_mm=model.positions_mm,
         templates=model.templates,
         canonical_shape=np.asarray(model.canonical_shape, dtype=np.int64),
+        canonical_transverse_inset_fraction=np.asarray(
+            model.canonical_config.transverse_inset_fraction
+        ),
+        canonical_longitudinal_span=np.asarray(
+            model.canonical_config.longitudinal_span
+        ),
         normalization=np.asarray(model.normalization),
         **{f"feature_{name}": np.asarray(value) for name, value in config.items()},
     )
@@ -358,6 +367,17 @@ def load_dense_template_model(path: str | Path) -> DenseTemplateModel:
     """Load a dense template model without enabling NumPy pickle support."""
 
     with np.load(Path(path), allow_pickle=False) as data:
+        canonical_shape = tuple(
+            int(value) for value in data["canonical_shape"].tolist()
+        )
+        canonical_config = CanonicalFingerConfig(
+            output_height=canonical_shape[0],
+            output_width=canonical_shape[1],
+            transverse_inset_fraction=float(
+                data["canonical_transverse_inset_fraction"].item()
+            ),
+            longitudinal_span=str(data["canonical_longitudinal_span"].item()),
+        )
         config = DenseProfileConfig(
             mode=str(data["feature_mode"].item()),
             transverse_start_fraction=float(
@@ -380,9 +400,7 @@ def load_dense_template_model(path: str | Path) -> DenseTemplateModel:
         return DenseTemplateModel(
             positions_mm=data["positions_mm"],
             templates=data["templates"],
-            canonical_shape=tuple(
-                int(value) for value in data["canonical_shape"].tolist()
-            ),
+            canonical_config=canonical_config,
             feature_config=config,
             normalization=str(data["normalization"].item()),
         )

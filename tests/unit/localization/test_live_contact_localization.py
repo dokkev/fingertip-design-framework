@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 from experiments.localization import (
+    CanonicalFingerConfig,
     DenseProfileConfig,
     DenseTemplateModel,
     save_dense_template_model,
@@ -15,7 +16,7 @@ def _model(config: DenseProfileConfig) -> DenseTemplateModel:
     return DenseTemplateModel(
         positions_mm=np.array((0.0, 5.0)),
         templates=np.array(((1.0, 0.0), (0.0, 1.0))),
-        canonical_shape=(2, 4),
+        canonical_config=CanonicalFingerConfig(output_height=2, output_width=4),
         feature_config=config,
     )
 
@@ -34,6 +35,7 @@ def test_default_dense_configs_match_validated_material_descriptors() -> None:
         mode="abs_highpass_red",
         transverse_stop_fraction=0.95,
         transverse_reduction="mean",
+        longitudinal_smoothing_sigma_px=2.0,
     )
 
 

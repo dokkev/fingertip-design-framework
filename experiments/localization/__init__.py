@@ -1,6 +1,7 @@
 """Camera-image localization for physical LUMO experiments."""
 
 from .canonical import (
+    CanonicalFingerConfig,
     CanonicalFingerMap,
     build_canonical_finger_map,
     similarity_from_landmarks,
@@ -37,6 +38,14 @@ from .fingertip_boundary import (
     FingertipBoundaryRegion,
     detect_fingertip_boundary,
 )
+from .fixed_finger_calibration import (
+    FixedFingerCalibration,
+    calibrate_fixed_finger,
+    load_fixed_finger_calibration,
+    project_longitudinal_positions,
+    save_fixed_finger_calibration,
+    warp_with_fixed_finger_calibration,
+)
 from .fingertip_segmentation import FingertipSegmentation, segment_fingertip
 from .optical_features import (
     DenseProfileConfig,
@@ -49,6 +58,7 @@ from .optical_features import (
 __all__ = [
     "AffineCentroidModel",
     "CONTACT_Z_THRESHOLD",
+    "CanonicalFingerConfig",
     "CanonicalFingerMap",
     "DensePositionEstimate",
     "DenseProfileConfig",
@@ -57,10 +67,12 @@ __all__ = [
     "ContactEstimate",
     "FingertipBoundaryRegion",
     "FingertipSegmentation",
+    "FixedFingerCalibration",
     "LedArrayGeometry",
     "brightest_red_features",
     "build_canonical_finger_map",
     "build_dense_template_model",
+    "calibrate_fixed_finger",
     "constrain_led_array_motion",
     "contact_image_point",
     "detect_fingertip_boundary",
@@ -72,15 +84,19 @@ __all__ = [
     "extract_dense_response_profile",
     "fit_affine_position_from_centroid",
     "load_dense_template_model",
+    "load_fixed_finger_calibration",
     "mean_center_l2",
     "reanchor_led_array",
+    "project_longitudinal_positions",
     "response_centroid",
     "robust_zscore",
     "save_dense_template_model",
+    "save_fixed_finger_calibration",
     "segment_fingertip",
     "similarity_from_landmarks",
     "track_led_array",
     "transform_canonical_map",
     "unloaded_baseline_statistics",
     "warp_to_canonical",
+    "warp_with_fixed_finger_calibration",
 ]

@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 from experiments.localization import (
+    CanonicalFingerConfig,
     DenseProfileConfig,
     build_dense_template_model,
     estimate_affine_position_from_centroid,
@@ -26,7 +27,7 @@ def test_exact_dense_template_returns_its_labelled_position() -> None:
     model = build_dense_template_model(
         profiles,
         np.array((0.0, 5.0, 10.0)),
-        canonical_shape=(4, 8),
+        canonical_config=CanonicalFingerConfig(output_height=4, output_width=8),
     )
 
     estimate = estimate_dense_template_position(profiles[1], model)
@@ -76,10 +77,16 @@ def test_dense_template_npz_round_trip_uses_explicit_metadata(tmp_path) -> None:
         transverse_reduction="mean",
         top_fraction=0.2,
     )
+    canonical_config = CanonicalFingerConfig(
+        output_height=3,
+        output_width=12,
+        transverse_inset_fraction=0.08,
+        longitudinal_span="core",
+    )
     model = build_dense_template_model(
         np.array(((0.0, 1.0, 0.0), (0.0, 0.0, 1.0))),
         np.array((2.0, 7.0)),
-        canonical_shape=(3, 12),
+        canonical_config=canonical_config,
         feature_config=config,
     )
     path = tmp_path / "dense_model.npz"
@@ -90,6 +97,7 @@ def test_dense_template_npz_round_trip_uses_explicit_metadata(tmp_path) -> None:
     assert np.array_equal(loaded.positions_mm, model.positions_mm)
     assert np.array_equal(loaded.templates, model.templates)
     assert loaded.canonical_shape == model.canonical_shape
+    assert loaded.canonical_config == canonical_config
     assert loaded.feature_config == config
     assert loaded.normalization == model.normalization
 

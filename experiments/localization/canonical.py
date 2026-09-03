@@ -10,6 +10,34 @@ import numpy as np
 from .fingertip_boundary import FingertipBoundaryRegion
 
 
+_LONGITUDINAL_SPANS = ("full_silhouette", "core")
+
+
+@dataclass(frozen=True)
+class CanonicalFingerConfig:
+    """Sampling contract for one finger-relative canonical image."""
+
+    output_height: int = 256
+    output_width: int = 128
+    transverse_inset_fraction: float = 0.04
+    longitudinal_span: str = "full_silhouette"
+
+    def __post_init__(self) -> None:
+        for name, value in (
+            ("output_height", self.output_height),
+            ("output_width", self.output_width),
+        ):
+            if not isinstance(value, int) or isinstance(value, bool) or value < 2:
+                raise ValueError(f"{name} must be an integer of at least two")
+        if not 0.0 <= self.transverse_inset_fraction < 0.5:
+            raise ValueError("transverse_inset_fraction must be in [0, 0.5)")
+        if self.longitudinal_span not in _LONGITUDINAL_SPANS:
+            raise ValueError(
+                "longitudinal_span must be one of "
+                + ", ".join(_LONGITUDINAL_SPANS)
+            )
+
+
 @dataclass(frozen=True)
 class CanonicalFingerMap:
     """Source-image coordinates sampled on a normalized finger rectangle."""
@@ -46,25 +74,27 @@ class CanonicalFingerMap:
 
 def build_canonical_finger_map(
     region: FingertipBoundaryRegion,
-    *,
-    output_height: int = 256,
-    output_width: int = 128,
-    transverse_inset_fraction: float = 0.04,
+    config: CanonicalFingerConfig = CanonicalFingerConfig(),
 ) -> CanonicalFingerMap:
     """Map normalized longitudinal/transverse samples into one finger image."""
 
-    for name, value in (
-        ("output_height", output_height),
-        ("output_width", output_width),
-    ):
-        if not isinstance(value, int) or isinstance(value, bool) or value < 2:
-            raise ValueError(f"{name} must be an integer of at least two")
-    if not 0.0 <= transverse_inset_fraction < 0.5:
-        raise ValueError("transverse_inset_fraction must be in [0, 0.5)")
+    if not isinstance(config, CanonicalFingerConfig):
+        raise TypeError("config must be a CanonicalFingerConfig")
 
-    y_start, y_stop = region.core_y_span
-    source_y = np.linspace(y_start, y_stop - 1, output_height, dtype=np.float64)
     boundary_y = region.dorsal_boundary_xy_px[:, 1]
+    if config.longitudinal_span == "full_silhouette":
+        y_start = int(np.ceil(boundary_y[0]))
+        y_stop = int(np.floor(boundary_y[-1])) + 1
+    else:
+        y_start, y_stop = region.core_y_span
+    if y_stop - y_start < 2:
+        raise RuntimeError("canonical longitudinal span contains fewer than two rows")
+    source_y = np.linspace(
+        y_start,
+        y_stop - 1,
+        config.output_height,
+        dtype=np.float64,
+    )
     dorsal_x = np.interp(
         source_y,
         boundary_y,
@@ -79,9 +109,9 @@ def build_canonical_finger_map(
     if np.any(width <= 0.0):
         raise RuntimeError("canonical finger boundaries cross")
 
-    left = dorsal_x + transverse_inset_fraction * width
-    right = palmar_x - transverse_inset_fraction * width
-    transverse = np.linspace(0.0, 1.0, output_width, dtype=np.float64)
+    left = dorsal_x + config.transverse_inset_fraction * width
+    right = palmar_x - config.transverse_inset_fraction * width
+    transverse = np.linspace(0.0, 1.0, config.output_width, dtype=np.float64)
     map_x = left[:, None] + transverse[None, :] * (right - left)[:, None]
     map_y = np.broadcast_to(source_y[:, None], map_x.shape)
     return CanonicalFingerMap(map_x=map_x, map_y=map_y)
@@ -173,6 +203,7 @@ def transform_canonical_map(
 
 
 __all__ = [
+    "CanonicalFingerConfig",
     "CanonicalFingerMap",
     "build_canonical_finger_map",
     "similarity_from_landmarks",

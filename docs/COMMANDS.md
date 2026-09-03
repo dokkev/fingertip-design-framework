@@ -95,7 +95,19 @@ under `output/contact_dataset/mock/MOCK_*` and carry `sensor_mode: mock`.
 
 ## Live D435 contact localization
 
-Replay the smooth emissive segmentation on the checked-in 14-image reference
+Build and validate the offline projective calibration for a fixed fingertip,
+fixed camera, and one unloaded reference frame:
+
+```bash
+conda run --no-capture-output -n lit \
+  python -u validation/validate_fixed_finger_calibration.py
+```
+
+This writes per-condition NPZ calibrations, a summary CSV, and one diagnostic
+PNG beneath `output/validation/fixed_finger_calibration/`. It performs no live
+tracking, joint-state processing, or per-frame geometry reconstruction.
+
+Replay the smooth emissive segmentation on the checked-in 13-image reference
 set, report fixed-extrinsic stability/runtime, and regenerate its overlays:
 
 ```bash
@@ -112,6 +124,14 @@ conda run --no-capture-output -n lit \
   python -u validation/validate_contact_localization.py
 conda run --no-capture-output -n lit \
   python -u validation/validate_contact_localization.py --compare-features
+```
+
+Ablate only the Dragon Skin longitudinal canonical span while holding the
+segmentation result and optical descriptor fixed:
+
+```bash
+conda run --no-capture-output -n lit \
+  python -u validation/validate_contact_canonicalization.py
 ```
 
 Export a Solaris dense-template model for online replay:

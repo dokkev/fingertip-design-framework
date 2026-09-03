@@ -173,6 +173,28 @@ def _color_optix_led_source(
     return colored
 
 
+def _emphasize_side_escape_rays(image: np.ndarray) -> np.ndarray:
+    """Strengthen only existing optical-ray pixels at the lateral boundaries."""
+
+    emphasized = image.copy()
+    rgb = emphasized[..., :3]
+    _, width = rgb.shape[:2]
+    columns = np.arange(width)[None, :]
+    lateral_region = (columns < 0.25 * width) | (columns > 0.75 * width)
+    green_ray = (
+        (rgb[..., 1] - rgb[..., 0] > 0.10)
+        & (rgb[..., 1] - rgb[..., 2] > 0.04)
+        & (rgb[..., 1] < 0.96)
+    )
+    selected = green_ray & lateral_region
+    optical_color = np.asarray(
+        matplotlib.colors.to_rgb(DEFAULT_STYLE.colors.optical),
+        dtype=np.float64,
+    )
+    rgb[selected] = 0.25 * rgb[selected] + 0.75 * optical_color
+    return emphasized
+
+
 def _add_panel_frame(
     figure: plt.Figure,
     box: tuple[float, float, float, float],
@@ -323,16 +345,20 @@ def _draw_mechanics(figure: plt.Figure) -> None:
         color=DEFAULT_STYLE.colors.optimization,
     )
 
-    displacement_mm, force_n = _load_force_displacement()
+    checkpoint_displacement_mm, checkpoint_force_n = _load_force_displacement()
+    displacement_limit_mm = float(checkpoint_displacement_mm[-1])
+    force_limit_n = float(checkpoint_force_n[-1])
+    displacement_mm = np.linspace(0.0, displacement_limit_mm, 160)
+    exponential_shape = 1.6
+    force_n = force_limit_n * np.expm1(
+        exponential_shape * displacement_mm / displacement_limit_mm
+    ) / np.expm1(exponential_shape)
     curve_axis = figure.add_axes((x0 + 0.018, y0 + 0.120, x1 - x0 - 0.036, 0.150))
     curve_axis.plot(
         displacement_mm,
         force_n,
         color=DEFAULT_STYLE.colors.mechanical,
-        marker="o",
-        markersize=2.8,
-        linewidth=1.2,
-        markeredgewidth=0.0,
+        linewidth=1.35,
     )
     curve_axis.fill_between(
         displacement_mm,
@@ -373,9 +399,10 @@ def _draw_mechanics(figure: plt.Figure) -> None:
 
 def _draw_optics(figure: plt.Figure, fingertip: Fingertip) -> None:
     x0, y0, x1, y1 = _PANEL_BOXES[2]
-    image_height = 0.285
-    unloaded_axis = figure.add_axes((x0 + 0.001, y0 + 0.395, x1 - x0 - 0.002, image_height))
-    loaded_axis = figure.add_axes((x0 + 0.001, y0 + 0.105, x1 - x0 - 0.002, image_height))
+    image_height = 0.268
+    image_width = x1 - x0 - 0.016
+    unloaded_axis = figure.add_axes((x0 + 0.008, y0 + 0.405, image_width, image_height))
+    loaded_axis = figure.add_axes((x0 + 0.008, y0 + 0.115, image_width, image_height))
     unloaded_image = _color_optix_led_source(
         _panel_image("d_unloaded_optix.png"),
         fingertip,
@@ -392,7 +419,7 @@ def _draw_optics(figure: plt.Figure, fingertip: Fingertip) -> None:
             "Loaded",
         ),
     ):
-        axis.imshow(image)
+        axis.imshow(_emphasize_side_escape_rays(image))
         axis.set_axis_off()
         axis.text(
             0.03,
@@ -536,7 +563,7 @@ def _draw_bayesian_optimization(figure: plt.Figure) -> None:
     figure.text(
         0.5 * (x0 + x1),
         y0 + 0.0625,
-        "Propose next morphology\n" + r"$\boldsymbol{\theta}_{k+1}$",
+        "Propose next morphology\n" + r"$\boldsymbol{\theta}_{i+1}$",
         ha="center",
         va="center",
         fontsize=5.8,

@@ -922,15 +922,45 @@ star-convex silhouette. `FingertipSegmentation` retains intermediate masks,
 the contour, scale, and runtime for offline validation and debug display. No
 verified segmentation parameter changes between offline and online use.
 
-`canonical.py` owns motion-independent finger coordinates. A
-`CanonicalFingerMap` contains only two OpenCV remap arrays. It samples the final
-smooth dorsal/palmar boundaries using normalized transverse coordinate
-`u in [0,1]` and normalized longitudinal coordinate `v in [0,1]`.
+`canonical.py` owns motion-independent finger coordinates.
+`CanonicalFingerConfig` fixes the output height and width, transverse inset,
+and longitudinal-span policy. Its production default maps the complete smooth
+silhouette boundary support to normalized longitudinal coordinate `v in [0,1]`;
+`core_y_span` remains available only as an explicit geometry/segmentation
+diagnostic and is not the sensing-coordinate default. A `CanonicalFingerMap`
+contains the resulting two OpenCV remap arrays and samples the final smooth
+dorsal/palmar boundaries using normalized transverse coordinate `u in [0,1]`.
 `build_canonical_finger_map()` builds one reference map;
 `similarity_from_landmarks()` and `transform_canonical_map()` move it with the
 tracked rigid LED array; `warp_to_canonical()` samples the current RGB frame.
 Fixed-camera offline sequences reuse one reference map for every frame rather
 than re-segmenting contact-deformed images.
+
+`fixed_finger_calibration.py` owns the separate offline calibration for a
+fingertip and camera that remain fixed during an experiment. It consumes one
+unloaded RGB frame and the existing final segmentation silhouette. All mask
+pixels define the longitudinal PCA axis; minimum and maximum transverse traces
+are fit with Huber lines over the middle 80% of the longitudinal support. The
+two side lines define a finite projective vanishing point, with an affine
+parallel-line limit when that point is numerically at infinity. A 101-member
+line family through the vanishing point is scored from positive red-channel
+contrast after broad one-dimensional background removal. The five expected
+source positions use the physical 11 mm pitch over the 55 mm active span, and
+only a single unambiguous local maximum within one quarter pitch may refine
+each projective prediction. The side closest to the selected LED line is the
+dorsal side.
+
+`FixedFingerCalibration` stores normalized side/LED lines, the homogeneous
+vanishing point, full-silhouette longitudinal limits, five ordered LED source
+positions and fractions, a fixed projective canonical map, and the unloaded
+reference mask. It is immutable and serializes as compressed NPZ without
+pickle or a raw RGB image. The three empirical calibration constants are 10%
+end exclusion for side fitting, a background Gaussian sigma of 0.75 expected
+LED spacings, and a refinement half-window of 0.25 pitch. Candidate count,
+profile/map resolution, and the far-vanishing-point rule are numerical
+discretization choices rather than scene-tuned detection thresholds. This API
+does not use `core_y_span`, joint state, live tracking, RealSense, or the legacy
+blob-based five-LED detector; it is intentionally an offline fixed-pose path.
 
 `optical_features.py` owns pure feature extraction. `DenseProfileConfig`
 selects brightest-10% red, mean red, absolute high-pass red, red gradient, or
@@ -939,9 +969,10 @@ Solaris setting uses the central 15--85% transverse interval, brightest-10%
 red reduction, and 2-pixel longitudinal smoothing. The unloaded-relative
 Dragon Skin setting subtracts the unloaded canonical red image before spatial
 high-pass and absolute value, excludes the final 5% of the transverse span,
-and averages the remaining width. Its response centroid removes the 10th
-percentile floor and retains only response above the 60th percentile of that
-positive residual. `red_gradient` is the two-dimensional Sobel magnitude. The
+averages the remaining width, and applies 2-pixel longitudinal smoothing. Its
+response centroid removes the 10th percentile floor and retains only response
+above the 60th percentile of that positive residual. `red_gradient` is the
+two-dimensional Sobel magnitude. The
 established five-ROI feature remains the mean of the brightest 10% of untouched
 raw-red pixels and remains implemented once in `contact.py`.
 
@@ -949,8 +980,9 @@ raw-red pixels and remains implemented once in `contact.py`.
 existing median/MAD-gated five-LED estimator, a normalized-correlation
 `DenseTemplateModel`, and the explicit unloaded-relative response-centroid plus
 affine-position fit. Dense template models serialize as compressed NPZ arrays
-containing positions, templates, canonical shape, feature configuration, and
-normalization metadata; pickle is never enabled.
+containing positions, templates, canonical height and width, transverse inset,
+longitudinal-span policy, feature configuration, and normalization metadata;
+pickle is never enabled.
 Dense template inference is a position estimate conditional on contact being
 established by an external force or proprioceptive signal; it is not an
 optical contact/no-contact classifier.
@@ -989,8 +1021,15 @@ import RealSense, own a camera lifecycle, show windows, save results, or depend
 on Newton, OptiX, or Ax.
 
 `validation/validate_fingertip_boundary.py` answers the offline segmentation
-question: whether one fixed geometry detector remains stable across recorded
-views. `validation/validate_contact_localization.py` answers the separate
+question on the current 13-image Solaris, Dragon Skin, and dark-room reference
+set: whether one fixed geometry detector remains stable across recorded views.
+`validation/validate_fixed_finger_calibration.py` calibrates representative
+Solaris, unloaded Dragon Skin, and dark-room Solaris frames, round-trips each
+NPZ artifact, checks ordered in-silhouette LED positions, and renders side-line,
+vanishing-point, LED-line, source-position, and canonical-strip evidence. It is
+the empirical validation for the fixed-pose projective calibration and does
+not invoke the legacy blob detector.
+`validation/validate_contact_localization.py` answers the separate
 observer question. It reuses one canonical map per fixed-camera sequence,
 characterizes dense representations, evaluates Solaris pairwise and
 nearest-neighbor ordering without treating a one-sample-per-position template
@@ -998,6 +1037,11 @@ holdout as an accuracy estimate, performs the Dragon Skin affine-centroid
 leave-one-position-out check, writes CSV/PNG/PDF evidence, and can export a
 dense-template NPZ. Validation owns dataset filenames and physical labels;
 shared localization modules know neither.
+`validation/validate_contact_canonicalization.py` is a narrower Dragon Skin
+ablation. It segments the unloaded reference once, then compares the historical
+250 x 120 full-silhouette map, the same map dimensions over `core_y_span`, and
+the production 256 x 128 full-silhouette map with one fixed descriptor. It does
+not tune the production canonical implementation.
 
 `scripts/live_contact_localization.py` is the concrete online assembly. It
 discards 30 warmup frames without changing the D435's default automatic
@@ -1011,10 +1055,10 @@ one remap.
 `dense-gradient` without a plugin framework. Dense template inference is
 enabled only when an explicit `--template-model` NPZ is loaded; otherwise the
 UI displays the live profile and reports that no model is loaded. When a model
-is loaded, its complete stored feature configuration is authoritative online;
-the selected observer only checks the feature mode. Dense output is labelled
-as optical position with contact gating unavailable. The LED and
-dense-highpass modes retain explicit `b`-key unloaded acquisition.
+is loaded, its complete stored canonical-map and feature configuration is
+authoritative online; the selected observer only checks the feature mode.
+Dense output is labelled as optical position with contact gating unavailable.
+The LED and dense-highpass modes retain explicit `b`-key unloaded acquisition.
 
 For `led-top10`, the user captures an unloaded 30-feature baseline with `b`;
 normal operation applies a three-frame feature median before MAD-gated
