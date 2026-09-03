@@ -968,6 +968,10 @@ profile/map resolution, and the far-vanishing-point rule are numerical
 discretization choices rather than scene-tuned detection thresholds. This API
 does not use `core_y_span`, joint state, live tracking, RealSense, or the legacy
 blob-based five-LED detector; it is intentionally an offline fixed-pose path.
+The offline validator independently reconstructs the selected candidate's
+one-dimensional positive-red profile, verifies that the stored line score is
+exactly the sum of the five expected-window maxima, and plots those windows and
+maxima. Whole-line mean contrast is reported only as a non-scored diagnostic.
 
 `experiments/optical_morphology_analysis.py` owns the corresponding small
 offline measurement path. It remaps one unloaded image and loaded frames with

@@ -108,9 +108,13 @@ conda run --no-capture-output -n lit \
 The first command records five clicks per image, in distal-to-proximal order,
 in `validation/fixed_finger_led_ground_truth.json`. The second writes
 per-condition NPZ calibrations, measured pixel errors, a summary CSV, and one
-diagnostic PNG beneath `output/validation/fixed_finger_calibration/`. It fails
-when the manual labels are absent and performs no live tracking, joint-state
-processing, or per-frame geometry reconstruction.
+diagnostic PNG beneath `output/validation/fixed_finger_calibration/`. The PNG
+includes the selected line's positive-red profile, five physical score windows,
+and the maximum used from each window. The CSV independently checks that their
+sum equals the stored line score and reports whole-line mean contrast as an
+explicitly non-scored diagnostic. The command fails when the manual labels are
+absent and performs no live tracking, joint-state processing, or per-frame
+geometry reconstruction.
 
 To regenerate only the silhouette, side lines, five score windows, LED line,
 and sampling-strip diagnostic without claiming LED-position accuracy:

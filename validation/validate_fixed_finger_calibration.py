@@ -26,7 +26,10 @@ from experiments.localization import (  # noqa: E402
     warp_with_fixed_finger_calibration,
 )
 from experiments.localization.fixed_finger_calibration import (  # noqa: E402
+    PROFILE_SAMPLE_COUNT,
     LED_REFINEMENT_HALF_WINDOW_IN_SPACINGS,
+    _candidate_profile,
+    _five_led_window_score,
 )
 from lumo.fingertip.layout import (  # noqa: E402
     LED_CENTERS_Y_MM,
@@ -44,6 +47,14 @@ REFERENCE_IMAGES = (
     ("Dragon Skin unloaded", "dragonskin_unloaded_Color.png"),
     ("Dark-room Solaris", "solaris_unloaded_dark_Color.png"),
 )
+
+
+def _expected_led_fractions() -> np.ndarray:
+    proximal_y_mm, distal_y_mm = TOTAL_Y_BOUNDS_MM
+    led_y_distal_to_proximal = np.sort(np.asarray(LED_CENTERS_Y_MM))[::-1]
+    return (distal_y_mm - led_y_distal_to_proximal) / (
+        distal_y_mm - proximal_y_mm
+    )
 
 
 def _load_rgb(filename: str) -> np.ndarray:
@@ -104,8 +115,7 @@ def _led_search_window_segments(
 ) -> tuple[np.ndarray, ...]:
     proximal_y_mm, distal_y_mm = TOTAL_Y_BOUNDS_MM
     total_length_mm = distal_y_mm - proximal_y_mm
-    led_y_distal_to_proximal = np.sort(np.asarray(LED_CENTERS_Y_MM))[::-1]
-    centers = (distal_y_mm - led_y_distal_to_proximal) / total_length_mm
+    centers = _expected_led_fractions()
     pitch_fraction = abs(LED_CENTERS_Y_MM[1] - LED_CENTERS_Y_MM[0]) / total_length_mm
     half_window = LED_REFINEMENT_HALF_WINDOW_IN_SPACINGS * pitch_fraction
     return tuple(
@@ -130,6 +140,57 @@ def _line_segment(
         calibration.proximal_longitudinal_limit,
         calibration.vanishing_point_h,
         np.asarray((0.0, 1.0)),
+    )
+
+
+def _selected_line_profile(
+    rgb: np.ndarray,
+    calibration: FixedFingerCalibration,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, float]:
+    """Recompute the exact selected-candidate profile and its five score terms."""
+
+    sampled_fractions = np.linspace(0.0, 1.0, PROFILE_SAMPLE_COUNT)
+    reference_limit = (
+        calibration.distal_longitudinal_limit
+        + calibration.proximal_longitudinal_limit
+    )
+    reference_limit /= np.linalg.norm(reference_limit[:2])
+    candidate_line, contrast, valid = _candidate_profile(
+        rgb[:, :, 0].astype(np.float32),
+        calibration.reference_mask,
+        calibration.dorsal_line,
+        calibration.palmar_line,
+        reference_limit,
+        calibration.distal_longitudinal_limit,
+        calibration.proximal_longitudinal_limit,
+        calibration.vanishing_point_h,
+        calibration.led_line_alpha,
+        sampled_fractions,
+    )
+    line_error = min(
+        np.linalg.norm(candidate_line - calibration.led_line),
+        np.linalg.norm(candidate_line + calibration.led_line),
+    )
+    if line_error > 1.0e-10:
+        raise RuntimeError("could not reconstruct the selected LED line")
+
+    expected_fractions = _expected_led_fractions()
+    spacing_fraction = float(expected_fractions[1] - expected_fractions[0])
+    half_window = LED_REFINEMENT_HALF_WINDOW_IN_SPACINGS * spacing_fraction
+    peak_indices = []
+    for center in expected_fractions:
+        indices = np.flatnonzero(
+            np.abs(sampled_fractions - center) <= half_window
+        )
+        peak_indices.append(int(indices[np.argmax(contrast[indices])]))
+    peak_indices = np.asarray(peak_indices, dtype=np.int64)
+    whole_line_mean = float(np.sum(contrast[valid]) / len(sampled_fractions))
+    return (
+        sampled_fractions,
+        contrast,
+        expected_fractions,
+        peak_indices,
+        whole_line_mean,
     )
 
 
@@ -232,6 +293,62 @@ def _overlay(
     axis.axis("off")
 
 
+def _plot_score_profile(
+    axis: plt.Axes,
+    sampled_fractions: np.ndarray,
+    contrast: np.ndarray,
+    expected_fractions: np.ndarray,
+    peak_indices: np.ndarray,
+    score: float,
+) -> None:
+    spacing_fraction = float(expected_fractions[1] - expected_fractions[0])
+    half_window = LED_REFINEMENT_HALF_WINDOW_IN_SPACINGS * spacing_fraction
+    for index, center in enumerate(expected_fractions):
+        axis.axvspan(
+            center - half_window,
+            center + half_window,
+            color="#7b2cbf",
+            alpha=0.13,
+            linewidth=0.0,
+            label="score window" if index == 0 else None,
+        )
+    axis.plot(
+        sampled_fractions,
+        contrast,
+        color="#303030",
+        linewidth=1.1,
+        label="positive red contrast",
+    )
+    axis.scatter(
+        sampled_fractions[peak_indices],
+        contrast[peak_indices],
+        color="#ff2ca0",
+        edgecolor="white",
+        linewidth=0.5,
+        s=28,
+        zorder=3,
+        label="window maximum",
+    )
+    for led_index, peak_index in enumerate(peak_indices, start=1):
+        axis.annotate(
+            str(led_index),
+            (sampled_fractions[peak_index], contrast[peak_index]),
+            xytext=(0, 5),
+            textcoords="offset points",
+            ha="center",
+            va="bottom",
+            fontsize=7,
+            color="#7b2cbf",
+        )
+    axis.set_xlim(0.0, 1.0)
+    axis.set_ylim(bottom=0.0)
+    axis.set_xlabel("Distal ← longitudinal coordinate $v$ → proximal", fontsize=8)
+    axis.set_ylabel("Positive red contrast [DN]", fontsize=8)
+    axis.set_title(f"Five-window score = {score:.3f} DN", fontsize=10)
+    axis.tick_params(labelsize=7)
+    axis.legend(loc="upper left", fontsize=7, frameon=False)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -252,8 +369,9 @@ def main() -> None:
     OUTPUT_DIRECTORY.mkdir(parents=True, exist_ok=True)
     figure, axes = plt.subplots(
         len(REFERENCE_IMAGES),
-        2,
-        figsize=(10.0, 11.0),
+        3,
+        figsize=(15.0, 11.0),
+        gridspec_kw={"width_ratios": (1.35, 0.75, 1.0)},
         constrained_layout=True,
     )
     rows = []
@@ -267,6 +385,27 @@ def main() -> None:
         save_fixed_finger_calibration(calibration_path, calibration)
         loaded = load_fixed_finger_calibration(calibration_path)
         round_trip = _round_trip_matches(calibration, loaded)
+        (
+            sampled_fractions,
+            contrast,
+            expected_fractions,
+            peak_indices,
+            whole_line_mean,
+        ) = _selected_line_profile(rgb, calibration)
+        window_peaks = contrast[peak_indices]
+        score_from_windows = _five_led_window_score(
+            sampled_fractions,
+            contrast,
+            expected_fractions,
+        )
+        score_matches_windows = bool(
+            np.isclose(
+                calibration.led_line_score,
+                score_from_windows,
+                rtol=0.0,
+                atol=1.0e-12,
+            )
+        )
 
         rounded_centers = np.rint(calibration.led_centers_xy_px).astype(np.int64)
         rounded_centers[:, 0] = np.clip(rounded_centers[:, 0], 0, rgb.shape[1] - 1)
@@ -280,7 +419,9 @@ def main() -> None:
             )
         )
         ordered = bool(np.all(np.diff(calibration.led_longitudinal_fractions) > 0.0))
-        case_geometry_valid = round_trip and centers_inside and ordered
+        case_geometry_valid = (
+            round_trip and centers_inside and ordered and score_matches_windows
+        )
         geometry_valid &= case_geometry_valid
         labels_xy_px = None if ground_truth is None else ground_truth[filename]
         if labels_xy_px is None:
@@ -308,6 +449,10 @@ def main() -> None:
                 filename,
                 calibration.led_line_alpha,
                 calibration.led_line_score,
+                score_from_windows,
+                whole_line_mean,
+                *window_peaks.tolist(),
+                score_matches_windows,
                 vanishing_kind,
                 centers_inside,
                 ordered,
@@ -324,6 +469,14 @@ def main() -> None:
         axes[row_index, 1].imshow(warp_with_fixed_finger_calibration(rgb, loaded))
         axes[row_index, 1].set_title("Fixed image-space sampling strip", fontsize=10)
         axes[row_index, 1].axis("off")
+        _plot_score_profile(
+            axes[row_index, 2],
+            sampled_fractions,
+            contrast,
+            expected_fractions,
+            peak_indices,
+            calibration.led_line_score,
+        )
         print(f"{title}: {'VALID' if case_geometry_valid else 'INVALID'}")
         print(f"  source: {filename}")
         print(
@@ -331,7 +484,19 @@ def main() -> None:
             f"score={calibration.led_line_score:.6f}, VP={vanishing_kind}"
         )
         print(
-            "  LED fractions distal->proximal: "
+            "  score terms [DN]: "
+            f"{np.round(window_peaks, 6).tolist()}, "
+            f"sum={score_from_windows:.6f}, "
+            f"matches stored={score_matches_windows}"
+        )
+        print(f"  whole-line mean contrast (not scored)={whole_line_mean:.6f} DN")
+        print(
+            "  hardware Y [mm] distal->proximal: "
+            f"{np.sort(np.asarray(LED_CENTERS_Y_MM))[::-1].tolist()} over "
+            f"total bounds {list(TOTAL_Y_BOUNDS_MM)}"
+        )
+        print(
+            "  calibrated LED fractions distal->proximal: "
             f"{np.round(calibration.led_longitudinal_fractions, 6).tolist()}"
         )
         print(
@@ -365,6 +530,14 @@ def main() -> None:
                 "filename",
                 "led_line_alpha",
                 "led_line_score",
+                "score_recomputed_from_five_windows",
+                "whole_line_mean_contrast_not_scored",
+                "window_1_peak_dn",
+                "window_2_peak_dn",
+                "window_3_peak_dn",
+                "window_4_peak_dn",
+                "window_5_peak_dn",
+                "score_matches_five_window_sum",
                 "vanishing_point",
                 "centers_inside_silhouette",
                 "ordered_distal_to_proximal",
