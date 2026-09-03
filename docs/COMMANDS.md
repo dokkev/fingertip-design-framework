@@ -67,7 +67,7 @@ conda run --no-capture-output -n lit \
 ```
 
 Keep the Rokubi completely unloaded during startup tare and every manual
-`TARE`. The loaded sequence is a continuous 2 → 5 → 10 → 15 N progression at
+`TARE`. The loaded sequence is a continuous 1 → 2 → 5 → 10 → 15 N progression at
 one indenter/hole configuration; do not release between successful targets.
 Hole 1 is distal and Hole 6 is proximal. At each target the accepted band is
 `target ± max(0.2 N, 0.05 × target)`, with 0.5 s continuous settling followed

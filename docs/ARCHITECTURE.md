@@ -881,7 +881,7 @@ data consumers.
 `experiments/data_collection/` owns the hardware-independent physical
 acquisition contract. `ForceSequenceController` accepts only monotonic host
 time and force magnitude. It requires a continuous in-band settle followed by
-a continuous in-band recording at 2, 5, 10, and 15 N; it never requires release
+a continuous in-band recording at 1, 2, 5, 10, and 15 N; it never requires release
 between successful targets. `UnloadedCaptureController` separately requires
 force at or below 0.3 N throughout its settle and recording intervals.
 

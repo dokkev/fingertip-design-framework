@@ -11,7 +11,7 @@ import math
 class ForceSequenceConfig:
     """Timing and force-band contract shared by loaded and unloaded capture."""
 
-    target_forces_n: tuple[float, ...] = (2.0, 5.0, 10.0, 15.0)
+    target_forces_n: tuple[float, ...] = (1.0, 2.0, 5.0, 10.0, 15.0)
     settle_duration_s: float = 0.5
     record_duration_s: float = 2.0
     unloaded_max_force_n: float = 0.3
