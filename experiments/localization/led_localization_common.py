@@ -9,28 +9,19 @@ import numpy as np
 
 @dataclass(frozen=True)
 class LedLocalizationResult:
-    """Five ordered LED positions and the image geometry that produced them.
-
-    LEDs and ``longitudinal_positions_mm`` are ordered distal to proximal.
-    Image lines use homogeneous coefficients ``[a, b, c]`` for
-    ``a*x + b*y + c = 0``. Center and inter-LED responses are material-
-    specific diagnostics of the optical score used to place the rigid array.
-    """
+    """Five ordered Solaris LED centers and their one-dimensional evidence."""
 
     image_shape: tuple[int, int]
     led_centers_xy_px: np.ndarray
-    longitudinal_positions_mm: np.ndarray
     led_line: np.ndarray
-    dorsal_line: np.ndarray
-    palmar_line: np.ndarray
-    distal_limit: np.ndarray
-    vanishing_point_h: np.ndarray
-    led_center_responses: np.ndarray
-    inter_led_responses: np.ndarray
+    selected_side: str
+    peak_rows_px: np.ndarray
+    profile_rows_px: np.ndarray
+    red_profile_dn: np.ndarray
+    red_contrast_dn: np.ndarray
+    peak_prominences_dn: np.ndarray
+    sequence_score: float
     reference_mask: np.ndarray
-    led_line_alpha: float
-    longitudinal_scale_px_per_mm: float
-    line_score: float
 
     def __post_init__(self) -> None:
         height, width = self.image_shape
@@ -42,51 +33,58 @@ class LedLocalizationResult:
             or min(height, width) < 2
         ):
             raise ValueError("image_shape must contain two integer dimensions >= 2")
+        if self.selected_side not in {"left", "right"}:
+            raise ValueError("selected_side must be left or right")
+        if not np.isfinite(self.sequence_score):
+            raise ValueError("sequence_score must be finite")
 
         arrays = {
             "led_centers_xy_px": ((5, 2), np.float64),
-            "longitudinal_positions_mm": ((5,), np.float64),
             "led_line": ((3,), np.float64),
-            "dorsal_line": ((3,), np.float64),
-            "palmar_line": ((3,), np.float64),
-            "distal_limit": ((3,), np.float64),
-            "vanishing_point_h": ((3,), np.float64),
-            "led_center_responses": ((5,), np.float64),
-            "inter_led_responses": ((4,), np.float64),
+            "peak_rows_px": ((5,), np.float64),
+            "peak_prominences_dn": ((5,), np.float64),
         }
         for name, (shape, dtype) in arrays.items():
             value = np.asarray(getattr(self, name), dtype=dtype)
-            if value.shape != shape:
-                raise ValueError(f"{name} must have shape {shape}")
-            if not np.all(np.isfinite(value)):
-                raise ValueError(f"{name} must be finite")
+            if value.shape != shape or not np.all(np.isfinite(value)):
+                raise ValueError(f"{name} must be a finite array with shape {shape}")
             value = value.copy()
             value.setflags(write=False)
             object.__setattr__(self, name, value)
 
-        if not np.all(np.diff(self.longitudinal_positions_mm) > 0.0):
-            raise ValueError(
-                "longitudinal_positions_mm must increase distal to proximal"
-            )
+        if not np.all(np.diff(self.peak_rows_px) > 0.0):
+            raise ValueError("peak_rows_px must increase distal to proximal")
+        if np.any(self.peak_prominences_dn < 0.0):
+            raise ValueError("peak_prominences_dn must be nonnegative")
+
+        profile_rows = np.asarray(self.profile_rows_px, dtype=np.float64)
+        raw = np.asarray(self.red_profile_dn, dtype=np.float64)
+        contrast = np.asarray(self.red_contrast_dn, dtype=np.float64)
+        if (
+            profile_rows.ndim != 1
+            or len(profile_rows) < 2
+            or raw.shape != profile_rows.shape
+            or contrast.shape != profile_rows.shape
+            or not np.all(np.isfinite(profile_rows))
+            or not np.all(np.isfinite(raw))
+            or not np.all(np.isfinite(contrast))
+        ):
+            raise ValueError("profile arrays must be matching finite vectors")
+        for name, value in (
+            ("profile_rows_px", profile_rows),
+            ("red_profile_dn", raw),
+            ("red_contrast_dn", contrast),
+        ):
+            value = value.copy()
+            value.setflags(write=False)
+            object.__setattr__(self, name, value)
+
         mask = np.asarray(self.reference_mask, dtype=bool)
         if mask.shape != self.image_shape or not np.any(mask):
             raise ValueError("reference_mask must be nonempty and match image_shape")
         mask = mask.copy()
         mask.setflags(write=False)
         object.__setattr__(self, "reference_mask", mask)
-
-        if (
-            not np.isfinite(self.led_line_alpha)
-            or not 0.0 <= self.led_line_alpha <= 1.0
-        ):
-            raise ValueError("led_line_alpha must be finite and in [0, 1]")
-        if (
-            not np.isfinite(self.longitudinal_scale_px_per_mm)
-            or self.longitudinal_scale_px_per_mm <= 0.0
-        ):
-            raise ValueError("longitudinal_scale_px_per_mm must be positive and finite")
-        if not np.isfinite(self.line_score):
-            raise ValueError("line_score must be finite")
 
 
 __all__ = ["LedLocalizationResult"]

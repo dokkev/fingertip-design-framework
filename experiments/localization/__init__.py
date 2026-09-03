@@ -57,7 +57,7 @@ from .optical_features import (
 )
 from .solaris_led_localization import (
     localize_solaris_leds,
-    solaris_physical_led_layout,
+    temporal_median_rgb,
 )
 
 __all__ = [
@@ -101,7 +101,7 @@ __all__ = [
     "save_fixed_finger_calibration",
     "segment_fingertip",
     "similarity_from_landmarks",
-    "solaris_physical_led_layout",
+    "temporal_median_rgb",
     "track_led_array",
     "transform_canonical_map",
     "unloaded_baseline_statistics",

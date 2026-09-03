@@ -973,27 +973,33 @@ one-dimensional positive-red profile, verifies that the stored line score is
 exactly the sum of the five expected-window maxima, and plots those windows and
 maxima. Whole-line mean contrast is reported only as a non-scored diagnostic.
 
-Solaris also has a separate material-specific offline localizer. The small
-`LedLocalizationResult` contract contains five distal-to-proximal physical/image
-correspondences, fitted side and LED lines, the distal limit, projective
-vanishing geometry, the reference mask, five LED-center responses, four
-inter-LED midpoint responses, and the fitted distal image scale.
-`localize_solaris_leds()` segments one fixed reference image once, derives its
-PCA side geometry, and searches only two image unknowns: the transverse LED-line
-coordinate `alpha` and the local longitudinal scale at the distal end.
+Solaris also has a separate material-specific offline localizer for a fixed
+finger and camera. `localize_solaris_leds()` accepts one RGB image or a stack;
+a stack is reduced to one per-pixel temporal-median RGB image. It then runs the
+existing emissive segmentation once and builds raw-red longitudinal profiles
+over the outer half of every valid silhouette row on both image sides. Each
+row value is its 90th-percentile red-channel intensity. A small Gaussian first
+suppresses pixel noise, and one broad Gaussian estimates the slowly varying
+background; their signed difference is the lobe contrast.
 
-For each candidate, the raw red profile is sampled only on the physical LED 1
-through LED 5 interval and converted to signed contrast by subtracting a broad
-one-dimensional Gaussian background. The periodic match score is the mean of
-five equal-width LED-center responses minus the mean of four equal-width
-inter-LED midpoint responses. Samples after LED 5 make exactly zero contribution.
-The physical distances `[10.5, 21.5, 32.5, 43.5, 54.5] mm` come from the hardware
-layout and are mapped from the distal limit through the shared longitudinal
-vanishing point. The exact 11 mm pitch and 44 mm span remain one rigid projective
-array: no LED receives an independent position variable or local refinement.
-The segmented proximal endpoint is neither stored nor used for longitudinal
-scaling. This Solaris module does not dispatch on material and no Dragon Skin
-counterpart exists yet.
+Each side is searched for five consecutive positive peaks. A valid group must
+start away from the distal cap reflection, end before the proximal limit, have
+broadly bounded median spacing, have no adjacent-spacing ratio above 1.9, and
+fit a quadratic row trend within 15% of its median pitch. The first valid group
+from the distal side is selected. Its score combines
+median and minimum peak prominence, smooth-spacing quality, and a mild distal
+preference. The stronger valid side wins. Each selected row is then refined to
+an image-space center using the ordinary centroid of approximately the
+brightest 5% of red pixels in a small masked ROI on the selected outer side.
+The five centers are returned distal to proximal. The compact
+`LedLocalizationResult` retains only those centers, their fitted line, selected
+side, profile/contrast diagnostics, peak prominences, score, image shape, and
+reference mask. This path has no vanishing point, physical pixel scale,
+periodic bright/dark template, terminal correction, or contact/morphology
+state. OpenCV's RNG is reset before the one GrabCut call so saved-image offline
+replays are deterministic. A previously calibrated mask may be supplied for
+fixed-geometry photometric ablations; this reuses the same algorithm and only
+prevents the ablation itself from changing silhouette support.
 
 `experiments/optical_morphology_analysis.py` owns the corresponding small
 offline measurement path. It remaps one unloaded image and loaded frames with
