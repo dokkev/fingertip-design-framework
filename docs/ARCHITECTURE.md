@@ -997,9 +997,11 @@ side, profile/contrast diagnostics, peak prominences, score, image shape, and
 reference mask. This path has no vanishing point, physical pixel scale,
 periodic bright/dark template, terminal correction, or contact/morphology
 state. OpenCV's RNG is reset before the one GrabCut call so saved-image offline
-replays are deterministic. A previously calibrated mask may be supplied for
-fixed-geometry photometric ablations; this reuses the same algorithm and only
-prevents the ablation itself from changing silhouette support.
+replays are deterministic. The normal fixed-camera validation forms one mask
+from the six-frame temporal median and supplies that same mask to every
+single-frame and leave-one-frame-out replay. This keeps silhouette geometry
+fixed while the optical evidence changes. A previously calibrated mask may
+likewise be supplied for other fixed-geometry photometric ablations.
 
 `experiments/optical_morphology_analysis.py` owns the corresponding small
 offline measurement path. It remaps one unloaded image and loaded frames with

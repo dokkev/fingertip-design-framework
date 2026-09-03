@@ -132,8 +132,10 @@ conda run --no-capture-output -n lit \
   python -u validation/validate_solaris_led_localization.py
 ```
 
-The command writes normal-frame overlays, normal/dark profile diagnostics,
-terminal-leakage stress artifacts, coordinate and stability CSV files, and an
+The command forms one silhouette mask from the six-frame normal temporal
+median, reuses it for all six single-frame and leave-one-frame-out replays, and
+writes their overlays and stability CSV files. It also writes normal/dark
+profile diagnostics, terminal-leakage stress artifacts, coordinates, and an
 empty or populated per-LED ground-truth error CSV beneath
 `output/validation/solaris_led_localization/`. It detects the first regular
 five-lobe sequence in the two silhouette-side raw-red profiles; it does not use

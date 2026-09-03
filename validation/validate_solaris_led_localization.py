@@ -191,12 +191,15 @@ def _plot_profile(
 
 def _save_normal_overlay(
     frames: np.ndarray,
-    result: LedLocalizationResult,
+    results: list[LedLocalizationResult],
 ) -> None:
     figure, axes = plt.subplots(2, 3, figsize=(10.5, 6.8), constrained_layout=True)
-    for index, (axis, frame) in enumerate(zip(axes.flat, frames, strict=True), start=1):
+    for index, (axis, frame, result) in enumerate(
+        zip(axes.flat, frames, results, strict=True),
+        start=1,
+    ):
         _draw_localization(axis, frame, result, f"Normal frame {index}")
-    figure.suptitle("One six-frame temporal-median calibration", fontsize=13)
+    figure.suptitle("One six-frame temporal-median mask reused per frame", fontsize=13)
     figure.savefig(OUTPUT_DIRECTORY / "normal_six_frame_overlay.png", dpi=200)
     figure.savefig(OUTPUT_DIRECTORY / "normal_six_frame_overlay.pdf")
     plt.close(figure)
@@ -287,6 +290,7 @@ def _ground_truth_errors(
 def _write_csv(
     normal_result: LedLocalizationResult,
     dark_result: LedLocalizationResult,
+    single_frame_shifts: np.ndarray,
     leave_one_out_shifts: np.ndarray,
     terminal_shifts: np.ndarray,
     ground_truth: dict[str, np.ndarray] | None,
@@ -315,6 +319,16 @@ def _write_csv(
         writer = csv.writer(stream)
         writer.writerow(("held_out_frame", "led", "shift_px"))
         for frame_index, shifts in enumerate(leave_one_out_shifts, start=1):
+            for led_index, shift in enumerate(shifts, start=1):
+                writer.writerow((frame_index, led_index, shift))
+
+    with (OUTPUT_DIRECTORY / "fixed_mask_single_frame.csv").open(
+        "w",
+        newline="",
+    ) as stream:
+        writer = csv.writer(stream)
+        writer.writerow(("frame", "led", "shift_from_six_frame_median_px"))
+        for frame_index, shifts in enumerate(single_frame_shifts, start=1):
             for led_index, shift in enumerate(shifts, start=1):
                 writer.writerow((frame_index, led_index, shift))
 
@@ -365,8 +379,26 @@ def main() -> None:
     normal_result = localize_solaris_leds(normal_frames)
     dark_result = localize_solaris_leds(dark_reference)
 
+    fixed_normal_mask = normal_result.reference_mask
+    single_frame_results = [
+        localize_solaris_leds(frame, reference_mask=fixed_normal_mask)
+        for frame in normal_frames
+    ]
+    single_frame_shifts = np.vstack(
+        [
+            np.linalg.norm(
+                result.led_centers_xy_px - normal_result.led_centers_xy_px,
+                axis=1,
+            )
+            for result in single_frame_results
+        ]
+    )
+
     leave_one_out_results = [
-        localize_solaris_leds(np.delete(normal_frames, held_out, axis=0))
+        localize_solaris_leds(
+            np.delete(normal_frames, held_out, axis=0),
+            reference_mask=fixed_normal_mask,
+        )
         for held_out in range(len(normal_frames))
     ]
     leave_one_out_shifts = np.vstack(
@@ -391,7 +423,7 @@ def main() -> None:
         axis=1,
     )
 
-    _save_normal_overlay(normal_frames, normal_result)
+    _save_normal_overlay(normal_frames, single_frame_results)
     _save_reference_diagnostics(
         normal_reference,
         normal_result,
@@ -408,6 +440,7 @@ def main() -> None:
     _write_csv(
         normal_result,
         dark_result,
+        single_frame_shifts,
         leave_one_out_shifts,
         terminal_shifts,
         ground_truth,
@@ -423,6 +456,11 @@ def main() -> None:
         f"  prominences [DN]: {np.round(normal_result.peak_prominences_dn, 3).tolist()}"
     )
     print(f"  sequence score: {normal_result.sequence_score:.6f}")
+    print(
+        "Fixed-mask single-frame LED shift median/max [px]: "
+        f"{np.median(single_frame_shifts):.6f}/"
+        f"{np.max(single_frame_shifts):.6f}"
+    )
     print("Dark-room localization")
     print(f"  selected side: {dark_result.selected_side}")
     print(
