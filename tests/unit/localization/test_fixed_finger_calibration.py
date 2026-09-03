@@ -1,5 +1,8 @@
 """Tests for the fixed-experiment projective geometry calibration."""
 
+from types import SimpleNamespace
+
+import cv2
 import numpy as np
 
 from experiments.localization import (
@@ -8,6 +11,12 @@ from experiments.localization import (
     project_longitudinal_positions,
     save_fixed_finger_calibration,
 )
+from experiments.localization.fixed_finger_calibration import (
+    _five_led_window_score,
+    _physical_led_fractions,
+    _refine_led_array_fractions,
+)
+import experiments.localization.fixed_finger_calibration as fixed_calibration
 
 
 def _project(homography: np.ndarray, points_xy: np.ndarray) -> np.ndarray:
@@ -63,6 +72,54 @@ def test_projective_led_positions_match_planar_homography() -> None:
     assert np.all(np.diff(actual[:, 1]) > 0.0)
 
 
+def test_calibration_recovers_synthetic_projective_led_array(monkeypatch) -> None:
+    homography = np.asarray(
+        (
+            (210.0, 35.0, 120.0),
+            (20.0, 420.0, 70.0),
+            (0.10, 0.22, 1.0),
+        )
+    )
+    image = np.zeros((520, 420, 3), dtype=np.uint8)
+    world_corners = np.asarray(((0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)))
+    image_corners = _project(homography, world_corners)
+    mask = np.zeros(image.shape[:2], dtype=np.uint8)
+    cv2.fillConvexPoly(mask, np.rint(image_corners).astype(np.int32), 1)
+    image[mask.astype(bool)] = (15, 180, 190)
+    physical_fractions = _physical_led_fractions()
+    expected_centers = _project(
+        homography,
+        np.column_stack((np.full(5, 0.28), physical_fractions)),
+    )
+    for center in expected_centers:
+        cv2.circle(
+            image,
+            tuple(np.rint(center).astype(np.int32)),
+            5,
+            (255, 255, 255),
+            -1,
+        )
+    monkeypatch.setattr(
+        fixed_calibration,
+        "segment_fingertip",
+        lambda _: SimpleNamespace(final_mask=mask.astype(bool)),
+    )
+
+    calibration = fixed_calibration.calibrate_fixed_finger(image)
+
+    errors_px = np.linalg.norm(
+        calibration.led_centers_xy_px - expected_centers,
+        axis=1,
+    )
+    assert np.allclose(calibration.led_longitudinal_fractions, physical_fractions)
+    np.testing.assert_allclose(
+        calibration.led_line_alpha,
+        0.28,
+        atol=0.02,
+    )
+    assert np.max(errors_px) < 7.0
+
+
 def test_affine_camera_reduces_to_equal_image_spacing() -> None:
     homography = np.asarray(
         (
@@ -83,6 +140,53 @@ def test_affine_camera_reduces_to_equal_image_spacing() -> None:
     )
 
     assert np.allclose(np.diff(projected, axis=0), np.diff(projected, axis=0)[0])
+
+
+def test_hardware_led_fractions_include_the_distal_end_cap() -> None:
+    expected = np.asarray((10.5, 21.5, 32.5, 43.5, 54.5)) / 60.0
+
+    assert np.allclose(_physical_led_fractions(), expected)
+    assert np.allclose(np.diff(_physical_led_fractions()), 11.0 / 60.0)
+
+
+def test_led_line_score_uses_only_the_five_expected_windows() -> None:
+    samples = np.linspace(0.0, 1.0, 1001)
+    predicted = _physical_led_fractions()
+    contrast = np.zeros_like(samples)
+    for center in predicted:
+        contrast[np.argmin(np.abs(samples - center))] = 2.0
+    contrast[0] = 1000.0
+
+    score = _five_led_window_score(samples, contrast, predicted)
+
+    assert score == 10.0
+
+
+def test_led_refinement_preserves_one_rigid_equal_pitch_array() -> None:
+    samples = np.linspace(0.0, 1.0, 1001)
+    predicted = np.linspace(0.1, 0.9, 5)
+    contrast = np.zeros_like(samples)
+    for center in predicted[:-1] + 0.02:
+        contrast[np.argmin(np.abs(samples - center))] = 1.0
+    contrast[np.argmin(np.abs(samples - (predicted[-1] + 0.04)))] = 1.0
+
+    refined = _refine_led_array_fractions(predicted, samples, contrast)
+
+    assert np.allclose(refined, predicted + 0.02)
+    assert np.allclose(np.diff(refined), 0.2)
+
+
+def test_led_refinement_keeps_geometry_when_any_window_is_ambiguous() -> None:
+    samples = np.linspace(0.0, 1.0, 1001)
+    predicted = np.linspace(0.1, 0.9, 5)
+    contrast = np.zeros_like(samples)
+    for center in predicted + 0.01:
+        contrast[np.argmin(np.abs(samples - center))] = 1.0
+    contrast[np.argmin(np.abs(samples - (predicted[-1] + 0.04)))] = 0.9
+
+    refined = _refine_led_array_fractions(predicted, samples, contrast)
+
+    assert np.array_equal(refined, predicted)
 
 
 def test_fixed_calibration_npz_round_trip_has_no_image_payload(tmp_path) -> None:

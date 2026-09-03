@@ -943,17 +943,24 @@ pixels define the longitudinal PCA axis; minimum and maximum transverse traces
 are fit with Huber lines over the middle 80% of the longitudinal support. The
 two side lines define a finite projective vanishing point, with an affine
 parallel-line limit when that point is numerically at infinity. A 101-member
-line family through the vanishing point is scored from positive red-channel
-contrast after broad one-dimensional background removal. The five expected
-source positions use the physical 11 mm pitch over the 55 mm active span, and
-only a single unambiguous local maximum within one quarter pitch may refine
-each projective prediction. The side closest to the selected LED line is the
-dorsal side.
+line family through the vanishing point is scored by summing the maximum
+positive red-channel contrast in each of five expected LED windows after broad
+one-dimensional background removal. The five expected source positions come
+directly from the fixed hardware coordinates: 11 mm pitch over the complete
+60 mm silhouette, including the 5 mm distal end cap.
+Refinement never moves LEDs independently: when every quarter-pitch window has
+one unambiguous local maximum, the median of their five offsets translates the
+complete projective five-LED pattern. Otherwise the geometry prediction is
+retained. The side closest to the selected LED line is the dorsal side.
 
 `FixedFingerCalibration` stores normalized side/LED lines, the homogeneous
 vanishing point, full-silhouette longitudinal limits, five ordered LED source
-positions and fractions, a fixed projective canonical map, and the unloaded
-reference mask. It is immutable and serializes as compressed NPZ without
+positions and fractions, fixed image-space sampling maps, and the unloaded
+reference mask. The longitudinal sampling follows the fitted vanishing-point
+geometry; transverse samples are image-linear between corresponding side-line
+points. This is a stable sampling strip for the current longitudinal optical
+metric, not a claim of complete planar homography rectification. The object is
+immutable and serializes as compressed NPZ without
 pickle or a raw RGB image. The three empirical calibration constants are 10%
 end exclusion for side fitting, a background Gaussian sigma of 0.75 expected
 LED spacings, and a refinement half-window of 0.25 pitch. Candidate count,
@@ -961,6 +968,16 @@ profile/map resolution, and the far-vanishing-point rule are numerical
 discretization choices rather than scene-tuned detection thresholds. This API
 does not use `core_y_span`, joint state, live tracking, RealSense, or the legacy
 blob-based five-LED detector; it is intentionally an offline fixed-pose path.
+
+`experiments/optical_morphology_analysis.py` owns the corresponding small
+offline measurement path. It remaps one unloaded image and loaded frames with
+the same fixed calibration, computes signed red-channel difference in camera
+DN, reports mean absolute response magnitude, averages signed response across
+the transverse strip to form a longitudinal signature, and computes pairwise
+signature RMS distances. Its separability summary is the smallest pairwise
+distance. No dimensionless separability ratio is defined because the current
+saved dataset has only one image per contact state and therefore cannot support
+a within-state noise estimate.
 
 `optical_features.py` owns pure feature extraction. `DenseProfileConfig`
 selects brightest-10% red, mean red, absolute high-pass red, red gradient, or
@@ -1026,9 +1043,15 @@ set: whether one fixed geometry detector remains stable across recorded views.
 `validation/validate_fixed_finger_calibration.py` calibrates representative
 Solaris, unloaded Dragon Skin, and dark-room Solaris frames, round-trips each
 NPZ artifact, checks ordered in-silhouette LED positions, and renders side-line,
-vanishing-point, LED-line, source-position, and canonical-strip evidence. It is
-the empirical validation for the fixed-pose projective calibration and does
-not invoke the legacy blob detector.
+vanishing-point, LED-line, source-position, manual-ground-truth, and sampling-
+strip evidence. Its one-time interactive mode writes five manually clicked LED
+centers per image to JSON. The validator reports median/maximum center error and
+line distance without inventing an unrequested pixel acceptance threshold; a
+missing manual-label file is an explicit failure. It does not invoke the legacy
+blob detector. `validation/validate_optical_morphology_analysis.py` reports
+Dragon Skin response magnitudes, longitudinal signatures, and the full
+pairwise-distance matrix. Solaris is not evaluated there because the checked-in
+images do not contain a same-condition unloaded reference.
 `validation/validate_contact_localization.py` answers the separate
 observer question. It reuses one canonical map per fixed-camera sequence,
 characterizes dense representations, evaluates Solaris pairwise and

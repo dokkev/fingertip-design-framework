@@ -8,7 +8,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from lumo.fingertip.layout import ACTIVE_Y_BOUNDS_MM, LED_CENTERS_Y_MM
+from lumo.fingertip.layout import LED_CENTERS_Y_MM, TOTAL_Y_BOUNDS_MM
 
 from .fingertip_segmentation import segment_fingertip
 
@@ -444,7 +444,7 @@ def _candidate_profile(
     spacing_samples = (
         (len(longitudinal_fractions) - 1)
         * (LED_CENTERS_Y_MM[1] - LED_CENTERS_Y_MM[0])
-        / (ACTIVE_Y_BOUNDS_MM[1] - ACTIVE_Y_BOUNDS_MM[0])
+        / (TOTAL_Y_BOUNDS_MM[1] - TOTAL_Y_BOUNDS_MM[0])
     )
     contrast = _positive_red_contrast(
         profile,
@@ -461,15 +461,47 @@ def _candidate_profile(
     return center_line, contrast, valid
 
 
-def _refine_led_fractions(
+def _five_led_window_score(
+    sampled_fractions: np.ndarray,
+    contrast: np.ndarray,
+    predicted_fractions: np.ndarray,
+) -> float:
+    spacing_fraction = float(predicted_fractions[1] - predicted_fractions[0])
+    half_window = LED_REFINEMENT_HALF_WINDOW_IN_SPACINGS * spacing_fraction
+    score = 0.0
+    for center in predicted_fractions:
+        in_window = np.abs(sampled_fractions - center) <= half_window
+        if np.any(in_window):
+            score += float(np.max(contrast[in_window]))
+    return score
+
+
+def _physical_led_fractions() -> np.ndarray:
+    """Return the hardware LED lattice from distal to proximal over total length."""
+
+    proximal_y_mm, distal_y_mm = TOTAL_Y_BOUNDS_MM
+    total_length_mm = distal_y_mm - proximal_y_mm
+    distal_to_proximal_y_mm = np.sort(np.asarray(LED_CENTERS_Y_MM))[::-1]
+    return (distal_y_mm - distal_to_proximal_y_mm) / total_length_mm
+
+
+def _refine_led_array_fractions(
     predicted: np.ndarray,
     sampled_fractions: np.ndarray,
     contrast: np.ndarray,
 ) -> np.ndarray:
+    """Refine only one shared longitudinal offset for the rigid LED array.
+
+    Each physical LED contributes at most one unambiguous local-peak offset.
+    The median offset moves the complete five-LED pattern, so an isolated
+    escape-light peak cannot move one endpoint independently. If any LED
+    window is missing or ambiguous, the geometry prediction is retained.
+    """
+
     spacing_fraction = float(predicted[1] - predicted[0])
     half_window = LED_REFINEMENT_HALF_WINDOW_IN_SPACINGS * spacing_fraction
-    refined = predicted.copy()
-    for led_index, center in enumerate(predicted):
+    offsets = []
+    for center in predicted:
         in_window = np.flatnonzero(np.abs(sampled_fractions - center) <= half_window)
         local_maxima = [
             index
@@ -478,9 +510,10 @@ def _refine_led_fractions(
             and contrast[index] > contrast[index - 1]
             and contrast[index] > contrast[index + 1]
         ]
-        if len(local_maxima) == 1 and contrast[local_maxima[0]] > 0.0:
-            refined[led_index] = sampled_fractions[local_maxima[0]]
-    return refined
+        if len(local_maxima) != 1 or contrast[local_maxima[0]] <= 0.0:
+            return predicted.copy()
+        offsets.append(sampled_fractions[local_maxima[0]] - center)
+    return predicted + float(np.median(offsets))
 
 
 def _points_inside_mask(points_xy: np.ndarray, mask: np.ndarray) -> np.ndarray:
@@ -568,10 +601,7 @@ def calibrate_fixed_finger(
         span,
     )
 
-    finger_length_mm = ACTIVE_Y_BOUNDS_MM[1] - ACTIVE_Y_BOUNDS_MM[0]
-    led_span_mm = LED_CENTERS_Y_MM[-1] - LED_CENTERS_Y_MM[0]
-    edge_fraction = 0.5 * (finger_length_mm - led_span_mm) / finger_length_mm
-    predicted_fractions = np.linspace(edge_fraction, 1.0 - edge_fraction, 5)
+    predicted_fractions = _physical_led_fractions()
 
     red = image[:, :, 0].astype(np.float32)
     sampled_fractions = np.linspace(0.0, 1.0, PROFILE_SAMPLE_COUNT)
@@ -580,7 +610,7 @@ def calibrate_fixed_finger(
         np.arange(LED_LINE_CANDIDATE_COUNT, dtype=np.float64) + 0.5
     ) / LED_LINE_CANDIDATE_COUNT
     for alpha in candidate_alphas:
-        candidate_line, contrast, valid = _candidate_profile(
+        candidate_line, contrast, _ = _candidate_profile(
             red,
             mask,
             first_side,
@@ -601,7 +631,11 @@ def calibrate_fixed_finger(
         )
         if not np.all(_points_inside_mask(predicted_centers, mask)):
             continue
-        score = float(np.sum(contrast[valid]) / len(sampled_fractions))
+        score = _five_led_window_score(
+            sampled_fractions,
+            contrast,
+            predicted_fractions,
+        )
         if best is None or score > best[0]:
             best = (score, float(alpha), candidate_line, contrast)
     if best is None:
@@ -619,7 +653,7 @@ def calibrate_fixed_finger(
         dorsal_line, palmar_line = second_side, first_side
         led_line_alpha = 1.0 - led_line_alpha
 
-    led_fractions = _refine_led_fractions(
+    led_fractions = _refine_led_array_fractions(
         predicted_fractions,
         sampled_fractions,
         led_contrast,

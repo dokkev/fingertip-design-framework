@@ -95,17 +95,41 @@ under `output/contact_dataset/mock/MOCK_*` and carry `sensor_mode: mock`.
 
 ## Live D435 contact localization
 
-Build and validate the offline projective calibration for a fixed fingertip,
-fixed camera, and one unloaded reference frame:
+Create the one-time manual LED ground truth for the fixed-finger reference
+images, then measure the offline calibration against those labels:
 
 ```bash
+conda run --no-capture-output -n lit \
+  python -u validation/validate_fixed_finger_calibration.py --label-ground-truth
 conda run --no-capture-output -n lit \
   python -u validation/validate_fixed_finger_calibration.py
 ```
 
-This writes per-condition NPZ calibrations, a summary CSV, and one diagnostic
-PNG beneath `output/validation/fixed_finger_calibration/`. It performs no live
-tracking, joint-state processing, or per-frame geometry reconstruction.
+The first command records five clicks per image, in distal-to-proximal order,
+in `validation/fixed_finger_led_ground_truth.json`. The second writes
+per-condition NPZ calibrations, measured pixel errors, a summary CSV, and one
+diagnostic PNG beneath `output/validation/fixed_finger_calibration/`. It fails
+when the manual labels are absent and performs no live tracking, joint-state
+processing, or per-frame geometry reconstruction.
+
+To regenerate only the silhouette, side lines, five score windows, LED line,
+and sampling-strip diagnostic without claiming LED-position accuracy:
+
+```bash
+conda run --no-capture-output -n lit \
+  python -u validation/validate_fixed_finger_calibration.py --diagnostic-only
+```
+
+Characterize unloaded-relative Dragon Skin optical magnitude, longitudinal
+signatures, and pairwise RMS separation with the fixed sampling strip:
+
+```bash
+conda run --no-capture-output -n lit \
+  python -u validation/validate_optical_morphology_analysis.py
+```
+
+Solaris is deliberately omitted because no same-condition unloaded Solaris
+reference is currently checked in.
 
 Replay the smooth emissive segmentation on the checked-in 13-image reference
 set, report fixed-extrinsic stability/runtime, and regenerate its overlays:
