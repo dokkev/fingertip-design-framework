@@ -62,8 +62,16 @@ Rokubi at `/dev/ttyUSB0`:
 ```bash
 conda run --no-capture-output -n lit \
   python -u scripts/collect_contact_dataset.py \
-    --bota-port /dev/ttyUSB0
+    --bota-port /dev/ttyUSB0 \
+    --camera-exposure-us EXPOSURE_US \
+    --camera-gain GAIN \
+    --camera-white-balance-k WHITE_BALANCE_K
 ```
+
+Select nonsaturating manual RGB values once before the experiment and use the
+same three values for every morphology. The collector disables automatic
+exposure and white balance, verifies the camera read-back, and records the
+actual values in `session.json`.
 
 The saved burst rate defaults to 5 Hz and can be changed independently of the
 30 FPS camera stream with `--capture-rate-hz`.
@@ -78,21 +86,24 @@ For each loaded run select a 10, 15, 20, or 30 mm spherical indenter, then the
 hole and repeat index. Repeat indices identify independent trials within the
 same specimen/indenter/hole condition and must not be reused. The loaded
 sequence is a continuous 2 → 5 → 10 → 15 N progression; do not release between
-successful targets.
+successful targets. The vertical force gauge shows the current force as a bar,
+the active target as a horizontal line, and the accepted margin as a shaded
+band.
 Hole 1 is distal and Hole 6 is proximal. The accepted band is target ±20% at
 2 and 5 N, and target ±10% at 10 and 15 N. Hold the band for the 1.0 s settling
 phase and the complete 1.0 s recording interval. The default elapsed-time
 schedule records at 5 Hz with the start included and the end excluded, yielding
-five synchronized RGB/Rokubi frames. Leaving the band at any time discards the
-whole partial target attempt. After 15 N completes, release the indenter.
+exactly five synchronized RGB/Rokubi frames. A missed scheduled observation,
+camera delivery drop, or force-band excursion discards the whole partial target
+attempt. After 15 N completes, release the indenter.
 
 Use `CAPTURE UNLOADED` separately within the specimen session. It saves a
 synchronized burst while `F_mag ≤ 1.0 N` is maintained
 through the 1.0 s settling and 1.0 s recording intervals. The same 5 Hz
 elapsed-time schedule is used, and any force excursion discards the entire
 unloaded attempt. An unloaded reference is not required before every loaded
-run. By default, sessions are written beneath the repository's `experiments/`
-directory using dataset format v2. `session.json` owns specimen, camera, sensor,
+run. By default, sessions are written to `output/contact_dataset/`, which is
+ignored by Git, using dataset format v2. `session.json` owns specimen, camera, sensor,
 tare, and acquisition configuration; each `run.json` owns indenter, hole,
 repeat, and run status. A finalized force or unloaded directory contains only
 lossless PNGs under `frames/` and raw synchronized measurements in `frames.csv`.
@@ -104,11 +115,14 @@ manual-force mock mode:
 
 ```bash
 conda run --no-capture-output -n lit \
-  python -u scripts/collect_contact_dataset.py --mock
+  python -u scripts/collect_contact_dataset.py --mock \
+    --camera-exposure-us EXPOSURE_US \
+    --camera-gain GAIN \
+    --camera-white-balance-k WHITE_BALANCE_K
 ```
 
 Mock sessions cannot enter the physical dataset namespace: they are written
-under `experiments/mock/MOCK_*` and carry `sensor_mode: mock`.
+under `output/contact_dataset/mock/MOCK_*` and carry `sensor_mode: mock`.
 
 ## Live D435 contact localization
 

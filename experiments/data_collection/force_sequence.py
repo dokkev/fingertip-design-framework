@@ -52,6 +52,26 @@ class ForceSequenceConfig:
     def capture_period_s(self) -> float:
         return 1.0 / self.capture_rate_hz
 
+    @property
+    def expected_record_frame_count(self) -> int:
+        """Number of scheduled observations in one loaded recording interval."""
+
+        return max(
+            1,
+            math.ceil(self.record_duration_s * self.capture_rate_hz - 1.0e-12),
+        )
+
+    @property
+    def expected_unloaded_frame_count(self) -> int:
+        """Number of scheduled observations in one unloaded recording interval."""
+
+        return max(
+            1,
+            math.ceil(
+                self.unloaded_record_duration_s * self.capture_rate_hz - 1.0e-12
+            ),
+        )
+
     def tolerance_n(self, target_force_n: float) -> float:
         """Return the absolute tolerance for one low- or high-force target."""
 
@@ -116,6 +136,7 @@ class ForceSequenceController:
         self._phase_started_s: float | None = None
         self._next_capture_time_s: float | None = None
         self._last_time_s: float | None = None
+        self._captured_frame_count = 0
 
     @property
     def state(self) -> ForceSequenceState:
@@ -131,12 +152,17 @@ class ForceSequenceController:
     def completed_targets_n(self) -> tuple[float, ...]:
         return self.config.target_forces_n[: self._target_index]
 
+    @property
+    def captured_frame_count(self) -> int:
+        return self._captured_frame_count
+
     def start(self, now_s: float) -> ForceSequenceUpdate:
         now = self._validate_time(now_s, allow_before_start=True)
         self._state = ForceSequenceState.WAITING_FOR_TARGET
         self._target_index = 0
         self._phase_started_s = None
         self._next_capture_time_s = None
+        self._captured_frame_count = 0
         self._last_time_s = now
         return self._snapshot()
 
@@ -173,10 +199,17 @@ class ForceSequenceController:
                 self._phase_started_s = now
                 self._next_capture_time_s = now + self.config.capture_period_s
                 should_record = True
+                self._captured_frame_count = 1
                 record_target = target
                 events.append(ForceSequenceEvent.RECORDING_STARTED)
         elif self._state is ForceSequenceState.RECORDING:
             if band is not ForceBandPosition.IN_BAND:
+                self._reset_to_waiting()
+                events.append(ForceSequenceEvent.ATTEMPT_RESET)
+            elif now - self._phase_start() >= self.config.record_duration_s and (
+                self._captured_frame_count
+                != self.config.expected_record_frame_count
+            ):
                 self._reset_to_waiting()
                 events.append(ForceSequenceEvent.ATTEMPT_RESET)
             elif now - self._phase_start() >= self.config.record_duration_s:
@@ -185,6 +218,7 @@ class ForceSequenceController:
                 self._target_index += 1
                 self._phase_started_s = None
                 self._next_capture_time_s = None
+                self._captured_frame_count = 0
                 if self._target_index == len(self.config.target_forces_n):
                     self._state = ForceSequenceState.RUN_COMPLETE
                     events.append(ForceSequenceEvent.RUN_COMPLETED)
@@ -192,6 +226,7 @@ class ForceSequenceController:
                     self._state = ForceSequenceState.WAITING_FOR_TARGET
             elif now >= self._next_capture_time():
                 should_record = True
+                self._captured_frame_count += 1
                 record_target = target
                 while self._next_capture_time() <= now:
                     self._next_capture_time_s += self.config.capture_period_s
@@ -204,6 +239,20 @@ class ForceSequenceController:
             completed_target=completed_target,
         )
 
+    def reset_attempt(self, now_s: float) -> ForceSequenceUpdate:
+        """Discard timing progress for the current target after an input gap."""
+
+        now = self._validate_time(now_s)
+        self._last_time_s = now
+        if self._state not in (
+            ForceSequenceState.WAITING_FOR_TARGET,
+            ForceSequenceState.SETTLING,
+            ForceSequenceState.RECORDING,
+        ):
+            return self._snapshot()
+        self._reset_to_waiting()
+        return self._snapshot(events=(ForceSequenceEvent.ATTEMPT_RESET,))
+
     def abort(self, now_s: float) -> ForceSequenceUpdate:
         now = self._validate_time(now_s)
         self._last_time_s = now
@@ -212,12 +261,14 @@ class ForceSequenceController:
         self._state = ForceSequenceState.ABORTED
         self._phase_started_s = None
         self._next_capture_time_s = None
+        self._captured_frame_count = 0
         return self._snapshot(events=(ForceSequenceEvent.ABORTED,))
 
     def _reset_to_waiting(self) -> None:
         self._state = ForceSequenceState.WAITING_FOR_TARGET
         self._phase_started_s = None
         self._next_capture_time_s = None
+        self._captured_frame_count = 0
 
     def _band_position(self, force_n: float, target_n: float) -> ForceBandPosition:
         tolerance = self.config.tolerance_n(target_n)
@@ -314,16 +365,22 @@ class UnloadedCaptureController:
         self._phase_started_s: float | None = None
         self._next_capture_time_s: float | None = None
         self._last_time_s: float | None = None
+        self._captured_frame_count = 0
 
     @property
     def state(self) -> UnloadedCaptureState:
         return self._state
+
+    @property
+    def captured_frame_count(self) -> int:
+        return self._captured_frame_count
 
     def start(self, now_s: float) -> UnloadedCaptureUpdate:
         now = self._validate_time(now_s, allow_before_start=True)
         self._state = UnloadedCaptureState.WAITING_FOR_UNLOADED
         self._phase_started_s = None
         self._next_capture_time_s = None
+        self._captured_frame_count = 0
         self._last_time_s = now
         return self._snapshot()
 
@@ -355,21 +412,44 @@ class UnloadedCaptureController:
                 self._phase_started_s = now
                 self._next_capture_time_s = now + self.config.capture_period_s
                 should_record = True
+                self._captured_frame_count = 1
                 events.append(UnloadedCaptureEvent.RECORDING_STARTED)
         elif self._state is UnloadedCaptureState.RECORDING:
             if not is_unloaded:
+                self._reset_to_waiting()
+                events.append(UnloadedCaptureEvent.ATTEMPT_RESET)
+            elif now - self._phase_start() >= self.config.unloaded_record_duration_s and (
+                self._captured_frame_count
+                != self.config.expected_unloaded_frame_count
+            ):
                 self._reset_to_waiting()
                 events.append(UnloadedCaptureEvent.ATTEMPT_RESET)
             elif now - self._phase_start() >= self.config.unloaded_record_duration_s:
                 self._state = UnloadedCaptureState.COMPLETE
                 self._phase_started_s = None
                 self._next_capture_time_s = None
+                self._captured_frame_count = 0
                 events.append(UnloadedCaptureEvent.CAPTURE_COMPLETED)
             elif now >= self._next_capture_time():
                 should_record = True
+                self._captured_frame_count += 1
                 while self._next_capture_time() <= now:
                     self._next_capture_time_s += self.config.capture_period_s
         return self._snapshot(tuple(events), should_record)
+
+    def reset_attempt(self, now_s: float) -> UnloadedCaptureUpdate:
+        """Discard timing progress after a camera delivery gap."""
+
+        now = self._validate_time(now_s)
+        self._last_time_s = now
+        if self._state not in (
+            UnloadedCaptureState.WAITING_FOR_UNLOADED,
+            UnloadedCaptureState.SETTLING,
+            UnloadedCaptureState.RECORDING,
+        ):
+            return self._snapshot()
+        self._reset_to_waiting()
+        return self._snapshot((UnloadedCaptureEvent.ATTEMPT_RESET,))
 
     def abort(self, now_s: float) -> UnloadedCaptureUpdate:
         now = self._validate_time(now_s)
@@ -379,12 +459,14 @@ class UnloadedCaptureController:
         self._state = UnloadedCaptureState.ABORTED
         self._phase_started_s = None
         self._next_capture_time_s = None
+        self._captured_frame_count = 0
         return self._snapshot((UnloadedCaptureEvent.ABORTED,))
 
     def _reset_to_waiting(self) -> None:
         self._state = UnloadedCaptureState.WAITING_FOR_UNLOADED
         self._phase_started_s = None
         self._next_capture_time_s = None
+        self._captured_frame_count = 0
 
     def _phase_start(self) -> float:
         assert self._phase_started_s is not None

@@ -862,9 +862,12 @@ lifecycles. The current
 `RealSenseColorCamera` is a thin owner of one `pyrealsense2` color pipeline. It
 configures a 1920 x 1080 RGB stream at 30 FPS by default, returns an owned
 immutable RGB frame with device timestamp and frame number, and exposes explicit
-`start()`/`read()`/`stop()` plus context-manager cleanup. It does not alter
-exposure, gain, white balance, or their automatic controllers. RealSense objects
-do not cross this package boundary. Depth
+`start()`/`read()`/`stop()` plus context-manager cleanup. Live localization
+leaves camera photometric controls untouched. Quantitative data collection calls
+`set_manual_photometric_controls()` with explicit user-selected exposure, gain,
+and white balance; the method disables both automatic controllers, checks the
+device ranges, and verifies the read-back values. RealSense objects do not cross
+this package boundary. Depth
 acquisition is intentionally absent because the current localization algorithm
 consumes only color images.
 
@@ -887,18 +890,30 @@ it never requires release between successful targets. Recording includes the
 start and excludes the end, so an uninterrupted default interval produces five
 frames. Scheduling uses elapsed monotonic time rather than camera-frame count,
 and one camera callback can satisfy at most one capture deadline. Leaving the
-band during settling or recording resets only the current attempt.
+band during settling or recording resets only the current attempt. Both loaded
+and unloaded controllers count scheduled observations and refuse completion
+unless all five default observations were delivered. A camera delivery-queue
+drop resets the active attempt and discards any partial segment.
 `UnloadedCaptureController` applies the same atomic burst contract after one
 continuous settling second at or below 1.0 N.
+
+The collection GUI visualizes the latest force magnitude on one vertical gauge.
+The current controller target is a horizontal marker and its accepted force
+range is a shaded band; this display does not participate in acquisition state
+or saved measurements.
 
 `ContactDatasetWriter` writes acquisition format version 2. One session is one
 physical specimen under one fixed camera and acquisition configuration. One run
 is an independent `indenter + hole + repeat` contact trial. A force directory is
 one successfully completed force hold. A frame is one raw RGB image paired with
-the synchronized raw force/torque axes and timestamps. The hierarchy is:
+the synchronized raw force/torque axes and timestamps. Each segment handle owns
+its exact expected frame count, and the writer independently rejects incomplete
+or overfull segments before publication. The hierarchy is:
 
 The collection GUI exposes the spherical indenter identifiers `sphere_10mm`,
-`sphere_15mm`, `sphere_20mm`, and `sphere_30mm`.
+`sphere_15mm`, `sphere_20mm`, and `sphere_30mm`, and the morphology identifiers
+`baseline`, `flat_opt`, and `angled_opt`. Its default dataset root is the
+Git-ignored `output/contact_dataset/` directory.
 
 ```text
 <session>/
@@ -927,15 +942,20 @@ current defaults:
   "created_utc": "...",
   "specimen": {
     "material": "solaris",
-    "morphology": "nominal",
-    "specimen_id": "solaris_nominal_01"
+    "morphology": "baseline",
+    "specimen_id": "solaris_baseline_01"
   },
   "camera": {
     "model": "RealSense D435",
     "serial_number": "...",
     "width": 1920,
     "height": 1080,
-    "fps": 30
+    "fps": 30,
+    "auto_exposure": false,
+    "exposure_us": 120.0,
+    "gain": 16.0,
+    "auto_white_balance": false,
+    "white_balance_k": 4600.0
   },
   "force_sensor": {
     "model": "Bota Rokubi",

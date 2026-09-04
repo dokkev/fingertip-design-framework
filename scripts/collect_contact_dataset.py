@@ -52,6 +52,12 @@ WRITER_FRAME_CAPACITY = 32
 GUI_REFRESH_MS = 10
 PREVIEW_WIDTH = 960
 PREVIEW_HEIGHT = 540
+FORCE_GAUGE_WIDTH_PX = 205
+FORCE_GAUGE_HEIGHT_PX = 190
+FORCE_GAUGE_TOP_PX = 12
+FORCE_GAUGE_BOTTOM_PX = 176
+FORCE_GAUGE_LEFT_PX = 24
+FORCE_GAUGE_RIGHT_PX = 56
 
 
 @dataclass(frozen=True)
@@ -242,8 +248,8 @@ class ContactCollectorApp:
         side = ttk.Frame(outer)
         side.grid(row=1, column=1, sticky="nsew")
         self.material = tk.StringVar(value="dragon_skin")
-        self.morphology = tk.StringVar(value="nominal")
-        self.specimen_id = tk.StringVar(value="dragon_skin_nominal_01")
+        self.morphology = tk.StringVar(value="baseline")
+        self.specimen_id = tk.StringVar(value="dragon_skin_baseline_01")
         self.indenter = tk.StringVar(value="sphere_15mm")
         self.hole = tk.IntVar(value=1)
         self.repeat = tk.IntVar(value=1)
@@ -264,7 +270,7 @@ class ContactCollectorApp:
         morphology = ttk.Combobox(
             specimen,
             textvariable=self.morphology,
-            values=("nominal", "optimized"),
+            values=("baseline", "flat_opt", "angled_opt"),
         )
         morphology.grid(row=1, column=1, sticky="ew", padx=(8, 0), pady=2)
         ttk.Label(specimen, text="Specimen ID").grid(row=2, column=0, sticky="w")
@@ -314,6 +320,7 @@ class ContactCollectorApp:
 
         force_box = ttk.LabelFrame(side, text="Live Bota Rokubi", padding=10)
         force_box.grid(row=2, column=0, sticky="ew", pady=(10, 0))
+        force_box.columnconfigure(0, weight=1)
         self.force_text = tk.StringVar(value="F magnitude: -- N")
         self.fz_text = tk.StringVar(value="Fz: -- N")
         self.share_text = tk.StringVar(value="|Fz| / F: -- %")
@@ -321,6 +328,100 @@ class ContactCollectorApp:
             ttk.Label(force_box, textvariable=variable, font=("TkFixedFont", 12)).grid(
                 row=row, column=0, sticky="w"
             )
+
+        maximum_target_n = max(
+            target + self.config.tolerance_n(target)
+            for target in self.config.target_forces_n
+        )
+        self.force_gauge_max_n = max(20.0, maximum_target_n)
+        self.force_gauge = tk.Canvas(
+            force_box,
+            width=FORCE_GAUGE_WIDTH_PX,
+            height=FORCE_GAUGE_HEIGHT_PX,
+            background="white",
+            highlightbackground="#b8b8b8",
+            highlightthickness=1,
+        )
+        self.force_gauge.grid(row=0, column=1, rowspan=5, padx=(12, 0))
+        self.force_gauge.create_rectangle(
+            FORCE_GAUGE_LEFT_PX,
+            FORCE_GAUGE_TOP_PX,
+            FORCE_GAUGE_RIGHT_PX,
+            FORCE_GAUGE_BOTTOM_PX,
+            fill="#f0f0f0",
+            outline="#666666",
+        )
+        self.force_margin_band = self.force_gauge.create_rectangle(
+            FORCE_GAUGE_LEFT_PX - 5,
+            FORCE_GAUGE_BOTTOM_PX,
+            FORCE_GAUGE_RIGHT_PX + 5,
+            FORCE_GAUGE_BOTTOM_PX,
+            fill="#d9ead3",
+            outline="#4f8a55",
+            state="hidden",
+        )
+        self.force_current_bar = self.force_gauge.create_rectangle(
+            FORCE_GAUGE_LEFT_PX + 1,
+            FORCE_GAUGE_BOTTOM_PX,
+            FORCE_GAUGE_RIGHT_PX - 1,
+            FORCE_GAUGE_BOTTOM_PX - 1,
+            fill="#3579b8",
+            outline="",
+        )
+        self.force_target_line = self.force_gauge.create_line(
+            FORCE_GAUGE_LEFT_PX - 8,
+            FORCE_GAUGE_BOTTOM_PX,
+            FORCE_GAUGE_RIGHT_PX + 8,
+            FORCE_GAUGE_BOTTOM_PX,
+            fill="#202020",
+            width=2,
+            state="hidden",
+        )
+        for tick_n in (0.0, 5.0, 10.0, 15.0, 20.0):
+            if tick_n > self.force_gauge_max_n:
+                continue
+            tick_y = FORCE_GAUGE_BOTTOM_PX - (
+                tick_n / self.force_gauge_max_n
+            ) * (FORCE_GAUGE_BOTTOM_PX - FORCE_GAUGE_TOP_PX)
+            self.force_gauge.create_line(
+                FORCE_GAUGE_RIGHT_PX,
+                tick_y,
+                FORCE_GAUGE_RIGHT_PX + 5,
+                tick_y,
+                fill="#555555",
+            )
+            self.force_gauge.create_text(
+                FORCE_GAUGE_RIGHT_PX + 8,
+                tick_y,
+                text=f"{tick_n:g}",
+                anchor="w",
+                fill="#404040",
+                font=("TkDefaultFont", 8),
+            )
+        self.force_current_gauge_text = self.force_gauge.create_text(
+            106,
+            43,
+            text="Current\n-- N",
+            anchor="w",
+            fill="#245a8d",
+            font=("TkDefaultFont", 10, "bold"),
+        )
+        self.force_target_gauge_text = self.force_gauge.create_text(
+            106,
+            91,
+            text="Target\n-- N",
+            anchor="w",
+            fill="#202020",
+            font=("TkDefaultFont", 10),
+        )
+        self.force_margin_gauge_text = self.force_gauge.create_text(
+            106,
+            139,
+            text="Margin\n-- N",
+            anchor="w",
+            fill="#39733f",
+            font=("TkDefaultFont", 10),
+        )
         if self.mock_sensor:
             assert self.mock_force is not None
             ttk.Scale(force_box, from_=0.0, to=17.0, variable=self.mock_force).grid(
@@ -446,6 +547,9 @@ class ContactCollectorApp:
                 camera_width=self.camera.width,
                 camera_height=self.camera.height,
                 camera_fps=self.camera.fps,
+                camera_exposure_us=self._camera_setting("exposure_us"),
+                camera_gain=self._camera_setting("gain"),
+                camera_white_balance_k=self._camera_setting("white_balance_k"),
                 bota_serial_port=self.sensor.port,
                 bota_tare_offsets=self.current_tare_offsets,
                 force_sequence=self.config,
@@ -464,6 +568,12 @@ class ContactCollectorApp:
         self.state_text.set("READY — configure a loaded run or unloaded capture")
         self.io_text.set(f"Session: {self.writer.session_path}")
         self._set_inputs_enabled(True)
+
+    def _camera_setting(self, name: str) -> float:
+        value = getattr(self.camera, name)
+        if value is None:
+            raise RuntimeError(f"camera {name} was not fixed before session creation")
+        return float(value)
 
     def _conditions(self) -> tuple[str, int, int]:
         indenter = self.indenter.get().strip()
@@ -540,8 +650,9 @@ class ContactCollectorApp:
             self._abort()
         frames = self.camera_reader.drain()
         drop_count = self.camera_reader.dropped_frame_count
-        if drop_count != self.last_camera_drop_count and self.active_segment is not None:
-            self._abort_for_writer_loss("camera delivery queue overflow")
+        if drop_count != self.last_camera_drop_count and self.active_mode is not None:
+            self._reset_attempt_after_camera_drop()
+            frames = []
         self.last_camera_drop_count = drop_count
         for timed in frames:
             self._process_frame(timed)
@@ -550,6 +661,22 @@ class ContactCollectorApp:
         self._update_live_force()
         self._update_io_status()
         self.root.after(GUI_REFRESH_MS, self._tick)
+
+    def _reset_attempt_after_camera_drop(self) -> None:
+        if self.writer is None:
+            return
+        if self.active_segment is not None:
+            self.writer.discard_segment(self.active_segment)
+            self.active_segment = None
+        now_s = perf_counter()
+        if self.active_mode == "loaded" and self.force_controller is not None:
+            self.force_controller.reset_attempt(now_s)
+        elif self.active_mode == "unloaded" and self.unloaded_controller is not None:
+            self.unloaded_controller.reset_attempt(now_s)
+        self.force_progress["value"] = 0.0
+        self.state_text.set(
+            "CAMERA DROP — current attempt discarded; re-establish force target"
+        )
 
     def _process_frame(self, timed: _TimedColorFrame) -> None:
         sample = self.sensor.nearest_sample(timed.host_time_s)
@@ -730,6 +857,90 @@ class ContactCollectorApp:
         self.force_text.set(f"F magnitude: {sample.force_magnitude_n:7.3f} N")
         self.fz_text.set(f"Fz:          {sample.fz_n:7.3f} N")
         self.share_text.set(f"|Fz| / F:    {100.0 * sample.fz_share:6.1f} %")
+        self._update_force_gauge(sample.force_magnitude_n)
+
+    def _update_force_gauge(self, current_force_n: float) -> None:
+        target_n: float | None = None
+        lower_n: float | None = None
+        upper_n: float | None = None
+        margin_text = "Margin\n-- N"
+
+        if self.active_mode == "loaded" and self.force_controller is not None:
+            target_n = self.force_controller.current_target_n
+            if target_n is not None:
+                tolerance_n = self.config.tolerance_n(target_n)
+                lower_n = max(0.0, target_n - tolerance_n)
+                upper_n = target_n + tolerance_n
+                margin_text = f"Margin\n±{tolerance_n:.2f} N"
+        elif self.active_mode == "unloaded":
+            target_n = self.config.unloaded_max_force_n
+            lower_n = 0.0
+            upper_n = target_n
+            margin_text = f"Margin\n0–{target_n:.2f} N"
+
+        gauge_span_px = FORCE_GAUGE_BOTTOM_PX - FORCE_GAUGE_TOP_PX
+
+        def gauge_y(force_n: float) -> float:
+            clipped_force_n = min(max(force_n, 0.0), self.force_gauge_max_n)
+            return FORCE_GAUGE_BOTTOM_PX - (
+                clipped_force_n / self.force_gauge_max_n
+            ) * gauge_span_px
+
+        current_y = gauge_y(current_force_n)
+        self.force_gauge.coords(
+            self.force_current_bar,
+            FORCE_GAUGE_LEFT_PX + 1,
+            current_y,
+            FORCE_GAUGE_RIGHT_PX - 1,
+            FORCE_GAUGE_BOTTOM_PX - 1,
+        )
+        self.force_gauge.itemconfigure(
+            self.force_current_gauge_text,
+            text=f"Current\n{current_force_n:.2f} N",
+        )
+
+        if target_n is None or lower_n is None or upper_n is None:
+            self.force_gauge.itemconfigure(self.force_margin_band, state="hidden")
+            self.force_gauge.itemconfigure(self.force_target_line, state="hidden")
+            self.force_gauge.itemconfigure(
+                self.force_target_gauge_text, text="Target\n-- N"
+            )
+            self.force_gauge.itemconfigure(
+                self.force_margin_gauge_text, text=margin_text
+            )
+            self.force_gauge.itemconfigure(self.force_current_bar, fill="#3579b8")
+            return
+
+        self.force_gauge.coords(
+            self.force_margin_band,
+            FORCE_GAUGE_LEFT_PX - 5,
+            gauge_y(upper_n),
+            FORCE_GAUGE_RIGHT_PX + 5,
+            gauge_y(lower_n),
+        )
+        self.force_gauge.itemconfigure(self.force_margin_band, state="normal")
+        target_y = gauge_y(target_n)
+        self.force_gauge.coords(
+            self.force_target_line,
+            FORCE_GAUGE_LEFT_PX - 8,
+            target_y,
+            FORCE_GAUGE_RIGHT_PX + 8,
+            target_y,
+        )
+        self.force_gauge.itemconfigure(self.force_target_line, state="normal")
+        target_prefix = "≤" if self.active_mode == "unloaded" else ""
+        self.force_gauge.itemconfigure(
+            self.force_target_gauge_text,
+            text=f"Target\n{target_prefix}{target_n:.2f} N",
+        )
+        self.force_gauge.itemconfigure(self.force_margin_gauge_text, text=margin_text)
+        if lower_n <= current_force_n <= upper_n:
+            bar_color = "#2f8f46"
+        elif current_force_n > upper_n:
+            bar_color = "#c54b3c"
+        else:
+            bar_color = "#3579b8"
+        self.force_gauge.itemconfigure(self.force_current_bar, fill=bar_color)
 
     def _update_io_status(self) -> None:
         if self.writer is None:
@@ -784,11 +995,33 @@ class ContactCollectorApp:
 def _arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bota-port", default="/dev/ttyUSB0")
-    parser.add_argument("--output", type=Path, default=_REPOSITORY_ROOT / "experiments")
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=_REPOSITORY_ROOT / "output" / "contact_dataset",
+    )
     parser.add_argument("--camera-width", type=int, default=1920)
     parser.add_argument("--camera-height", type=int, default=1080)
     parser.add_argument("--camera-fps", type=int, default=30)
     parser.add_argument("--camera-serial")
+    parser.add_argument(
+        "--camera-exposure-us",
+        type=float,
+        required=True,
+        help="fixed RealSense RGB exposure used for every morphology",
+    )
+    parser.add_argument(
+        "--camera-gain",
+        type=float,
+        required=True,
+        help="fixed RealSense RGB gain used for every morphology",
+    )
+    parser.add_argument(
+        "--camera-white-balance-k",
+        type=float,
+        required=True,
+        help="fixed RealSense RGB white balance used for every morphology",
+    )
     parser.add_argument(
         "--capture-rate-hz",
         type=float,
@@ -817,6 +1050,11 @@ def main() -> None:
     sensor = _MockBotaSensor(mock_force.get) if args.mock else BotaSerialSensor(args.bota_port)
     try:
         camera.start()
+        camera.set_manual_photometric_controls(
+            exposure_us=args.camera_exposure_us,
+            gain=args.camera_gain,
+            white_balance_k=args.camera_white_balance_k,
+        )
         sensor.start()
     except BaseException:
         camera.stop()

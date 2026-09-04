@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from typing import Any
 
 import numpy as np
@@ -52,7 +53,11 @@ class RealSenseColorCamera:
         self.requested_serial_number = serial_number
         self.device_name: str | None = None
         self.serial_number: str | None = None
+        self.exposure_us: float | None = None
+        self.gain: float | None = None
+        self.white_balance_k: float | None = None
         self._pipeline: Any | None = None
+        self._device: Any | None = None
 
     @property
     def is_running(self) -> bool:
@@ -65,6 +70,9 @@ class RealSenseColorCamera:
 
         if self.is_running:
             raise RuntimeError("RealSense camera is already running")
+        self.exposure_us = None
+        self.gain = None
+        self.white_balance_k = None
         try:
             import pyrealsense2 as rs
         except ImportError as error:
@@ -93,6 +101,84 @@ class RealSenseColorCamera:
         self.device_name = str(device.get_info(rs.camera_info.name))
         self.serial_number = str(device.get_info(rs.camera_info.serial_number))
         self._pipeline = pipeline
+        self._device = device
+
+    def set_manual_photometric_controls(
+        self,
+        *,
+        exposure_us: float,
+        gain: float,
+        white_balance_k: float,
+    ) -> None:
+        """Set and verify fixed RGB controls for quantitative acquisition."""
+
+        if self._pipeline is None or self._device is None:
+            raise RuntimeError("RealSense camera is not running")
+        requested = {
+            "exposure_us": float(exposure_us),
+            "gain": float(gain),
+            "white_balance_k": float(white_balance_k),
+        }
+        if not all(math.isfinite(value) for value in requested.values()):
+            raise ValueError("camera photometric controls must be finite")
+
+        import pyrealsense2 as rs
+
+        required_options = (
+            rs.option.enable_auto_exposure,
+            rs.option.exposure,
+            rs.option.gain,
+            rs.option.enable_auto_white_balance,
+            rs.option.white_balance,
+        )
+        sensors = [
+            sensor
+            for sensor in self._device.query_sensors()
+            if all(sensor.supports(option) for option in required_options)
+        ]
+        if len(sensors) != 1:
+            raise RuntimeError(
+                "expected exactly one RealSense RGB sensor with manual exposure, "
+                "gain, and white-balance controls"
+            )
+        sensor = sensors[0]
+        manual_options = (
+            ("exposure_us", rs.option.exposure),
+            ("gain", rs.option.gain),
+            ("white_balance_k", rs.option.white_balance),
+        )
+        for name, option in manual_options:
+            value = requested[name]
+            option_range = sensor.get_option_range(option)
+            if not option_range.min <= value <= option_range.max:
+                raise ValueError(
+                    f"{name}={value:g} is outside the camera range "
+                    f"[{option_range.min:g}, {option_range.max:g}]"
+                )
+
+        sensor.set_option(rs.option.enable_auto_exposure, 0.0)
+        sensor.set_option(rs.option.enable_auto_white_balance, 0.0)
+        for name, option in manual_options:
+            sensor.set_option(option, requested[name])
+
+        if sensor.get_option(rs.option.enable_auto_exposure) != 0.0:
+            raise RuntimeError("RealSense auto exposure did not disable")
+        if sensor.get_option(rs.option.enable_auto_white_balance) != 0.0:
+            raise RuntimeError("RealSense auto white balance did not disable")
+
+        actual: dict[str, float] = {}
+        for name, option in manual_options:
+            value = float(sensor.get_option(option))
+            step = float(sensor.get_option_range(option).step)
+            if abs(value - requested[name]) > max(0.51 * step, 1.0e-6):
+                raise RuntimeError(
+                    f"RealSense {name} read-back {value:g} does not match "
+                    f"requested {requested[name]:g}"
+                )
+            actual[name] = value
+        self.exposure_us = actual["exposure_us"]
+        self.gain = actual["gain"]
+        self.white_balance_k = actual["white_balance_k"]
 
     def read(self, *, timeout_ms: int = 5000) -> ColorFrame:
         """Block for the next color frame and return an owned RGB copy."""
@@ -128,6 +214,7 @@ class RealSenseColorCamera:
 
         pipeline = self._pipeline
         self._pipeline = None
+        self._device = None
         if pipeline is not None:
             pipeline.stop()
 

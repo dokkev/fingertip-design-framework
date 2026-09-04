@@ -59,6 +59,7 @@ def test_full_valid_recording_captures_five_scheduled_frames() -> None:
     )
 
     assert sum(update.should_record_frame for update in updates) == 5
+    assert config.expected_record_frame_count == 5
     assert updates[-1].state is ForceSequenceState.RUN_COMPLETE
     assert ForceSequenceEvent.TARGET_COMPLETED in updates[-1].events
 
@@ -152,6 +153,27 @@ def test_one_camera_frame_is_not_reused_for_multiple_missed_deadlines() -> None:
     assert delayed.should_record_frame
     assert not immediate_next.should_record_frame
 
+    incomplete = controller.update(1.6, 2.0)
+    assert incomplete.state is ForceSequenceState.WAITING_FOR_TARGET
+    assert ForceSequenceEvent.ATTEMPT_RESET in incomplete.events
+    assert incomplete.completed_targets_n == ()
+
+
+def test_external_camera_drop_resets_only_current_target_attempt() -> None:
+    controller = ForceSequenceController(CONFIG)
+    controller.start(0.0)
+    first_target_end = _complete_target(controller, 2.0, 0.1)
+    controller.update(first_target_end + 0.1, 5.0)
+    controller.update(first_target_end + 0.6, 5.0)
+
+    reset = controller.reset_attempt(first_target_end + 0.7)
+
+    assert reset.state is ForceSequenceState.WAITING_FOR_TARGET
+    assert reset.current_target_n == 5.0
+    assert reset.completed_targets_n == (2.0,)
+    assert reset.events == (ForceSequenceEvent.ATTEMPT_RESET,)
+    assert controller.captured_frame_count == 0
+
 
 def test_two_newtons_success_advances_without_release() -> None:
     controller = ForceSequenceController(CONFIG)
@@ -169,15 +191,13 @@ def test_fifteen_newtons_success_emits_run_complete() -> None:
         target_forces_n=(15.0,),
         settle_duration_s=0.5,
         record_duration_s=1.0,
+        capture_rate_hz=4.0,
     )
     controller = ForceSequenceController(config)
     controller.start(0.0)
-    controller.update(0.1, 15.0)
-    controller.update(0.6, 15.0)
-    update = controller.update(1.6, 15.0)
+    _complete_target(controller, 15.0, 0.1)
 
-    assert update.state is ForceSequenceState.RUN_COMPLETE
-    assert ForceSequenceEvent.RUN_COMPLETED in update.events
+    assert controller.state is ForceSequenceState.RUN_COMPLETE
 
 
 def test_abort_produces_aborted_state() -> None:
@@ -217,6 +237,7 @@ def test_unloaded_continuous_hold_captures_scheduled_burst() -> None:
 
     assert UnloadedCaptureEvent.RECORDING_STARTED in started.events
     assert sum(update.should_record_frame for update in captures) == 4
+    assert CONFIG.expected_unloaded_frame_count == 4
     assert completed.state is UnloadedCaptureState.COMPLETE
     assert UnloadedCaptureEvent.CAPTURE_COMPLETED in completed.events
     assert not completed.should_record_frame
@@ -232,3 +253,17 @@ def test_unloaded_force_excursion_resets() -> None:
 
     assert update.state is UnloadedCaptureState.WAITING_FOR_UNLOADED
     assert UnloadedCaptureEvent.ATTEMPT_RESET in update.events
+
+
+def test_unloaded_missing_scheduled_frames_discards_attempt() -> None:
+    controller = UnloadedCaptureController(CONFIG)
+    controller.start(0.0)
+    controller.update(0.1, 0.1)
+    controller.update(0.6, 0.1)
+    controller.update(1.36, 0.1)
+
+    update = controller.update(1.6, 0.1)
+
+    assert update.state is UnloadedCaptureState.WAITING_FOR_UNLOADED
+    assert update.events == (UnloadedCaptureEvent.ATTEMPT_RESET,)
+    assert controller.captured_frame_count == 0

@@ -130,6 +130,9 @@ class SessionMetadata:
     camera_width: int
     camera_height: int
     camera_fps: int
+    camera_exposure_us: float
+    camera_gain: float
+    camera_white_balance_k: float
     bota_serial_port: str
     bota_tare_offsets: BotaTareOffsets
     force_sequence: ForceSequenceConfig
@@ -148,6 +151,15 @@ class SessionMetadata:
             value = getattr(self, name)
             if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
                 raise ValueError(f"{name} must be a positive integer")
+        for name in ("camera_exposure_us", "camera_white_balance_k"):
+            value = float(getattr(self, name))
+            if not math.isfinite(value) or value <= 0.0:
+                raise ValueError(f"{name} must be finite and positive")
+            object.__setattr__(self, name, value)
+        gain = float(self.camera_gain)
+        if not math.isfinite(gain) or gain < 0.0:
+            raise ValueError("camera_gain must be finite and nonnegative")
+        object.__setattr__(self, "camera_gain", gain)
         if not self.bota_serial_port.strip():
             raise ValueError("bota_serial_port must be nonempty")
         if not self.bota_model.strip():
@@ -175,6 +187,11 @@ class SessionMetadata:
                 "width": self.camera_width,
                 "height": self.camera_height,
                 "fps": self.camera_fps,
+                "auto_exposure": False,
+                "exposure_us": self.camera_exposure_us,
+                "gain": self.camera_gain,
+                "auto_white_balance": False,
+                "white_balance_k": self.camera_white_balance_k,
             },
             "force_sensor": {
                 "model": self.bota_model,
@@ -209,6 +226,10 @@ class SessionMetadata:
         sensor = data["force_sensor"]
         acquisition = data["acquisition"]
         tare = sensor["tare_offsets"]
+        if camera.get("auto_exposure") is not False:
+            raise ValueError("session camera auto_exposure must be false")
+        if camera.get("auto_white_balance") is not False:
+            raise ValueError("session camera auto_white_balance must be false")
         return cls(
             material=str(specimen["material"]),
             morphology=str(specimen["morphology"]),
@@ -218,6 +239,9 @@ class SessionMetadata:
             camera_width=int(camera["width"]),
             camera_height=int(camera["height"]),
             camera_fps=int(camera["fps"]),
+            camera_exposure_us=float(camera["exposure_us"]),
+            camera_gain=float(camera["gain"]),
+            camera_white_balance_k=float(camera["white_balance_k"]),
             bota_serial_port=str(sensor["serial_port"]),
             bota_tare_offsets=BotaTareOffsets(
                 fx_n=float(tare["fx_n"]),
@@ -338,6 +362,7 @@ class SegmentHandle:
     partial_path: Path
     final_path: Path
     target_force_n: float | None
+    expected_frame_count: int
 
 
 @dataclass(frozen=True)
@@ -490,6 +515,9 @@ class ContactDatasetWriter:
             base_key=f"{run.run_id}:force:{target:g}",
             final_path=run.path / format_force_directory(target),
             target_force_n=target,
+            expected_frame_count=(
+                self._session.force_sequence.expected_record_frame_count
+            ),
         )
 
     def begin_unloaded_capture(self) -> SegmentHandle:
@@ -500,6 +528,9 @@ class ContactDatasetWriter:
             base_key=f"unloaded:{capture_id}",
             final_path=self.session_path / "unloaded" / capture_id,
             target_force_n=None,
+            expected_frame_count=(
+                self._session.force_sequence.expected_unloaded_frame_count
+            ),
         )
 
     def _begin_segment(
@@ -508,6 +539,7 @@ class ContactDatasetWriter:
         base_key: str,
         final_path: Path,
         target_force_n: float | None,
+        expected_frame_count: int,
     ) -> SegmentHandle:
         self._ensure_open()
         if final_path.exists():
@@ -522,6 +554,7 @@ class ContactDatasetWriter:
             partial_path=partial,
             final_path=final_path,
             target_force_n=target_force_n,
+            expected_frame_count=expected_frame_count,
         )
 
         def begin() -> None:
@@ -554,6 +587,12 @@ class ContactDatasetWriter:
             return False
         with self._lock:
             frame_index = self._frame_indices[segment.key]
+            if frame_index >= segment.expected_frame_count:
+                self._frame_slots.release()
+                raise RuntimeError(
+                    f"segment {segment.key} already has its expected "
+                    f"{segment.expected_frame_count} frames"
+                )
             self._frame_indices[segment.key] = frame_index + 1
         filename = f"{frame_index:06d}.png"
         row = self._frame_row(frame_index, filename, elapsed, frame)
@@ -614,18 +653,30 @@ class ContactDatasetWriter:
         """Publish a successful segment containing only frames and frames.csv."""
 
         self._ensure_open()
+        with self._lock:
+            submitted_count = self._frame_indices.get(segment.key, 0)
+        if submitted_count != segment.expected_frame_count:
+            raise RuntimeError(
+                f"cannot finalize {segment.key}: expected "
+                f"{segment.expected_frame_count} frames, received {submitted_count}"
+            )
 
         def finalize() -> None:
             rows = self._rows.pop(segment.key, [])
             if segment.key in self._failed_segments:
                 return
-            if not rows:
+            if len(rows) != segment.expected_frame_count:
                 self._failed_segments.add(segment.key)
-                raise RuntimeError(f"cannot finalize empty segment {segment.key}")
+                raise RuntimeError(
+                    f"cannot finalize {segment.key}: expected "
+                    f"{segment.expected_frame_count} written frames, received {len(rows)}"
+                )
             self._write_frames_csv(segment.partial_path / "frames.csv", rows)
             if segment.final_path.exists():
                 raise FileExistsError(f"completed segment already exists: {segment.final_path}")
             segment.partial_path.replace(segment.final_path)
+            with self._lock:
+                self._frame_indices.pop(segment.key, None)
 
         self._enqueue_control(finalize)
 
@@ -637,6 +688,8 @@ class ContactDatasetWriter:
         def discard() -> None:
             self._rows.pop(segment.key, None)
             self._failed_segments.discard(segment.key)
+            with self._lock:
+                self._frame_indices.pop(segment.key, None)
             if segment.partial_path.exists():
                 shutil.rmtree(segment.partial_path)
 

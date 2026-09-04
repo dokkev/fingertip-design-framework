@@ -33,6 +33,9 @@ def _metadata(
         camera_width=8,
         camera_height=6,
         camera_fps=30,
+        camera_exposure_us=120.0,
+        camera_gain=16.0,
+        camera_white_balance_k=4600.0,
         bota_serial_port="MOCK",
         bota_tare_offsets=BotaTareOffsets(fx_n=0.1, mz_nm=-0.2),
         force_sequence=ForceSequenceConfig(
@@ -94,6 +97,21 @@ def _read_csv(path: Path) -> list[dict[str, str]]:
         return list(csv.DictReader(stream))
 
 
+def _submit_expected_frames(
+    writer: ContactDatasetWriter,
+    segment,
+    *,
+    first_frame_index: int = 0,
+    force_n: float = 2.0,
+) -> None:
+    for capture_index in range(segment.expected_frame_count):
+        assert writer.submit_frame(
+            segment,
+            _frame(first_frame_index + capture_index, force_n),
+            capture_elapsed_s=0.2 * capture_index,
+        )
+
+
 def test_session_metadata_round_trip_uses_explicit_v2_hierarchy(tmp_path: Path) -> None:
     metadata = _metadata(target_forces_n=(2.0, 5.0, 10.0, 15.0))
     with ContactDatasetWriter(tmp_path, metadata) as writer:
@@ -113,6 +131,11 @@ def test_session_metadata_round_trip_uses_explicit_v2_hierarchy(tmp_path: Path) 
         "width": 8,
         "height": 6,
         "fps": 30,
+        "auto_exposure": False,
+        "exposure_us": 120.0,
+        "gain": 16.0,
+        "auto_white_balance": False,
+        "white_balance_k": 4600.0,
     }
     assert stored["acquisition"]["target_forces_n"] == [2.0, 5.0, 10.0, 15.0]
     assert stored["acquisition"]["record_duration_s"] == 1.0
@@ -168,8 +191,7 @@ def test_completed_force_segment_contains_only_frames_and_csv(tmp_path: Path) ->
     with ContactDatasetWriter(tmp_path, _metadata()) as writer:
         run = _run(writer)
         segment = writer.begin_force_target(run, 2.0)
-        assert writer.submit_frame(segment, _frame(0), capture_elapsed_s=0.0)
-        assert writer.submit_frame(segment, _frame(1), capture_elapsed_s=0.2)
+        _submit_expected_frames(writer, segment)
         writer.finalize_segment(segment)
         writer.complete_loaded_run(run)
         writer.flush()
@@ -179,6 +201,9 @@ def test_completed_force_segment_contains_only_frames_and_csv(tmp_path: Path) ->
         assert sorted(path.name for path in (final / "frames").glob("*.png")) == [
             "000000.png",
             "000001.png",
+            "000002.png",
+            "000003.png",
+            "000004.png",
         ]
         stored_bgr = cv2.imread(str(final / "frames" / "000000.png"))
         assert stored_bgr is not None
@@ -195,7 +220,7 @@ def test_failed_attempt_is_removed_and_retry_restarts_at_frame_zero(
         writer.discard_segment(failed)
 
         retry = writer.begin_force_target(run, 2.0)
-        writer.submit_frame(retry, _frame(2), capture_elapsed_s=0.0)
+        _submit_expected_frames(writer, retry, first_frame_index=2)
         writer.finalize_segment(retry)
         writer.complete_loaded_run(run)
         writer.flush()
@@ -215,14 +240,14 @@ def test_frames_csv_contains_raw_facts_and_omits_derived_values(tmp_path: Path) 
     with ContactDatasetWriter(tmp_path, _metadata()) as writer:
         run = _run(writer)
         segment = writer.begin_force_target(run, 2.0)
-        writer.submit_frame(segment, _frame(0), capture_elapsed_s=0.4)
+        _submit_expected_frames(writer, segment)
         writer.finalize_segment(segment)
         writer.complete_loaded_run(run)
         writer.flush()
         rows = _read_csv(segment.final_path / "frames.csv")
 
     assert tuple(rows[0]) == FRAME_CSV_COLUMNS
-    assert float(rows[0]["capture_elapsed_s"]) == 0.4
+    assert float(rows[2]["capture_elapsed_s"]) == 0.4
     assert float(rows[0]["Fx_N"]) == 0.1
     assert float(rows[0]["Mz_Nm"]) == 0.03
     assert float(rows[0]["camera_bota_time_delta_ms"]) == pytest.approx(1.0)
@@ -234,14 +259,14 @@ def test_reader_resolves_specimen_run_force_and_raw_frame_context(tmp_path: Path
     with ContactDatasetWriter(tmp_path, _metadata()) as writer:
         run = _run(writer, hole_index=4, repeat_index=3)
         segment = writer.begin_force_target(run, 2.0)
-        writer.submit_frame(segment, _frame(0), capture_elapsed_s=0.0)
+        _submit_expected_frames(writer, segment)
         writer.finalize_segment(segment)
         writer.complete_loaded_run(run)
         writer.flush()
         session_path = writer.session_path
 
     records = list(iter_dataset_frames(session_path))
-    assert len(records) == 1
+    assert len(records) == 5
     record = records[0]
     assert record.session.material == "solaris"
     assert record.session.morphology == "nominal"
@@ -261,7 +286,7 @@ def test_aborted_run_keeps_completed_segments_and_removes_active_attempt(
     with ContactDatasetWriter(tmp_path, _metadata(target_forces_n=(2.0, 5.0))) as writer:
         run = _run(writer)
         complete = writer.begin_force_target(run, 2.0)
-        writer.submit_frame(complete, _frame(0), capture_elapsed_s=0.0)
+        _submit_expected_frames(writer, complete)
         writer.finalize_segment(complete)
         partial = writer.begin_force_target(run, 5.0)
         writer.submit_frame(partial, _frame(1, 5.0), capture_elapsed_s=0.0)
@@ -280,7 +305,7 @@ def test_unloaded_capture_inherits_session_specimen_without_own_metadata(
 ) -> None:
     with ContactDatasetWriter(tmp_path, _metadata()) as writer:
         capture = writer.begin_unloaded_capture()
-        writer.submit_frame(capture, _frame(0, 0.1), capture_elapsed_s=0.0)
+        _submit_expected_frames(writer, capture, force_n=0.1)
         writer.finalize_segment(capture)
         writer.flush()
         session_path = writer.session_path
@@ -295,6 +320,23 @@ def test_unloaded_capture_inherits_session_specimen_without_own_metadata(
     assert record.run is None
     assert record.target_force_n is None
     assert record.session.specimen_id == "solaris_nominal_01"
+
+
+def test_incomplete_segment_cannot_be_finalized(tmp_path: Path) -> None:
+    with ContactDatasetWriter(tmp_path, _metadata()) as writer:
+        run = _run(writer)
+        segment = writer.begin_force_target(run, 2.0)
+        for frame_index in range(segment.expected_frame_count - 1):
+            assert writer.submit_frame(
+                segment,
+                _frame(frame_index),
+                capture_elapsed_s=0.2 * frame_index,
+            )
+
+        with pytest.raises(RuntimeError, match="expected 5 frames, received 4"):
+            writer.finalize_segment(segment)
+        writer.discard_segment(segment)
+        writer.abort_loaded_run(run)
 
 
 @pytest.mark.parametrize(
