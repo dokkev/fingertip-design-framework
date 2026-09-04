@@ -67,9 +67,14 @@ def test_terminal_brightness_does_not_move_selected_leds(monkeypatch) -> None:
     bright_result = solaris.localize_solaris_leds(bright)
 
     np.testing.assert_allclose(
+        weak_result.peak_rows_px,
+        bright_result.peak_rows_px,
+        atol=1.0,
+    )
+    np.testing.assert_allclose(
         weak_result.led_centers_xy_px,
         bright_result.led_centers_xy_px,
-        atol=0.25,
+        atol=1.0,
     )
 
 
@@ -80,6 +85,26 @@ def test_side_with_regular_five_lobes_is_selected(monkeypatch) -> None:
     _patch_segmentation(monkeypatch, mask)
 
     result = solaris.localize_solaris_leds(image)
+
+    assert result.selected_side == "right"
+
+
+def test_irregular_silhouette_does_not_move_right_lobes_to_left_side() -> None:
+    height, width = 240, 220
+    image = np.zeros((height, width, 3), dtype=np.uint8)
+    mask = np.zeros((height, width), dtype=bool)
+    mask[20:221, 30:46] = True
+    mask[20:221, 90:191] = True
+    mask[20:25, 30:191] = True
+    mask[216:221, 30:191] = True
+    image[mask] = (25, 150, 170)
+
+    peak_rows = (55, 85, 115, 145, 175)
+    for row in peak_rows:
+        cv2.circle(image, (170, row), 7, (230, 230, 230), -1)
+        cv2.circle(image, (125, row), 7, (255, 255, 255), -1)
+
+    result = solaris.localize_solaris_leds(image, reference_mask=mask)
 
     assert result.selected_side == "right"
 

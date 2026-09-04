@@ -1,0 +1,20 @@
+{
+  "completed_targets_n": [],
+  "hole_index": 1,
+  "hole_index_definition": "1=distal, 6=proximal",
+  "hole_position_mm": null,
+  "indenter_type": "sphere 15 mm",
+  "morphology": "DragonSkin nominal",
+  "run_end_host_time_s": 170444.926838238,
+  "run_id": "run_0001",
+  "run_start_host_time_s": 170442.986823105,
+  "settle_duration_s": 2.0,
+  "status": "aborted",
+  "target_forces_n": [
+    2.0,
+    5.0,
+    10.0,
+    15.0
+  ],
+  "tolerance_rule": "target < 10 N: max(0.2 N, 0.2 * target); target >= 10 N: max(0.2 N, 0.1 * target)"
+}

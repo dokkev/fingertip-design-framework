@@ -286,11 +286,14 @@ class ContactDatasetWriter:
             "hole_position_mm": hole_position_mm,
             "target_forces_n": list(config.target_forces_n),
             "tolerance_rule": (
+                f"target < {config.high_force_threshold_n:g} N: "
                 f"max({config.minimum_tolerance_n:g} N, "
-                f"{config.relative_tolerance:g} * target_force_n)"
+                f"{config.low_force_relative_tolerance:g} * target); "
+                f"target >= {config.high_force_threshold_n:g} N: "
+                f"max({config.minimum_tolerance_n:g} N, "
+                f"{config.high_force_relative_tolerance:g} * target)"
             ),
             "settle_duration_s": config.settle_duration_s,
-            "record_duration_s": config.record_duration_s,
             "run_start_host_time_s": float(start_host_time_s),
             "run_end_host_time_s": None,
             "status": "active",
@@ -347,7 +350,6 @@ class ContactDatasetWriter:
                 "hole_index": None,
                 "maximum_force_n": config.unloaded_max_force_n,
                 "settle_duration_s": config.unloaded_settle_duration_s,
-                "record_duration_s": config.unloaded_record_duration_s,
                 "status": "recording",
                 "started_utc": _utc_now(),
             },

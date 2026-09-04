@@ -14,7 +14,6 @@ from .led_localization_common import LedLocalizationResult
 LED_COUNT = 5
 
 # Empirical choices of the verified fixed-camera method.
-OUTER_SIDE_DEPTH_FRACTION = 0.50
 OUTER_SIDE_RED_PERCENTILE = 90.0
 SMALL_SMOOTHING_SIGMA_SPAN_FRACTION = 0.008
 BROAD_BACKGROUND_SIGMA_SPAN_FRACTION = 0.060
@@ -65,10 +64,13 @@ def _outer_side_profile(
         columns = np.flatnonzero(mask[row])
         if len(columns) < 4:
             continue
-        band_width = max(2, int(round(OUTER_SIDE_DEPTH_FRACTION * len(columns))))
-        selected = columns[:band_width] if side == "left" else columns[-band_width:]
+        midpoint = int(round(0.5 * (columns[0] + columns[-1])))
+        if side == "left":
+            start, stop = int(columns[0]), midpoint
+        else:
+            start, stop = midpoint, int(columns[-1])
         values[index] = np.percentile(
-            red[row, selected],
+            red[row, start : stop + 1],
             OUTER_SIDE_RED_PERCENTILE,
         )
 
@@ -86,21 +88,19 @@ def _regular_five_peak_sequence(
     rows: np.ndarray,
     profile: np.ndarray,
 ) -> tuple[float, np.ndarray, np.ndarray, np.ndarray]:
-    """Find the first strong, smoothly spaced five-lobe sequence from distal."""
+    """Find the highest-quality valid five-lobe sequence from distal."""
 
     span = len(rows)
     small_sigma = max(1.0, SMALL_SMOOTHING_SIGMA_SPAN_FRACTION * span)
     broad_sigma = max(6.0, BROAD_BACKGROUND_SIGMA_SPAN_FRACTION * span)
     smooth = gaussian_filter1d(profile, small_sigma)
     contrast = smooth - gaussian_filter1d(smooth, broad_sigma)
-    robust_range = float(np.percentile(contrast, 90) - np.percentile(contrast, 10))
-
     peak_indices, properties = find_peaks(
         contrast,
         distance=max(4, round(MINIMUM_PEAK_DISTANCE_SPAN_FRACTION * span)),
         prominence=max(
             2.0,
-            MINIMUM_PROMINENCE_RANGE_FRACTION * robust_range,
+            MINIMUM_PROMINENCE_RANGE_FRACTION * float(np.ptp(contrast)),
         ),
     )
     prominences = properties["prominences"]
@@ -152,9 +152,10 @@ def _regular_five_peak_sequence(
 
     if not candidates:
         raise RuntimeError("no regular distal five-lobe Solaris sequence was found")
-    # Peak indices and candidate groups are already ordered distal-first.
-    # Bright terminal structure must never displace the first valid sequence.
-    score, selected_indices, selected_prominences = candidates[0]
+    score, selected_indices, selected_prominences = max(
+        candidates,
+        key=lambda candidate: candidate[0],
+    )
     return (
         score,
         rows[selected_indices].astype(np.float64),
@@ -181,8 +182,12 @@ def _brightest_fraction_centroid(
         columns = np.flatnonzero(mask[row])
         if len(columns) < 4:
             continue
-        band_width = max(2, int(round(OUTER_SIDE_DEPTH_FRACTION * len(columns))))
-        selected = columns[:band_width] if side == "left" else columns[-band_width:]
+        midpoint = int(round(0.5 * (columns[0] + columns[-1])))
+        if side == "left":
+            start, stop = int(columns[0]), midpoint
+        else:
+            start, stop = midpoint, int(columns[-1])
+        selected = np.arange(start, stop + 1)
         coordinates.append(
             np.column_stack((selected, np.full(len(selected), row, dtype=np.int32)))
         )
@@ -193,10 +198,7 @@ def _brightest_fraction_centroid(
     coordinate_array = np.concatenate(coordinates).astype(np.float64)
     value_array = np.concatenate(values).astype(np.float64)
     count = max(1, int(np.ceil(BRIGHTEST_CENTROID_FRACTION * len(value_array))))
-    threshold = np.partition(value_array, len(value_array) - count)[
-        len(value_array) - count
-    ]
-    selected = value_array >= threshold
+    selected = np.argpartition(value_array, len(value_array) - count)[-count:]
     return np.mean(coordinate_array[selected], axis=0)
 
 

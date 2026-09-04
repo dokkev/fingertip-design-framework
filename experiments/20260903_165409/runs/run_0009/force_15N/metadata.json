@@ -1,0 +1,9 @@
+{
+  "completed_utc": "2026-09-03T23:46:35.792+00:00",
+  "frame_count": 1,
+  "kind": "loaded_force_target",
+  "run_id": "run_0009",
+  "started_utc": "2026-09-03T23:46:35.677+00:00",
+  "status": "complete",
+  "target_force_n": 15.0
+}

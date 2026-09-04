@@ -880,18 +880,19 @@ data consumers.
 
 `experiments/data_collection/` owns the hardware-independent physical
 acquisition contract. `ForceSequenceController` accepts only monotonic host
-time and force magnitude. It requires a continuous in-band settle followed by
-a continuous in-band recording at 1, 2, 5, 10, and 15 N; it never requires release
-between successful targets. `UnloadedCaptureController` separately requires
-force at or below 0.3 N throughout its settle and recording intervals.
+time and force magnitude. At 2 and 5 N it uses a target ±20% force band; at 10
+and 15 N it uses target ±10%. After one continuous second inside the band, it
+marks that synchronized RGB and Rokubi sample as the target snapshot; it never
+requires release between successful targets. Leaving the band before one
+second resets only the current hold. `UnloadedCaptureController` similarly
+captures one snapshot after one continuous second at or below 1.0 N.
 
 `ContactDatasetWriter` owns session/run directories, lossless PNG and CSV
-writing, summaries, atomic completed-segment publication, aborted-run metadata,
-and a metadata-backed completed-run iterator. One worker thread performs image
-and metadata I/O. A bounded frame-slot budget makes overload explicit; a frame
-is never silently omitted from an otherwise successful target. Incomplete
-attempts retain `.partial` names until they are discarded and are ignored by
-the reader.
+writing, summaries, atomic completed-snapshot publication, aborted-run
+metadata, and a metadata-backed completed-run iterator. One worker thread
+performs image and metadata I/O. A bounded frame-slot budget makes overload
+explicit; a snapshot is never silently omitted. Incomplete attempts retain
+`.partial` names until they are discarded and are ignored by the reader.
 
 `scripts/collect_contact_dataset.py` owns the one Tkinter experiment GUI and
 orchestration only. A camera reader thread keeps blocking RealSense calls
@@ -899,8 +900,9 @@ outside Tk's event loop. For each accepted camera frame, the GUI records host
 monotonic time and selects the nearest Bota sample by its independent
 host-monotonic timestamp. RealSense and Rokubi device timestamps remain
 separate. The displayed preview is derived from the raw RGB; saved frames
-contain no overlays. Mock-force mode is visually explicit and writes only
-beneath a separate `mock/MOCK_*` session namespace.
+contain no overlays. Its working-directory-independent default output root is
+the repository's `experiments/` directory. Mock-force mode is visually explicit
+and writes only beneath a separate `experiments/mock/MOCK_*` session namespace.
 
 `experiments/localization/` owns shared pure NumPy/OpenCV algorithms for the
 physical fingertip. Offline characterization and online execution import these
@@ -985,23 +987,25 @@ background; their signed difference is the lobe contrast.
 Each side is searched for five consecutive positive peaks. A valid group must
 start away from the distal cap reflection, end before the proximal limit, have
 broadly bounded median spacing, have no adjacent-spacing ratio above 1.9, and
-fit a quadratic row trend within 15% of its median pitch. The first valid group
-from the distal side is selected. Its score combines
+fit a quadratic row trend within 15% of its median pitch. The highest-quality
+valid group is selected. Its score combines
 median and minimum peak prominence, smooth-spacing quality, and a mild distal
 preference. The stronger valid side wins. Each selected row is then refined to
-an image-space center using the ordinary centroid of approximately the
-brightest 5% of red pixels in a small masked ROI on the selected outer side.
+an image-space center using exactly the brightest 5% of red pixels in a small
+ROI on the selected outer side. Both the profile and centroid ROIs use the
+coordinate-space midpoint between the silhouette row endpoints rather than
+splitting the surviving mask pixels by count.
 The five centers are returned distal to proximal. The compact
 `LedLocalizationResult` retains only those centers, their fitted line, selected
 side, profile/contrast diagnostics, peak prominences, score, image shape, and
 reference mask. This path has no vanishing point, physical pixel scale,
 periodic bright/dark template, terminal correction, or contact/morphology
 state. OpenCV's RNG is reset before the one GrabCut call so saved-image offline
-replays are deterministic. The normal fixed-camera validation forms one mask
-from the six-frame temporal median and supplies that same mask to every
-single-frame and leave-one-frame-out replay. This keeps silhouette geometry
-fixed while the optical evidence changes. A previously calibrated mask may
-likewise be supplied for other fixed-geometry photometric ablations.
+replays are deterministic. The normal fixed-camera validation calibrates once
+from the six-frame temporal median and overlays those same LED centers on every
+loaded frame. Loaded optical changes are never fed back into calibration. A
+previously calibrated mask may be supplied for fixed-geometry photometric
+ablations.
 
 `experiments/optical_morphology_analysis.py` owns the corresponding small
 offline measurement path. It remaps one unloaded image and loaded frames with

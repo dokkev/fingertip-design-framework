@@ -1,0 +1,35 @@
+{
+  "bota_model": "Rokubi",
+  "bota_serial_port": "/dev/ttyUSB0",
+  "bota_tare_offsets": {
+    "fx_n": 18.349519147872925,
+    "fy_n": 81.10028060913086,
+    "fz_n": -16.089634914398193,
+    "mx_nm": 0.596963407099247,
+    "my_nm": -0.2297932244837284,
+    "mz_nm": 0.009922939091920853
+  },
+  "camera_fps": 30,
+  "camera_height": 1080,
+  "camera_model": "RealSense D435",
+  "camera_serial_number": "831612071786",
+  "camera_width": 1920,
+  "created_utc": "2026-09-03T21:54:09.047+00:00",
+  "force_sequence": {
+    "high_force_relative_tolerance": 0.1,
+    "high_force_threshold_n": 10.0,
+    "low_force_relative_tolerance": 0.2,
+    "minimum_tolerance_n": 0.2,
+    "settle_duration_s": 2.0,
+    "target_forces_n": [
+      2.0,
+      5.0,
+      10.0,
+      15.0
+    ],
+    "unloaded_max_force_n": 1.0,
+    "unloaded_settle_duration_s": 2.0
+  },
+  "git_commit": "a13df98f45c673e6886d40ebd613f8d6d18b8bbd",
+  "sensor_mode": "physical"
+}

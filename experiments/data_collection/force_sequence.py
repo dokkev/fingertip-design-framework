@@ -9,16 +9,16 @@ import math
 
 @dataclass(frozen=True)
 class ForceSequenceConfig:
-    """Timing and force-band contract shared by loaded and unloaded capture."""
+    """Continuous force-hold contract shared by loaded and unloaded snapshots."""
 
-    target_forces_n: tuple[float, ...] = (1.0, 2.0, 5.0, 10.0, 15.0)
-    settle_duration_s: float = 0.5
-    record_duration_s: float = 2.0
-    unloaded_max_force_n: float = 0.3
-    unloaded_settle_duration_s: float = 0.5
-    unloaded_record_duration_s: float = 2.0
+    target_forces_n: tuple[float, ...] = (2.0, 5.0, 10.0, 15.0)
+    settle_duration_s: float = 1.0
+    unloaded_max_force_n: float = 1.0
+    unloaded_settle_duration_s: float = 1.0
     minimum_tolerance_n: float = 0.2
-    relative_tolerance: float = 0.05
+    low_force_relative_tolerance: float = 0.20
+    high_force_relative_tolerance: float = 0.10
+    high_force_threshold_n: float = 10.0
 
     def __post_init__(self) -> None:
         targets = tuple(float(value) for value in self.target_forces_n)
@@ -28,38 +28,38 @@ class ForceSequenceConfig:
             raise ValueError("target_forces_n must be strictly increasing")
         object.__setattr__(self, "target_forces_n", targets)
         positive_fields = (
-            "record_duration_s",
-            "unloaded_record_duration_s",
+            "settle_duration_s",
+            "unloaded_settle_duration_s",
             "unloaded_max_force_n",
             "minimum_tolerance_n",
-            "relative_tolerance",
+            "low_force_relative_tolerance",
+            "high_force_relative_tolerance",
+            "high_force_threshold_n",
         )
-        nonnegative_fields = ("settle_duration_s", "unloaded_settle_duration_s")
         for name in positive_fields:
             value = float(getattr(self, name))
             if not math.isfinite(value) or value <= 0:
                 raise ValueError(f"{name} must be finite and positive")
             object.__setattr__(self, name, value)
-        for name in nonnegative_fields:
-            value = float(getattr(self, name))
-            if not math.isfinite(value) or value < 0:
-                raise ValueError(f"{name} must be finite and nonnegative")
-            object.__setattr__(self, name, value)
 
     def tolerance_n(self, target_force_n: float) -> float:
-        """Return ``max(minimum_tolerance_n, relative_tolerance * target)``."""
+        """Return the absolute tolerance for one low- or high-force target."""
 
         target = float(target_force_n)
         if not math.isfinite(target) or target <= 0:
             raise ValueError("target_force_n must be finite and positive")
-        return max(self.minimum_tolerance_n, self.relative_tolerance * target)
+        relative_tolerance = (
+            self.high_force_relative_tolerance
+            if target >= self.high_force_threshold_n
+            else self.low_force_relative_tolerance
+        )
+        return max(self.minimum_tolerance_n, relative_tolerance * target)
 
 
 class ForceSequenceState(Enum):
     IDLE = auto()
     WAITING_FOR_TARGET = auto()
     SETTLING = auto()
-    RECORDING = auto()
     RUN_COMPLETE = auto()
     ABORTED = auto()
 
@@ -72,7 +72,6 @@ class ForceBandPosition(Enum):
 
 class ForceSequenceEvent(Enum):
     SETTLING_STARTED = auto()
-    RECORDING_STARTED = auto()
     ATTEMPT_RESET = auto()
     TARGET_COMPLETED = auto()
     RUN_COMPLETED = auto()
@@ -156,28 +155,17 @@ class ForceSequenceController:
                 self._reset_to_waiting()
                 events.append(ForceSequenceEvent.ATTEMPT_RESET)
             elif now - self._phase_start() >= self.config.settle_duration_s:
-                self._state = ForceSequenceState.RECORDING
-                self._phase_started_s = now
                 should_record = True
                 record_target = target
-                events.append(ForceSequenceEvent.RECORDING_STARTED)
-        elif self._state is ForceSequenceState.RECORDING:
-            if band is not ForceBandPosition.IN_BAND:
-                self._reset_to_waiting()
-                events.append(ForceSequenceEvent.ATTEMPT_RESET)
-            else:
-                should_record = True
-                record_target = target
-                if now - self._phase_start() >= self.config.record_duration_s:
-                    completed_target = target
-                    events.append(ForceSequenceEvent.TARGET_COMPLETED)
-                    self._target_index += 1
-                    self._phase_started_s = None
-                    if self._target_index == len(self.config.target_forces_n):
-                        self._state = ForceSequenceState.RUN_COMPLETE
-                        events.append(ForceSequenceEvent.RUN_COMPLETED)
-                    else:
-                        self._state = ForceSequenceState.WAITING_FOR_TARGET
+                completed_target = target
+                events.append(ForceSequenceEvent.TARGET_COMPLETED)
+                self._target_index += 1
+                self._phase_started_s = None
+                if self._target_index == len(self.config.target_forces_n):
+                    self._state = ForceSequenceState.RUN_COMPLETE
+                    events.append(ForceSequenceEvent.RUN_COMPLETED)
+                else:
+                    self._state = ForceSequenceState.WAITING_FOR_TARGET
 
         return self._snapshot(
             events=tuple(events),
@@ -261,14 +249,12 @@ class UnloadedCaptureState(Enum):
     IDLE = auto()
     WAITING_FOR_UNLOADED = auto()
     SETTLING = auto()
-    RECORDING = auto()
     COMPLETE = auto()
     ABORTED = auto()
 
 
 class UnloadedCaptureEvent(Enum):
     SETTLING_STARTED = auto()
-    RECORDING_STARTED = auto()
     ATTEMPT_RESET = auto()
     CAPTURE_COMPLETED = auto()
     ABORTED = auto()
@@ -283,7 +269,7 @@ class UnloadedCaptureUpdate:
 
 
 class UnloadedCaptureController:
-    """Require a continuous low-force interval before and during capture."""
+    """Capture one snapshot after a continuous low-force interval."""
 
     def __init__(self, config: ForceSequenceConfig | None = None) -> None:
         self.config = config or ForceSequenceConfig()
@@ -326,20 +312,10 @@ class UnloadedCaptureController:
                 self._reset_to_waiting()
                 events.append(UnloadedCaptureEvent.ATTEMPT_RESET)
             elif now - self._phase_start() >= self.config.unloaded_settle_duration_s:
-                self._state = UnloadedCaptureState.RECORDING
-                self._phase_started_s = now
+                self._state = UnloadedCaptureState.COMPLETE
+                self._phase_started_s = None
                 should_record = True
-                events.append(UnloadedCaptureEvent.RECORDING_STARTED)
-        elif self._state is UnloadedCaptureState.RECORDING:
-            if not is_unloaded:
-                self._reset_to_waiting()
-                events.append(UnloadedCaptureEvent.ATTEMPT_RESET)
-            else:
-                should_record = True
-                if now - self._phase_start() >= self.config.unloaded_record_duration_s:
-                    self._state = UnloadedCaptureState.COMPLETE
-                    self._phase_started_s = None
-                    events.append(UnloadedCaptureEvent.CAPTURE_COMPLETED)
+                events.append(UnloadedCaptureEvent.CAPTURE_COMPLETED)
         return self._snapshot(tuple(events), should_record)
 
     def abort(self, now_s: float) -> UnloadedCaptureUpdate:

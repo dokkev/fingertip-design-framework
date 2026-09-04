@@ -1,0 +1,11 @@
+{
+  "max_force_magnitude_n": 2.082156346453212,
+  "mean_force_magnitude_n": 2.082156346453212,
+  "mean_fz_n": -2.067906360626221,
+  "mean_fz_share": 0.99315614033919,
+  "min_force_magnitude_n": 2.082156346453212,
+  "number_of_frames": 1,
+  "recording_duration_s": 0.0,
+  "std_force_magnitude_n": 0.0,
+  "target_force_n": 2.0
+}

@@ -530,18 +530,16 @@ class ContactCollectorApp:
             if self.active_segment is not None:
                 self.writer.discard_segment(self.active_segment)
                 self.active_segment = None
-        if ForceSequenceEvent.RECORDING_STARTED in update.events:
+        if ForceSequenceEvent.TARGET_COMPLETED in update.events:
             assert update.record_target_n is not None
             self.active_segment = self.writer.begin_force_target(
                 self.active_run, update.record_target_n
             )
-        if update.should_record_frame:
+            assert update.should_record_frame
             assert self.active_segment is not None
             if not self.writer.submit_frame(self.active_segment, frame):
                 self._abort_for_writer_loss("PNG writer queue overflow")
                 return
-        if ForceSequenceEvent.TARGET_COMPLETED in update.events:
-            assert self.active_segment is not None
             self.writer.finalize_segment(self.active_segment)
             self.active_segment = None
         if ForceSequenceEvent.RUN_COMPLETED in update.events:
@@ -564,7 +562,7 @@ class ContactCollectorApp:
             if self.active_segment is not None:
                 self.writer.discard_segment(self.active_segment)
                 self.active_segment = None
-        if UnloadedCaptureEvent.RECORDING_STARTED in update.events:
+        if UnloadedCaptureEvent.CAPTURE_COMPLETED in update.events:
             assert self.active_unloaded_conditions is not None
             morphology, indenter = self.active_unloaded_conditions
             self.active_segment = self.writer.begin_unloaded_capture(
@@ -572,13 +570,11 @@ class ContactCollectorApp:
                 indenter_type=indenter,
                 config=self.config,
             )
-        if update.should_record_frame:
+            assert update.should_record_frame
             assert self.active_segment is not None
             if not self.writer.submit_frame(self.active_segment, frame):
                 self._abort_for_writer_loss("PNG writer queue overflow")
                 return
-        if UnloadedCaptureEvent.CAPTURE_COMPLETED in update.events:
-            assert self.active_segment is not None
             self.writer.finalize_segment(self.active_segment)
             self.active_segment = None
             assert self.active_unloaded_conditions is not None
@@ -602,17 +598,10 @@ class ContactCollectorApp:
             self.force_progress["value"] = 0.0
         elif state is ForceSequenceState.SETTLING:
             self.state_text.set(
-                f"SETTLING {phase_elapsed:.2f} / {self.config.settle_duration_s:.2f} s"
+                f"HOLDING {phase_elapsed:.2f} / {self.config.settle_duration_s:.2f} s"
             )
             self.force_progress["value"] = min(
                 1.0, phase_elapsed / max(self.config.settle_duration_s, 1.0e-9)
-            )
-        elif state is ForceSequenceState.RECORDING:
-            self.state_text.set(
-                f"RECORDING {phase_elapsed:.2f} / {self.config.record_duration_s:.2f} s"
-            )
-            self.force_progress["value"] = min(
-                1.0, phase_elapsed / self.config.record_duration_s
             )
 
     def _show_unloaded_update(self, update: UnloadedCaptureUpdate) -> None:
@@ -625,13 +614,8 @@ class ContactCollectorApp:
             )
         elif state is UnloadedCaptureState.SETTLING:
             self.state_text.set(
-                "UNLOADED SETTLING "
+                "UNLOADED HOLDING "
                 f"{elapsed:.2f} / {self.config.unloaded_settle_duration_s:.2f} s"
-            )
-        elif state is UnloadedCaptureState.RECORDING:
-            self.state_text.set(
-                "UNLOADED RECORDING "
-                f"{elapsed:.2f} / {self.config.unloaded_record_duration_s:.2f} s"
             )
 
     def _abort_for_writer_loss(self, reason: str) -> None:
@@ -735,7 +719,7 @@ class ContactCollectorApp:
 def _arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bota-port", default="/dev/ttyUSB0")
-    parser.add_argument("--output", type=Path, default=Path("output/contact_dataset"))
+    parser.add_argument("--output", type=Path, default=_REPOSITORY_ROOT / "experiments")
     parser.add_argument("--camera-width", type=int, default=1920)
     parser.add_argument("--camera-height", type=int, default=1080)
     parser.add_argument("--camera-fps", type=int, default=30)

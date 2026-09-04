@@ -62,25 +62,26 @@ Rokubi at `/dev/ttyUSB0`:
 ```bash
 conda run --no-capture-output -n lit \
   python -u scripts/collect_contact_dataset.py \
-    --bota-port /dev/ttyUSB0 \
-    --output output/contact_dataset
+    --bota-port /dev/ttyUSB0
 ```
 
 Keep the Rokubi completely unloaded during startup tare and every manual
-`TARE`. The loaded sequence is a continuous 1 → 2 → 5 → 10 → 15 N progression at
+`TARE`. The loaded sequence is a continuous 2 → 5 → 10 → 15 N progression at
 one indenter/hole configuration; do not release between successful targets.
-Hole 1 is distal and Hole 6 is proximal. At each target the accepted band is
-`target ± max(0.2 N, 0.05 × target)`, with 0.5 s continuous settling followed
-by 2.0 s continuous recording. Losing the band resets and discards only that
-incomplete target attempt. After 15 N completes, release the indenter.
+Hole 1 is distal and Hole 6 is proximal. The accepted band is target ±20% at
+2 and 5 N, and target ±10% at 10 and 15 N. After 1.0 continuous second inside
+that band, one synchronized RGB and Rokubi snapshot is saved. Leaving the band
+before one second resets only the current hold. After 15 N completes, release
+the indenter.
 
 Use `CAPTURE UNLOADED` separately for the current morphology, indenter, and
-camera pose. It requires `F_mag ≤ 0.3 N` continuously for 0.5 s settling and
-2.0 s recording; an unloaded reference is not required before every loaded
-run. Sessions are written beneath `output/contact_dataset/` with `session.json`,
-lossless PNG sequences, per-frame synchronized FT CSV files, and per-segment
-summaries. Aborted runs retain completed targets, while `.partial` attempts are
-not exposed by the default reader.
+camera pose. It saves one synchronized snapshot after `F_mag ≤ 1.0 N` has held
+continuously for 1.0 s; an unloaded reference is not required before every
+loaded run. By default, sessions are written beneath the repository's
+`experiments/` directory with
+`session.json`, one lossless PNG and synchronized FT CSV row per checkpoint,
+and per-checkpoint summaries. Aborted runs retain completed targets, while
+`.partial` attempts are not exposed by the default reader.
 
 Exercise the complete GUI and D435 without a physical Rokubi using the prominent
 manual-force mock mode:
@@ -91,7 +92,7 @@ conda run --no-capture-output -n lit \
 ```
 
 Mock sessions cannot enter the physical dataset namespace: they are written
-under `output/contact_dataset/mock/MOCK_*` and carry `sensor_mode: mock`.
+under `experiments/mock/MOCK_*` and carry `sensor_mode: mock`.
 
 ## Live D435 contact localization
 
@@ -132,10 +133,10 @@ conda run --no-capture-output -n lit \
   python -u validation/validate_solaris_led_localization.py
 ```
 
-The command forms one silhouette mask from the six-frame normal temporal
-median, reuses it for all six single-frame and leave-one-frame-out replays, and
-writes their overlays and stability CSV files. It also writes normal/dark
-profile diagnostics, terminal-leakage stress artifacts, coordinates, and an
+The command calibrates once from the six-frame normal temporal median and
+overlays those same LED centers on all six loaded frames. It also writes
+leave-one-frame-out stability, normal/dark profile diagnostics,
+terminal-leakage stress artifacts, coordinates, and an
 empty or populated per-LED ground-truth error CSV beneath
 `output/validation/solaris_led_localization/`. It detects the first regular
 five-lobe sequence in the two silhouette-side raw-red profiles; it does not use
