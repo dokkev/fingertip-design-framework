@@ -1,13 +1,18 @@
 """Raw physical-contact acquisition primitives."""
 
 from .contact_dataset import (
-    CompletedRunRecord,
     ContactDatasetWriter,
+    DatasetFrameRecord,
+    FORMAT_VERSION,
+    FRAME_CSV_COLUMNS,
     LoadedRunHandle,
+    RunMetadata,
     SegmentHandle,
     SessionMetadata,
     SynchronizedFrame,
-    iter_completed_runs,
+    format_force_directory,
+    iter_dataset_frames,
+    parse_force_directory,
 )
 from .force_sequence import (
     ForceBandPosition,
@@ -23,8 +28,10 @@ from .force_sequence import (
 )
 
 __all__ = [
-    "CompletedRunRecord",
     "ContactDatasetWriter",
+    "DatasetFrameRecord",
+    "FORMAT_VERSION",
+    "FRAME_CSV_COLUMNS",
     "ForceBandPosition",
     "ForceSequenceConfig",
     "ForceSequenceController",
@@ -32,6 +39,7 @@ __all__ = [
     "ForceSequenceState",
     "ForceSequenceUpdate",
     "LoadedRunHandle",
+    "RunMetadata",
     "SegmentHandle",
     "SessionMetadata",
     "SynchronizedFrame",
@@ -39,5 +47,7 @@ __all__ = [
     "UnloadedCaptureEvent",
     "UnloadedCaptureState",
     "UnloadedCaptureUpdate",
-    "iter_completed_runs",
+    "format_force_directory",
+    "iter_dataset_frames",
+    "parse_force_directory",
 ]

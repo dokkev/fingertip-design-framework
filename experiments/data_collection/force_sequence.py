@@ -9,12 +9,15 @@ import math
 
 @dataclass(frozen=True)
 class ForceSequenceConfig:
-    """Continuous force-hold contract shared by loaded and unloaded snapshots."""
+    """Timing and force-band contract shared by loaded and unloaded capture."""
 
     target_forces_n: tuple[float, ...] = (2.0, 5.0, 10.0, 15.0)
     settle_duration_s: float = 1.0
+    record_duration_s: float = 1.0
+    capture_rate_hz: float = 5.0
     unloaded_max_force_n: float = 1.0
     unloaded_settle_duration_s: float = 1.0
+    unloaded_record_duration_s: float = 1.0
     minimum_tolerance_n: float = 0.2
     low_force_relative_tolerance: float = 0.20
     high_force_relative_tolerance: float = 0.10
@@ -29,7 +32,10 @@ class ForceSequenceConfig:
         object.__setattr__(self, "target_forces_n", targets)
         positive_fields = (
             "settle_duration_s",
+            "record_duration_s",
+            "capture_rate_hz",
             "unloaded_settle_duration_s",
+            "unloaded_record_duration_s",
             "unloaded_max_force_n",
             "minimum_tolerance_n",
             "low_force_relative_tolerance",
@@ -41,6 +47,10 @@ class ForceSequenceConfig:
             if not math.isfinite(value) or value <= 0:
                 raise ValueError(f"{name} must be finite and positive")
             object.__setattr__(self, name, value)
+
+    @property
+    def capture_period_s(self) -> float:
+        return 1.0 / self.capture_rate_hz
 
     def tolerance_n(self, target_force_n: float) -> float:
         """Return the absolute tolerance for one low- or high-force target."""
@@ -60,6 +70,7 @@ class ForceSequenceState(Enum):
     IDLE = auto()
     WAITING_FOR_TARGET = auto()
     SETTLING = auto()
+    RECORDING = auto()
     RUN_COMPLETE = auto()
     ABORTED = auto()
 
@@ -72,6 +83,7 @@ class ForceBandPosition(Enum):
 
 class ForceSequenceEvent(Enum):
     SETTLING_STARTED = auto()
+    RECORDING_STARTED = auto()
     ATTEMPT_RESET = auto()
     TARGET_COMPLETED = auto()
     RUN_COMPLETED = auto()
@@ -102,6 +114,7 @@ class ForceSequenceController:
         self._state = ForceSequenceState.IDLE
         self._target_index = 0
         self._phase_started_s: float | None = None
+        self._next_capture_time_s: float | None = None
         self._last_time_s: float | None = None
 
     @property
@@ -123,6 +136,7 @@ class ForceSequenceController:
         self._state = ForceSequenceState.WAITING_FOR_TARGET
         self._target_index = 0
         self._phase_started_s = None
+        self._next_capture_time_s = None
         self._last_time_s = now
         return self._snapshot()
 
@@ -155,17 +169,32 @@ class ForceSequenceController:
                 self._reset_to_waiting()
                 events.append(ForceSequenceEvent.ATTEMPT_RESET)
             elif now - self._phase_start() >= self.config.settle_duration_s:
+                self._state = ForceSequenceState.RECORDING
+                self._phase_started_s = now
+                self._next_capture_time_s = now + self.config.capture_period_s
                 should_record = True
                 record_target = target
+                events.append(ForceSequenceEvent.RECORDING_STARTED)
+        elif self._state is ForceSequenceState.RECORDING:
+            if band is not ForceBandPosition.IN_BAND:
+                self._reset_to_waiting()
+                events.append(ForceSequenceEvent.ATTEMPT_RESET)
+            elif now - self._phase_start() >= self.config.record_duration_s:
                 completed_target = target
                 events.append(ForceSequenceEvent.TARGET_COMPLETED)
                 self._target_index += 1
                 self._phase_started_s = None
+                self._next_capture_time_s = None
                 if self._target_index == len(self.config.target_forces_n):
                     self._state = ForceSequenceState.RUN_COMPLETE
                     events.append(ForceSequenceEvent.RUN_COMPLETED)
                 else:
                     self._state = ForceSequenceState.WAITING_FOR_TARGET
+            elif now >= self._next_capture_time():
+                should_record = True
+                record_target = target
+                while self._next_capture_time() <= now:
+                    self._next_capture_time_s += self.config.capture_period_s
 
         return self._snapshot(
             events=tuple(events),
@@ -182,11 +211,13 @@ class ForceSequenceController:
             raise RuntimeError("a completed force sequence cannot be aborted")
         self._state = ForceSequenceState.ABORTED
         self._phase_started_s = None
+        self._next_capture_time_s = None
         return self._snapshot(events=(ForceSequenceEvent.ABORTED,))
 
     def _reset_to_waiting(self) -> None:
         self._state = ForceSequenceState.WAITING_FOR_TARGET
         self._phase_started_s = None
+        self._next_capture_time_s = None
 
     def _band_position(self, force_n: float, target_n: float) -> ForceBandPosition:
         tolerance = self.config.tolerance_n(target_n)
@@ -199,6 +230,10 @@ class ForceSequenceController:
     def _phase_start(self) -> float:
         assert self._phase_started_s is not None
         return self._phase_started_s
+
+    def _next_capture_time(self) -> float:
+        assert self._next_capture_time_s is not None
+        return self._next_capture_time_s
 
     def _snapshot(
         self,
@@ -249,12 +284,14 @@ class UnloadedCaptureState(Enum):
     IDLE = auto()
     WAITING_FOR_UNLOADED = auto()
     SETTLING = auto()
+    RECORDING = auto()
     COMPLETE = auto()
     ABORTED = auto()
 
 
 class UnloadedCaptureEvent(Enum):
     SETTLING_STARTED = auto()
+    RECORDING_STARTED = auto()
     ATTEMPT_RESET = auto()
     CAPTURE_COMPLETED = auto()
     ABORTED = auto()
@@ -269,12 +306,13 @@ class UnloadedCaptureUpdate:
 
 
 class UnloadedCaptureController:
-    """Capture one snapshot after a continuous low-force interval."""
+    """Capture one low-rate burst while the unloaded condition remains valid."""
 
     def __init__(self, config: ForceSequenceConfig | None = None) -> None:
         self.config = config or ForceSequenceConfig()
         self._state = UnloadedCaptureState.IDLE
         self._phase_started_s: float | None = None
+        self._next_capture_time_s: float | None = None
         self._last_time_s: float | None = None
 
     @property
@@ -285,6 +323,7 @@ class UnloadedCaptureController:
         now = self._validate_time(now_s, allow_before_start=True)
         self._state = UnloadedCaptureState.WAITING_FOR_UNLOADED
         self._phase_started_s = None
+        self._next_capture_time_s = None
         self._last_time_s = now
         return self._snapshot()
 
@@ -312,10 +351,24 @@ class UnloadedCaptureController:
                 self._reset_to_waiting()
                 events.append(UnloadedCaptureEvent.ATTEMPT_RESET)
             elif now - self._phase_start() >= self.config.unloaded_settle_duration_s:
+                self._state = UnloadedCaptureState.RECORDING
+                self._phase_started_s = now
+                self._next_capture_time_s = now + self.config.capture_period_s
+                should_record = True
+                events.append(UnloadedCaptureEvent.RECORDING_STARTED)
+        elif self._state is UnloadedCaptureState.RECORDING:
+            if not is_unloaded:
+                self._reset_to_waiting()
+                events.append(UnloadedCaptureEvent.ATTEMPT_RESET)
+            elif now - self._phase_start() >= self.config.unloaded_record_duration_s:
                 self._state = UnloadedCaptureState.COMPLETE
                 self._phase_started_s = None
-                should_record = True
+                self._next_capture_time_s = None
                 events.append(UnloadedCaptureEvent.CAPTURE_COMPLETED)
+            elif now >= self._next_capture_time():
+                should_record = True
+                while self._next_capture_time() <= now:
+                    self._next_capture_time_s += self.config.capture_period_s
         return self._snapshot(tuple(events), should_record)
 
     def abort(self, now_s: float) -> UnloadedCaptureUpdate:
@@ -325,15 +378,21 @@ class UnloadedCaptureController:
             raise RuntimeError("a completed unloaded capture cannot be aborted")
         self._state = UnloadedCaptureState.ABORTED
         self._phase_started_s = None
+        self._next_capture_time_s = None
         return self._snapshot((UnloadedCaptureEvent.ABORTED,))
 
     def _reset_to_waiting(self) -> None:
         self._state = UnloadedCaptureState.WAITING_FOR_UNLOADED
         self._phase_started_s = None
+        self._next_capture_time_s = None
 
     def _phase_start(self) -> float:
         assert self._phase_started_s is not None
         return self._phase_started_s
+
+    def _next_capture_time(self) -> float:
+        assert self._next_capture_time_s is not None
+        return self._next_capture_time_s
 
     def _snapshot(
         self,

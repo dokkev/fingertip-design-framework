@@ -195,8 +195,8 @@ class ContactCollectorApp:
         self.active_mode: str | None = None
         self.active_run: LoadedRunHandle | None = None
         self.active_segment: SegmentHandle | None = None
-        self.active_unloaded_conditions: tuple[str, str] | None = None
-        self.unloaded_ready: set[tuple[str, str]] = set()
+        self.unloaded_capture_count = 0
+        self.current_tare_offsets: BotaTareOffsets | None = None
         self.tare_in_progress = False
         self.tare_results: queue.SimpleQueue[BotaTareOffsets | BaseException] = (
             queue.SimpleQueue()
@@ -241,45 +241,74 @@ class ContactCollectorApp:
 
         side = ttk.Frame(outer)
         side.grid(row=1, column=1, sticky="nsew")
-        self.morphology = tk.StringVar(value="DragonSkin nominal")
-        self.indenter = tk.StringVar(value="sphere 15 mm")
+        self.material = tk.StringVar(value="dragon_skin")
+        self.morphology = tk.StringVar(value="nominal")
+        self.specimen_id = tk.StringVar(value="dragon_skin_nominal_01")
+        self.indenter = tk.StringVar(value="sphere_15mm")
         self.hole = tk.IntVar(value=1)
-        self.morphology.trace_add("write", self._update_unloaded_label)
-        self.indenter.trace_add("write", self._update_unloaded_label)
+        self.repeat = tk.IntVar(value=1)
+        self.session_widgets: list[tk.Widget] = []
         self.input_widgets: list[tk.Widget] = []
 
-        conditions = ttk.LabelFrame(side, text="Run conditions", padding=10)
-        conditions.grid(row=0, column=0, sticky="ew")
-        conditions.columnconfigure(1, weight=1)
-        ttk.Label(conditions, text="Morphology").grid(row=0, column=0, sticky="w")
-        morphology = ttk.Combobox(
-            conditions,
-            textvariable=self.morphology,
-            values=(
-                "DragonSkin nominal",
-                "DragonSkin optimized",
-                "Solaris nominal",
-                "Solaris optimized",
-            ),
+        specimen = ttk.LabelFrame(side, text="Session specimen", padding=10)
+        specimen.grid(row=0, column=0, sticky="ew")
+        specimen.columnconfigure(1, weight=1)
+        ttk.Label(specimen, text="Material").grid(row=0, column=0, sticky="w")
+        material = ttk.Combobox(
+            specimen,
+            textvariable=self.material,
+            values=("dragon_skin", "solaris"),
         )
-        morphology.grid(row=0, column=1, sticky="ew", padx=(8, 0), pady=2)
-        ttk.Label(conditions, text="Indenter type").grid(row=1, column=0, sticky="w")
+        material.grid(row=0, column=1, sticky="ew", padx=(8, 0), pady=2)
+        ttk.Label(specimen, text="Morphology").grid(row=1, column=0, sticky="w")
+        morphology = ttk.Combobox(
+            specimen,
+            textvariable=self.morphology,
+            values=("nominal", "optimized"),
+        )
+        morphology.grid(row=1, column=1, sticky="ew", padx=(8, 0), pady=2)
+        ttk.Label(specimen, text="Specimen ID").grid(row=2, column=0, sticky="w")
+        specimen_id = ttk.Entry(specimen, textvariable=self.specimen_id)
+        specimen_id.grid(row=2, column=1, sticky="ew", padx=(8, 0), pady=2)
+        self.create_session_button = ttk.Button(
+            specimen,
+            text="CREATE SESSION",
+            command=self._create_session,
+        )
+        self.create_session_button.grid(
+            row=3, column=0, columnspan=2, sticky="ew", pady=(6, 0)
+        )
+        self.session_widgets.extend((material, morphology, specimen_id))
+
+        conditions = ttk.LabelFrame(side, text="Run conditions", padding=10)
+        conditions.grid(row=1, column=0, sticky="ew", pady=(10, 0))
+        conditions.columnconfigure(1, weight=1)
+        ttk.Label(conditions, text="Indenter").grid(row=0, column=0, sticky="w")
         indenter = ttk.Combobox(
             conditions,
             textvariable=self.indenter,
-            values=("sphere 10 mm", "sphere 15 mm", "sphere 20 mm"),
+            values=("sphere_10mm", "sphere_15mm", "sphere_20mm"),
         )
-        indenter.grid(row=1, column=1, sticky="ew", padx=(8, 0), pady=2)
-        ttk.Label(conditions, text="Hole number").grid(row=2, column=0, sticky="w")
+        indenter.grid(row=0, column=1, sticky="ew", padx=(8, 0), pady=2)
+        ttk.Label(conditions, text="Hole number").grid(row=1, column=0, sticky="w")
         hole = ttk.Spinbox(conditions, from_=1, to=6, textvariable=self.hole, width=6)
-        hole.grid(row=2, column=1, sticky="w", padx=(8, 0), pady=2)
+        hole.grid(row=1, column=1, sticky="w", padx=(8, 0), pady=2)
+        ttk.Label(conditions, text="Repeat index").grid(row=2, column=0, sticky="w")
+        repeat = ttk.Spinbox(
+            conditions,
+            from_=1,
+            to=999,
+            textvariable=self.repeat,
+            width=6,
+        )
+        repeat.grid(row=2, column=1, sticky="w", padx=(8, 0), pady=2)
         ttk.Label(conditions, text="Hole 1 = distal · Hole 6 = proximal").grid(
             row=3, column=0, columnspan=2, sticky="w", pady=(4, 0)
         )
-        self.input_widgets.extend((morphology, indenter, hole))
+        self.input_widgets.extend((indenter, hole, repeat))
 
         force_box = ttk.LabelFrame(side, text="Live Bota Rokubi", padding=10)
-        force_box.grid(row=1, column=0, sticky="ew", pady=(10, 0))
+        force_box.grid(row=2, column=0, sticky="ew", pady=(10, 0))
         self.force_text = tk.StringVar(value="F magnitude: -- N")
         self.fz_text = tk.StringVar(value="Fz: -- N")
         self.share_text = tk.StringVar(value="|Fz| / F: -- %")
@@ -297,7 +326,7 @@ class ContactCollectorApp:
             )
 
         sequence = ttk.LabelFrame(side, text="Progressive loading", padding=10)
-        sequence.grid(row=2, column=0, sticky="ew", pady=(10, 0))
+        sequence.grid(row=3, column=0, sticky="ew", pady=(10, 0))
         self.sequence_labels: list[ttk.Label] = []
         for column, target in enumerate(self.config.target_forces_n):
             label = ttk.Label(sequence, text=f"○ {target:g} N", padding=4)
@@ -315,11 +344,11 @@ class ContactCollectorApp:
 
         self.unloaded_text = tk.StringVar(value="Unloaded reference: NOT CAPTURED")
         ttk.Label(side, textvariable=self.unloaded_text).grid(
-            row=3, column=0, sticky="w", pady=(10, 0)
+            row=4, column=0, sticky="w", pady=(10, 0)
         )
 
         controls = ttk.Frame(side)
-        controls.grid(row=4, column=0, sticky="ew", pady=(10, 0))
+        controls.grid(row=5, column=0, sticky="ew", pady=(10, 0))
         self.start_button = ttk.Button(controls, text="START RUN", command=self._start_run)
         self.start_button.grid(row=0, column=0, padx=(0, 5))
         self.unloaded_button = ttk.Button(
@@ -333,21 +362,35 @@ class ContactCollectorApp:
 
         self.io_text = tk.StringVar(value="Writer: waiting for tare")
         ttk.Label(side, textvariable=self.io_text, wraplength=360).grid(
-            row=5, column=0, sticky="w", pady=(10, 0)
+            row=6, column=0, sticky="w", pady=(10, 0)
         )
 
     def _set_inputs_enabled(self, enabled: bool) -> None:
-        input_state = "normal" if enabled else "disabled"
+        session_state = "normal" if enabled and self.writer is None else "disabled"
+        for widget in self.session_widgets:
+            widget.configure(state=session_state)
+        input_state = "normal" if enabled and self.writer is not None else "disabled"
         for widget in self.input_widgets:
             widget.configure(state=input_state)
-        controls_enabled = enabled and not self.tare_in_progress
+        create_enabled = (
+            enabled
+            and not self.tare_in_progress
+            and self.writer is None
+            and self.current_tare_offsets is not None
+        )
+        self.create_session_button.configure(
+            state="normal" if create_enabled else "disabled"
+        )
+        controls_enabled = (
+            enabled
+            and self.writer is not None
+            and not self.tare_in_progress
+        )
         self.start_button.configure(state="normal" if controls_enabled else "disabled")
         self.unloaded_button.configure(
             state="normal" if controls_enabled else "disabled"
         )
-        self.tare_button.configure(
-            state="normal" if enabled and not self.tare_in_progress else "disabled"
-        )
+        self.tare_button.configure(state="normal" if enabled else "disabled")
         self.abort_button.configure(state="normal" if self.active_mode else "disabled")
 
     def _begin_tare(self) -> None:
@@ -373,63 +416,74 @@ class ContactCollectorApp:
         self.tare_in_progress = False
         if isinstance(result, BaseException):
             self.state_text.set(f"TARE FAILED: {result}")
-            for widget in self.input_widgets:
-                widget.configure(state="normal")
-            self.start_button.configure(state="disabled")
-            self.unloaded_button.configure(state="disabled")
-            self.abort_button.configure(state="disabled")
-            self.tare_button.configure(state="normal")
+            self.current_tare_offsets = None
+            self._set_inputs_enabled(True)
             messagebox.showerror("Bota Rokubi tare failed", str(result))
             return
-        if self.writer is None:
+        self.current_tare_offsets = result
+        if self.writer is not None:
+            self.writer.update_tare_offsets(result)
+            self.state_text.set("TARE COMPLETE — session tare metadata updated")
+        else:
+            self.state_text.set("TARE COMPLETE — enter specimen identity and create session")
+            self.io_text.set("Writer: create a specimen session")
+        self._set_inputs_enabled(True)
+
+    def _create_session(self) -> None:
+        if self.writer is not None or self.current_tare_offsets is None:
+            return
+        try:
             session = SessionMetadata(
+                material=self.material.get().strip(),
+                morphology=self.morphology.get().strip(),
+                specimen_id=self.specimen_id.get().strip(),
                 camera_model=self.camera.device_name or "Intel RealSense",
                 camera_width=self.camera.width,
                 camera_height=self.camera.height,
                 camera_fps=self.camera.fps,
                 bota_serial_port=self.sensor.port,
-                bota_tare_offsets=result,
+                bota_tare_offsets=self.current_tare_offsets,
                 force_sequence=self.config,
                 sensor_mode="mock" if self.mock_sensor else "physical",
                 camera_serial_number=self.camera.serial_number,
-                bota_model="Mock Rokubi" if self.mock_sensor else "Rokubi",
+                bota_model="Mock Rokubi" if self.mock_sensor else "Bota Rokubi",
             )
             self.writer = ContactDatasetWriter(
                 self.output_root,
                 session,
                 frame_queue_capacity=WRITER_FRAME_CAPACITY,
             )
-        else:
-            self.writer.update_tare_offsets(result)
+        except (OSError, RuntimeError, ValueError) as error:
+            messagebox.showerror("Cannot create session", str(error))
+            return
         self.state_text.set("READY — configure a loaded run or unloaded capture")
         self.io_text.set(f"Session: {self.writer.session_path}")
         self._set_inputs_enabled(True)
 
-    def _conditions(self) -> tuple[str, str, int]:
-        morphology = self.morphology.get().strip()
+    def _conditions(self) -> tuple[str, int, int]:
         indenter = self.indenter.get().strip()
         try:
             hole = int(self.hole.get())
+            repeat = int(self.repeat.get())
         except (TypeError, ValueError) as error:
-            raise ValueError("hole number must be an integer from 1 through 6") from error
-        if not morphology or not indenter:
-            raise ValueError("morphology and indenter type are required")
+            raise ValueError("hole and repeat must be integers") from error
+        if not indenter:
+            raise ValueError("indenter is required")
         if hole not in range(1, 7):
             raise ValueError("hole number must be from 1 through 6")
-        return morphology, indenter, hole
+        if repeat < 1:
+            raise ValueError("repeat index must be positive")
+        return indenter, hole, repeat
 
     def _start_run(self) -> None:
         if self.writer is None or self.active_mode is not None:
             return
         try:
-            morphology, indenter, hole = self._conditions()
-            now = perf_counter()
+            indenter, hole, repeat = self._conditions()
             self.active_run = self.writer.start_loaded_run(
-                morphology=morphology,
-                indenter_type=indenter,
+                indenter=indenter,
                 hole_index=hole,
-                config=self.config,
-                start_host_time_s=now,
+                repeat_index=repeat,
             )
         except (RuntimeError, ValueError) as error:
             messagebox.showerror("Cannot start run", str(error))
@@ -444,16 +498,7 @@ class ContactCollectorApp:
     def _start_unloaded(self) -> None:
         if self.writer is None or self.active_mode is not None:
             return
-        try:
-            morphology = self.morphology.get().strip()
-            indenter = self.indenter.get().strip()
-            if not morphology or not indenter:
-                raise ValueError("morphology and indenter type are required")
-        except ValueError as error:
-            messagebox.showerror("Cannot capture unloaded reference", str(error))
-            return
         self.unloaded_controller = UnloadedCaptureController(self.config)
-        self.active_unloaded_conditions = (morphology, indenter)
         self.active_mode = "unloaded"
         self.active_segment = None
         self.state_text.set(
@@ -472,7 +517,7 @@ class ContactCollectorApp:
             assert self.force_controller is not None
             if self.force_controller.state is not ForceSequenceState.RUN_COMPLETE:
                 self.force_controller.abort(now)
-            self.writer.abort_loaded_run(self.active_run, now)
+            self.writer.abort_loaded_run(self.active_run)
         elif self.active_mode == "unloaded":
             assert self.unloaded_controller is not None
             if self.unloaded_controller.state is not UnloadedCaptureState.COMPLETE:
@@ -530,20 +575,26 @@ class ContactCollectorApp:
             if self.active_segment is not None:
                 self.writer.discard_segment(self.active_segment)
                 self.active_segment = None
-        if ForceSequenceEvent.TARGET_COMPLETED in update.events:
+        if ForceSequenceEvent.RECORDING_STARTED in update.events:
             assert update.record_target_n is not None
             self.active_segment = self.writer.begin_force_target(
                 self.active_run, update.record_target_n
             )
-            assert update.should_record_frame
+        if update.should_record_frame:
             assert self.active_segment is not None
-            if not self.writer.submit_frame(self.active_segment, frame):
+            if not self.writer.submit_frame(
+                self.active_segment,
+                frame,
+                capture_elapsed_s=update.phase_elapsed_s,
+            ):
                 self._abort_for_writer_loss("PNG writer queue overflow")
                 return
+        if ForceSequenceEvent.TARGET_COMPLETED in update.events:
+            assert self.active_segment is not None
             self.writer.finalize_segment(self.active_segment)
             self.active_segment = None
         if ForceSequenceEvent.RUN_COMPLETED in update.events:
-            self.writer.complete_loaded_run(self.active_run, frame.camera_host_time_s)
+            self.writer.complete_loaded_run(self.active_run)
             self.state_text.set("RUN COMPLETE — release indenter")
             self._finish_active()
         else:
@@ -562,24 +613,22 @@ class ContactCollectorApp:
             if self.active_segment is not None:
                 self.writer.discard_segment(self.active_segment)
                 self.active_segment = None
-        if UnloadedCaptureEvent.CAPTURE_COMPLETED in update.events:
-            assert self.active_unloaded_conditions is not None
-            morphology, indenter = self.active_unloaded_conditions
-            self.active_segment = self.writer.begin_unloaded_capture(
-                morphology=morphology,
-                indenter_type=indenter,
-                config=self.config,
-            )
-            assert update.should_record_frame
+        if UnloadedCaptureEvent.RECORDING_STARTED in update.events:
+            self.active_segment = self.writer.begin_unloaded_capture()
+        if update.should_record_frame:
             assert self.active_segment is not None
-            if not self.writer.submit_frame(self.active_segment, frame):
+            if not self.writer.submit_frame(
+                self.active_segment,
+                frame,
+                capture_elapsed_s=update.phase_elapsed_s,
+            ):
                 self._abort_for_writer_loss("PNG writer queue overflow")
                 return
+        if UnloadedCaptureEvent.CAPTURE_COMPLETED in update.events:
+            assert self.active_segment is not None
             self.writer.finalize_segment(self.active_segment)
             self.active_segment = None
-            assert self.active_unloaded_conditions is not None
-            key = self.active_unloaded_conditions
-            self.unloaded_ready.add(key)
+            self.unloaded_capture_count += 1
             self.state_text.set("UNLOADED CAPTURE COMPLETE")
             self._update_unloaded_label()
             self._finish_active()
@@ -603,6 +652,13 @@ class ContactCollectorApp:
             self.force_progress["value"] = min(
                 1.0, phase_elapsed / max(self.config.settle_duration_s, 1.0e-9)
             )
+        elif state is ForceSequenceState.RECORDING:
+            self.state_text.set(
+                f"RECORDING {phase_elapsed:.2f} / {self.config.record_duration_s:.2f} s"
+            )
+            self.force_progress["value"] = min(
+                1.0, phase_elapsed / self.config.record_duration_s
+            )
 
     def _show_unloaded_update(self, update: UnloadedCaptureUpdate) -> None:
         assert self.unloaded_controller is not None
@@ -617,6 +673,11 @@ class ContactCollectorApp:
                 "UNLOADED HOLDING "
                 f"{elapsed:.2f} / {self.config.unloaded_settle_duration_s:.2f} s"
             )
+        elif state is UnloadedCaptureState.RECORDING:
+            self.state_text.set(
+                "UNLOADED RECORDING "
+                f"{elapsed:.2f} / {self.config.unloaded_record_duration_s:.2f} s"
+            )
 
     def _abort_for_writer_loss(self, reason: str) -> None:
         assert self.writer is not None
@@ -624,7 +685,7 @@ class ContactCollectorApp:
             self.writer.discard_segment(self.active_segment)
             self.active_segment = None
         if self.active_mode == "loaded" and self.active_run is not None:
-            self.writer.abort_loaded_run(self.active_run, perf_counter())
+            self.writer.abort_loaded_run(self.active_run)
         self.state_text.set(f"RUN ABORTED — {reason}; no frames were silently dropped")
         self._finish_active()
 
@@ -633,7 +694,6 @@ class ContactCollectorApp:
         self.active_run = None
         self.force_controller = None
         self.unloaded_controller = None
-        self.active_unloaded_conditions = None
         self.active_segment = None
         self.force_progress["value"] = 0.0
         self._set_inputs_enabled(True)
@@ -681,9 +741,9 @@ class ContactCollectorApp:
         )
 
     def _update_unloaded_label(self, *_: object) -> None:
-        key = (self.morphology.get().strip(), self.indenter.get().strip())
-        status = "READY" if key in self.unloaded_ready else "NOT CAPTURED"
-        self.unloaded_text.set(f"Unloaded reference: {status}")
+        self.unloaded_text.set(
+            f"Unloaded captures in session: {self.unloaded_capture_count}"
+        )
 
     def _show_preview(self, frame: ColorFrame) -> None:
         resized = cv2.resize(
@@ -725,6 +785,12 @@ def _arguments() -> argparse.Namespace:
     parser.add_argument("--camera-fps", type=int, default=30)
     parser.add_argument("--camera-serial")
     parser.add_argument(
+        "--capture-rate-hz",
+        type=float,
+        default=5.0,
+        help="saved RGB frame rate during loaded and unloaded recording bursts",
+    )
+    parser.add_argument(
         "--mock",
         action="store_true",
         help="replace the Rokubi with a manual force slider and isolate output as MOCK",
@@ -760,7 +826,7 @@ def main() -> None:
         camera_reader=reader,
         sensor=sensor,
         output_root=args.output,
-        config=ForceSequenceConfig(),
+        config=ForceSequenceConfig(capture_rate_hz=args.capture_rate_hz),
         mock_sensor=args.mock,
         mock_force_variable=mock_force if args.mock else None,
     )

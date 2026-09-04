@@ -881,18 +881,145 @@ data consumers.
 `experiments/data_collection/` owns the hardware-independent physical
 acquisition contract. `ForceSequenceController` accepts only monotonic host
 time and force magnitude. At 2 and 5 N it uses a target ±20% force band; at 10
-and 15 N it uses target ±10%. After one continuous second inside the band, it
-marks that synchronized RGB and Rokubi sample as the target snapshot; it never
-requires release between successful targets. Leaving the band before one
-second resets only the current hold. `UnloadedCaptureController` similarly
-captures one snapshot after one continuous second at or below 1.0 N.
+and 15 N it uses target ±10%. After the one-second settling phase it records a
+one-second, 5 Hz RGB/Rokubi burst while the force remains continuously valid;
+it never requires release between successful targets. Recording includes the
+start and excludes the end, so an uninterrupted default interval produces five
+frames. Scheduling uses elapsed monotonic time rather than camera-frame count,
+and one camera callback can satisfy at most one capture deadline. Leaving the
+band during settling or recording resets only the current attempt.
+`UnloadedCaptureController` applies the same atomic burst contract after one
+continuous settling second at or below 1.0 N.
 
-`ContactDatasetWriter` owns session/run directories, lossless PNG and CSV
-writing, summaries, atomic completed-snapshot publication, aborted-run
-metadata, and a metadata-backed completed-run iterator. One worker thread
-performs image and metadata I/O. A bounded frame-slot budget makes overload
-explicit; a snapshot is never silently omitted. Incomplete attempts retain
-`.partial` names until they are discarded and are ignored by the reader.
+`ContactDatasetWriter` writes acquisition format version 2. One session is one
+physical specimen under one fixed camera and acquisition configuration. One run
+is an independent `indenter + hole + repeat` contact trial. A force directory is
+one successfully completed force hold. A frame is one raw RGB image paired with
+the synchronized raw force/torque axes and timestamps. The hierarchy is:
+
+```text
+<session>/
+├── session.json
+├── unloaded/
+│   └── capture_001/
+│       ├── frames/000000.png ...
+│       └── frames.csv
+└── runs/
+    └── run_0001/
+        ├── run.json
+        ├── force_02N/
+        │   ├── frames/000000.png ...
+        │   └── frames.csv
+        ├── force_05N/
+        ├── force_10N/
+        └── force_15N/
+```
+
+`session.json` has this explicit schema; acquisition values shown are the
+current defaults:
+
+```json
+{
+  "format_version": 2,
+  "created_utc": "...",
+  "specimen": {
+    "material": "solaris",
+    "morphology": "nominal",
+    "specimen_id": "solaris_nominal_01"
+  },
+  "camera": {
+    "model": "RealSense D435",
+    "serial_number": "...",
+    "width": 1920,
+    "height": 1080,
+    "fps": 30
+  },
+  "force_sensor": {
+    "model": "Bota Rokubi",
+    "serial_port": "/dev/ttyUSB0",
+    "mode": "physical",
+    "tare_offsets": {
+      "fx_n": 0.0,
+      "fy_n": 0.0,
+      "fz_n": 0.0,
+      "mx_nm": 0.0,
+      "my_nm": 0.0,
+      "mz_nm": 0.0
+    }
+  },
+  "acquisition": {
+    "target_forces_n": [2.0, 5.0, 10.0, 15.0],
+    "settle_duration_s": 1.0,
+    "record_duration_s": 1.0,
+    "capture_rate_hz": 5.0,
+    "minimum_tolerance_n": 0.2,
+    "low_force_relative_tolerance": 0.2,
+    "high_force_relative_tolerance": 0.1,
+    "high_force_threshold_n": 10.0,
+    "unloaded_max_force_n": 1.0,
+    "unloaded_settle_duration_s": 1.0,
+    "unloaded_record_duration_s": 1.0
+  },
+  "git_commit": "..."
+}
+```
+
+Each `run.json` contains exactly:
+
+```json
+{
+  "run_id": "run_0001",
+  "indenter": "sphere_15mm",
+  "hole_index": 3,
+  "repeat_index": 2,
+  "started_utc": "...",
+  "ended_utc": "...",
+  "status": "complete"
+}
+```
+
+The only force/unloaded segment contents are `frames/` and `frames.csv`. The
+exact CSV columns are:
+
+```text
+frame_index
+rgb_filename
+capture_elapsed_s
+camera_host_time_s
+camera_device_timestamp_ms
+camera_frame_number
+bota_host_time_s
+bota_sensor_timestamp
+camera_bota_time_delta_ms
+Fx_N
+Fy_N
+Fz_N
+Mx_Nm
+My_Nm
+Mz_Nm
+temperature_C
+bota_status
+```
+
+Target force is parsed from the sole canonical `force_01N`, `force_02N`,
+`force_05N`, `force_10N`, ... naming rule. Force/torque magnitudes, Fz share,
+statistics, duration summaries, and completed-target lists are derived during
+analysis and are not acquisition metadata.
+
+One worker thread performs image and metadata I/O. A bounded frame-slot budget
+makes overload explicit; a frame is never silently omitted from an otherwise
+successful target. Frames are written only beneath an attempt-specific
+`.partial` directory. Force-band failure deletes that entire attempt, while
+success writes `frames.csv` and publishes the directory by atomic rename. The
+directory's existence is the success record, so there is no segment
+`metadata.json` or `summary.json`. Aborted runs retain already finalized force
+directories and record only `status: aborted` in `run.json`.
+
+`iter_dataset_frames(session_path)` is the format-v2 reader. It combines
+`session.json`, `run.json`, the force directory name, and `frames.csv` into each
+`DatasetFrameRecord`; unloaded records inherit the same session specimen and
+have no run or target force. The reader accepts one explicit v2 session. It does
+not silently migrate or reinterpret format-v1 recordings.
 
 `scripts/collect_contact_dataset.py` owns the one Tkinter experiment GUI and
 orchestration only. A camera reader thread keeps blocking RealSense calls

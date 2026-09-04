@@ -65,23 +65,38 @@ conda run --no-capture-output -n lit \
     --bota-port /dev/ttyUSB0
 ```
 
-Keep the Rokubi completely unloaded during startup tare and every manual
-`TARE`. The loaded sequence is a continuous 2 → 5 → 10 → 15 N progression at
-one indenter/hole configuration; do not release between successful targets.
-Hole 1 is distal and Hole 6 is proximal. The accepted band is target ±20% at
-2 and 5 N, and target ±10% at 10 and 15 N. After 1.0 continuous second inside
-that band, one synchronized RGB and Rokubi snapshot is saved. Leaving the band
-before one second resets only the current hold. After 15 N completes, release
-the indenter.
+The saved burst rate defaults to 5 Hz and can be changed independently of the
+30 FPS camera stream with `--capture-rate-hz`.
 
-Use `CAPTURE UNLOADED` separately for the current morphology, indenter, and
-camera pose. It saves one synchronized snapshot after `F_mag ≤ 1.0 N` has held
-continuously for 1.0 s; an unloaded reference is not required before every
-loaded run. By default, sessions are written beneath the repository's
-`experiments/` directory with
-`session.json`, one lossless PNG and synchronized FT CSV row per checkpoint,
-and per-checkpoint summaries. Aborted runs retain completed targets, while
-`.partial` attempts are not exposed by the default reader.
+Keep the Rokubi completely unloaded during startup tare and every manual
+`TARE`. After startup tare, enter the session material, morphology, and specimen
+ID, then select `CREATE SESSION`. Those specimen values and the camera and
+acquisition configuration are fixed for the whole session. Start a new session
+when the physical specimen or camera setup changes.
+
+For each loaded run select only the indenter, hole, and repeat index. Repeat
+indices identify independent trials within the same specimen/indenter/hole
+condition and must not be reused. The loaded sequence is a continuous
+2 → 5 → 10 → 15 N progression; do not release between successful targets.
+Hole 1 is distal and Hole 6 is proximal. The accepted band is target ±20% at
+2 and 5 N, and target ±10% at 10 and 15 N. Hold the band for the 1.0 s settling
+phase and the complete 1.0 s recording interval. The default elapsed-time
+schedule records at 5 Hz with the start included and the end excluded, yielding
+five synchronized RGB/Rokubi frames. Leaving the band at any time discards the
+whole partial target attempt. After 15 N completes, release the indenter.
+
+Use `CAPTURE UNLOADED` separately within the specimen session. It saves a
+synchronized burst while `F_mag ≤ 1.0 N` is maintained
+through the 1.0 s settling and 1.0 s recording intervals. The same 5 Hz
+elapsed-time schedule is used, and any force excursion discards the entire
+unloaded attempt. An unloaded reference is not required before every loaded
+run. By default, sessions are written beneath the repository's `experiments/`
+directory using dataset format v2. `session.json` owns specimen, camera, sensor,
+tare, and acquisition configuration; each `run.json` owns indenter, hole,
+repeat, and run status. A finalized force or unloaded directory contains only
+lossless PNGs under `frames/` and raw synchronized measurements in `frames.csv`.
+It has no `metadata.json` or `summary.json`. Aborted runs retain completed force
+directories, while incomplete `.partial` attempts are deleted.
 
 Exercise the complete GUI and D435 without a physical Rokubi using the prominent
 manual-force mock mode:
