@@ -74,10 +74,11 @@ ID, then select `CREATE SESSION`. Those specimen values and the camera and
 acquisition configuration are fixed for the whole session. Start a new session
 when the physical specimen or camera setup changes.
 
-For each loaded run select only the indenter, hole, and repeat index. Repeat
-indices identify independent trials within the same specimen/indenter/hole
-condition and must not be reused. The loaded sequence is a continuous
-2 → 5 → 10 → 15 N progression; do not release between successful targets.
+For each loaded run select a 10, 15, 20, or 30 mm spherical indenter, then the
+hole and repeat index. Repeat indices identify independent trials within the
+same specimen/indenter/hole condition and must not be reused. The loaded
+sequence is a continuous 2 → 5 → 10 → 15 N progression; do not release between
+successful targets.
 Hole 1 is distal and Hole 6 is proximal. The accepted band is target ±20% at
 2 and 5 N, and target ±10% at 10 and 15 N. Hold the band for the 1.0 s settling
 phase and the complete 1.0 s recording interval. The default elapsed-time

@@ -287,7 +287,12 @@ class ContactCollectorApp:
         indenter = ttk.Combobox(
             conditions,
             textvariable=self.indenter,
-            values=("sphere_10mm", "sphere_15mm", "sphere_20mm"),
+            values=(
+                "sphere_10mm",
+                "sphere_15mm",
+                "sphere_20mm",
+                "sphere_30mm",
+            ),
         )
         indenter.grid(row=0, column=1, sticky="ew", padx=(8, 0), pady=2)
         ttk.Label(conditions, text="Hole number").grid(row=1, column=0, sticky="w")

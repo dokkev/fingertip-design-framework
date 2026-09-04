@@ -897,6 +897,9 @@ is an independent `indenter + hole + repeat` contact trial. A force directory is
 one successfully completed force hold. A frame is one raw RGB image paired with
 the synchronized raw force/torque axes and timestamps. The hierarchy is:
 
+The collection GUI exposes the spherical indenter identifiers `sphere_10mm`,
+`sphere_15mm`, `sphere_20mm`, and `sphere_30mm`.
+
 ```text
 <session>/
 ├── session.json
