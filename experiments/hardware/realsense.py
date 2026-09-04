@@ -9,6 +9,9 @@ from typing import Any
 import numpy as np
 
 
+_COLOR_EXPOSURE_NATIVE_UNIT_US = 100.0
+
+
 @dataclass(frozen=True)
 class ColorFrame:
     """One owned RGB camera frame with device timing metadata."""
@@ -110,7 +113,7 @@ class RealSenseColorCamera:
         gain: float,
         white_balance_k: float,
     ) -> None:
-        """Set and verify fixed RGB controls for quantitative acquisition."""
+        """Set and verify fixed RGB controls using microseconds at this API."""
 
         if self._pipeline is None or self._device is None:
             raise RuntimeError("RealSense camera is not running")
@@ -143,23 +146,25 @@ class RealSenseColorCamera:
             )
         sensor = sensors[0]
         manual_options = (
-            ("exposure_us", rs.option.exposure),
-            ("gain", rs.option.gain),
-            ("white_balance_k", rs.option.white_balance),
+            ("exposure_us", rs.option.exposure, _COLOR_EXPOSURE_NATIVE_UNIT_US),
+            ("gain", rs.option.gain, 1.0),
+            ("white_balance_k", rs.option.white_balance, 1.0),
         )
-        for name, option in manual_options:
+        for name, option, user_units_per_native_unit in manual_options:
             value = requested[name]
             option_range = sensor.get_option_range(option)
-            if not option_range.min <= value <= option_range.max:
+            minimum = float(option_range.min) * user_units_per_native_unit
+            maximum = float(option_range.max) * user_units_per_native_unit
+            if not minimum <= value <= maximum:
                 raise ValueError(
                     f"{name}={value:g} is outside the camera range "
-                    f"[{option_range.min:g}, {option_range.max:g}]"
+                    f"[{minimum:g}, {maximum:g}]"
                 )
 
         sensor.set_option(rs.option.enable_auto_exposure, 0.0)
         sensor.set_option(rs.option.enable_auto_white_balance, 0.0)
-        for name, option in manual_options:
-            sensor.set_option(option, requested[name])
+        for name, option, user_units_per_native_unit in manual_options:
+            sensor.set_option(option, requested[name] / user_units_per_native_unit)
 
         if sensor.get_option(rs.option.enable_auto_exposure) != 0.0:
             raise RuntimeError("RealSense auto exposure did not disable")
@@ -167,9 +172,12 @@ class RealSenseColorCamera:
             raise RuntimeError("RealSense auto white balance did not disable")
 
         actual: dict[str, float] = {}
-        for name, option in manual_options:
-            value = float(sensor.get_option(option))
-            step = float(sensor.get_option_range(option).step)
+        for name, option, user_units_per_native_unit in manual_options:
+            value = float(sensor.get_option(option)) * user_units_per_native_unit
+            step = (
+                float(sensor.get_option_range(option).step)
+                * user_units_per_native_unit
+            )
             if abs(value - requested[name]) > max(0.51 * step, 1.0e-6):
                 raise RuntimeError(
                     f"RealSense {name} read-back {value:g} does not match "

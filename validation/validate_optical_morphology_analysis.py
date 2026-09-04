@@ -15,14 +15,14 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 if str(REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(REPOSITORY_ROOT))
 
-from experiments.localization import calibrate_fixed_finger  # noqa: E402
-from experiments.optical_morphology_analysis import (  # noqa: E402
-    fixed_red_differences,
-    longitudinal_red_signatures,
-    mean_absolute_red_response,
-    minimum_pairwise_separation,
+from experiments.analysis.optical_response import (  # noqa: E402
+    calibrate_analysis_strip,
+    fixed_channel_differences,
+    longitudinal_signature,
+    mean_absolute_response,
     pairwise_signature_distances,
 )
+from experiments.analysis.spatial_signature import minimum_pairwise_separation  # noqa: E402
 
 
 IMAGE_DIRECTORY = REPOSITORY_ROOT / "experiments" / "img"
@@ -51,17 +51,26 @@ def main() -> None:
     loaded = np.stack([_load_rgb(filename) for filename, _ in LOADED_SEQUENCE])
     positions_mm = np.asarray([position for _, position in LOADED_SEQUENCE])
     cv2.setRNGSeed(0)
-    calibration = calibrate_fixed_finger(unloaded)
-    differences = fixed_red_differences(unloaded, loaded, calibration)
-    magnitudes = mean_absolute_red_response(differences)
-    signatures = longitudinal_red_signatures(differences)
+    calibration = calibrate_analysis_strip(unloaded)
+    differences = fixed_channel_differences(
+        unloaded, loaded, calibration, channel_index=0
+    )
+    magnitudes = mean_absolute_response(differences)
+    signatures = np.vstack(
+        [
+            longitudinal_signature(difference, len(difference))
+            for difference in differences
+        ]
+    )
     distances = pairwise_signature_distances(signatures)
     minimum, pair = minimum_pairwise_separation(distances)
 
     OUTPUT_DIRECTORY.mkdir(parents=True, exist_ok=True)
     with (OUTPUT_DIRECTORY / "response_magnitude.csv").open("w", newline="") as stream:
         writer = csv.writer(stream)
-        writer.writerow(("filename", "contact_position_mm", "mean_absolute_delta_red_dn"))
+        writer.writerow(
+            ("filename", "contact_position_mm", "mean_absolute_delta_red_dn")
+        )
         for (filename, position), magnitude in zip(
             LOADED_SEQUENCE,
             magnitudes,

@@ -18,7 +18,7 @@ class ForceSequenceConfig:
     unloaded_max_force_n: float = 1.0
     unloaded_settle_duration_s: float = 1.0
     unloaded_record_duration_s: float = 1.0
-    minimum_tolerance_n: float = 0.2
+    minimum_tolerance_n: float = 1.0
     low_force_relative_tolerance: float = 0.20
     high_force_relative_tolerance: float = 0.10
     high_force_threshold_n: float = 10.0

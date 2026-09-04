@@ -21,6 +21,17 @@ CONFIG = ForceSequenceConfig(
 )
 
 
+def test_default_force_margins_match_collection_protocol() -> None:
+    config = ForceSequenceConfig()
+
+    assert tuple(config.tolerance_n(target) for target in config.target_forces_n) == (
+        1.0,
+        1.0,
+        1.0,
+        1.5,
+    )
+
+
 def _complete_target(
     controller: ForceSequenceController,
     target_n: float,
@@ -80,9 +91,9 @@ def test_force_spike_crossing_target_does_not_count() -> None:
     controller = ForceSequenceController(CONFIG)
     controller.start(0.0)
 
-    update = controller.update(0.1, 1.0)
+    update = controller.update(0.1, 0.9)
     assert update.state is ForceSequenceState.WAITING_FOR_TARGET
-    update = controller.update(0.2, 3.0)
+    update = controller.update(0.2, 3.1)
     assert update.state is ForceSequenceState.WAITING_FOR_TARGET
     assert update.completed_targets_n == ()
 
@@ -92,7 +103,7 @@ def test_leaving_band_during_settling_resets() -> None:
     controller.start(0.0)
     controller.update(0.1, 2.0)
 
-    update = controller.update(0.4, 1.0)
+    update = controller.update(0.4, 0.9)
 
     assert update.state is ForceSequenceState.WAITING_FOR_TARGET
     assert ForceSequenceEvent.ATTEMPT_RESET in update.events
@@ -105,7 +116,7 @@ def test_leaving_band_at_point_nine_seconds_discards_attempt() -> None:
     controller.update(0.6, 2.0)
     controller.update(0.86, 2.0)
 
-    update = controller.update(1.5, 1.0)
+    update = controller.update(1.5, 0.9)
 
     assert update.state is ForceSequenceState.WAITING_FOR_TARGET
     assert ForceSequenceEvent.ATTEMPT_RESET in update.events
@@ -117,7 +128,7 @@ def test_reentry_after_failed_recording_starts_new_schedule() -> None:
     controller.start(0.0)
     controller.update(0.1, 2.0)
     controller.update(0.6, 2.0)
-    controller.update(1.5, 1.0)
+    controller.update(1.5, 0.9)
 
     controller.update(1.6, 2.0)
     restarted = controller.update(2.1, 2.0)
@@ -134,7 +145,7 @@ def test_overshoot_during_recording_resets_attempt() -> None:
     controller.update(0.1, 2.0)
     controller.update(0.6, 2.0)
 
-    update = controller.update(1.0, 2.5)
+    update = controller.update(1.0, 3.1)
 
     assert update.band_position is ForceBandPosition.ABOVE
     assert update.state is ForceSequenceState.WAITING_FOR_TARGET

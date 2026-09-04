@@ -1,4 +1,4 @@
-"""Format-v2 storage and reading for raw physical contact data."""
+"""Format-v3 storage and reading for raw physical contact data."""
 
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ from experiments.hardware import BotaSample, BotaTareOffsets
 from .force_sequence import ForceSequenceConfig
 
 
-FORMAT_VERSION = 2
+FORMAT_VERSION = 3
 FRAME_CSV_COLUMNS = (
     "frame_index",
     "rgb_filename",
@@ -121,7 +121,7 @@ def parse_force_directory(name: str) -> float:
 
 @dataclass(frozen=True)
 class SessionMetadata:
-    """Session-wide format-v2 identity and acquisition configuration."""
+    """Session-wide format-v3 identity and acquisition configuration."""
 
     material: str
     morphology: str
@@ -217,7 +217,7 @@ class SessionMetadata:
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> SessionMetadata:
-        """Load only the explicit format-v2 session schema."""
+        """Load only the explicit format-v3 session schema."""
 
         if data.get("format_version") != FORMAT_VERSION:
             raise ValueError(f"session format_version must be {FORMAT_VERSION}")
@@ -282,7 +282,7 @@ class RunMetadata:
     run_id: str
     indenter: str
     hole_index: int
-    repeat_index: int
+    repetition_index: int
     started_utc: str
     ended_utc: str | None = None
     status: str = "active"
@@ -293,8 +293,8 @@ class RunMetadata:
         object.__setattr__(self, "indenter", _validate_machine_name("indenter", self.indenter))
         if not isinstance(self.hole_index, int) or self.hole_index not in range(1, 7):
             raise ValueError("hole_index must be an integer from 1 through 6")
-        if not isinstance(self.repeat_index, int) or self.repeat_index < 1:
-            raise ValueError("repeat_index must be a positive integer")
+        if not isinstance(self.repetition_index, int) or self.repetition_index < 1:
+            raise ValueError("repetition_index must be a positive integer")
         if self.status not in {"active", "complete", "aborted"}:
             raise ValueError("status must be active, complete, or aborted")
 
@@ -303,7 +303,7 @@ class RunMetadata:
             "run_id": self.run_id,
             "indenter": self.indenter,
             "hole_index": self.hole_index,
-            "repeat_index": self.repeat_index,
+            "repetition_index": self.repetition_index,
             "started_utc": self.started_utc,
             "ended_utc": self.ended_utc,
             "status": self.status,
@@ -315,7 +315,7 @@ class RunMetadata:
             run_id=str(data["run_id"]),
             indenter=str(data["indenter"]),
             hole_index=int(data["hole_index"]),
-            repeat_index=int(data["repeat_index"]),
+            repetition_index=int(data["repetition_index"]),
             started_utc=str(data["started_utc"]),
             ended_utc=None if data["ended_utc"] is None else str(data["ended_utc"]),
             status=str(data["status"]),
@@ -384,7 +384,7 @@ class _Task:
 
 
 class ContactDatasetWriter:
-    """Write one specimen-scoped format-v2 session with atomic segments."""
+    """Write one specimen-scoped format-v3 session with atomic segments."""
 
     def __init__(
         self,
@@ -401,9 +401,9 @@ class ContactDatasetWriter:
         base = Path(output_root)
         if session_metadata.sensor_mode == "mock":
             base = base / "mock"
-        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        prefix = "MOCK_" if session_metadata.sensor_mode == "mock" else ""
-        self.session_path = self._unique_path(base, prefix + stamp)
+        date = datetime.now().strftime("%Y-%m-%d")
+        name = f"{date}_{session_metadata.material}_{session_metadata.morphology}"
+        self.session_path = self._unique_path(base, name)
         self.session_path.mkdir(parents=True)
         (self.session_path / "runs").mkdir()
         (self.session_path / "unloaded").mkdir()
@@ -423,7 +423,7 @@ class ContactDatasetWriter:
         self._run_count = 0
         self._unloaded_count = 0
         self._attempt_counts: dict[str, int] = {}
-        self._run_conditions: set[tuple[str, int, int]] = set()
+        self._repetition_counts: dict[tuple[str, int], int] = {}
         self._dropped_frame_count = 0
         self._pending_tasks = 0
         self._first_error: BaseException | None = None
@@ -472,7 +472,6 @@ class ContactDatasetWriter:
         *,
         indenter: str,
         hole_index: int,
-        repeat_index: int,
     ) -> LoadedRunHandle:
         """Create one independent run; specimen and acquisition stay session-owned."""
 
@@ -480,22 +479,17 @@ class ContactDatasetWriter:
         indenter = _validate_machine_name("indenter", indenter)
         if not isinstance(hole_index, int) or hole_index not in range(1, 7):
             raise ValueError("hole_index must be an integer from 1 through 6")
-        if not isinstance(repeat_index, int) or repeat_index < 1:
-            raise ValueError("repeat_index must be a positive integer")
-        condition = (indenter, hole_index, repeat_index)
+        condition = (indenter, hole_index)
         with self._lock:
-            if condition in self._run_conditions:
-                raise ValueError(
-                    "repeat_index already exists for this indenter and hole in the session"
-                )
-            self._run_conditions.add(condition)
+            repetition_index = self._repetition_counts.get(condition, 0) + 1
+            self._repetition_counts[condition] = repetition_index
             self._run_count += 1
             run_id = f"run_{self._run_count:04d}"
         metadata = RunMetadata(
             run_id=run_id,
             indenter=indenter,
             hole_index=hole_index,
-            repeat_index=repeat_index,
+            repetition_index=repetition_index,
             started_utc=_utc_now(),
         )
         path = self.session_path / "runs" / run_id
@@ -724,7 +718,7 @@ class ContactDatasetWriter:
                 run_id=run.metadata.run_id,
                 indenter=run.metadata.indenter,
                 hole_index=run.metadata.hole_index,
-                repeat_index=run.metadata.repeat_index,
+                repetition_index=run.metadata.repetition_index,
                 started_utc=run.metadata.started_utc,
                 ended_utc=_utc_now(),
                 status=status,
@@ -810,7 +804,7 @@ def _segment_rows(segment_path: Path) -> Iterator[dict[str, str]]:
     with csv_path.open(newline="", encoding="utf-8") as stream:
         reader = csv.DictReader(stream)
         if tuple(reader.fieldnames or ()) != FRAME_CSV_COLUMNS:
-            raise ValueError(f"{csv_path} does not use the format-v2 frame schema")
+            raise ValueError(f"{csv_path} does not use the format-v3 frame schema")
         yield from reader
 
 

@@ -864,10 +864,12 @@ configures a 1920 x 1080 RGB stream at 30 FPS by default, returns an owned
 immutable RGB frame with device timestamp and frame number, and exposes explicit
 `start()`/`read()`/`stop()` plus context-manager cleanup. Live localization
 leaves camera photometric controls untouched. Quantitative data collection calls
-`set_manual_photometric_controls()` with explicit user-selected exposure, gain,
-and white balance; the method disables both automatic controllers, checks the
-device ranges, and verifies the read-back values. RealSense objects do not cross
-this package boundary. Depth
+`set_manual_photometric_controls()` with configured exposure, gain, and white
+balance; the defaults are 1500 µs, 0, and 4600 K. The method disables both
+automatic controllers, checks the device ranges, and verifies the read-back
+values. Its public and persisted exposure unit is microseconds; the hardware
+boundary converts to and from the D435 RGB sensor's native 100-µs exposure
+unit. RealSense objects do not cross this package boundary. Depth
 acquisition is intentionally absent because the current localization algorithm
 consumes only color images.
 
@@ -883,8 +885,8 @@ data consumers.
 
 `experiments/data_collection/` owns the hardware-independent physical
 acquisition contract. `ForceSequenceController` accepts only monotonic host
-time and force magnitude. At 2 and 5 N it uses a target ±20% force band; at 10
-and 15 N it uses target ±10%. After the one-second settling phase it records a
+time and force magnitude. It uses a ±1 N force band at 2 N, ±20% at 5 N, and
+±10% at 10 and 15 N. After the one-second settling phase it records a
 one-second, 5 Hz RGB/Rokubi burst while the force remains continuously valid;
 it never requires release between successful targets. Recording includes the
 start and excludes the end, so an uninterrupted default interval produces five
@@ -902,21 +904,26 @@ The current controller target is a horizontal marker and its accepted force
 range is a shaded band; this display does not participate in acquisition state
 or saved measurements.
 
-`ContactDatasetWriter` writes acquisition format version 2. One session is one
+`ContactDatasetWriter` writes acquisition format version 3. One session is one
 physical specimen under one fixed camera and acquisition configuration. One run
-is an independent `indenter + hole + repeat` contact trial. A force directory is
-one successfully completed force hold. A frame is one raw RGB image paired with
-the synchronized raw force/torque axes and timestamps. Each segment handle owns
+is an independent `indenter + hole + repetition` contact trial. The writer
+automatically assigns a one-based repetition index independently for each
+`indenter + hole` pair whenever a run starts, and the GUI displays the assigned
+read-only value. A force directory is one
+successfully completed force hold. A frame is one raw RGB image paired with the
+synchronized raw force/torque axes and timestamps. Each segment handle owns
 its exact expected frame count, and the writer independently rejects incomplete
 or overfull segments before publication. The hierarchy is:
 
 The collection GUI exposes the spherical indenter identifiers `sphere_10mm`,
 `sphere_15mm`, `sphere_20mm`, and `sphere_30mm`, and the morphology identifiers
 `baseline`, `flat_opt`, and `angled_opt`. Its default dataset root is the
-Git-ignored `output/contact_dataset/` directory.
+Git-ignored `output/contact_dataset/` directory. Each session directory uses
+`YYYY-MM-DD_<material>_<morphology>`; a same-day name collision receives a
+two-digit suffix without overwriting existing data.
 
 ```text
-<session>/
+2026-09-04_solaris_baseline/
 ├── session.json
 ├── unloaded/
 │   └── capture_001/
@@ -938,7 +945,7 @@ current defaults:
 
 ```json
 {
-  "format_version": 2,
+  "format_version": 3,
   "created_utc": "...",
   "specimen": {
     "material": "solaris",
@@ -952,8 +959,8 @@ current defaults:
     "height": 1080,
     "fps": 30,
     "auto_exposure": false,
-    "exposure_us": 120.0,
-    "gain": 16.0,
+    "exposure_us": 1500.0,
+    "gain": 0.0,
     "auto_white_balance": false,
     "white_balance_k": 4600.0
   },
@@ -975,7 +982,7 @@ current defaults:
     "settle_duration_s": 1.0,
     "record_duration_s": 1.0,
     "capture_rate_hz": 5.0,
-    "minimum_tolerance_n": 0.2,
+    "minimum_tolerance_n": 1.0,
     "low_force_relative_tolerance": 0.2,
     "high_force_relative_tolerance": 0.1,
     "high_force_threshold_n": 10.0,
@@ -994,7 +1001,7 @@ Each `run.json` contains exactly:
   "run_id": "run_0001",
   "indenter": "sphere_15mm",
   "hole_index": 3,
-  "repeat_index": 2,
+  "repetition_index": 2,
   "started_utc": "...",
   "ended_utc": "...",
   "status": "complete"
@@ -1038,11 +1045,11 @@ directory's existence is the success record, so there is no segment
 `metadata.json` or `summary.json`. Aborted runs retain already finalized force
 directories and record only `status: aborted` in `run.json`.
 
-`iter_dataset_frames(session_path)` is the format-v2 reader. It combines
+`iter_dataset_frames(session_path)` is the format-v3 reader. It combines
 `session.json`, `run.json`, the force directory name, and `frames.csv` into each
 `DatasetFrameRecord`; unloaded records inherit the same session specimen and
-have no run or target force. The reader accepts one explicit v2 session. It does
-not silently migrate or reinterpret format-v1 recordings.
+have no run or target force. The reader accepts one explicit v3 session. It does
+not silently migrate or reinterpret older recordings.
 
 `scripts/collect_contact_dataset.py` owns the one Tkinter experiment GUI and
 orchestration only. A camera reader thread keeps blocking RealSense calls
@@ -1157,15 +1164,29 @@ loaded frame. Loaded optical changes are never fed back into calibration. A
 previously calibrated mask may be supplied for fixed-geometry photometric
 ablations.
 
-`experiments/optical_morphology_analysis.py` owns the corresponding small
-offline measurement path. It remaps one unloaded image and loaded frames with
-the same fixed calibration, computes signed red-channel difference in camera
-DN, reports mean absolute response magnitude, averages signed response across
-the transverse strip to form a longitudinal signature, and computes pairwise
-signature RMS distances. Its separability summary is the smallest pairwise
-distance. No dimensionless separability ratio is defined because the current
-saved dataset has only one image per contact state and therefore cannot support
-a within-state noise estimate.
+`experiments/analysis/` owns offline characterization of format-v3 physical
+contact datasets. `dataset_index.py` resolves the current reader's session,
+run, force, frame, and synchronized Rokubi context and reports missing,
+duplicate, incomplete, and unexpected coverage without repairing metadata.
+`optical_response.py` constructs one specimen-owned temporal-median unloaded
+reference, one fixed canonical sampling strip, raw RGB response summaries, and
+the signed 128-bin transverse-mean Delta-G signature. `deformation.py` measures
+visible image-contour motion in pixels along fixed unloaded contour normals.
+`aggregation.py` reduces the five hold frames by median into one independent
+run-force observation and then summarizes independent runs.
+`spatial_signature.py` owns robust hole templates, repeat variability, and
+pairwise RMS template separation. `export.py` writes the compact numerical
+bundle and diagnostic figures.
+
+`scripts/analyze_contact_dataset.py` accepts any positive number of session
+directories. Raw PNGs are decoded only while constructing a per-session
+CSV/NPZ cache; `--recompute` explicitly invalidates that cache. Subsequent
+aggregation, comparison, and figure generation use the compact cache. The
+uploadable `analysis_bundle` retains frame features, run and condition
+summaries, raw signed spatial signatures, separability, force fits, unloaded
+stability, provenance, and definitions, but no raw image sequence. Camera
+setting differences are reported rather than hidden by normalization. The
+statistical unit is always a run, never one of its five repeated hold frames.
 
 `optical_features.py` owns pure feature extraction. `DenseProfileConfig`
 selects brightest-10% red, mean red, absolute high-pass red, red gradient, or
@@ -1236,10 +1257,10 @@ strip evidence. Its one-time interactive mode writes five manually clicked LED
 centers per image to JSON. The validator reports median/maximum center error and
 line distance without inventing an unrequested pixel acceptance threshold; a
 missing manual-label file is an explicit failure. It does not invoke the legacy
-blob detector. `validation/validate_optical_morphology_analysis.py` reports
-Dragon Skin response magnitudes, longitudinal signatures, and the full
-pairwise-distance matrix. Solaris is not evaluated there because the checked-in
-images do not contain a same-condition unloaded reference.
+blob detector. `validation/validate_optical_morphology_analysis.py` remains a
+small checked-in image replay using the fixed-strip numerical functions. The
+multi-run physical dataset comparison is owned by `experiments/analysis/`, not
+by a validation module.
 `validation/validate_solaris_led_localization.py` separately exercises only the
 Solaris localizer on representative and dark-room images. It plots the
 silhouette, side/distal-limit/LED lines, the exact 44 mm rigid array, and the raw

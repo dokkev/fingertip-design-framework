@@ -121,13 +121,14 @@ def test_manual_photometric_controls_are_disabled_set_and_read_back(
     camera._device = _FakeDevice(sensor)
 
     camera.set_manual_photometric_controls(
-        exposure_us=120.0,
+        exposure_us=1000.0,
         gain=16.0,
         white_balance_k=4500.0,
     )
 
     assert sensor.values["enable_auto_exposure"] == 0.0
     assert sensor.values["enable_auto_white_balance"] == 0.0
-    assert camera.exposure_us == 120.0
+    assert sensor.values["exposure"] == 10.0
+    assert camera.exposure_us == 1000.0
     assert camera.gain == 16.0
     assert camera.white_balance_k == 4500.0

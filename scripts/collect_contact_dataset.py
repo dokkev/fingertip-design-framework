@@ -252,7 +252,7 @@ class ContactCollectorApp:
         self.specimen_id = tk.StringVar(value="dragon_skin_baseline_01")
         self.indenter = tk.StringVar(value="sphere_15mm")
         self.hole = tk.IntVar(value=1)
-        self.repeat = tk.IntVar(value=1)
+        self.repetition_index_text = tk.StringVar(value="—")
         self.session_widgets: list[tk.Widget] = []
         self.input_widgets: list[tk.Widget] = []
 
@@ -304,19 +304,16 @@ class ContactCollectorApp:
         ttk.Label(conditions, text="Hole number").grid(row=1, column=0, sticky="w")
         hole = ttk.Spinbox(conditions, from_=1, to=6, textvariable=self.hole, width=6)
         hole.grid(row=1, column=1, sticky="w", padx=(8, 0), pady=2)
-        ttk.Label(conditions, text="Repeat index").grid(row=2, column=0, sticky="w")
-        repeat = ttk.Spinbox(
-            conditions,
-            from_=1,
-            to=999,
-            textvariable=self.repeat,
-            width=6,
+        ttk.Label(conditions, text="Repetition Index").grid(
+            row=2, column=0, sticky="w"
         )
-        repeat.grid(row=2, column=1, sticky="w", padx=(8, 0), pady=2)
+        ttk.Label(conditions, textvariable=self.repetition_index_text).grid(
+            row=2, column=1, sticky="w", padx=(8, 0), pady=2
+        )
         ttk.Label(conditions, text="Hole 1 = distal · Hole 6 = proximal").grid(
             row=3, column=0, columnspan=2, sticky="w", pady=(4, 0)
         )
-        self.input_widgets.extend((indenter, hole, repeat))
+        self.input_widgets.extend((indenter, hole))
 
         force_box = ttk.LabelFrame(side, text="Live Bota Rokubi", padding=10)
         force_box.grid(row=2, column=0, sticky="ew", pady=(10, 0))
@@ -575,38 +572,38 @@ class ContactCollectorApp:
             raise RuntimeError(f"camera {name} was not fixed before session creation")
         return float(value)
 
-    def _conditions(self) -> tuple[str, int, int]:
+    def _conditions(self) -> tuple[str, int]:
         indenter = self.indenter.get().strip()
         try:
             hole = int(self.hole.get())
-            repeat = int(self.repeat.get())
         except (TypeError, ValueError) as error:
-            raise ValueError("hole and repeat must be integers") from error
+            raise ValueError("hole number must be an integer") from error
         if not indenter:
             raise ValueError("indenter is required")
         if hole not in range(1, 7):
             raise ValueError("hole number must be from 1 through 6")
-        if repeat < 1:
-            raise ValueError("repeat index must be positive")
-        return indenter, hole, repeat
+        return indenter, hole
 
     def _start_run(self) -> None:
         if self.writer is None or self.active_mode is not None:
             return
         try:
-            indenter, hole, repeat = self._conditions()
+            indenter, hole = self._conditions()
             self.active_run = self.writer.start_loaded_run(
                 indenter=indenter,
                 hole_index=hole,
-                repeat_index=repeat,
             )
         except (RuntimeError, ValueError) as error:
             messagebox.showerror("Cannot start run", str(error))
             return
+        self.repetition_index_text.set(str(self.active_run.metadata.repetition_index))
         self.force_controller = ForceSequenceController(self.config)
         self.active_mode = "loaded"
         self.active_segment = None
-        self.state_text.set(f"Increase force to {self.config.target_forces_n[0]:g} N")
+        self.state_text.set(
+            f"Repetition {self.active_run.metadata.repetition_index} — increase force "
+            f"to {self.config.target_forces_n[0]:g} N"
+        )
         self._set_inputs_enabled(False)
         self._update_sequence_labels()
 
@@ -1007,20 +1004,20 @@ def _arguments() -> argparse.Namespace:
     parser.add_argument(
         "--camera-exposure-us",
         type=float,
-        required=True,
-        help="fixed RealSense RGB exposure used for every morphology",
+        default=1500.0,
+        help="fixed RealSense RGB exposure (default: 1500 us)",
     )
     parser.add_argument(
         "--camera-gain",
         type=float,
-        required=True,
-        help="fixed RealSense RGB gain used for every morphology",
+        default=0.0,
+        help="fixed RealSense RGB gain (default: 0)",
     )
     parser.add_argument(
         "--camera-white-balance-k",
         type=float,
-        required=True,
-        help="fixed RealSense RGB white balance used for every morphology",
+        default=4600.0,
+        help="fixed RealSense RGB white balance (default: 4600 K)",
     )
     parser.add_argument(
         "--capture-rate-hz",

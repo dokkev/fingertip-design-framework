@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import json
 from pathlib import Path
+import re
 
 import cv2
 import numpy as np
@@ -83,12 +84,10 @@ def _run(
     writer: ContactDatasetWriter,
     *,
     hole_index: int = 3,
-    repeat_index: int = 2,
 ):
     return writer.start_loaded_run(
         indenter="sphere_15mm",
         hole_index=hole_index,
-        repeat_index=repeat_index,
     )
 
 
@@ -112,14 +111,14 @@ def _submit_expected_frames(
         )
 
 
-def test_session_metadata_round_trip_uses_explicit_v2_hierarchy(tmp_path: Path) -> None:
+def test_session_metadata_round_trip_uses_explicit_v3_hierarchy(tmp_path: Path) -> None:
     metadata = _metadata(target_forces_n=(2.0, 5.0, 10.0, 15.0))
     with ContactDatasetWriter(tmp_path, metadata) as writer:
         stored = json.loads(
             (writer.session_path / "session.json").read_text(encoding="utf-8")
         )
 
-    assert stored["format_version"] == 2
+    assert stored["format_version"] == 3
     assert stored["specimen"] == {
         "material": "solaris",
         "morphology": "nominal",
@@ -140,6 +139,16 @@ def test_session_metadata_round_trip_uses_explicit_v2_hierarchy(tmp_path: Path) 
     assert stored["acquisition"]["target_forces_n"] == [2.0, 5.0, 10.0, 15.0]
     assert stored["acquisition"]["record_duration_s"] == 1.0
     assert SessionMetadata.from_dict(stored) == metadata
+
+
+def test_session_directory_uses_date_material_and_morphology(tmp_path: Path) -> None:
+    with ContactDatasetWriter(tmp_path, _metadata()) as first:
+        first_name = first.session_path.name
+    with ContactDatasetWriter(tmp_path, _metadata()) as second:
+        second_name = second.session_path.name
+
+    assert re.fullmatch(r"\d{4}-\d{2}-\d{2}_solaris_nominal", first_name)
+    assert second_name == f"{first_name}_01"
 
 
 def test_manual_tare_updates_only_session_sensor_metadata(tmp_path: Path) -> None:
@@ -173,14 +182,14 @@ def test_run_json_contains_only_independent_trial_identity_and_lifecycle(
         "run_id",
         "indenter",
         "hole_index",
-        "repeat_index",
+        "repetition_index",
         "started_utc",
         "ended_utc",
         "status",
     }
     assert stored["indenter"] == "sphere_15mm"
     assert stored["hole_index"] == 3
-    assert stored["repeat_index"] == 2
+    assert stored["repetition_index"] == 1
     assert stored["status"] == "aborted"
     assert "material" not in stored
     assert "target_forces_n" not in stored
@@ -208,6 +217,23 @@ def test_completed_force_segment_contains_only_frames_and_csv(tmp_path: Path) ->
         stored_bgr = cv2.imread(str(final / "frames" / "000000.png"))
         assert stored_bgr is not None
         assert tuple(stored_bgr[0, 0]) == (0, 0, 17)
+
+
+def test_repetition_index_increments_automatically_per_indenter_and_hole(
+    tmp_path: Path,
+) -> None:
+    with ContactDatasetWriter(tmp_path, _metadata()) as writer:
+        first = _run(writer, hole_index=3)
+        second = _run(writer, hole_index=3)
+        other_hole = _run(writer, hole_index=4)
+
+        assert first.metadata.repetition_index == 1
+        assert second.metadata.repetition_index == 2
+        assert other_hole.metadata.repetition_index == 1
+
+        writer.abort_loaded_run(first)
+        writer.abort_loaded_run(second)
+        writer.abort_loaded_run(other_hole)
 
 
 def test_failed_attempt_is_removed_and_retry_restarts_at_frame_zero(
@@ -257,7 +283,7 @@ def test_frames_csv_contains_raw_facts_and_omits_derived_values(tmp_path: Path) 
 
 def test_reader_resolves_specimen_run_force_and_raw_frame_context(tmp_path: Path) -> None:
     with ContactDatasetWriter(tmp_path, _metadata()) as writer:
-        run = _run(writer, hole_index=4, repeat_index=3)
+        run = _run(writer, hole_index=4)
         segment = writer.begin_force_target(run, 2.0)
         _submit_expected_frames(writer, segment)
         writer.finalize_segment(segment)
@@ -274,7 +300,7 @@ def test_reader_resolves_specimen_run_force_and_raw_frame_context(tmp_path: Path
     assert record.run is not None
     assert record.run.indenter == "sphere_15mm"
     assert record.run.hole_index == 4
-    assert record.run.repeat_index == 3
+    assert record.run.repetition_index == 1
     assert record.target_force_n == 2.0
     assert record.measurements["Fz_N"] == "2.0"
     assert record.rgb_path.is_file()

@@ -62,16 +62,16 @@ Rokubi at `/dev/ttyUSB0`:
 ```bash
 conda run --no-capture-output -n lit \
   python -u scripts/collect_contact_dataset.py \
-    --bota-port /dev/ttyUSB0 \
-    --camera-exposure-us EXPOSURE_US \
-    --camera-gain GAIN \
-    --camera-white-balance-k WHITE_BALANCE_K
+    --bota-port /dev/ttyUSB0
 ```
 
-Select nonsaturating manual RGB values once before the experiment and use the
-same three values for every morphology. The collector disables automatic
-exposure and white balance, verifies the camera read-back, and records the
-actual values in `session.json`.
+The fixed RGB defaults are 1500 µs exposure, gain 0, and 4600 K white balance.
+The three corresponding CLI options can override them, but every morphology in
+one comparison must use identical values. The collector disables automatic
+exposure and white balance, verifies the camera read-back, and records the actual
+values in `session.json`. Exposure remains expressed in microseconds at the CLI
+and in the dataset; the RealSense adapter converts it to the D435 RGB sensor's
+native 100-µs units (for example, 1500 µs becomes native value 15).
 
 The saved burst rate defaults to 5 Hz and can be changed independently of the
 30 FPS camera stream with `--capture-rate-hz`.
@@ -82,15 +82,16 @@ ID, then select `CREATE SESSION`. Those specimen values and the camera and
 acquisition configuration are fixed for the whole session. Start a new session
 when the physical specimen or camera setup changes.
 
-For each loaded run select a 10, 15, 20, or 30 mm spherical indenter, then the
-hole and repeat index. Repeat indices identify independent trials within the
-same specimen/indenter/hole condition and must not be reused. The loaded
-sequence is a continuous 2 → 5 → 10 → 15 N progression; do not release between
+For each loaded run select a 10, 15, 20, or 30 mm spherical indenter and a hole.
+Pressing `START RUN` automatically assigns the next one-based repetition index
+for that `indenter + hole` pair and displays it in the read-only
+`Repetition Index` row. The loaded sequence is a continuous
+2 → 5 → 10 → 15 N progression; do not release between
 successful targets. The vertical force gauge shows the current force as a bar,
 the active target as a horizontal line, and the accepted margin as a shaded
 band.
-Hole 1 is distal and Hole 6 is proximal. The accepted band is target ±20% at
-2 and 5 N, and target ±10% at 10 and 15 N. Hold the band for the 1.0 s settling
+Hole 1 is distal and Hole 6 is proximal. The accepted band is ±1 N at 2 N,
+±20% at 5 N, and ±10% at 10 and 15 N. Hold the band for the 1.0 s settling
 phase and the complete 1.0 s recording interval. The default elapsed-time
 schedule records at 5 Hz with the start included and the end excluded, yielding
 exactly five synchronized RGB/Rokubi frames. A missed scheduled observation,
@@ -103,9 +104,11 @@ through the 1.0 s settling and 1.0 s recording intervals. The same 5 Hz
 elapsed-time schedule is used, and any force excursion discards the entire
 unloaded attempt. An unloaded reference is not required before every loaded
 run. By default, sessions are written to `output/contact_dataset/`, which is
-ignored by Git, using dataset format v2. `session.json` owns specimen, camera, sensor,
-tare, and acquisition configuration; each `run.json` owns indenter, hole,
-repeat, and run status. A finalized force or unloaded directory contains only
+ignored by Git, using dataset format v3. `session.json` owns specimen, camera, sensor,
+tare, and acquisition configuration. Session directories use
+`YYYY-MM-DD_<material>_<morphology>` and add `_01`, `_02`, ... only when that
+same-day name already exists. Each `run.json` owns indenter, hole, repetition,
+and run status. A finalized force or unloaded directory contains only
 lossless PNGs under `frames/` and raw synchronized measurements in `frames.csv`.
 It has no `metadata.json` or `summary.json`. Aborted runs retain completed force
 directories, while incomplete `.partial` attempts are deleted.
@@ -115,10 +118,7 @@ manual-force mock mode:
 
 ```bash
 conda run --no-capture-output -n lit \
-  python -u scripts/collect_contact_dataset.py --mock \
-    --camera-exposure-us EXPOSURE_US \
-    --camera-gain GAIN \
-    --camera-white-balance-k WHITE_BALANCE_K
+  python -u scripts/collect_contact_dataset.py --mock
 ```
 
 Mock sessions cannot enter the physical dataset namespace: they are written
@@ -191,6 +191,20 @@ conda run --no-capture-output -n lit \
 
 Solaris is deliberately omitted because no same-condition unloaded Solaris
 reference is currently checked in.
+
+Analyze any number of format-v3 physical contact sessions and create reusable
+per-session caches plus a compact uploadable bundle:
+
+```bash
+conda run --no-capture-output -n lit \
+  python -u scripts/analyze_contact_dataset.py \
+  output/contact_dataset/2026-09-04_solaris_baseline \
+  output/contact_dataset/2026-09-04_solaris_flat_opt \
+  --output output/analysis/solaris_compare
+```
+
+Add `--recompute` only when raw-image features must be extracted again. Without
+it, summaries and figures are regenerated from the compact CSV/NPZ cache.
 
 Replay the smooth emissive segmentation on the checked-in 13-image reference
 set, report fixed-extrinsic stability/runtime, and regenerate its overlays:
