@@ -108,12 +108,15 @@ ALL_HOLES = tuple(HOLE_TO_CONTACT_X_MM)
 ATLAS_INDENTER = "sphere_10mm"
 ATLAS_REPETITION = 1
 ATLAS_TARGET_FORCE_N = 15.0
-ATLAS_DISPLAY_EXPOSURE_EV = 0.0
+ATLAS_DISPLAY_EXPOSURE_EV_BY_MATERIAL = {
+    "solaris": 0.0,
+    "dragon_skin": 0.25,
+}
 
 # One camera-coordinate ROI is reused without recentering or photometric
 # manipulation for every atlas frame. All Figure 5 sessions used the same
 # 1920 x 1080 fixed-camera acquisition contract.
-ATLAS_CROP_XYXY = (820, 170, 1170, 750)
+ATLAS_CROP_XYXY = (820, 170, 1170, 660)
 
 
 def require_available_inputs() -> None:
@@ -139,7 +142,7 @@ __all__ = [
     "ALL_HOLES",
     "ANALYSIS_ROOTS",
     "ATLAS_CROP_XYXY",
-    "ATLAS_DISPLAY_EXPOSURE_EV",
+    "ATLAS_DISPLAY_EXPOSURE_EV_BY_MATERIAL",
     "ATLAS_HOLES",
     "ATLAS_INDENTER",
     "ATLAS_REPETITION",

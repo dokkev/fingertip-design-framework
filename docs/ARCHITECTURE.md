@@ -1226,8 +1226,11 @@ spacing. Panels (a) and (b) share one morphology-row height, gap, and material
 separator contract so their six row centers coincide in the composed figure.
 `fig5a.py` selects auditable raw 10 mm-sphere, repetition-1, 15 N
 frames and one temporally nearest real unloaded frame per specimen. Every cell
-uses the same fixed camera-coordinate crop and unmodified stored RGB values;
-the renderer performs no per-cell normalization or display enhancement.
+uses the same fixed camera-coordinate crop. Solaris retains the stored RGB
+values, while every measured Dragon Skin cell receives the same fixed +0.25 EV
+display exposure for print readability. The renderer performs no per-cell
+normalization or adaptive enhancement, and the fixed material-level display
+exposure is recorded in the selection manifest.
 `fig5b.py` reads the compact Solaris and Dragon Skin hold profiles from
 `longitudinal_profiles.npz`; it does not consume fitted load-response slopes.
 Within each independent repetition it subtracts the 2 N profile from the 15 N

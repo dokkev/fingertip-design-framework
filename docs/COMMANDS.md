@@ -238,8 +238,9 @@ Outputs are written beside the scripts under `figures/figure5/`:
 `fig5a_selection_manifest.csv`, `fig5b_region_response.csv`, and
 `fig5c_neighbor_separations.csv`, and `fig5c_metrics.csv`. The raw atlas uses
 the 10 mm sphere, repetition 1, and the frame closest to 15 N at five physical
-11 mm-spaced fixture positions. Stored RGB values are shown without display
-enhancement or per-cell normalization. Dragon Skin angled-opt remains visibly pending
+11 mm-spaced fixture positions. Solaris uses stored RGB values directly; all
+measured Dragon Skin atlas cells use one documented +0.25 EV display exposure.
+No per-cell normalization is applied. Dragon Skin angled-opt remains visibly pending
 until that physical dataset exists; the renderer never substitutes numerical
 or image data for it.
 

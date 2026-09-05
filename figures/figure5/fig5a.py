@@ -22,7 +22,7 @@ from lumo.visualization import DEFAULT_STYLE, publication_context, save_figure  
 
 from .config import (  # noqa: E402
     ATLAS_CROP_XYXY,
-    ATLAS_DISPLAY_EXPOSURE_EV,
+    ATLAS_DISPLAY_EXPOSURE_EV_BY_MATERIAL,
     ATLAS_HOLES,
     ATLAS_INDENTER,
     ATLAS_REPETITION,
@@ -193,7 +193,9 @@ def write_selection_manifest(
                     for field in fields
                     if field not in {"image_path", "display_exposure_ev"}
                 }
-                record["display_exposure_ev"] = ATLAS_DISPLAY_EXPOSURE_EV
+                record["display_exposure_ev"] = (
+                    ATLAS_DISPLAY_EXPOSURE_EV_BY_MATERIAL[item.material]
+                )
                 try:
                     record["image_path"] = str(item.image_path.relative_to(REPOSITORY_ROOT))
                 except ValueError:
@@ -300,6 +302,13 @@ def render_panel(
                 )
             else:
                 rgb = _crop(load_rgb(row[column].image_path))
+                exposure_ev = ATLAS_DISPLAY_EXPOSURE_EV_BY_MATERIAL[
+                    condition.material
+                ]
+                if exposure_ev != 0.0:
+                    rgb = np.clip(
+                        rgb.astype(np.float32) * (2.0**exposure_ev), 0.0, 255.0
+                    ).astype(np.uint8)
                 axis.imshow(rgb)
     return selections
 
