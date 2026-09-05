@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import csv
+
 import matplotlib
 
 matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt  # noqa: E402
+import matplotlib.patheffects as path_effects  # noqa: E402
 import numpy as np  # noqa: E402
 from matplotlib.colors import Normalize  # noqa: E402
 from matplotlib.figure import Figure  # noqa: E402
@@ -23,6 +26,7 @@ from .config import (  # noqa: E402
     HOLE_TO_CONTACT_X_MM,
     MORPHOLOGY_CONDITIONS,
     MORPHOLOGY_TABLE_HEIGHT_RATIOS,
+    MORPHOLOGY_TABLE_HSPACE,
     MORPHOLOGY_TABLE_ROW_SLOTS,
     require_available_inputs,
 )
@@ -32,6 +36,7 @@ INDENTER_COLUMNS = (
     ("sphere_10mm", "10 mm sphere"),
     ("sphere_30mm", "30 mm sphere"),
 )
+N_LONGITUDINAL_REGIONS = 6
 
 
 def load_response_templates() -> tuple[
@@ -103,6 +108,92 @@ def load_response_templates() -> tuple[
     return coordinate, templates
 
 
+def coarse_region_responses(
+    coordinate: np.ndarray,
+    templates: dict[tuple[str, str, str], np.ndarray | None],
+) -> tuple[np.ndarray, dict[tuple[str, str, str], np.ndarray | None]]:
+    """Reduce each dense signed profile to six fixed-region RMS magnitudes."""
+
+    if coordinate.ndim != 1 or len(coordinate) < N_LONGITUDINAL_REGIONS:
+        raise ValueError("longitudinal coordinate cannot define six regions")
+    if not np.all(np.isfinite(coordinate)) or not np.all(np.diff(coordinate) > 0.0):
+        raise ValueError("longitudinal coordinate must be finite and increasing")
+
+    edges = np.linspace(
+        float(coordinate[0]),
+        float(coordinate[-1]),
+        N_LONGITUDINAL_REGIONS + 1,
+    )
+    region_indices = []
+    for region in range(N_LONGITUDINAL_REGIONS):
+        if region == N_LONGITUDINAL_REGIONS - 1:
+            mask = (coordinate >= edges[region]) & (coordinate <= edges[region + 1])
+        else:
+            mask = (coordinate >= edges[region]) & (coordinate < edges[region + 1])
+        indices = np.flatnonzero(mask)
+        if indices.size == 0:
+            raise ValueError(f"longitudinal region {region + 1} contains no samples")
+        region_indices.append(indices)
+
+    coarse: dict[tuple[str, str, str], np.ndarray | None] = {}
+    for key, values in templates.items():
+        if values is None:
+            coarse[key] = None
+            continue
+        if values.ndim != 2 or values.shape[1] != coordinate.size:
+            raise ValueError(f"response template has incompatible shape for {key}")
+        coarse[key] = np.column_stack(
+            [
+                np.sqrt(np.mean(np.square(values[:, indices]), axis=1))
+                for indices in region_indices
+            ]
+        )
+    return edges, coarse
+
+
+def write_region_response_csv(
+    region_edges: np.ndarray,
+    responses: dict[tuple[str, str, str], np.ndarray | None],
+) -> None:
+    """Persist the exact coarse values and dominant-region flags shown in (b)."""
+
+    path = FIGURE_DIRECTORY / "fig5b_region_response.csv"
+    fields = (
+        "material",
+        "morphology",
+        "indenter",
+        "X_contact_mm",
+        "region_index",
+        "region_start",
+        "region_end",
+        "response_rms_DN_per_N",
+        "is_peak_region",
+    )
+    physical_locations = [HOLE_TO_CONTACT_X_MM[hole] for hole in ALL_HOLES]
+    with path.open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.DictWriter(stream, fieldnames=fields)
+        writer.writeheader()
+        for (material, indenter, morphology), values in responses.items():
+            if values is None:
+                continue
+            peaks = np.argmax(values, axis=1)
+            for contact_row, contact_position in enumerate(physical_locations):
+                for region in range(N_LONGITUDINAL_REGIONS):
+                    writer.writerow(
+                        {
+                            "material": material,
+                            "morphology": morphology,
+                            "indenter": indenter,
+                            "X_contact_mm": contact_position,
+                            "region_index": region + 1,
+                            "region_start": region_edges[region],
+                            "region_end": region_edges[region + 1],
+                            "response_rms_DN_per_N": values[contact_row, region],
+                            "is_peak_region": region == peaks[contact_row],
+                        }
+                    )
+
+
 def render_panel(
     figure: Figure,
     subplot_spec: SubplotSpec,
@@ -116,19 +207,20 @@ def render_panel(
     """Render the shared-scale response fields into one SubplotSpec."""
 
     coordinate, templates = load_response_templates() if data is None else data
-    measured = [values for values in templates.values() if values is not None]
-    minimum = min(float(np.min(values)) for values in measured)
+    region_edges, responses = coarse_region_responses(coordinate, templates)
+    write_region_response_csv(region_edges, responses)
+    measured = [values for values in responses.values() if values is not None]
     maximum = max(float(np.max(values)) for values in measured)
-    if not np.all(np.isfinite((minimum, maximum))) or minimum >= maximum:
-        raise ValueError("response fields must span a finite nonzero range")
-    normalization = Normalize(vmin=minimum, vmax=maximum)
+    if not np.isfinite(maximum) or maximum <= 0.0:
+        raise ValueError("coarse response magnitudes must have a finite positive range")
+    normalization = Normalize(vmin=0.0, vmax=maximum)
 
     grid = subplot_spec.subgridspec(
         9,
-        5,
+        6,
         height_ratios=MORPHOLOGY_TABLE_HEIGHT_RATIOS,
-        width_ratios=(0.10, 0.54, 1.0, 1.0, 0.075),
-        hspace=0.018,
+        width_ratios=(0.10, 0.54, 1.0, 1.0, 0.055, 0.13),
+        hspace=MORPHOLOGY_TABLE_HSPACE,
         wspace=0.045,
     )
     title_axis = figure.add_subplot(grid[0, :])
@@ -176,7 +268,6 @@ def render_panel(
 
     image = None
     axes = []
-    peak_coordinates: dict[tuple[str, str, str], np.ndarray] = {}
     physical_locations = np.asarray(
         [HOLE_TO_CONTACT_X_MM[hole] for hole in ALL_HOLES], dtype=np.float64
     )
@@ -198,10 +289,10 @@ def render_panel(
         for column, (candidate_indenter, _) in enumerate(INDENTER_COLUMNS, start=2):
             axis = figure.add_subplot(grid[row_slot, column])
             key = (condition.material, candidate_indenter, condition.morphology)
-            values = templates[key]
+            values = responses[key]
             if values is None:
                 axis.set_facecolor("#EFEFEF")
-                axis.set_xlim(coordinate[0], coordinate[-1])
+                axis.set_xlim(-0.5, N_LONGITUDINAL_REGIONS - 0.5)
                 axis.set_ylim(60.5, -5.5)
                 axis.text(
                     0.5,
@@ -220,30 +311,53 @@ def render_panel(
                     interpolation="nearest",
                     cmap="viridis",
                     norm=normalization,
-                    extent=(coordinate[0], coordinate[-1], 60.5, -5.5),
+                    extent=(-0.5, N_LONGITUDINAL_REGIONS - 0.5, 60.5, -5.5),
                 )
-                peaks = coordinate[np.argmax(values, axis=1)]
-                peak_coordinates[key] = peaks
-                axis.plot(
-                    peaks,
+                peak_regions = np.argmax(values, axis=1)
+                markers = axis.scatter(
+                    peak_regions,
                     physical_locations,
+                    marker="x",
+                    s=8.0,
+                    linewidths=0.70,
                     color="white",
-                    linewidth=0.55,
-                    marker="o",
-                    markersize=2.0,
-                    markerfacecolor="white",
-                    markeredgecolor="#333333",
-                    markeredgewidth=0.28,
                     zorder=3,
+                )
+                markers.set_path_effects(
+                    [
+                        path_effects.Stroke(linewidth=1.25, foreground="#333333"),
+                        path_effects.Normal(),
+                    ]
                 )
             if column == 2 and row_index in (0, 3):
                 axis.set_yticks(physical_locations)
             else:
                 axis.set_yticks([])
             if row_index == len(MORPHOLOGY_CONDITIONS) - 1:
-                axis.set_xticks((0.0, 1.0), ("Distal", "Proximal"))
-                axis.get_xticklabels()[0].set_ha("left")
-                axis.get_xticklabels()[-1].set_ha("right")
+                axis.set_xticks(
+                    np.arange(N_LONGITUDINAL_REGIONS),
+                    tuple(f"R{region}" for region in range(1, N_LONGITUDINAL_REGIONS + 1)),
+                )
+                if column == 2:
+                    axis.text(
+                        0.0,
+                        -0.25,
+                        "Distal",
+                        transform=axis.transAxes,
+                        fontsize=4.4,
+                        ha="left",
+                        va="top",
+                    )
+                else:
+                    axis.text(
+                        1.0,
+                        -0.25,
+                        "Proximal",
+                        transform=axis.transAxes,
+                        fontsize=4.4,
+                        ha="right",
+                        va="top",
+                    )
             else:
                 axis.set_xticks([])
             axis.tick_params(labelsize=4.6, length=1.5, pad=0.8)
@@ -255,15 +369,16 @@ def render_panel(
     assert image is not None
     colorbar_axis = figure.add_subplot(grid[2:, 4])
     colorbar = figure.colorbar(image, cax=colorbar_axis)
-    colorbar.ax.set_title("Response\n[DN/N]", fontsize=4.5, pad=2.0)
+    colorbar.ax.set_title("Response\nmagnitude\n[DN/N]", fontsize=3.9, pad=1.5)
     colorbar.ax.tick_params(labelsize=4.5, length=1.5, pad=0.8)
     colorbar.outline.set_linewidth(0.45)
     return {
         "axes": tuple(axes),
         "templates": templates,
         "coordinate": coordinate,
-        "peak_coordinates": peak_coordinates,
-        "color_limits": (minimum, maximum),
+        "region_edges": region_edges,
+        "region_responses": responses,
+        "color_limits": (0.0, maximum),
     }
 
 
@@ -272,7 +387,7 @@ def main() -> None:
 
     with publication_context(DEFAULT_STYLE):
         figure = plt.figure(figsize=(7.16, 4.25))
-        grid = figure.add_gridspec(1, 1, left=0.02, right=0.985, bottom=0.055, top=0.99)
+        grid = figure.add_gridspec(1, 1, left=0.02, right=0.985, bottom=0.075, top=0.99)
         render_panel(figure, grid[0, 0])
         save_figure(
             figure,

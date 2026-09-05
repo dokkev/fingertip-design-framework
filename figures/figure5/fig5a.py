@@ -31,6 +31,7 @@ from .config import (  # noqa: E402
     HOLE_TO_CONTACT_X_MM,
     MORPHOLOGY_CONDITIONS,
     MORPHOLOGY_TABLE_HEIGHT_RATIOS,
+    MORPHOLOGY_TABLE_HSPACE,
     MORPHOLOGY_TABLE_ROW_SLOTS,
     REPOSITORY_ROOT,
     require_available_inputs,
@@ -228,7 +229,7 @@ def render_panel(
         7,
         height_ratios=MORPHOLOGY_TABLE_HEIGHT_RATIOS,
         width_ratios=(1.18, 1, 1, 1, 1, 1, 1),
-        hspace=0.018,
+        hspace=MORPHOLOGY_TABLE_HSPACE,
         wspace=0.010,
     )
     title_axis = figure.add_subplot(grid[0, :])

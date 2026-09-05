@@ -86,6 +86,7 @@ COMPARISON_CONDITIONS = (
 # the two materials without adding a decorative rule.
 MORPHOLOGY_TABLE_HEIGHT_RATIOS = (0.24, 0.20, 1.0, 1.0, 1.0, 0.10, 1.0, 1.0, 1.0)
 MORPHOLOGY_TABLE_ROW_SLOTS = (2, 3, 4, 6, 7, 8)
+MORPHOLOGY_TABLE_HSPACE = 0.018
 
 # The fixture has six equally spaced stops across its 55 mm travel. Hole 1 is
 # the distal stop and hole 6 is proximal. Coordinates are measured from the
@@ -154,6 +155,7 @@ __all__ = [
     "HOLE_TO_CONTACT_X_MM",
     "MORPHOLOGY_CONDITIONS",
     "MORPHOLOGY_TABLE_HEIGHT_RATIOS",
+    "MORPHOLOGY_TABLE_HSPACE",
     "MORPHOLOGY_TABLE_ROW_SLOTS",
     "MorphologyCondition",
     "REPOSITORY_ROOT",

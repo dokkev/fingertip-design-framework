@@ -1222,19 +1222,25 @@ its repeated hold frames.
 configuration names the five available fabricated specimens, the intentionally
 pending Dragon Skin angled-opt specimen, and the fixture mapping from six
 distal-to-proximal acquisition stops to physical contact coordinates at 11 mm
-spacing. `fig5a.py` selects auditable raw 10 mm-sphere, repetition-1, 15 N
+spacing. Panels (a) and (b) share one morphology-row height, gap, and material
+separator contract so their six row centers coincide in the composed figure.
+`fig5a.py` selects auditable raw 10 mm-sphere, repetition-1, 15 N
 frames and one temporally nearest real unloaded frame per specimen. Every cell
 uses the same fixed camera-coordinate crop and unmodified stored RGB values;
 the renderer performs no per-cell normalization or display enhancement.
 `fig5b.py` reads the compact Solaris and Dragon Skin load-response slopes and
 forms each location row by taking the median across five independent
 repetitions. It follows the raw atlas's six morphology rows and places the 10
-and 30 mm sphere response fields in two columns. Its ten measured heatmaps use
-one shared global minimum/maximum with the standard Viridis colormap while
-preserving the signed response values. They overlay the per-location
-dominant-response coordinate as a thin white ridge guide. The two
-uncollected Dragon Skin angled-opt conditions remain explicit non-numerical
-placeholders. `fig5c.py` checks `R_obs = D_neighbor / W` and presents the
+and 30 mm sphere response fields in two columns. The stored 128-bin signed
+profiles remain the source data, but the figure partitions their normalized
+distal-to-proximal span into six fixed regions and displays the RMS response
+magnitude in each region. All ten measured 6-by-6 matrices share a zero-based
+Viridis scale. One outlined white `x` per contact row marks its largest regional
+response without connecting the markers or adding a fitted trend. The exact
+coarse values are exported to `fig5b_region_response.csv`. The two uncollected
+Dragon Skin angled-opt conditions remain explicit non-numerical placeholders.
+`fig5c.py` checks
+`R_obs = D_neighbor / W` and presents the
 baseline-normalized Flat-opt/Angled-opt gains as a compact four-row by two-column
 table; baseline is the explicit `G_obs = 1` reference rather than a redundant
 data column. `fig5.py` composes these panels with nested

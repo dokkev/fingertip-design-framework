@@ -28,7 +28,7 @@ def build_figure() -> plt.Figure:
         3,
         left=0.008,
         right=0.992,
-        bottom=0.040,
+        bottom=0.065,
         top=0.994,
         width_ratios=(0.38, 0.42, 0.20),
         wspace=0.025,
