@@ -79,6 +79,21 @@ The collector never imports segmentation, LED detection, or contact observers.
 It preserves raw camera RGB and synchronized force/torque measurements for
 later offline analysis.
 
+Continuous contact-history acquisition is a second, schema-separated path:
+
+```text
+RealSenseColorCamera ── owned RGB frame ─┐
+                                        ├─ collect_contact_history.py
+BotaSerialSensor ─ timestamped FT sample┘          │
+                   ForceTrajectoryController ──────┤
+                                                   ↓
+                                           HistoryDatasetWriter
+```
+
+It shares only the concrete hardware boundary and nearest-host-time
+synchronization contract with the discrete collector. It does not add a mode
+switch to the discrete acquisition state machine or reinterpret format v3.
+
 Each layer must be usable and validated before downstream layers depend on it.
 
 ## Package ownership
@@ -1060,15 +1075,45 @@ runs remain part of the dataset.
 have no run or target force. The reader accepts one explicit v3 session. It does
 not silently migrate or reinterpret older recordings.
 
-`scripts/collect_contact_dataset.py` owns the one Tkinter experiment GUI and
-orchestration only. A camera reader thread keeps blocking RealSense calls
+`scripts/collect_contact_dataset.py` owns the discrete-contact Tkinter GUI and
+its orchestration only. A camera reader thread keeps blocking RealSense calls
 outside Tk's event loop. For each accepted camera frame, the GUI records host
 monotonic time and selects the nearest Bota sample by its independent
 host-monotonic timestamp. RealSense and Rokubi device timestamps remain
 separate. The displayed preview is derived from the raw RGB; saved frames
 contain no overlays. Its working-directory-independent default output root is
-the repository's `experiments/` directory. Mock-force mode is visually explicit
-and writes only beneath a separate `experiments/mock/MOCK_*` session namespace.
+`output/contact_dataset/`. Mock-force mode is visually explicit and writes only
+beneath the separate `output/contact_dataset/mock/` namespace.
+
+`ForceTrajectoryController` is the independent history-acquisition state
+machine. Before acquisition it requires measured force near the minimum-force
+preload for a configured settling interval. Once cycling begins, phase, cycle,
+target force, and capture deadlines are deterministic functions of monotonic
+elapsed time. Actual Rokubi force never advances or resets the schedule; it is
+stored separately with the target and tracking error. Explicit `loading`,
+`high_dwell`, `unloading`, and `low_dwell` phases and `conditioning` versus
+`measurement` cycle roles are emitted online rather than inferred later. After
+the final low dwell, a continuous low-force release gate closes the independent
+run.
+
+`HistoryDatasetWriter` owns history format version 1 under
+`output/contact_history/`. One completed run contains one continuous
+`trajectory/` with lossless PNG frames, synchronized raw wrench rows, trajectory
+phase/cycle fields, and diagnostics. It has no per-force directories. The
+bounded asynchronous writer records an individual overrun as a missing
+observation and preserves the rest of the trajectory. Run contents remain in a
+`.partial` directory until CSV, diagnostics, and completed run metadata have
+been written and the directory is atomically renamed. Abort removes only the
+current partial run. Independent unloaded diagnostic captures live beneath the
+same history session without automatic pairing to runs. Mock sessions are
+isolated under `output/contact_history/mock/`.
+
+`scripts/collect_contact_history.py` owns the dedicated guided-human Tk GUI. It
+uses the same fixed D435 photometric controls and nearest-host-time Rokubi
+synchronization as the discrete collector but sends no actuator commands. Its
+vertical gauge displays actual force and the time-varying target line without a
+ramp acceptance band. Series repetitions are created only after the preceding
+trajectory satisfies the full-release gate.
 
 `experiments/localization/` owns shared pure NumPy/OpenCV algorithms for the
 physical fingertip. Offline characterization and online execution import these
@@ -1270,6 +1315,19 @@ hold median, reference geometry, and a real-image whole-ROI translation check
 are preserved under
 `output/validation/hardware_indentation_tracking_edges/`. This diagnostic
 cannot populate `S_OM`, change Figure 5, or promote itself to production.
+
+`validation/optomech/hardware_unloaded_optical_activation.py` is a separate
+read-only optical-reference feasibility study over the five available Figure 5
+specimen sessions. It constructs exactly one production `OpticalStrip` from
+the temporal median of every unloaded frame in a session and reuses that same
+strip for every unloaded and loaded 128-bin Green profile. Each complete run is
+paired to the nearest unloaded capture in camera host time, without preferring
+before or after, and all four loaded holds share that pairing. The study reports
+profile-RMS change in camera DN, capture-to-capture unloaded drift, sensitivity
+to every alternative unloaded capture, and the existing camera-geometry QC.
+Its fixture coordinates are the corrected 0, 10, 20, 30, 40, and 50 mm stops.
+It does not divide by force, interpret Unloaded as 0 N, alter Figure 5, or define
+a production or paper metric.
 
 `figures/figure5/` owns the self-contained physical-hardware Figure 5. Its
 configuration names the five available fabricated specimens, the intentionally

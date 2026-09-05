@@ -132,6 +132,76 @@ conda run --no-capture-output -n lit \
 Mock sessions cannot enter the physical dataset namespace: they are written
 under `output/contact_dataset/mock/MOCK_*` and carry `sensor_mode: mock`.
 
+## Physical contact-history dataset collection
+
+Use the separate contact-history collector when the scientific question is
+history-dependent optical response during continuous cyclic loading. Launch it
+with the production D435 and Rokubi defaults:
+
+```bash
+conda run --no-capture-output -n lit \
+  python -u scripts/collect_contact_history.py \
+    --bota-port /dev/ttyUSB0
+```
+
+One run establishes one physical contact near 2 N, then keeps that contact
+engaged while cycling continuously between 2 and 15 N. The default loading and
+unloading ramps are 1 N/s, with a 1 s dwell at 15 N and a 1 s dwell at 2 N.
+The first two cycles are labeled `conditioning`; the following five are labeled
+`measurement`, but both roles are saved. Do not release the indenter between
+cycles. After the seventh cycle, the run is finalized only after force remains
+at or below 1 N for 0.5 s. A series creates its next independent repetition
+only after that complete release.
+
+The moving target is operator guidance, not force control or an acceptance
+band. The trajectory advances only from monotonic elapsed time and never resets
+when measured force leads or lags the target. Every scheduled synchronized
+observation records the actual Rokubi wrench, actual force magnitude, target,
+explicit loading/dwell/unloading phase, cycle role, and tracking error. Later
+analysis must compare branches at matched actual measured force.
+
+The camera remains 1920 x 1080 at 30 FPS with fixed 1500 µs exposure, gain 0,
+and 4600 K white balance. Lossless RGB observations are selected at 5 Hz by
+elapsed time. At the defaults, each ramp lasts 13 s, a cycle lasts 28 s, and
+the seven-cycle trajectory lasts exactly 196 s. This produces 980 scheduled
+trajectory observations when none are missed. The preload and final release
+each add at least 0.5 s; operator waiting time is additional.
+
+History format v1 is isolated under `output/contact_history/`:
+
+```text
+YYYY-MM-DD_<material>_<morphology>[_NN]/
+├── session.json
+├── unloaded/
+│   └── capture_001/
+│       ├── frames.csv
+│       └── frames/
+└── runs/
+    └── run_0001/
+        ├── run.json
+        └── trajectory/
+            ├── trajectory.json
+            ├── frames.csv
+            └── frames/
+```
+
+`CAPTURE UNLOADED` stores independent diagnostic captures; it does not pair one
+with a loaded run. A bounded asynchronous PNG writer reports individual missed
+observations without discarding the otherwise valid continuous trajectory.
+`ABORT` deletes the current partial run, cancels the remaining series, and
+preserves completed repetitions.
+
+Exercise the whole GUI without camera or Rokubi hardware using the static-image
+mock camera and manual force slider:
+
+```bash
+conda run --no-capture-output -n lit \
+  python -u scripts/collect_contact_history.py --mock
+```
+
+Mock sessions are written only under `output/contact_history/mock/` and are
+marked as non-physical data in both the GUI and `session.json`.
+
 ## Live D435 contact localization
 
 Create the one-time manual LED ground truth for the fixed-finger reference
@@ -277,6 +347,22 @@ reference definitions, Markdown conclusion, and four diagnostic figures are
 written under `output/validation/hardware_indentation_tracking_edges/`. The
 study is pixel-domain and read-only, stops at the fixed sample, and does not
 modify `S_OM` or Figure 5.
+
+Run the unloaded-referenced optical-activation feasibility study on all five
+available Figure 5 specimen sessions:
+
+```bash
+conda run --no-capture-output -n lit \
+  python -u validation/optomech/hardware_unloaded_optical_activation.py
+```
+
+The script re-extracts every unloaded and loaded frame through one
+session-global production optical strip, pairs each complete run to the nearest
+unloaded capture in camera host time, and writes run, morphology, pairing,
+reference-sensitivity, unloaded-stability, compact-profile, Markdown, and PNG
+outputs beneath `output/validation/hardware_unloaded_optical_activation/`.
+The reported RMS activation has camera-DN units and is not force-normalized.
+This validation neither modifies Figure 5 nor registers a production metric.
 
 Render the standalone Figure 5 panels, selection/metric audit tables, and the
 final IEEE double-column PDF/PNG from the current physical datasets and compact
