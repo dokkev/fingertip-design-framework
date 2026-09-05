@@ -12,12 +12,12 @@ class ForceSequenceConfig:
     """Timing and force-band contract shared by loaded and unloaded capture."""
 
     target_forces_n: tuple[float, ...] = (2.0, 5.0, 10.0, 15.0)
-    settle_duration_s: float = 1.0
-    record_duration_s: float = 1.0
+    settle_duration_s: float = 0.25
+    record_duration_s: float = 0.25
     capture_rate_hz: float = 5.0
     unloaded_max_force_n: float = 1.0
-    unloaded_settle_duration_s: float = 1.0
-    unloaded_record_duration_s: float = 1.0
+    unloaded_settle_duration_s: float = 0.25
+    unloaded_record_duration_s: float = 0.25
     minimum_tolerance_n: float = 1.0
     low_force_relative_tolerance: float = 0.20
     high_force_relative_tolerance: float = 0.10

@@ -15,14 +15,11 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 if str(REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(REPOSITORY_ROOT))
 
-from experiments.analysis.optical_response import (  # noqa: E402
-    calibrate_analysis_strip,
-    fixed_channel_differences,
-    longitudinal_signature,
-    mean_absolute_response,
-    pairwise_signature_distances,
+from experiments.analysis.optical import (  # noqa: E402
+    calibrate_optical_strip,
+    rms_profile_distance,
+    warp_rgb,
 )
-from experiments.analysis.spatial_signature import minimum_pairwise_separation  # noqa: E402
 
 
 IMAGE_DIRECTORY = REPOSITORY_ROOT / "experiments" / "img"
@@ -51,19 +48,32 @@ def main() -> None:
     loaded = np.stack([_load_rgb(filename) for filename, _ in LOADED_SEQUENCE])
     positions_mm = np.asarray([position for _, position in LOADED_SEQUENCE])
     cv2.setRNGSeed(0)
-    calibration = calibrate_analysis_strip(unloaded)
-    differences = fixed_channel_differences(
-        unloaded, loaded, calibration, channel_index=0
+    calibration = calibrate_optical_strip(unloaded)
+    reference_red = warp_rgb(unloaded, calibration)[:, :, 0].astype(np.float64)
+    differences = np.asarray(
+        [
+            warp_rgb(image, calibration)[:, :, 0].astype(np.float64) - reference_red
+            for image in loaded
+        ]
     )
-    magnitudes = mean_absolute_response(differences)
+    support = calibration.support_mask
+    magnitudes = np.mean(np.abs(differences[:, support]), axis=1)
     signatures = np.vstack(
         [
-            longitudinal_signature(difference, len(difference))
+            _longitudinal_profile(difference, support, len(difference))
             for difference in differences
         ]
     )
-    distances = pairwise_signature_distances(signatures)
-    minimum, pair = minimum_pairwise_separation(distances)
+    distances = np.asarray(
+        [
+            [rms_profile_distance(first, second) for second in signatures]
+            for first in signatures
+        ]
+    )
+    upper = np.triu_indices(len(distances), k=1)
+    minimum_index = int(np.argmin(distances[upper]))
+    pair = int(upper[0][minimum_index]), int(upper[1][minimum_index])
+    minimum = float(distances[pair])
 
     OUTPUT_DIRECTORY.mkdir(parents=True, exist_ok=True)
     with (OUTPUT_DIRECTORY / "response_magnitude.csv").open("w", newline="") as stream:
@@ -131,6 +141,17 @@ def main() -> None:
     )
     print("  Solaris: not evaluated (no same-condition unloaded reference image)")
     print(f"Artifacts: {OUTPUT_DIRECTORY}")
+
+
+def _longitudinal_profile(
+    values: np.ndarray, support: np.ndarray, bins: int
+) -> np.ndarray:
+    counts = np.count_nonzero(support, axis=1)
+    valid = counts > 0
+    profile = np.sum(values * support, axis=1)[valid] / counts[valid]
+    source = np.linspace(0.0, 1.0, len(values))[valid]
+    source = (source - source[0]) / (source[-1] - source[0])
+    return np.interp(np.linspace(0.0, 1.0, bins), source, profile)
 
 
 if __name__ == "__main__":

@@ -169,12 +169,15 @@ def test_manual_tare_updates_only_session_sensor_metadata(tmp_path: Path) -> Non
     }
 
 
-def test_run_json_contains_only_independent_trial_identity_and_lifecycle(
+def test_completed_run_json_contains_only_independent_trial_identity_and_lifecycle(
     tmp_path: Path,
 ) -> None:
     with ContactDatasetWriter(tmp_path, _metadata()) as writer:
         run = _run(writer)
-        writer.abort_loaded_run(run)
+        segment = writer.begin_force_target(run, 2.0)
+        _submit_expected_frames(writer, segment)
+        writer.finalize_segment(segment)
+        writer.complete_loaded_run(run)
         writer.flush()
         stored = json.loads((run.path / "run.json").read_text(encoding="utf-8"))
 
@@ -190,7 +193,7 @@ def test_run_json_contains_only_independent_trial_identity_and_lifecycle(
     assert stored["indenter"] == "sphere_15mm"
     assert stored["hole_index"] == 3
     assert stored["repetition_index"] == 1
-    assert stored["status"] == "aborted"
+    assert stored["status"] == "complete"
     assert "material" not in stored
     assert "target_forces_n" not in stored
     assert "completed_targets_n" not in stored
@@ -224,15 +227,20 @@ def test_repetition_index_increments_automatically_per_indenter_and_hole(
 ) -> None:
     with ContactDatasetWriter(tmp_path, _metadata()) as writer:
         first = _run(writer, hole_index=3)
+        assert first.metadata.repetition_index == 1
+        writer.abort_loaded_run(first)
+        writer.flush()
+
+        retry = _run(writer, hole_index=3)
         second = _run(writer, hole_index=3)
         other_hole = _run(writer, hole_index=4)
 
-        assert first.metadata.repetition_index == 1
+        assert retry.metadata.repetition_index == 1
         assert second.metadata.repetition_index == 2
         assert other_hole.metadata.repetition_index == 1
 
-        writer.abort_loaded_run(first)
         writer.abort_loaded_run(second)
+        writer.abort_loaded_run(retry)
         writer.abort_loaded_run(other_hole)
 
 
@@ -306,7 +314,7 @@ def test_reader_resolves_specimen_run_force_and_raw_frame_context(tmp_path: Path
     assert record.rgb_path.is_file()
 
 
-def test_aborted_run_keeps_completed_segments_and_removes_active_attempt(
+def test_aborted_run_removes_completed_segments_and_active_attempt(
     tmp_path: Path,
 ) -> None:
     with ContactDatasetWriter(tmp_path, _metadata(target_forces_n=(2.0, 5.0))) as writer:
@@ -318,12 +326,10 @@ def test_aborted_run_keeps_completed_segments_and_removes_active_attempt(
         writer.submit_frame(partial, _frame(1, 5.0), capture_elapsed_s=0.0)
         writer.abort_loaded_run(run)
         writer.flush()
-        stored = json.loads((run.path / "run.json").read_text(encoding="utf-8"))
 
-    assert complete.final_path.is_dir()
+    assert not run.path.exists()
+    assert not complete.final_path.exists()
     assert not partial.partial_path.exists()
-    assert stored["status"] == "aborted"
-    assert "completed_targets_n" not in stored
 
 
 def test_unloaded_capture_inherits_session_specimen_without_own_metadata(

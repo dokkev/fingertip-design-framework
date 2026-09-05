@@ -690,30 +690,18 @@ class ContactDatasetWriter:
         self._enqueue_control(discard)
 
     def complete_loaded_run(self, run: LoadedRunHandle) -> None:
-        self._set_run_status(run, "complete")
-
-    def abort_loaded_run(self, run: LoadedRunHandle) -> None:
-        self._set_run_status(run, "aborted")
-
-    def _set_run_status(self, run: LoadedRunHandle, status: str) -> None:
         self._ensure_open()
-        if status not in {"complete", "aborted"}:
-            raise ValueError("invalid run status")
 
-        def finish() -> None:
-            if status == "complete":
-                missing = [
-                    target
-                    for target in self._session.force_sequence.target_forces_n
-                    if not (run.path / format_force_directory(target)).is_dir()
-                ]
-                if missing:
-                    raise RuntimeError(
-                        f"cannot complete {run.run_id}: missing targets are {missing}"
-                    )
-            else:
-                for partial in run.path.glob("*.partial"):
-                    shutil.rmtree(partial)
+        def complete() -> None:
+            missing = [
+                target
+                for target in self._session.force_sequence.target_forces_n
+                if not (run.path / format_force_directory(target)).is_dir()
+            ]
+            if missing:
+                raise RuntimeError(
+                    f"cannot complete {run.run_id}: missing targets are {missing}"
+                )
             metadata = RunMetadata(
                 run_id=run.metadata.run_id,
                 indenter=run.metadata.indenter,
@@ -721,11 +709,42 @@ class ContactDatasetWriter:
                 repetition_index=run.metadata.repetition_index,
                 started_utc=run.metadata.started_utc,
                 ended_utc=_utc_now(),
-                status=status,
+                status="complete",
             )
             _write_json(run.path / "run.json", metadata.to_dict())
 
-        self._enqueue_control(finish)
+        self._enqueue_control(complete)
+
+    def abort_loaded_run(self, run: LoadedRunHandle) -> None:
+        """Discard the complete run, including already finalized force segments."""
+
+        self._ensure_open()
+        condition = (run.metadata.indenter, run.metadata.hole_index)
+        with self._lock:
+            if self._repetition_counts.get(condition) == run.metadata.repetition_index:
+                if run.metadata.repetition_index == 1:
+                    self._repetition_counts.pop(condition)
+                else:
+                    self._repetition_counts[condition] = (
+                        run.metadata.repetition_index - 1
+                    )
+
+        def abort() -> None:
+            prefix = f"{run.run_id}:"
+            for key in tuple(self._rows):
+                if key.startswith(prefix):
+                    self._rows.pop(key, None)
+            for key in tuple(self._failed_segments):
+                if key.startswith(prefix):
+                    self._failed_segments.discard(key)
+            with self._lock:
+                for key in tuple(self._frame_indices):
+                    if key.startswith(prefix):
+                        self._frame_indices.pop(key, None)
+            if run.path.exists():
+                shutil.rmtree(run.path)
+
+        self._enqueue_control(abort)
 
     @staticmethod
     def _write_frames_csv(path: Path, rows: list[dict[str, Any]]) -> None:

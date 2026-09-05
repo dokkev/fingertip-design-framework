@@ -1,2 +1,0 @@
-frame_index,rgb_filename,target_force_n,camera_host_time_s,camera_device_timestamp_ms,camera_frame_number,bota_host_time_s,bota_sensor_timestamp,camera_bota_time_delta_ms,Fx_N,Fy_N,Fz_N,Mx_Nm,My_Nm,Mz_Nm,F_mag_N,torque_mag_Nm,Fz_share,temperature_C,bota_status
-0,frames/000000.png,10.0,170510.325917854,1788472530043.7715,2609,170510.304751972,83036755,21.16588200442493,0.2164307403564436,0.5743360900878969,-9.62719678401947,0.04218060970306392,0.0582251839339733,0.016718163341283798,9.646741529033704,0.07381648098204815,0.9979739536966538,31.275833129882812,0

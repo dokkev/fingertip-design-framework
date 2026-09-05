@@ -250,9 +250,15 @@ class ContactCollectorApp:
         self.material = tk.StringVar(value="dragon_skin")
         self.morphology = tk.StringVar(value="baseline")
         self.specimen_id = tk.StringVar(value="dragon_skin_baseline_01")
-        self.indenter = tk.StringVar(value="sphere_15mm")
+        self.indenter = tk.StringVar(value="sphere_10mm")
         self.hole = tk.IntVar(value=1)
+        self.series_run_count = tk.IntVar(value=1)
         self.repetition_index_text = tk.StringVar(value="—")
+        self.series_progress_text = tk.StringVar(value="—")
+        self.series_total = 0
+        self.series_completed = 0
+        self.series_condition: tuple[str, int] | None = None
+        self.series_release_started_s: float | None = None
         self.session_widgets: list[tk.Widget] = []
         self.input_widgets: list[tk.Widget] = []
 
@@ -290,30 +296,58 @@ class ContactCollectorApp:
         conditions.grid(row=1, column=0, sticky="ew", pady=(10, 0))
         conditions.columnconfigure(1, weight=1)
         ttk.Label(conditions, text="Indenter").grid(row=0, column=0, sticky="w")
-        indenter = ttk.Combobox(
-            conditions,
-            textvariable=self.indenter,
-            values=(
-                "sphere_10mm",
-                "sphere_15mm",
-                "sphere_20mm",
-                "sphere_30mm",
-            ),
+        indenter_buttons = ttk.Frame(conditions)
+        indenter_buttons.grid(row=0, column=1, sticky="ew", padx=(8, 0), pady=2)
+        indenter_buttons.columnconfigure(0, weight=1)
+        indenter_buttons.columnconfigure(1, weight=1)
+        indenter_10mm = ttk.Radiobutton(
+            indenter_buttons,
+            text="10 mm",
+            variable=self.indenter,
+            value="sphere_10mm",
+            style="Toolbutton",
         )
-        indenter.grid(row=0, column=1, sticky="ew", padx=(8, 0), pady=2)
+        indenter_10mm.grid(row=0, column=0, sticky="ew", padx=(0, 3))
+        indenter_30mm = ttk.Radiobutton(
+            indenter_buttons,
+            text="30 mm",
+            variable=self.indenter,
+            value="sphere_30mm",
+            style="Toolbutton",
+        )
+        indenter_30mm.grid(row=0, column=1, sticky="ew", padx=(3, 0))
         ttk.Label(conditions, text="Hole number").grid(row=1, column=0, sticky="w")
         hole = ttk.Spinbox(conditions, from_=1, to=6, textvariable=self.hole, width=6)
         hole.grid(row=1, column=1, sticky="w", padx=(8, 0), pady=2)
-        ttk.Label(conditions, text="Repetition Index").grid(
+        ttk.Label(conditions, text="Runs in series").grid(
             row=2, column=0, sticky="w"
         )
+        series_runs = ttk.Spinbox(
+            conditions,
+            from_=1,
+            to=100,
+            textvariable=self.series_run_count,
+            width=6,
+        )
+        series_runs.grid(row=2, column=1, sticky="w", padx=(8, 0), pady=2)
+        ttk.Label(conditions, text="Series progress").grid(
+            row=3, column=0, sticky="w"
+        )
+        ttk.Label(conditions, textvariable=self.series_progress_text).grid(
+            row=3, column=1, sticky="w", padx=(8, 0), pady=2
+        )
+        ttk.Label(conditions, text="Repetition Index").grid(
+            row=4, column=0, sticky="w"
+        )
         ttk.Label(conditions, textvariable=self.repetition_index_text).grid(
-            row=2, column=1, sticky="w", padx=(8, 0), pady=2
+            row=4, column=1, sticky="w", padx=(8, 0), pady=2
         )
         ttk.Label(conditions, text="Hole 1 = distal · Hole 6 = proximal").grid(
-            row=3, column=0, columnspan=2, sticky="w", pady=(4, 0)
+            row=5, column=0, columnspan=2, sticky="w", pady=(4, 0)
         )
-        self.input_widgets.extend((indenter, hole))
+        self.input_widgets.extend(
+            (indenter_10mm, indenter_30mm, hole, series_runs)
+        )
 
         force_box = ttk.LabelFrame(side, text="Live Bota Rokubi", padding=10)
         force_box.grid(row=2, column=0, sticky="ew", pady=(10, 0))
@@ -452,7 +486,9 @@ class ContactCollectorApp:
 
         controls = ttk.Frame(side)
         controls.grid(row=5, column=0, sticky="ew", pady=(10, 0))
-        self.start_button = ttk.Button(controls, text="START RUN", command=self._start_run)
+        self.start_button = ttk.Button(
+            controls, text="START SERIES", command=self._start_run
+        )
         self.start_button.grid(row=0, column=0, padx=(0, 5))
         self.unloaded_button = ttk.Button(
             controls, text="CAPTURE UNLOADED", command=self._start_unloaded
@@ -589,20 +625,41 @@ class ContactCollectorApp:
             return
         try:
             indenter, hole = self._conditions()
+            series_total = int(self.series_run_count.get())
+            if series_total < 1:
+                raise ValueError("runs in series must be a positive integer")
+        except (RuntimeError, TypeError, ValueError, tk.TclError) as error:
+            messagebox.showerror("Cannot start series", str(error))
+            return
+        self.series_total = series_total
+        self.series_completed = 0
+        self.series_condition = (indenter, hole)
+        self.series_release_started_s = None
+        self._begin_series_run()
+
+    def _begin_series_run(self) -> None:
+        assert self.writer is not None
+        assert self.series_condition is not None
+        indenter, hole = self.series_condition
+        try:
             self.active_run = self.writer.start_loaded_run(
                 indenter=indenter,
                 hole_index=hole,
             )
         except (RuntimeError, ValueError) as error:
-            messagebox.showerror("Cannot start run", str(error))
+            self._finish_active()
+            messagebox.showerror("Cannot start series run", str(error))
             return
+        series_index = self.series_completed + 1
         self.repetition_index_text.set(str(self.active_run.metadata.repetition_index))
+        self.series_progress_text.set(f"{series_index} / {self.series_total}")
         self.force_controller = ForceSequenceController(self.config)
         self.active_mode = "loaded"
         self.active_segment = None
         self.state_text.set(
-            f"Repetition {self.active_run.metadata.repetition_index} — increase force "
-            f"to {self.config.target_forces_n[0]:g} N"
+            f"Series {series_index}/{self.series_total} · repetition "
+            f"{self.active_run.metadata.repetition_index} — increase force to "
+            f"{self.config.target_forces_n[0]:g} N"
         )
         self._set_inputs_enabled(False)
         self._update_sequence_labels()
@@ -634,7 +691,12 @@ class ContactCollectorApp:
             assert self.unloaded_controller is not None
             if self.unloaded_controller.state is not UnloadedCaptureState.COMPLETE:
                 self.unloaded_controller.abort(now)
-        self.state_text.set("ABORTED — completed force targets were preserved")
+        if self.active_mode == "loaded":
+            self.state_text.set("SERIES ABORTED — current run discarded")
+        elif self.active_mode == "series_release":
+            self.state_text.set("SERIES ABORTED — remaining runs cancelled")
+        else:
+            self.state_text.set("UNLOADED CAPTURE ABORTED")
         self._finish_active()
 
     def _tick(self) -> None:
@@ -670,6 +732,12 @@ class ContactCollectorApp:
             self.force_controller.reset_attempt(now_s)
         elif self.active_mode == "unloaded" and self.unloaded_controller is not None:
             self.unloaded_controller.reset_attempt(now_s)
+        elif self.active_mode == "series_release":
+            self.series_release_started_s = None
+            self.state_text.set(
+                "CAMERA DROP — release hold restarted before next series run"
+            )
+            return
         self.force_progress["value"] = 0.0
         self.state_text.set(
             "CAMERA DROP — current attempt discarded; re-establish force target"
@@ -688,8 +756,10 @@ class ContactCollectorApp:
         )
         if self.active_mode == "loaded":
             self._process_loaded_frame(frame)
-        else:
+        elif self.active_mode == "unloaded":
             self._process_unloaded_frame(frame)
+        else:
+            self._process_series_release_frame(frame)
 
     def _process_loaded_frame(self, frame: SynchronizedFrame) -> None:
         assert self.writer is not None
@@ -724,11 +794,47 @@ class ContactCollectorApp:
             self.active_segment = None
         if ForceSequenceEvent.RUN_COMPLETED in update.events:
             self.writer.complete_loaded_run(self.active_run)
-            self.state_text.set("RUN COMPLETE — release indenter")
-            self._finish_active()
+            self.series_completed += 1
+            self.series_progress_text.set(
+                f"{self.series_completed} / {self.series_total} complete"
+            )
+            if self.series_completed >= self.series_total:
+                self.state_text.set(
+                    f"SERIES COMPLETE — {self.series_completed} runs saved"
+                )
+                self._finish_active()
+            else:
+                self.active_mode = "series_release"
+                self.active_run = None
+                self.force_controller = None
+                self.series_release_started_s = None
+                self.force_progress["value"] = 0.0
+                self.state_text.set(
+                    "RUN COMPLETE — fully release indenter for the next run"
+                )
         else:
             self._show_loaded_update(update)
         self._update_sequence_labels()
+
+    def _process_series_release_frame(self, frame: SynchronizedFrame) -> None:
+        force_n = frame.bota_sample.force_magnitude_n
+        if force_n > self.config.unloaded_max_force_n:
+            self.series_release_started_s = None
+            self.state_text.set(
+                f"Release to ≤ {self.config.unloaded_max_force_n:g} N before next run"
+            )
+            return
+        if self.series_release_started_s is None:
+            self.series_release_started_s = frame.camera_host_time_s
+        elapsed_s = frame.camera_host_time_s - self.series_release_started_s
+        if elapsed_s >= self.config.unloaded_settle_duration_s:
+            self.series_release_started_s = None
+            self._begin_series_run()
+            return
+        self.state_text.set(
+            "RELEASE HOLD "
+            f"{elapsed_s:.2f} / {self.config.unloaded_settle_duration_s:.2f} s"
+        )
 
     def _process_unloaded_frame(self, frame: SynchronizedFrame) -> None:
         assert self.writer is not None
@@ -815,7 +921,11 @@ class ContactCollectorApp:
             self.active_segment = None
         if self.active_mode == "loaded" and self.active_run is not None:
             self.writer.abort_loaded_run(self.active_run)
-        self.state_text.set(f"RUN ABORTED — {reason}; no frames were silently dropped")
+            self.state_text.set(
+                f"SERIES ABORTED — {reason}; current run discarded"
+            )
+        else:
+            self.state_text.set(f"UNLOADED CAPTURE ABORTED — {reason}")
         self._finish_active()
 
     def _finish_active(self) -> None:
@@ -824,6 +934,10 @@ class ContactCollectorApp:
         self.force_controller = None
         self.unloaded_controller = None
         self.active_segment = None
+        self.series_total = 0
+        self.series_completed = 0
+        self.series_condition = None
+        self.series_release_started_s = None
         self.force_progress["value"] = 0.0
         self._set_inputs_enabled(True)
         self._update_sequence_labels()
@@ -869,7 +983,7 @@ class ContactCollectorApp:
                 lower_n = max(0.0, target_n - tolerance_n)
                 upper_n = target_n + tolerance_n
                 margin_text = f"Margin\n±{tolerance_n:.2f} N"
-        elif self.active_mode == "unloaded":
+        elif self.active_mode in {"unloaded", "series_release"}:
             target_n = self.config.unloaded_max_force_n
             lower_n = 0.0
             upper_n = target_n
@@ -925,7 +1039,9 @@ class ContactCollectorApp:
             target_y,
         )
         self.force_gauge.itemconfigure(self.force_target_line, state="normal")
-        target_prefix = "≤" if self.active_mode == "unloaded" else ""
+        target_prefix = (
+            "≤" if self.active_mode in {"unloaded", "series_release"} else ""
+        )
         self.force_gauge.itemconfigure(
             self.force_target_gauge_text,
             text=f"Target\n{target_prefix}{target_n:.2f} N",

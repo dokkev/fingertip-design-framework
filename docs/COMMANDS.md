@@ -82,36 +82,44 @@ ID, then select `CREATE SESSION`. Those specimen values and the camera and
 acquisition configuration are fixed for the whole session. Start a new session
 when the physical specimen or camera setup changes.
 
-For each loaded run select a 10, 15, 20, or 30 mm spherical indenter and a hole.
-Pressing `START RUN` automatically assigns the next one-based repetition index
-for that `indenter + hole` pair and displays it in the read-only
-`Repetition Index` row. The loaded sequence is a continuous
+For each loaded run click the 10 or 30 mm spherical-indenter button and select a
+hole.
+Enter `Runs in series`, then press `START SERIES`. The collector automatically
+assigns the next one-based repetition index for that `indenter + hole` pair and
+displays both series progress and the current read-only `Repetition Index`.
+Each repetition runs the continuous
 2 → 5 → 10 → 15 N progression; do not release between
 successful targets. The vertical force gauge shows the current force as a bar,
 the active target as a horizontal line, and the accepted margin as a shaded
 band.
 Hole 1 is distal and Hole 6 is proximal. The accepted band is ±1 N at 2 N,
-±20% at 5 N, and ±10% at 10 and 15 N. Hold the band for the 1.0 s settling
-phase and the complete 1.0 s recording interval. The default elapsed-time
+±20% at 5 N, and ±10% at 10 and 15 N. Hold the band for the 0.25 s settling
+phase and the complete 0.25 s recording interval. The default elapsed-time
 schedule records at 5 Hz with the start included and the end excluded, yielding
-exactly five synchronized RGB/Rokubi frames. A missed scheduled observation,
+exactly two synchronized RGB/Rokubi frames. A missed scheduled observation,
 camera delivery drop, or force-band excursion discards the whole partial target
-attempt. After 15 N completes, release the indenter.
+attempt. After 15 N completes, fully release the indenter. If more repetitions
+remain, the collector requires force at or below 1 N continuously for 0.25 s
+and then creates the next independent run automatically. `ABORT` deletes only
+the current incomplete run, cancels the remainder of the series, and preserves
+earlier completed repetitions.
 
 Use `CAPTURE UNLOADED` separately within the specimen session. It saves a
 synchronized burst while `F_mag ≤ 1.0 N` is maintained
-through the 1.0 s settling and 1.0 s recording intervals. The same 5 Hz
-elapsed-time schedule is used, and any force excursion discards the entire
-unloaded attempt. An unloaded reference is not required before every loaded
-run. By default, sessions are written to `output/contact_dataset/`, which is
+through the 0.25 s settling and 0.25 s recording intervals. The same 5 Hz
+elapsed-time schedule yields exactly two frames, and any force excursion
+discards the entire unloaded attempt. An unloaded reference is not required
+before every loaded run. By default, sessions are written to
+`output/contact_dataset/`, which is
 ignored by Git, using dataset format v3. `session.json` owns specimen, camera, sensor,
 tare, and acquisition configuration. Session directories use
 `YYYY-MM-DD_<material>_<morphology>` and add `_01`, `_02`, ... only when that
 same-day name already exists. Each `run.json` owns indenter, hole, repetition,
 and run status. A finalized force or unloaded directory contains only
 lossless PNGs under `frames/` and raw synchronized measurements in `frames.csv`.
-It has no `metadata.json` or `summary.json`. Aborted runs retain completed force
-directories, while incomplete `.partial` attempts are deleted.
+It has no `metadata.json` or `summary.json`. Aborting discards the entire loaded
+run, including any completed force directories; incomplete `.partial` attempts
+are also deleted.
 
 Exercise the complete GUI and D435 without a physical Rokubi using the prominent
 manual-force mock mode:
@@ -192,19 +200,26 @@ conda run --no-capture-output -n lit \
 Solaris is deliberately omitted because no same-condition unloaded Solaris
 reference is currently checked in.
 
-Analyze any number of format-v3 physical contact sessions and create reusable
-per-session caches plus a compact uploadable bundle:
+Analyze any number of format-v3 physical contact sessions and create scientific
+results plus the compact, image-free `raw_data_summary`:
 
 ```bash
 conda run --no-capture-output -n lit \
-  python -u scripts/analyze_contact_dataset.py \
+  python -u scripts/analyze_morphologies.py \
   output/contact_dataset/2026-09-04_solaris_baseline \
   output/contact_dataset/2026-09-04_solaris_flat_opt \
   --output output/analysis/solaris_compare
 ```
 
-Add `--recompute` only when raw-image features must be extracted again. Without
-it, summaries and figures are regenerated from the compact CSV/NPZ cache.
+Each invocation reads the raw PNGs once and writes `results/`, `figures/`, and
+`raw_data_summary/`, plus `raw_data_summary.zip` for later upload. The fixed
+interior strip is calibrated once per specimen. Frames within one hold are
+aggregated by median, and the primary profile slope uses actual measured force.
+`--expected-repetitions` changes only coverage QC. `--hole-spacing-mm` adds a
+physical-spacing-normalized neighboring-location diagnostic when that spacing
+is trusted. The summary contains no PNGs and no mechanical-deformation claim.
+`suspect_runs.csv` is a deterministic manual-inspection ranking and never
+repairs or relabels the dataset.
 
 Replay the smooth emissive segmentation on the checked-in 13-image reference
 set, report fixed-extrinsic stability/runtime, and regenerate its overlays:

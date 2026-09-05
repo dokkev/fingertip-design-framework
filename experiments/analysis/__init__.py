@@ -1,1 +1,1 @@
-"""Offline characterization of fixed-camera physical contact datasets."""
+"""Offline physical morphology characterization from compact optical profiles."""

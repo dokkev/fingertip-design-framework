@@ -915,12 +915,20 @@ synchronized raw force/torque axes and timestamps. Each segment handle owns
 its exact expected frame count, and the writer independently rejects incomplete
 or overfull segments before publication. The hierarchy is:
 
-The collection GUI exposes the spherical indenter identifiers `sphere_10mm`,
-`sphere_15mm`, `sphere_20mm`, and `sphere_30mm`, and the morphology identifiers
-`baseline`, `flat_opt`, and `angled_opt`. Its default dataset root is the
+The collection GUI exposes two click-selectable spherical indenters,
+`sphere_10mm` and `sphere_30mm`, and the morphology identifiers `baseline`,
+`flat_opt`, and `angled_opt`. Its default dataset root is the
 Git-ignored `output/contact_dataset/` directory. Each session directory uses
 `YYYY-MM-DD_<material>_<morphology>`; a same-day name collision receives a
 two-digit suffix without overwriting existing data.
+
+The GUI can schedule `N` independent loaded runs for one selected indenter and
+hole. It creates only the current `run_*`; after a complete 2/5/10/15 N run,
+the next run is created only after measured force remains at or below 1 N for
+0.25 s. Each repetition therefore keeps its own immutable run identity and
+ordinary `repetition_index`. Aborting deletes the current incomplete run,
+cancels the remaining scheduled runs, and preserves repetitions that already
+completed.
 
 ```text
 2026-09-04_solaris_baseline/
@@ -979,16 +987,16 @@ current defaults:
   },
   "acquisition": {
     "target_forces_n": [2.0, 5.0, 10.0, 15.0],
-    "settle_duration_s": 1.0,
-    "record_duration_s": 1.0,
+    "settle_duration_s": 0.25,
+    "record_duration_s": 0.25,
     "capture_rate_hz": 5.0,
     "minimum_tolerance_n": 1.0,
     "low_force_relative_tolerance": 0.2,
     "high_force_relative_tolerance": 0.1,
     "high_force_threshold_n": 10.0,
     "unloaded_max_force_n": 1.0,
-    "unloaded_settle_duration_s": 1.0,
-    "unloaded_record_duration_s": 1.0
+    "unloaded_settle_duration_s": 0.25,
+    "unloaded_record_duration_s": 0.25
   },
   "git_commit": "..."
 }
@@ -999,7 +1007,7 @@ Each `run.json` contains exactly:
 ```json
 {
   "run_id": "run_0001",
-  "indenter": "sphere_15mm",
+  "indenter": "sphere_10mm",
   "hole_index": 3,
   "repetition_index": 2,
   "started_utc": "...",
@@ -1042,8 +1050,9 @@ successful target. Frames are written only beneath an attempt-specific
 `.partial` directory. Force-band failure deletes that entire attempt, while
 success writes `frames.csv` and publishes the directory by atomic rename. The
 directory's existence is the success record, so there is no segment
-`metadata.json` or `summary.json`. Aborted runs retain already finalized force
-directories and record only `status: aborted` in `run.json`.
+`metadata.json` or `summary.json`. Aborting a loaded run deletes its complete
+`run_*` directory, including already finalized force targets; only completed
+runs remain part of the dataset.
 
 `iter_dataset_frames(session_path)` is the format-v3 reader. It combines
 `session.json`, `run.json`, the force directory name, and `frames.csv` into each
@@ -1165,28 +1174,43 @@ previously calibrated mask may be supplied for fixed-geometry photometric
 ablations.
 
 `experiments/analysis/` owns offline characterization of format-v3 physical
-contact datasets. `dataset_index.py` resolves the current reader's session,
-run, force, frame, and synchronized Rokubi context and reports missing,
-duplicate, incomplete, and unexpected coverage without repairing metadata.
-`optical_response.py` constructs one specimen-owned temporal-median unloaded
-reference, one fixed canonical sampling strip, raw RGB response summaries, and
-the signed 128-bin transverse-mean Delta-G signature. `deformation.py` measures
-visible image-contour motion in pixels along fixed unloaded contour normals.
-`aggregation.py` reduces the five hold frames by median into one independent
-run-force observation and then summarizes independent runs.
-`spatial_signature.py` owns robust hole templates, repeat variability, and
-pairwise RMS template separation. `export.py` writes the compact numerical
-bundle and diagnostic figures.
+contact datasets. `dataset.py` resolves session, run, force, frame, and
+synchronized Rokubi context and reports missing, duplicate, incomplete, and
+unexpected coverage without repairing metadata. `optical.py` derives one fixed
+interior sampling strip per specimen from its unloaded captures, then reduces
+each loaded frame to a raw 128-bin longitudinal Green camera-intensity profile.
+The unloaded image defines geometry only; the primary optical representation
+is neither unloaded-subtracted nor sample-normalized.
 
-`scripts/analyze_contact_dataset.py` accepts any positive number of session
-directories. Raw PNGs are decoded only while constructing a per-session
-CSV/NPZ cache; `--recompute` explicitly invalidates that cache. Subsequent
-aggregation, comparison, and figure generation use the compact cache. The
-uploadable `analysis_bundle` retains frame features, run and condition
-summaries, raw signed spatial signatures, separability, force fits, unloaded
-stability, provenance, and definitions, but no raw image sequence. Camera
-setting differences are reported rather than hidden by normalization. The
-statistical unit is always a run, never one of its five repeated hold frames.
+`metrics.py` first reduces repeated frames within one hold by a per-bin median.
+It uses the median measured force magnitude
+`sqrt(Fx^2 + Fy^2 + Fz^2)` as the force coordinate and fits, independently for
+each physical run and longitudinal bin, `s(v,F) = a(v) + b(v)F`. The primary
+load metric is `S_load = RMS_v(b(v))` in DN/N. Neighboring-location
+separability is the RMS distance between adjacent-hole median slope profiles;
+different indenter geometries and physical specimens are never pooled while
+constructing those templates. Repeat variability is the run-to-template RMS
+distance. No green-emission boundary is interpreted as mechanical
+deformation. `S_OM` remains explicitly unavailable until a trusted mechanical
+displacement source is provided.
+
+`summary.py` performs the one raw-image pass and writes two products beneath a
+user-selected output directory: ordinary scientific results/figures and an
+image-free `raw_data_summary`. The latter contains CSV tables plus compressed
+run-force and load-slope profiles with complete identity metadata. It is the
+compact research artifact for future post-analysis without the multi-GB PNG
+tree; there is no repository-owned cache, manifest, or compatibility layer.
+`plotting.py` writes the four optical comparison figures. `run_qc.py` retains
+deterministic manual-review ranking from measured-force longitudinal profiles
+and coverage metadata; it never repairs, relabels, or deletes experimental
+data.
+
+`scripts/analyze_morphologies.py` accepts any positive number of format-v3
+session directories. Morphology, material, specimen, camera, force, indenter,
+hole, and repetition identity comes exclusively from stored dataset metadata.
+Camera-setting differences and acquisition coverage errors are reported rather
+than hidden. The statistical unit is always one independent run, never one of
+its repeated hold frames.
 
 `optical_features.py` owns pure feature extraction. `DenseProfileConfig`
 selects brightest-10% red, mean red, absolute high-pass red, red gradient, or
