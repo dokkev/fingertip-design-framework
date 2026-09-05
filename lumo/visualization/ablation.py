@@ -108,17 +108,17 @@ def plot_structural_ablation_schematic(
     sample_count: int,
     style: PublicationStyle = DEFAULT_STYLE,
 ) -> None:
-    """Draw the three paired structural counterfactuals on ``axes``."""
+    """Draw the three paired structural counterfactuals left to right."""
 
     if sample_count <= 0:
         raise ValueError("sample_count must be positive")
 
-    centers_y = (8.0, 0.0, -8.0)
-    scale = 0.68
+    centers_x = (-5.6, 0.0, 5.6)
+    scale = 0.52
     _draw_structure(
         axes,
+        centers_x[0],
         0.0,
-        centers_y[0],
         carrier=False,
         stem_half_width=1.35,
         void_half_width=0.0,
@@ -128,8 +128,8 @@ def plot_structural_ablation_schematic(
     )
     _draw_structure(
         axes,
+        centers_x[1],
         0.0,
-        centers_y[1],
         carrier=True,
         stem_half_width=1.35,
         void_half_width=0.0,
@@ -139,8 +139,8 @@ def plot_structural_ablation_schematic(
     )
     _draw_structure(
         axes,
+        centers_x[2],
         0.0,
-        centers_y[2],
         carrier=True,
         stem_half_width=1.00,
         void_half_width=2.45,
@@ -150,32 +150,32 @@ def plot_structural_ablation_schematic(
     )
 
     names = ("Soft-only", "No-void carrier", "LUMO")
-    for center_y, name in zip(centers_y, names, strict=True):
-        axes.text(0.0, center_y - 2.82, name, ha="center", va="top", fontsize=6.3)
+    for center_x, name in zip(centers_x, names, strict=True):
+        axes.text(center_x, -2.25, name, ha="center", va="top", fontsize=6.3)
 
     transitions = (
-        (4.35, 2.55, "+ carrier", style.colors.mechanical),
-        (-3.55, -5.60, "+ void", "#7560A8"),
+        (-3.05, -2.62, "+ carrier", style.colors.mechanical),
+        (2.62, 3.05, "+ void", "#7560A8"),
     )
     for start, end, label, color in transitions:
         axes.annotate(
             "",
-            xy=(0.0, end),
-            xytext=(0.0, start),
+            xy=(end, 0.0),
+            xytext=(start, 0.0),
             arrowprops={"arrowstyle": "-|>", "lw": 0.8, "color": "#555555"},
         )
         axes.text(
-            0.55,
             0.5 * (start + end),
+            0.70,
             label,
-            ha="left",
+            ha="center",
             va="center",
             color=color,
             fontsize=5.7,
         )
 
-    axes.set_xlim(-5.25, 5.25)
-    axes.set_ylim(-12.1, 10.7)
+    axes.set_xlim(-8.55, 8.55)
+    axes.set_ylim(-3.15, 3.15)
     axes.set_aspect("equal", adjustable="box")
     axes.axis("off")
 

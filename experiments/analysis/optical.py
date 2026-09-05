@@ -132,6 +132,37 @@ def strip_centroid(strip: OpticalStrip) -> np.ndarray:
     return np.asarray((np.mean(x), np.mean(y)), dtype=np.float64)
 
 
+def strip_geometry(strip: OpticalStrip) -> dict[str, float]:
+    """Return simple image-space pose diagnostics for one calibrated strip."""
+
+    y, x = np.nonzero(strip.source_mask)
+    points = np.column_stack((x, y)).astype(np.float64)
+    centroid = points.mean(axis=0)
+    centered = points - centroid
+    _, vectors = np.linalg.eigh(np.cov(centered.T))
+    longitudinal = vectors[:, 1]
+    angle_deg = float(np.degrees(np.arctan2(longitudinal[1], longitudinal[0])))
+    if angle_deg >= 90.0:
+        angle_deg -= 180.0
+    elif angle_deg < -90.0:
+        angle_deg += 180.0
+    transverse = np.asarray((-longitudinal[1], longitudinal[0]))
+    longitudinal_coordinate = centered @ longitudinal
+    transverse_coordinate = centered @ transverse
+    return {
+        "optical_region_centroid_x_px": float(centroid[0]),
+        "optical_region_centroid_y_px": float(centroid[1]),
+        "optical_region_orientation_deg": angle_deg,
+        "optical_region_longitudinal_extent_px": float(
+            np.ptp(longitudinal_coordinate)
+        ),
+        "optical_region_transverse_extent_px": float(
+            np.ptp(transverse_coordinate)
+        ),
+        "optical_region_area_px": float(len(points)),
+    }
+
+
 def warp_rgb(rgb: np.ndarray, strip: OpticalStrip) -> np.ndarray:
     """Sample one RGB frame through the fixed canonical strip."""
 
@@ -254,6 +285,7 @@ __all__ = [
     "longitudinal_green_profile",
     "rms_profile_distance",
     "strip_centroid",
+    "strip_geometry",
     "temporal_median_rgb",
     "warp_rgb",
 ]

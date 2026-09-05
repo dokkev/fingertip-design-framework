@@ -1197,7 +1197,13 @@ displacement source is provided.
 `summary.py` performs the one raw-image pass and writes two products beneath a
 user-selected output directory: ordinary scientific results/figures and an
 image-free `raw_data_summary`. The latter contains CSV tables plus compressed
-run-force and load-slope profiles with complete identity metadata. It is the
+run-force and load-slope profiles with complete identity metadata. Every
+unloaded capture remains independent: the summary stores its timing, measured
+force, RGB/saturation and image-geometry diagnostics, every frame's raw
+128-bin longitudinal profile, one capture-median profile, and a compact
+64 x 32 canonical RGB map per frame. It neither pairs unloaded captures with
+loaded runs nor selects a preferred unloaded reference; camera pose can differ
+between captures, so that association belongs to later analysis. It is the
 compact research artifact for future post-analysis without the multi-GB PNG
 tree; there is no repository-owned cache, manifest, or compatibility layer.
 `plotting.py` writes the four optical comparison figures. `run_qc.py` retains
@@ -1211,6 +1217,31 @@ hole, and repetition identity comes exclusively from stored dataset metadata.
 Camera-setting differences and acquisition coverage errors are reported rather
 than hidden. The statistical unit is always one independent run, never one of
 its repeated hold frames.
+
+`figures/figure5/` owns the self-contained physical-hardware Figure 5. Its
+configuration names the five available fabricated specimens, the intentionally
+pending Dragon Skin angled-opt specimen, and the fixture mapping from six
+distal-to-proximal acquisition stops to physical contact coordinates at 11 mm
+spacing. `fig5a.py` selects auditable raw 10 mm-sphere, repetition-1, 15 N
+frames and one temporally nearest real unloaded frame per specimen. Every cell
+uses the same fixed camera-coordinate crop and unmodified stored RGB values;
+the renderer performs no per-cell normalization or display enhancement.
+`fig5b.py` reads the compact Solaris and Dragon Skin load-response slopes and
+forms each location row by taking the median across five independent
+repetitions. It follows the raw atlas's six morphology rows and places the 10
+and 30 mm sphere response fields in two columns. Its ten measured heatmaps use
+one shared global minimum/maximum with the standard Viridis colormap while
+preserving the signed response values. They overlay the per-location
+dominant-response coordinate as a thin white ridge guide. The two
+uncollected Dragon Skin angled-opt conditions remain explicit non-numerical
+placeholders. `fig5c.py` checks `R_obs = D_neighbor / W` and presents the
+baseline-normalized Flat-opt/Angled-opt gains as a compact four-row by two-column
+table; baseline is the explicit `G_obs = 1` reference rather than a redundant
+data column. `fig5.py` composes these panels with nested
+Matplotlib GridSpecs at the exact 7.16-inch double-column width. The final PDF
+embeds raw atlas images as raster content while retaining all axes, heatmaps,
+labels, and annotations as native Matplotlib artists; it never stitches
+rendered panel screenshots.
 
 `optical_features.py` owns pure feature extraction. `DenseProfileConfig`
 selects brightest-10% red, mean red, absolute high-pass red, red gradient, or

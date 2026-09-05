@@ -8,9 +8,13 @@ from pathlib import Path
 from typing import Any
 import zipfile
 
+import cv2
 import numpy as np
 
-from experiments.data_collection.contact_dataset import FORMAT_VERSION
+from experiments.data_collection.contact_dataset import (
+    DatasetFrameRecord,
+    FORMAT_VERSION,
+)
 
 from .dataset import SessionIndex, camera_consistency_warnings, index_session
 from .metrics import (
@@ -27,15 +31,18 @@ from .optical import (
     calibrate_optical_strip,
     load_rgb,
     longitudinal_green_profile,
-    strip_centroid,
+    strip_geometry,
     temporal_median_rgb,
+    warp_rgb,
 )
 from .plotting import write_figures
 from .run_qc import analyze_run_qc
 
 
-SUMMARY_SCHEMA_VERSION = 1
+SUMMARY_SCHEMA_VERSION = 2
 CAMERA_GEOMETRY_WARNING_FRACTION = 0.01
+UNLOADED_MAP_HEIGHT = 64
+UNLOADED_MAP_WIDTH = 32
 
 
 @dataclass(frozen=True)
@@ -82,11 +89,23 @@ def analyze_morphologies(
     dataset_rows: list[dict[str, Any]] = []
     frame_rows: list[dict[str, Any]] = []
     frame_profiles: list[np.ndarray] = []
+    unloaded_rows: list[dict[str, Any]] = []
+    unloaded_frame_rows: list[dict[str, Any]] = []
+    unloaded_profiles: list[np.ndarray] = []
+    unloaded_capture_rows: list[dict[str, Any]] = []
+    unloaded_capture_profiles: list[np.ndarray] = []
+    unloaded_maps: list[np.ndarray] = []
     for index in indexes:
         extracted = _extract_session(index, config)
         dataset_rows.append(extracted["dataset_row"])
         frame_rows.extend(extracted["frame_rows"])
         frame_profiles.extend(extracted["frame_profiles"])
+        unloaded_rows.extend(extracted["unloaded_rows"])
+        unloaded_frame_rows.extend(extracted["unloaded_frame_rows"])
+        unloaded_profiles.extend(extracted["unloaded_profiles"])
+        unloaded_capture_rows.extend(extracted["unloaded_capture_rows"])
+        unloaded_capture_profiles.extend(extracted["unloaded_capture_profiles"])
+        unloaded_maps.extend(extracted["unloaded_maps"])
 
     run_force_rows, run_force_profiles = aggregate_run_force_frames(
         frame_rows, np.asarray(frame_profiles, dtype=np.float64)
@@ -125,6 +144,7 @@ def analyze_morphologies(
     _write_csv(raw_summary / "dataset_summary.csv", dataset_rows)
     _write_csv(raw_summary / "run_force_summary.csv", run_force_rows)
     _write_csv(raw_summary / "run_load_response.csv", run_rows)
+    _write_csv(raw_summary / "unloaded_summary.csv", unloaded_rows)
     _write_csv(raw_summary / "qc_summary.csv", qc_rows)
     _write_csv(raw_summary / "suspect_runs.csv", run_qc["rows"])
     _write_profile_npz(
@@ -143,6 +163,18 @@ def analyze_morphologies(
     )
     _write_slope_profile_csv(
         raw_summary / "load_response_profiles.csv", run_rows, slope_profiles
+    )
+    _write_unloaded_profiles_npz(
+        raw_summary / "unloaded_profiles.npz",
+        unloaded_frame_rows,
+        np.asarray(unloaded_profiles, dtype=np.float32),
+        unloaded_capture_rows,
+        np.asarray(unloaded_capture_profiles, dtype=np.float32),
+    )
+    _write_unloaded_maps_npz(
+        raw_summary / "unloaded_maps.npz",
+        unloaded_frame_rows,
+        np.asarray(unloaded_maps, dtype=np.uint8),
     )
     _write_readme(
         raw_summary,
@@ -178,24 +210,19 @@ def _extract_session(
         interior_margin_px=config.optical_interior_margin_px,
     )
 
+    unloaded = _extract_unloaded_captures(
+        index, unloaded_records, unloaded_images, config
+    )
     calibration_warnings: list[str] = []
-    capture_centroids = []
-    capture_paths = sorted({frame.segment_path for frame in unloaded_records})
-    for path in capture_paths:
-        images = [
-            image
-            for frame, image in zip(unloaded_records, unloaded_images, strict=True)
-            if frame.segment_path == path
-        ]
-        try:
-            capture_strip = calibrate_optical_strip(
-                temporal_median_rgb(images),
-                green_excess_threshold_dn=config.green_excess_threshold_dn,
-                interior_margin_px=config.optical_interior_margin_px,
+    capture_centroids = [
+        np.asarray(
+            (
+                row["optical_region_centroid_x_px"],
+                row["optical_region_centroid_y_px"],
             )
-            capture_centroids.append(strip_centroid(capture_strip))
-        except RuntimeError as error:
-            calibration_warnings.append(f"unloaded geometry calibration failed: {error}")
+        )
+        for row in unloaded["capture_rows"]
+    ]
     centroid_span_px = max(
         (
             float(np.linalg.norm(first - second))
@@ -285,6 +312,7 @@ def _extract_session(
         "number_of_runs": len(index.runs),
         "number_of_loaded_images": len(frame_rows),
         "number_of_unloaded_images": len(unloaded_records),
+        "number_of_unloaded_captures": index.unloaded_capture_count,
         "number_of_indenters": len({run.indenter for run in index.runs}),
         "number_of_holes": len({run.hole_index for run in index.runs}),
         "number_of_repetitions": len(
@@ -302,6 +330,146 @@ def _extract_session(
         "dataset_row": dataset_row,
         "frame_rows": frame_rows,
         "frame_profiles": profiles,
+        "unloaded_rows": unloaded["summary_rows"],
+        "unloaded_frame_rows": unloaded["frame_rows"],
+        "unloaded_profiles": unloaded["profiles"],
+        "unloaded_capture_rows": unloaded["capture_rows"],
+        "unloaded_capture_profiles": unloaded["capture_profiles"],
+        "unloaded_maps": unloaded["maps"],
+    }
+
+
+def _extract_unloaded_captures(
+    index: SessionIndex,
+    records: list[DatasetFrameRecord],
+    images: list[np.ndarray],
+    config: AnalysisConfig,
+) -> dict[str, list[Any]]:
+    """Preserve every unloaded capture without pairing it to loaded runs."""
+
+    grouped: dict[Path, list[tuple[DatasetFrameRecord, np.ndarray]]] = {}
+    for record, image in zip(records, images, strict=True):
+        grouped.setdefault(record.segment_path, []).append((record, image))
+
+    summary_rows: list[dict[str, Any]] = []
+    frame_rows: list[dict[str, Any]] = []
+    profiles: list[np.ndarray] = []
+    capture_rows: list[dict[str, Any]] = []
+    capture_profiles: list[np.ndarray] = []
+    maps: list[np.ndarray] = []
+    for path in sorted(grouped):
+        capture_id = path.name
+        capture = grouped[path]
+        capture_images = [item[1] for item in capture]
+        try:
+            strip = calibrate_optical_strip(
+                temporal_median_rgb(capture_images),
+                green_excess_threshold_dn=config.green_excess_threshold_dn,
+                interior_margin_px=config.optical_interior_margin_px,
+            )
+        except RuntimeError as error:
+            raise RuntimeError(
+                f"{index.specimen_id}/{capture_id} unloaded calibration failed: {error}"
+            ) from error
+
+        geometry = strip_geometry(strip)
+        capture_forces: list[float] = []
+        capture_profiles_for_median: list[np.ndarray] = []
+        capture_pixels: list[np.ndarray] = []
+        device_timestamps_ms: list[float] = []
+        host_timestamps_s: list[float] = []
+        for record, image in capture:
+            measurements = record.measurements
+            force = actual_force_magnitude(
+                float(measurements["Fx_N"]),
+                float(measurements["Fy_N"]),
+                float(measurements["Fz_N"]),
+            )
+            profile, _ = longitudinal_green_profile(
+                image, strip, bins=config.profile_bins
+            )
+            canonical = warp_rgb(image, strip)
+            canonical_map = cv2.resize(
+                canonical,
+                (UNLOADED_MAP_WIDTH, UNLOADED_MAP_HEIGHT),
+                interpolation=cv2.INTER_AREA,
+            )
+            timestamp_ms = float(measurements["camera_device_timestamp_ms"])
+            host_time_s = float(measurements["camera_host_time_s"])
+            frame_row = {
+                "specimen_id": index.session.specimen_id,
+                "material": index.session.material,
+                "morphology": index.session.morphology,
+                "capture_id": capture_id,
+                "frame_index": int(measurements["frame_index"]),
+                "timestamp": timestamp_ms,
+                "actual_force_n": force,
+            }
+            frame_rows.append(frame_row)
+            profiles.append(profile)
+            maps.append(canonical_map)
+            capture_profiles_for_median.append(profile)
+            capture_pixels.append(canonical[strip.support_mask])
+            capture_forces.append(force)
+            device_timestamps_ms.append(timestamp_ms)
+            host_timestamps_s.append(host_time_s)
+
+        force_values = np.asarray(capture_forces, dtype=np.float64)
+        pixels = np.concatenate(capture_pixels, axis=0).astype(np.float64)
+        summary_row: dict[str, Any] = {
+            "specimen_id": index.session.specimen_id,
+            "material": index.session.material,
+            "morphology": index.session.morphology,
+            "capture_id": capture_id,
+            "frame_count": len(capture),
+            "capture_start_timestamp_ms": min(device_timestamps_ms),
+            "capture_end_timestamp_ms": max(device_timestamps_ms),
+            "capture_start_host_time_s": min(host_timestamps_s),
+            "capture_end_host_time_s": max(host_timestamps_s),
+            "actual_force_median_n": float(np.median(force_values)),
+            "actual_force_std_n": float(np.std(force_values)),
+            "actual_force_min_n": float(np.min(force_values)),
+            "actual_force_max_n": float(np.max(force_values)),
+        }
+        for channel_index, channel in enumerate("RGB"):
+            values = pixels[:, channel_index]
+            summary_row[f"mean_{channel}_dn"] = float(np.mean(values))
+            summary_row[f"std_{channel}_dn"] = float(np.std(values))
+            summary_row[f"saturation_ge250_{channel}_fraction"] = float(
+                np.mean(values >= 250)
+            )
+            summary_row[f"saturation_eq255_{channel}_fraction"] = float(
+                np.mean(values == 255)
+            )
+        summary_row["saturation_ge250_any_fraction"] = float(
+            np.mean(np.any(pixels >= 250, axis=1))
+        )
+        summary_row["saturation_eq255_any_fraction"] = float(
+            np.mean(np.any(pixels == 255, axis=1))
+        )
+        summary_row.update(geometry)
+        summary_rows.append(summary_row)
+
+        capture_row = {
+            "specimen_id": index.session.specimen_id,
+            "material": index.session.material,
+            "morphology": index.session.morphology,
+            "capture_id": capture_id,
+            "frame_count": len(capture),
+        }
+        capture_row.update(geometry)
+        capture_rows.append(capture_row)
+        capture_profiles.append(
+            np.median(np.asarray(capture_profiles_for_median), axis=0)
+        )
+
+    return {
+        "summary_rows": summary_rows,
+        "frame_rows": frame_rows,
+        "profiles": profiles,
+        "capture_rows": capture_rows,
+        "capture_profiles": capture_profiles,
+        "maps": maps,
     }
 
 
@@ -450,6 +618,72 @@ def _write_slope_profile_csv(
     _write_csv(path, output)
 
 
+def _write_unloaded_profiles_npz(
+    path: Path,
+    frame_rows: list[dict[str, Any]],
+    profiles: np.ndarray,
+    capture_rows: list[dict[str, Any]],
+    capture_profiles: np.ndarray,
+) -> None:
+    np.savez_compressed(
+        path,
+        schema_version=np.asarray(SUMMARY_SCHEMA_VERSION, dtype=np.int16),
+        longitudinal_coordinate=np.linspace(
+            0.0, 1.0, profiles.shape[1], dtype=np.float32
+        ),
+        profiles=profiles,
+        specimen_id=_strings(frame_rows, "specimen_id"),
+        material=_strings(frame_rows, "material"),
+        morphology=_strings(frame_rows, "morphology"),
+        capture_id=_strings(frame_rows, "capture_id"),
+        frame_index=np.asarray(
+            [row["frame_index"] for row in frame_rows], dtype=np.int16
+        ),
+        timestamp=np.asarray(
+            [row["timestamp"] for row in frame_rows], dtype=np.float64
+        ),
+        timestamp_unit=np.asarray("camera_device_timestamp_ms"),
+        actual_force_n=np.asarray(
+            [row["actual_force_n"] for row in frame_rows], dtype=np.float32
+        ),
+        capture_median_profiles=capture_profiles,
+        capture_median_specimen_id=_strings(capture_rows, "specimen_id"),
+        capture_median_material=_strings(capture_rows, "material"),
+        capture_median_morphology=_strings(capture_rows, "morphology"),
+        capture_median_capture_id=_strings(capture_rows, "capture_id"),
+        capture_median_frame_count=np.asarray(
+            [row["frame_count"] for row in capture_rows], dtype=np.int16
+        ),
+    )
+
+
+def _write_unloaded_maps_npz(
+    path: Path,
+    frame_rows: list[dict[str, Any]],
+    maps: np.ndarray,
+) -> None:
+    np.savez_compressed(
+        path,
+        schema_version=np.asarray(SUMMARY_SCHEMA_VERSION, dtype=np.int16),
+        rgb_maps=maps,
+        channel_order=np.asarray("RGB"),
+        specimen_id=_strings(frame_rows, "specimen_id"),
+        material=_strings(frame_rows, "material"),
+        morphology=_strings(frame_rows, "morphology"),
+        capture_id=_strings(frame_rows, "capture_id"),
+        frame_index=np.asarray(
+            [row["frame_index"] for row in frame_rows], dtype=np.int16
+        ),
+        timestamp=np.asarray(
+            [row["timestamp"] for row in frame_rows], dtype=np.float64
+        ),
+        timestamp_unit=np.asarray("camera_device_timestamp_ms"),
+        actual_force_n=np.asarray(
+            [row["actual_force_n"] for row in frame_rows], dtype=np.float32
+        ),
+    )
+
+
 def _write_readme(
     path: Path,
     *,
@@ -476,6 +710,20 @@ Actual force is `sqrt(Fx^2 + Fy^2 + Fz^2)` and the hold median is the fit
 coordinate. For each run and bin, `s(v,F)=a(v)+b(v)F` is fit across available
 forces. `S_load = RMS_v(b(v))` [DN/N].
 
+Every unloaded capture is preserved independently. Each capture is
+canonicalized from its own temporal-median geometry, and every original frame
+retains its own raw {profile_bins}-bin profile and compact
+{UNLOADED_MAP_HEIGHT} x {UNLOADED_MAP_WIDTH} RGB map. The summary does not
+associate an unloaded capture with any loaded run and does not select a
+preferred unloaded reference. That pairing remains a later analysis choice
+because camera pose may change between captures.
+
+Unloaded `timestamp` arrays use the stored RealSense device timestamp in
+milliseconds. Capture summaries retain both device timestamps and host clock
+times. RGB and pose diagnostics are measured within each capture's independently
+calibrated green optical region; they are camera-pose QC, not a mechanical
+silicone-contour measurement. Compact RGB map axes are longitudinal x transverse.
+
 For each specimen, indenter, and hole, the hole template is the median slope
 profile across independent runs. `D_neighbor` is the median RMS distance
 between adjacent hole templates (1-2 through 5-6). Repeat variability `W` is
@@ -491,6 +739,9 @@ deformation input is available, so `S_OM` is explicitly unavailable.
 - `longitudinal_profiles.npz`: `profiles` (`N x {profile_bins}`, float32) plus specimen/run/indenter/hole/repetition/target/actual-force metadata and normalized longitudinal coordinates.
 - `load_response_profiles.npz`: `slope_profiles` (`M x {profile_bins}`, float32) plus complete run identity, `S_load`, and normalized longitudinal coordinates.
 - `load_response_profiles.csv`: the same slope profiles as `bin_000` through `bin_{profile_bins - 1:03d}`.
+- `unloaded_summary.csv`: one row per unloaded capture with timing, measured-force statistics, RGB intensity/saturation summaries, and simple image-space geometry diagnostics.
+- `unloaded_profiles.npz`: every unloaded frame's raw `profiles` (`U x {profile_bins}`, float32), frame identity/time/force arrays, and one `capture_median_profiles` row per independent capture.
+- `unloaded_maps.npz`: every unloaded frame as a compact `rgb_maps` (`U x {UNLOADED_MAP_HEIGHT} x {UNLOADED_MAP_WIDTH} x 3`, uint8) array with the same frame identity/time/force metadata. It contains no full-resolution image.
 - `qc_summary.csv`: coverage, frame-count, force, saturation, camera-setting, and simple unloaded-geometry warnings.
 - `suspect_runs.csv`: deterministic optical/metadata ranking for manual review only; it never repairs or deletes a run.
 

@@ -178,8 +178,14 @@ def save_figure(
     formats: Sequence[str] = ("pdf", "png"),
     style: PublicationStyle = DEFAULT_STYLE,
     transparent: bool = False,
+    bbox_inches: str | None = "tight",
+    pad_inches: float = 0.02,
 ) -> tuple[Path, ...]:
-    """Save one assembled figure as vector and/or high-resolution raster files."""
+    """Save one assembled figure as vector and/or high-resolution raster files.
+
+    ``bbox_inches=None`` keeps the declared canvas size, which is useful for
+    publication figures whose final width must match a column specification.
+    """
 
     stem = Path(output_stem)
     if stem.suffix:
@@ -196,8 +202,8 @@ def save_figure(
     for file_format in normalized_formats:
         output_path = stem.with_suffix(f".{file_format}")
         save_options: dict[str, object] = {
-            "bbox_inches": "tight",
-            "pad_inches": 0.02,
+            "bbox_inches": bbox_inches,
+            "pad_inches": pad_inches,
             "transparent": transparent,
             # Preserve high-resolution raster panels inside PDF/SVG while
             # keeping text, paths, and annotations vector-based.

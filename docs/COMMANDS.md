@@ -218,8 +218,29 @@ aggregated by median, and the primary profile slope uses actual measured force.
 `--expected-repetitions` changes only coverage QC. `--hole-spacing-mm` adds a
 physical-spacing-normalized neighboring-location diagnostic when that spacing
 is trusted. The summary contains no PNGs and no mechanical-deformation claim.
+It preserves every unloaded capture separately in `unloaded_summary.csv`,
+`unloaded_profiles.npz`, and compact `unloaded_maps.npz`; it does not infer a
+loaded-run pairing or choose a preferred unloaded reference.
 `suspect_runs.csv` is a deterministic manual-inspection ranking and never
 repairs or relabels the dataset.
+
+Render the standalone Figure 5 panels, selection/metric audit tables, and the
+final IEEE double-column PDF/PNG from the current physical datasets and compact
+analysis summaries:
+
+```bash
+conda run --no-capture-output -n lit \
+  python -m figures.figure5.fig5
+```
+
+Outputs are written beside the scripts under `figures/figure5/`:
+`fig5a.png`, `fig5b.png`, `fig5c.png`, `fig5.pdf`, `fig5.png`,
+`fig5a_selection_manifest.csv`, and `fig5c_metrics.csv`. The raw atlas uses
+the 10 mm sphere, repetition 1, and the frame closest to 15 N at five physical
+11 mm-spaced fixture positions. Stored RGB values are shown without display
+enhancement or per-cell normalization. Dragon Skin angled-opt remains visibly pending
+until that physical dataset exists; the renderer never substitutes numerical
+or image data for it.
 
 Replay the smooth emissive segmentation on the checked-in 13-image reference
 set, report fixed-extrinsic stability/runtime, and regenerate its overlays:

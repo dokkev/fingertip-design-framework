@@ -1,0 +1,31 @@
+material,morphology,display_name,displayed_contact_position_mm,hole_index,repetition_index,target_force_n,actual_force_n,image_path,timestamp_s,unloaded,run_id,capture_id,display_exposure_ev
+solaris,baseline,Solaris Baseline,,,,0.0,0.15810846586784505,output/contact_dataset/2026-09-04_solaris_baseline_01/unloaded/capture_001/frames/000001.png,264158.625554296,True,,capture_001,0.0
+solaris,baseline,Solaris Baseline,0.0,1,1,15.0,14.965436207377465,output/contact_dataset/2026-09-04_solaris_baseline_01/runs/run_0001/force_15N/frames/000001.png,264216.200606474,False,run_0001,,0.0
+solaris,baseline,Solaris Baseline,11.0,2,1,15.0,14.247319247455497,output/contact_dataset/2026-09-04_solaris_baseline_01/runs/run_0006/force_15N/frames/000000.png,264251.226218643,False,run_0006,,0.0
+solaris,baseline,Solaris Baseline,22.0,3,1,15.0,15.723177632122802,output/contact_dataset/2026-09-04_solaris_baseline_01/runs/run_0011/force_15N/frames/000001.png,264291.755673461,False,run_0011,,0.0
+solaris,baseline,Solaris Baseline,33.0,4,1,15.0,15.107208985014195,output/contact_dataset/2026-09-04_solaris_baseline_01/runs/run_0016/force_15N/frames/000001.png,264335.854507779,False,run_0016,,0.0
+solaris,baseline,Solaris Baseline,44.0,5,1,15.0,14.909996688061492,output/contact_dataset/2026-09-04_solaris_baseline_01/runs/run_0021/force_15N/frames/000000.png,264372.848097594,False,run_0021,,0.0
+solaris,flat_opt,Solaris Flat-opt,,,,0.0,0.07255682670216047,output/contact_dataset/2026-09-04_solaris_flat_opt_01/unloaded/capture_001/frames/000001.png,262899.354860412,True,,capture_001,0.0
+solaris,flat_opt,Solaris Flat-opt,0.0,1,1,15.0,14.42648117938626,output/contact_dataset/2026-09-04_solaris_flat_opt_01/runs/run_0001/force_15N/frames/000001.png,262934.246852141,False,run_0001,,0.0
+solaris,flat_opt,Solaris Flat-opt,11.0,2,1,15.0,14.816681607278221,output/contact_dataset/2026-09-04_solaris_flat_opt_01/runs/run_0006/force_15N/frames/000001.png,262976.644328272,False,run_0006,,0.0
+solaris,flat_opt,Solaris Flat-opt,22.0,3,1,15.0,14.604508682648138,output/contact_dataset/2026-09-04_solaris_flat_opt_01/runs/run_0011/force_15N/frames/000000.png,263010.869116484,False,run_0011,,0.0
+solaris,flat_opt,Solaris Flat-opt,33.0,4,1,15.0,14.535887267506503,output/contact_dataset/2026-09-04_solaris_flat_opt_01/runs/run_0016/force_15N/frames/000000.png,263263.786133363,False,run_0016,,0.0
+solaris,flat_opt,Solaris Flat-opt,44.0,5,1,15.0,14.622522088953042,output/contact_dataset/2026-09-04_solaris_flat_opt_01/runs/run_0021/force_15N/frames/000000.png,263439.213567599,False,run_0021,,0.0
+solaris,angled_opt,Solaris Angled-opt,,,,0.0,0.12020044418065234,output/contact_dataset/2026-09-04_solaris_angled_opt_01/unloaded/capture_001/frames/000001.png,259125.183659493,True,,capture_001,0.0
+solaris,angled_opt,Solaris Angled-opt,0.0,1,1,15.0,14.222959234935932,output/contact_dataset/2026-09-04_solaris_angled_opt_01/runs/run_0001/force_15N/frames/000001.png,259148.533986822,False,run_0001,,0.0
+solaris,angled_opt,Solaris Angled-opt,11.0,2,1,15.0,14.844812842587602,output/contact_dataset/2026-09-04_solaris_angled_opt_01/runs/run_0006/force_15N/frames/000000.png,259620.711404931,False,run_0006,,0.0
+solaris,angled_opt,Solaris Angled-opt,22.0,3,1,15.0,14.964144698811008,output/contact_dataset/2026-09-04_solaris_angled_opt_01/runs/run_0011/force_15N/frames/000001.png,259674.116874732,False,run_0011,,0.0
+solaris,angled_opt,Solaris Angled-opt,33.0,4,1,15.0,14.731750753758606,output/contact_dataset/2026-09-04_solaris_angled_opt_01/runs/run_0016/force_15N/frames/000001.png,259719.649972408,False,run_0016,,0.0
+solaris,angled_opt,Solaris Angled-opt,44.0,5,1,15.0,14.511771055291387,output/contact_dataset/2026-09-04_solaris_angled_opt_01/runs/run_0021/force_15N/frames/000000.png,259756.243479343,False,run_0021,,0.0
+dragon_skin,baseline,Dragon Skin Baseline,,,,0.0,0.10174924347635775,output/contact_dataset/2026-09-04_dragon_skin_baseline/unloaded/capture_001/frames/000001.png,265282.649948796,True,,capture_001,0.0
+dragon_skin,baseline,Dragon Skin Baseline,0.0,1,1,15.0,14.904640647853434,output/contact_dataset/2026-09-04_dragon_skin_baseline/runs/run_0001/force_15N/frames/000001.png,265306.266892255,False,run_0001,,0.0
+dragon_skin,baseline,Dragon Skin Baseline,11.0,2,1,15.0,14.617693219669388,output/contact_dataset/2026-09-04_dragon_skin_baseline/runs/run_0006/force_15N/frames/000001.png,265344.995152782,False,run_0006,,0.0
+dragon_skin,baseline,Dragon Skin Baseline,22.0,3,1,15.0,14.093858702643876,output/contact_dataset/2026-09-04_dragon_skin_baseline/runs/run_0011/force_15N/frames/000000.png,265380.487566392,False,run_0011,,0.0
+dragon_skin,baseline,Dragon Skin Baseline,33.0,4,1,15.0,14.60236780944142,output/contact_dataset/2026-09-04_dragon_skin_baseline/runs/run_0016/force_15N/frames/000001.png,265429.223531194,False,run_0016,,0.0
+dragon_skin,baseline,Dragon Skin Baseline,44.0,5,1,15.0,14.914313250383064,output/contact_dataset/2026-09-04_dragon_skin_baseline/runs/run_0021/force_15N/frames/000001.png,265458.644661532,False,run_0021,,0.0
+dragon_skin,flat_opt,Dragon Skin Flat-opt,,,,0.0,0.14939993673565052,output/contact_dataset/2026-09-04_dragon_skin_flat_opt/unloaded/capture_001/frames/000001.png,267051.524642432,True,,capture_001,0.0
+dragon_skin,flat_opt,Dragon Skin Flat-opt,0.0,1,1,15.0,15.064978797240627,output/contact_dataset/2026-09-04_dragon_skin_flat_opt/runs/run_0001/force_15N/frames/000000.png,267080.616760709,False,run_0001,,0.0
+dragon_skin,flat_opt,Dragon Skin Flat-opt,11.0,2,1,15.0,15.165610908988524,output/contact_dataset/2026-09-04_dragon_skin_flat_opt/runs/run_0006/force_15N/frames/000000.png,267111.501424548,False,run_0006,,0.0
+dragon_skin,flat_opt,Dragon Skin Flat-opt,22.0,3,1,15.0,14.967129501860168,output/contact_dataset/2026-09-04_dragon_skin_flat_opt/runs/run_0011/force_15N/frames/000001.png,267144.358640831,False,run_0011,,0.0
+dragon_skin,flat_opt,Dragon Skin Flat-opt,33.0,4,1,15.0,14.851359123373845,output/contact_dataset/2026-09-04_dragon_skin_flat_opt/runs/run_0016/force_15N/frames/000000.png,267176.88235113,False,run_0016,,0.0
+dragon_skin,flat_opt,Dragon Skin Flat-opt,44.0,5,1,15.0,15.16411019939908,output/contact_dataset/2026-09-04_dragon_skin_flat_opt/runs/run_0022/force_15N/frames/000001.png,267694.692691309,False,run_0022,,0.0

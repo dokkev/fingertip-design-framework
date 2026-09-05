@@ -338,29 +338,40 @@ def main() -> None:
     void_normalization = Normalize(*void_bounds)
 
     with publication_context():
-        figure = plt.figure(figsize=(7.14, 4.05), constrained_layout=False)
+        figure = plt.figure(
+            figsize=(DEFAULT_STYLE.double_column_width_in, 3.20),
+            constrained_layout=False,
+        )
         outer = figure.add_gridspec(
             1,
             2,
-            width_ratios=(0.18, 0.82),
-            left=0.012,
-            right=0.995,
-            bottom=0.060,
-            top=0.930,
-            wspace=0.10,
+            width_ratios=(0.70, 0.30),
+            left=0.055,
+            right=0.985,
+            bottom=0.070,
+            top=0.900,
+            wspace=0.08,
         )
-        structural_axes = figure.add_subplot(outer[0, 0])
+        structural_board = outer[0, 0].subgridspec(
+            2,
+            2,
+            height_ratios=(0.62, 1.0),
+            width_ratios=(1.0, 1.0),
+            hspace=0.12,
+            wspace=0.20,
+        )
+        structural_axes = figure.add_subplot(structural_board[0, :])
 
         board = outer[0, 1].subgridspec(
             5,
-            3,
-            height_ratios=(0.12, 1.0, 0.28, 1.0, 0.05),
-            width_ratios=(1.18, 1.0, 1.0),
-            hspace=0.10,
-            wspace=0.32,
+            2,
+            height_ratios=(0.08, 1.0, 0.26, 1.0, 0.02),
+            width_ratios=(1.0, 1.0),
+            hspace=0.06,
+            wspace=0.28,
         )
-        carrier_axes = figure.add_subplot(board[1, 0])
-        void_axes = figure.add_subplot(board[3, 0])
+        carrier_axes = figure.add_subplot(structural_board[1, 0])
+        void_axes = figure.add_subplot(structural_board[1, 1])
 
         plot_structural_ablation_schematic(
             structural_axes,
@@ -371,6 +382,11 @@ def main() -> None:
             ablation["soft_contact"],
             ablation["carrier_contact"],
         )
+        # Match the lower ablation panel's landscape footprint. The carrier
+        # helper uses an equal data aspect by default; overriding the box
+        # aspect makes panels (b) and (c) the same size in the composition.
+        carrier_axes.set_box_aspect(0.72)
+        carrier_axes.set_anchor("N")
         void_mappable = plot_void_coupled_response(
             void_axes,
             ablation["void_delta_contact"],
@@ -379,15 +395,17 @@ def main() -> None:
             colormap=_VOID_CMAP,
             normalization=void_normalization,
         )
-        void_axes.set_box_aspect(1.0)
+        # Use a compact landscape rectangle rather than a square so the
+        # two structural panels have the same footprint in the grid.
+        void_axes.set_box_aspect(0.72)
         void_axes.set_anchor("N")
 
-        structure_slot = outer[0, 0].get_position(figure)
+        structure_slot = structural_board[0, :].get_position(figure)
         structure_frame_bounds = (
             structure_slot.x0,
-            void_axes.get_position().y0,
+            structure_slot.y0,
             structure_slot.x1,
-            carrier_axes.get_position().y1,
+            structure_slot.y1,
         )
         structural_axes.set_position(
             [
@@ -414,10 +432,10 @@ def main() -> None:
             spine.set_color("#5F5F5F")
             spine.set_linewidth(0.8)
 
-        optimization_header_axes = figure.add_subplot(board[0, 1:])
+        optimization_header_axes = figure.add_subplot(board[0, :])
         optimization_header_axes.axis("off")
 
-        pareto_cells = ((1, 1), (1, 2), (3, 1), (3, 2))
+        pareto_cells = ((1, 0), (1, 1), (3, 0), (3, 1))
         pareto_axes = tuple(
             figure.add_subplot(board[row, column]) for row, column in pareto_cells
         )
@@ -434,36 +452,46 @@ def main() -> None:
                 colormap=_VOID_CMAP,
                 normalization=void_normalization,
             )
-            axes.set_box_aspect(1.0)
+            # Landscape Pareto panels reduce the overall figure height while
+            # retaining enough width for the objective labels.
+            axes.set_box_aspect(0.72)
             axes.set_anchor("N")
-            axes.set_title(str(dataset["label"]), fontsize=6.2, pad=1.5)
+            axes.text(
+                0.035,
+                0.965,
+                str(dataset["label"]),
+                transform=axes.transAxes,
+                ha="left",
+                va="top",
+                fontsize=5.8,
+                zorder=6,
+                bbox={
+                    "facecolor": "white",
+                    "edgecolor": "#777777",
+                    "linewidth": 0.35,
+                    "boxstyle": "round,pad=0.20",
+                },
+            )
             if index >= 2:
                 axes.set_xlabel(r"$J_{contact}$", fontsize=6.2, labelpad=1.0)
-            if index % 2 == 0:
-                axes.set_ylabel(
-                    r"$J_{obs}$ [$\times 10^{-3}$]",
-                    fontsize=6.2,
-                    labelpad=0.0,
-                )
-            axes.tick_params(labelsize=5.6, pad=1.0)
+            axes.tick_params(axis="y", labelleft=False)
+            axes.tick_params(labelsize=5.4, pad=0.8)
 
-        horizontal_gap = (
-            pareto_axes[1].get_position().x0 - pareto_axes[0].get_position().x1
+        # Keep a narrow right gutter for the shared Pareto legend. A uniform
+        # horizontal compression preserves the native 2x2 grid alignment.
+        pareto_left = min(axes.get_position().x0 for axes in pareto_axes)
+        pareto_right = max(axes.get_position().x1 for axes in pareto_axes)
+        pareto_target_right = 0.900
+        pareto_scale = (pareto_target_right - pareto_left) / (
+            pareto_right - pareto_left
         )
-        vertical_gap = (
-            pareto_axes[0].get_position().y0 - pareto_axes[2].get_position().y1
-        )
-        horizontal_shift = 0.275 * horizontal_gap
-        vertical_shift = 0.10 * vertical_gap
-        for index, axes in enumerate(pareto_axes):
+        for axes in pareto_axes:
             position = axes.get_position()
-            x_shift = horizontal_shift if index % 2 == 0 else -horizontal_shift
-            y_shift = -vertical_shift if index < 2 else vertical_shift
             axes.set_position(
                 [
-                    position.x0 + x_shift,
-                    position.y0 + y_shift,
-                    position.width,
+                    pareto_left + (position.x0 - pareto_left) * pareto_scale,
+                    position.y0,
+                    position.width * pareto_scale,
                     position.height,
                 ]
             )
@@ -502,14 +530,22 @@ def main() -> None:
                 label="Balanced",
             ),
         )
-        optimization_header_axes.legend(
+        structure_title_y = structure_frame_bounds[3] + 0.006
+        response_title_y = carrier_axes.get_position().y1 + 0.006
+        optimization_title_y = pareto_axes[0].get_position().y1 + 0.006
+        legend_axes = figure.add_axes(
+            [0.735, 0.902, 0.235, 0.030],
+            frameon=False,
+        )
+        legend_axes.set_axis_off()
+        legend_axes.legend(
             handles=legend_handles,
             loc="center",
             ncol=3,
             frameon=False,
             handletextpad=0.25,
             columnspacing=0.55,
-            fontsize=5.8,
+            fontsize=5.6,
         )
 
         void_position = void_axes.get_position()
@@ -535,34 +571,23 @@ def main() -> None:
         void_width_colorbar.ax.tick_params(labelsize=5.6, length=1.4, pad=0.7)
         void_width_colorbar.outline.set_linewidth(0.4)
 
-        structure_position = outer[0, 0].get_position(figure)
-        optimization_position = board[:, 1:].get_position(figure)
-        block_bottom = 0.035
-        block_top = 0.985
+        optimization_position = board[:, :].get_position(figure)
+        block_bottom = 0.033
+        block_top = 0.940
         left_bounds = (
-            structure_position.x0 - 0.004,
-            void_width_colorbar_axes.get_position().x1 + 0.032,
+            structure_frame_bounds[0] - 0.004,
+            structure_frame_bounds[1] - 0.014,
+            structure_frame_bounds[2] + 0.004,
+            structure_frame_bounds[3] + 0.014,
         )
         right_bounds = (
             optimization_position.x0 - 0.015,
             optimization_position.x1 + 0.004,
         )
-        for left, right in (left_bounds, right_bounds):
-            add_figure_box(
-                figure,
-                (left, block_bottom, right, block_top),
-            )
-        super_title_y = 0.967
-        top_panel_title_y = carrier_axes.get_position().y1 + 0.006
-        bottom_panel_title_y = void_axes.get_position().y1 + 0.006
-        figure.text(
-            0.5 * (right_bounds[0] + right_bounds[1]),
-            super_title_y,
-            "(d)  Morphology Optimization",
-            ha="center",
-            va="center",
-            fontsize=7.2,
-            fontweight="bold",
+        add_figure_box(figure, left_bounds)
+        add_figure_box(
+            figure,
+            (right_bounds[0], block_bottom, right_bounds[1], block_top),
         )
         panel_title_style = {
             "va": "bottom",
@@ -571,8 +596,15 @@ def main() -> None:
         }
         figure.text(
             0.5 * (structure_frame_bounds[0] + structure_frame_bounds[2]),
-            top_panel_title_y,
+            structure_title_y,
             "(a)  Structure",
+            ha="center",
+            **panel_title_style,
+        )
+        figure.text(
+            0.5 * (pareto_axes[0].get_position().x0 + pareto_axes[1].get_position().x1),
+            optimization_title_y,
+            "(d)  Morphology Optimization",
             ha="center",
             **panel_title_style,
         )
@@ -582,39 +614,24 @@ def main() -> None:
                 carrier_axes.get_position().x0
                 + carrier_axes.get_position().x1
             ),
-            top_panel_title_y,
+            response_title_y,
             "(b)  Carrier Contribution",
             ha="center",
             **panel_title_style,
         )
         figure.text(
             0.5 * (void_axes.get_position().x0 + void_axes.get_position().x1),
-            bottom_panel_title_y,
+            response_title_y,
             "(c)  Void Effect",
             ha="center",
             **panel_title_style,
         )
-        flow_axes = figure.add_axes(
-            [
-                left_bounds[1],
-                0.940,
-                right_bounds[0] - left_bounds[1],
-                0.025,
-            ],
-            frameon=False,
-        )
-        flow_axes.set_axis_off()
-        flow_axes.annotate(
-            "",
-            xy=(0.9, 0.5),
-            xytext=(0.1, 0.5),
-            arrowprops={"arrowstyle": "-|>", "color": "#8A8A8A", "lw": 0.65},
-        )
-
         outputs = save_figure(
             figure,
             _OUTPUT_STEM,
             formats=("pdf", "svg", "png"),
+            bbox_inches=None,
+            pad_inches=0.0,
         )
         plt.close(figure)
 
