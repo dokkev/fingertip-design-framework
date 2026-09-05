@@ -128,15 +128,11 @@ def require_available_inputs() -> None:
                 f"missing required Figure 5 session: {condition.session_path}"
             )
     for material, root in ANALYSIS_ROOTS.items():
-        for relative in (
-            "raw_data_summary/load_response_profiles.npz",
-            "results/morphology_metrics.csv",
-        ):
-            path = root / relative
-            if not path.is_file():
-                raise FileNotFoundError(
-                    f"missing required {material} analysis artifact: {path}"
-                )
+        path = root / "raw_data_summary" / "longitudinal_profiles.npz"
+        if not path.is_file():
+            raise FileNotFoundError(
+                f"missing required {material} analysis artifact: {path}"
+            )
 
 
 __all__ = [

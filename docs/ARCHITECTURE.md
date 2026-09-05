@@ -1228,22 +1228,29 @@ separator contract so their six row centers coincide in the composed figure.
 frames and one temporally nearest real unloaded frame per specimen. Every cell
 uses the same fixed camera-coordinate crop and unmodified stored RGB values;
 the renderer performs no per-cell normalization or display enhancement.
-`fig5b.py` reads the compact Solaris and Dragon Skin load-response slopes and
-forms each location row by taking the median across five independent
-repetitions. It follows the raw atlas's six morphology rows and places the 10
-and 30 mm sphere response fields in two columns. The stored 128-bin signed
-profiles remain the source data, but the figure partitions their normalized
-distal-to-proximal span into six fixed regions and displays the RMS response
-magnitude in each region. All ten measured 6-by-6 matrices share a zero-based
-Viridis scale. One outlined white `x` per contact row marks its largest regional
-response without connecting the markers or adding a fitted trend. The exact
-coarse values are exported to `fig5b_region_response.csv`. The two uncollected
-Dragon Skin angled-opt conditions remain explicit non-numerical placeholders.
-`fig5c.py` checks
-`R_obs = D_neighbor / W` and presents the
-baseline-normalized Flat-opt/Angled-opt gains as a compact four-row by two-column
-table; baseline is the explicit `G_obs = 1` reference rather than a redundant
-data column. `fig5.py` composes these panels with nested
+`fig5b.py` reads the compact Solaris and Dragon Skin hold profiles from
+`longitudinal_profiles.npz`; it does not consume fitted load-response slopes.
+Within each independent repetition it subtracts the 2 N profile from the 15 N
+profile, partitions the normalized distal-to-proximal span into six fixed
+regions, and computes one RMS change magnitude per region before taking the
+median across five repetitions. It follows the raw atlas's six morphology rows
+and places the 10 and 30 mm sphere maps in two columns. All ten measured 6-by-6
+matrices share a zero-based Viridis scale in camera DN. One outlined white `x`
+per contact row marks its largest regional change without connecting the
+markers or adding a fitted trend. The paired per-repetition values and plotted
+medians are exported to `fig5b_region_response.csv`. The two uncollected Dragon
+Skin angled-opt conditions remain explicit non-numerical placeholders.
+`fig5c.py` reads the same 128-bin measured hold profiles directly. For each
+material, morphology, indenter, force, and contact location it first takes the
+median of exactly five complete repetitions. It then computes the RMS profile
+distance for each of the five neighboring 11 mm contact pairs at each of the
+four 2/5/10/15 N force states. The grouped-bar height is the median of those 20
+absolute camera-DN separations; Q1, Q3, and IQR remain in the audit table while
+bar annotations report improvement over the corresponding material/indenter
+baseline. No force, profile, baseline, or repeat-variability normalization is
+applied. The 20 underlying values are exported separately, and unmeasured
+Dragon Skin angled-opt entries retain fixed textual placeholder slots.
+`fig5.py` composes these panels with nested
 Matplotlib GridSpecs at the exact 7.16-inch double-column width. The final PDF
 embeds raw atlas images as raster content while retaining all axes, heatmaps,
 labels, and annotations as native Matplotlib artists; it never stitches

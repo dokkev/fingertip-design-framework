@@ -37,34 +37,74 @@ INDENTER_COLUMNS = (
     ("sphere_30mm", "30 mm sphere"),
 )
 N_LONGITUDINAL_REGIONS = 6
+FORCE_LOW_N = 2.0
+FORCE_HIGH_N = 15.0
 
 
-def load_response_templates() -> tuple[
-    np.ndarray, dict[tuple[str, str, str], np.ndarray | None]
+def _fixed_region_indices(
+    coordinate: np.ndarray,
+) -> tuple[np.ndarray, tuple[np.ndarray, ...]]:
+    """Return six fixed regions over the normalized longitudinal coordinate."""
+
+    if coordinate.ndim != 1 or len(coordinate) < N_LONGITUDINAL_REGIONS:
+        raise ValueError("longitudinal coordinate cannot define six regions")
+    if not np.all(np.isfinite(coordinate)) or not np.all(np.diff(coordinate) > 0.0):
+        raise ValueError("longitudinal coordinate must be finite and increasing")
+    if not np.isclose(coordinate[0], 0.0) or not np.isclose(coordinate[-1], 1.0):
+        raise ValueError("Figure 5(b) expects a normalized 0-to-1 coordinate")
+
+    edges = np.linspace(0.0, 1.0, N_LONGITUDINAL_REGIONS + 1)
+    regions = []
+    for region in range(N_LONGITUDINAL_REGIONS):
+        if region == N_LONGITUDINAL_REGIONS - 1:
+            mask = (coordinate >= edges[region]) & (coordinate <= edges[region + 1])
+        else:
+            mask = (coordinate >= edges[region]) & (coordinate < edges[region + 1])
+        indices = np.flatnonzero(mask)
+        if indices.size == 0:
+            raise ValueError(f"longitudinal region {region + 1} contains no samples")
+        regions.append(indices)
+    return edges, tuple(regions)
+
+
+def load_optical_change_maps() -> tuple[
+    np.ndarray,
+    np.ndarray,
+    dict[tuple[str, str, str], np.ndarray | None],
+    list[dict[str, object]],
 ]:
-    """Load compact slopes and median independent repetitions per location."""
+    """Load paired 2/15 N profiles and form median regional RMS changes."""
 
     require_available_inputs()
     coordinate: np.ndarray | None = None
-    templates: dict[tuple[str, str, str], np.ndarray | None] = {}
+    region_edges: np.ndarray | None = None
+    region_indices: tuple[np.ndarray, ...] | None = None
+    response_maps: dict[tuple[str, str, str], np.ndarray | None] = {}
+    audit_rows: list[dict[str, object]] = []
     for candidate_material, root in ANALYSIS_ROOTS.items():
-        path = root / "raw_data_summary" / "load_response_profiles.npz"
+        path = root / "raw_data_summary" / "longitudinal_profiles.npz"
         with np.load(path, allow_pickle=False) as data:
             current_coordinate = np.asarray(
                 data["longitudinal_coordinate"], dtype=np.float64
             )
-            profiles = np.asarray(data["slope_profiles"], dtype=np.float64)
+            profiles = np.asarray(data["profiles"], dtype=np.float64)
+            specimen = np.asarray(data["specimen_id"]).astype(str)
             material = np.asarray(data["material"]).astype(str)
             morphology = np.asarray(data["morphology"]).astype(str)
+            run_id = np.asarray(data["run_id"]).astype(str)
             indenter = np.asarray(data["indenter"]).astype(str)
             holes = np.asarray(data["hole_index"], dtype=np.int64)
             repetition = np.asarray(data["repetition_index"], dtype=np.int64)
+            target_force = np.asarray(data["target_force_n"], dtype=np.float64)
+            actual_force = np.asarray(data["actual_force_n"], dtype=np.float64)
             status = np.asarray(data["run_status"]).astype(str)
 
         if coordinate is None:
             coordinate = current_coordinate
+            region_edges, region_indices = _fixed_region_indices(coordinate)
         elif not np.array_equal(coordinate, current_coordinate):
             raise RuntimeError("Figure 5(b) summaries use different optical coordinates")
+        assert region_edges is not None and region_indices is not None
 
         material_indenters = [
             candidate_indenter
@@ -82,116 +122,142 @@ def load_response_templates() -> tuple[
                     candidate_material == "dragon_skin"
                     and candidate_morphology == "angled_opt"
                 ):
-                    templates[key] = None
+                    response_maps[key] = None
                     continue
-                rows = []
+                contact_rows = []
                 for hole in ALL_HOLES:
-                    mask = (
+                    condition_mask = (
                         (material == candidate_material)
                         & (morphology == candidate_morphology)
                         & (indenter == candidate_indenter)
                         & (holes == hole)
                         & (status == "complete")
                     )
-                    indices = np.flatnonzero(mask)
-                    if len(indices) != 5 or len(np.unique(repetition[indices])) != 5:
+                    repetitions = np.unique(repetition[condition_mask])
+                    if len(repetitions) != 5:
                         raise RuntimeError(
                             "Figure 5(b) requires five independent repetitions for "
                             f"{candidate_material}, {candidate_morphology}, "
-                            f"{candidate_indenter}, hole {hole}; found {len(indices)}"
+                            f"{candidate_indenter}, hole {hole}; found {len(repetitions)}"
                         )
-                    rows.append(np.median(profiles[indices], axis=0))
-                templates[key] = np.asarray(rows)
+                    repetition_values = []
+                    repetition_metadata = []
+                    for candidate_repetition in repetitions:
+                        repetition_mask = condition_mask & (
+                            repetition == candidate_repetition
+                        )
+                        low_indices = np.flatnonzero(
+                            repetition_mask & np.isclose(target_force, FORCE_LOW_N)
+                        )
+                        high_indices = np.flatnonzero(
+                            repetition_mask & np.isclose(target_force, FORCE_HIGH_N)
+                        )
+                        if len(low_indices) != 1 or len(high_indices) != 1:
+                            raise RuntimeError(
+                                "Figure 5(b) requires exactly one 2 N and one 15 N "
+                                "profile within each complete repetition; "
+                                f"{key}, hole {hole}, repetition "
+                                f"{candidate_repetition} has {len(low_indices)} / "
+                                f"{len(high_indices)}"
+                            )
+                        low_index = int(low_indices[0])
+                        high_index = int(high_indices[0])
+                        if run_id[low_index] != run_id[high_index]:
+                            raise RuntimeError(
+                                "Figure 5(b) low/high profiles do not share a run: "
+                                f"{key}, hole {hole}, repetition {candidate_repetition}"
+                            )
+                        delta = profiles[high_index] - profiles[low_index]
+                        regional_rms = np.asarray(
+                            [
+                                np.sqrt(np.mean(np.square(delta[indices])))
+                                for indices in region_indices
+                            ],
+                            dtype=np.float64,
+                        )
+                        repetition_values.append(regional_rms)
+                        repetition_metadata.append(
+                            (
+                                int(candidate_repetition),
+                                specimen[low_index],
+                                run_id[low_index],
+                                actual_force[low_index],
+                                actual_force[high_index],
+                            )
+                        )
 
-    if coordinate is None:
-        raise RuntimeError("Figure 5(b) has no response-profile summaries")
-    return coordinate, templates
+                    repetition_values_array = np.asarray(repetition_values)
+                    median_values = np.median(repetition_values_array, axis=0)
+                    peak_region = int(np.argmax(median_values))
+                    contact_rows.append(median_values)
+                    for repetition_row, metadata in enumerate(repetition_metadata):
+                        (
+                            candidate_repetition,
+                            candidate_specimen,
+                            candidate_run_id,
+                            actual_low,
+                            actual_high,
+                        ) = metadata
+                        for region in range(N_LONGITUDINAL_REGIONS):
+                            audit_rows.append(
+                                {
+                                    "specimen_id": candidate_specimen,
+                                    "material": candidate_material,
+                                    "morphology": candidate_morphology,
+                                    "run_id": candidate_run_id,
+                                    "indenter": candidate_indenter,
+                                    "X_contact_mm": HOLE_TO_CONTACT_X_MM[hole],
+                                    "repetition_index": candidate_repetition,
+                                    "force_low_target_n": FORCE_LOW_N,
+                                    "force_high_target_n": FORCE_HIGH_N,
+                                    "force_low_actual_n": actual_low,
+                                    "force_high_actual_n": actual_high,
+                                    "region_index": region + 1,
+                                    "region_start_normalized": region_edges[region],
+                                    "region_end_normalized": region_edges[region + 1],
+                                    "delta_rms_DN": repetition_values_array[
+                                        repetition_row, region
+                                    ],
+                                    "median_delta_rms_DN": median_values[region],
+                                    "is_peak_region": region == peak_region,
+                                }
+                            )
+                response_maps[key] = np.asarray(contact_rows)
 
-
-def coarse_region_responses(
-    coordinate: np.ndarray,
-    templates: dict[tuple[str, str, str], np.ndarray | None],
-) -> tuple[np.ndarray, dict[tuple[str, str, str], np.ndarray | None]]:
-    """Reduce each dense signed profile to six fixed-region RMS magnitudes."""
-
-    if coordinate.ndim != 1 or len(coordinate) < N_LONGITUDINAL_REGIONS:
-        raise ValueError("longitudinal coordinate cannot define six regions")
-    if not np.all(np.isfinite(coordinate)) or not np.all(np.diff(coordinate) > 0.0):
-        raise ValueError("longitudinal coordinate must be finite and increasing")
-
-    edges = np.linspace(
-        float(coordinate[0]),
-        float(coordinate[-1]),
-        N_LONGITUDINAL_REGIONS + 1,
-    )
-    region_indices = []
-    for region in range(N_LONGITUDINAL_REGIONS):
-        if region == N_LONGITUDINAL_REGIONS - 1:
-            mask = (coordinate >= edges[region]) & (coordinate <= edges[region + 1])
-        else:
-            mask = (coordinate >= edges[region]) & (coordinate < edges[region + 1])
-        indices = np.flatnonzero(mask)
-        if indices.size == 0:
-            raise ValueError(f"longitudinal region {region + 1} contains no samples")
-        region_indices.append(indices)
-
-    coarse: dict[tuple[str, str, str], np.ndarray | None] = {}
-    for key, values in templates.items():
-        if values is None:
-            coarse[key] = None
-            continue
-        if values.ndim != 2 or values.shape[1] != coordinate.size:
-            raise ValueError(f"response template has incompatible shape for {key}")
-        coarse[key] = np.column_stack(
-            [
-                np.sqrt(np.mean(np.square(values[:, indices]), axis=1))
-                for indices in region_indices
-            ]
-        )
-    return edges, coarse
+    if coordinate is None or region_edges is None:
+        raise RuntimeError("Figure 5(b) has no longitudinal-profile summaries")
+    return coordinate, region_edges, response_maps, audit_rows
 
 
 def write_region_response_csv(
-    region_edges: np.ndarray,
-    responses: dict[tuple[str, str, str], np.ndarray | None],
+    rows: list[dict[str, object]],
 ) -> None:
-    """Persist the exact coarse values and dominant-region flags shown in (b)."""
+    """Persist each paired repetition and the medians displayed in (b)."""
 
     path = FIGURE_DIRECTORY / "fig5b_region_response.csv"
     fields = (
+        "specimen_id",
         "material",
         "morphology",
+        "run_id",
         "indenter",
         "X_contact_mm",
+        "repetition_index",
+        "force_low_target_n",
+        "force_high_target_n",
+        "force_low_actual_n",
+        "force_high_actual_n",
         "region_index",
-        "region_start",
-        "region_end",
-        "response_rms_DN_per_N",
+        "region_start_normalized",
+        "region_end_normalized",
+        "delta_rms_DN",
+        "median_delta_rms_DN",
         "is_peak_region",
     )
-    physical_locations = [HOLE_TO_CONTACT_X_MM[hole] for hole in ALL_HOLES]
     with path.open("w", newline="", encoding="utf-8") as stream:
         writer = csv.DictWriter(stream, fieldnames=fields)
         writer.writeheader()
-        for (material, indenter, morphology), values in responses.items():
-            if values is None:
-                continue
-            peaks = np.argmax(values, axis=1)
-            for contact_row, contact_position in enumerate(physical_locations):
-                for region in range(N_LONGITUDINAL_REGIONS):
-                    writer.writerow(
-                        {
-                            "material": material,
-                            "morphology": morphology,
-                            "indenter": indenter,
-                            "X_contact_mm": contact_position,
-                            "region_index": region + 1,
-                            "region_start": region_edges[region],
-                            "region_end": region_edges[region + 1],
-                            "response_rms_DN_per_N": values[contact_row, region],
-                            "is_peak_region": region == peaks[contact_row],
-                        }
-                    )
+        writer.writerows(rows)
 
 
 def render_panel(
@@ -200,15 +266,19 @@ def render_panel(
     *,
     panel_label: str = "(b)",
     data: tuple[
-        np.ndarray, dict[tuple[str, str, str], np.ndarray | None]
+        np.ndarray,
+        np.ndarray,
+        dict[tuple[str, str, str], np.ndarray | None],
+        list[dict[str, object]],
     ]
     | None = None,
 ) -> dict[str, object]:
-    """Render the shared-scale response fields into one SubplotSpec."""
+    """Render shared-scale regional 2-to-15 N optical changes."""
 
-    coordinate, templates = load_response_templates() if data is None else data
-    region_edges, responses = coarse_region_responses(coordinate, templates)
-    write_region_response_csv(region_edges, responses)
+    coordinate, region_edges, responses, audit_rows = (
+        load_optical_change_maps() if data is None else data
+    )
+    write_region_response_csv(audit_rows)
     measured = [values for values in responses.values() if values is not None]
     maximum = max(float(np.max(values)) for values in measured)
     if not np.isfinite(maximum) or maximum <= 0.0:
@@ -236,7 +306,7 @@ def render_panel(
     title_axis.text(
         0.080,
         0.55,
-        "Measured hardware response fields",
+        "Measured optical change from 2 to 15 N",
         fontsize=6.2,
         fontweight="bold",
         va="center",
@@ -369,15 +439,15 @@ def render_panel(
     assert image is not None
     colorbar_axis = figure.add_subplot(grid[2:, 4])
     colorbar = figure.colorbar(image, cax=colorbar_axis)
-    colorbar.ax.set_title("Response\nmagnitude\n[DN/N]", fontsize=3.9, pad=1.5)
+    colorbar.ax.set_title("2–15 N optical\nchange [DN]", fontsize=3.9, pad=1.5)
     colorbar.ax.tick_params(labelsize=4.5, length=1.5, pad=0.8)
     colorbar.outline.set_linewidth(0.45)
     return {
         "axes": tuple(axes),
-        "templates": templates,
         "coordinate": coordinate,
         "region_edges": region_edges,
         "region_responses": responses,
+        "audit_rows": audit_rows,
         "color_limits": (0.0, maximum),
     }
 

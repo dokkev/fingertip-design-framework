@@ -236,7 +236,7 @@ conda run --no-capture-output -n lit \
 Outputs are written beside the scripts under `figures/figure5/`:
 `fig5a.png`, `fig5b.png`, `fig5c.png`, `fig5.pdf`, `fig5.png`,
 `fig5a_selection_manifest.csv`, `fig5b_region_response.csv`, and
-`fig5c_metrics.csv`. The raw atlas uses
+`fig5c_neighbor_separations.csv`, and `fig5c_metrics.csv`. The raw atlas uses
 the 10 mm sphere, repetition 1, and the frame closest to 15 N at five physical
 11 mm-spaced fixture positions. Stored RGB values are shown without display
 enhancement or per-cell normalization. Dragon Skin angled-opt remains visibly pending
