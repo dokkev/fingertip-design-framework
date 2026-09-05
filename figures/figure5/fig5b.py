@@ -431,6 +431,7 @@ def render_panel(
             else:
                 axis.set_xticks([])
             axis.tick_params(labelsize=4.6, length=1.5, pad=0.8)
+            axis.set_box_aspect(1.0)
             for spine in axis.spines.values():
                 spine.set_linewidth(0.45)
                 spine.set_color("#777777")

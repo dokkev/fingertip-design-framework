@@ -1218,12 +1218,68 @@ Camera-setting differences and acquisition coverage errors are reported rather
 than hidden. The statistical unit is always one independent run, never one of
 its repeated hold frames.
 
+`validation/optomech/hardware_indentation_tracking.py` is a bounded,
+read-only feasibility study for deriving an image-space indentation signal from
+the existing physical data. Two session-level rectangular ROIs are explicit in
+the adjacent JSON config: one covers the rigid indenter shaft and one covers a
+fixed fixture-base region; neither is a silicone contour or an illuminated
+optical-response support. Every 2, 5, 10, and 15 N hold is represented by its
+median RGB frame. OpenCV phase correlation is applied to one fixed
+representation, the red-channel Scharr-gradient magnitude, without a fallback
+tracker. Moving and fixture translations are both measured relative to the
+same run's 2 N state, and their difference is projected onto the majority-signed
+first SVD direction of the 2-to-15 N vectors. Individual frames remain in the
+QC table so phase-peak ambiguity is not hidden by hold aggregation. The staged
+workflow is one manually inspected run, then 6--12 runs spanning all six
+locations, and only then a full session if the signal is mechanically
+consistent. Results remain in pixels because no trusted image-to-mm calibration
+is available, and they do not populate `S_OM` or any Figure 5 input. This study
+uses the corrected fixture positions 0, 10, 20, 30, 40, and 50 mm and explicitly
+reports that Figure 5 still carries the older 11 mm mapping.
+
+`validation/optomech/hardware_indentation_tracking_1d.py` is a separate,
+read-only follow-up to that 2-D baseline. It uses the same fixed 12-run Solaris
+Baseline sample and the same rigid moving/fixed ROIs, but does not call the 2-D
+estimator. The current A/B follow-up reduces the moving and fixture images to
+signed red-channel Scharr-x profiles by a vertical mean, while retaining the
+previous vertical-median output in its original directory. Explicit
+overlap-normalized 1-D NCC
+searches integer lags from -60 through +60 px. Every estimate retains both NCC
+peaks, their margin, the full lag curve, and an optional three-point subpixel
+refinement. Same-run 2 N hold medians remain the references, fixture motion is
+subtracted, and one majority sign makes increasing rigid-shaft motion positive.
+Individual frames, direct-versus-sequential estimates, and synthetic shifts of
+real profiles are separate diagnostics. Mean-reduction outputs live under
+`output/validation/hardware_indentation_tracking_1d_mean/`; the study stops after
+the fixed sample and cannot populate `S_OM`, a mechanical-deformation metric,
+or Figure 5.
+
+`validation/optomech/hardware_indentation_tracking_edges.py` is a third,
+independent read-only feasibility study on that exact 12-run sample. It does
+not call either correlation estimator. In the fixed moving ROI it finds the
+strongest signed red-channel Scharr-x positive and negative response in every
+row, fixes their left/right polarity from the same run's 2 N hold-median image,
+rejects rows inconsistent with the broad 2 N shaft geometry, and combines the
+surviving subpixel peaks as two Theil-Sen lines. Shaft position is the center
+of those lines at the ROI center row; their separation remains an explicit
+rigid-width diagnostic. The fixed ROI supplies one directly observed outer
+fixture edge through the same row-wise peak and robust-line construction.
+Moving-center and fixture shifts are differenced relative to the same run's
+2 N reference and reported in pixels under one majority sign. Every frame,
+hold median, reference geometry, and a real-image whole-ROI translation check
+are preserved under
+`output/validation/hardware_indentation_tracking_edges/`. This diagnostic
+cannot populate `S_OM`, change Figure 5, or promote itself to production.
+
 `figures/figure5/` owns the self-contained physical-hardware Figure 5. Its
 configuration names the five available fabricated specimens, the intentionally
 pending Dragon Skin angled-opt specimen, and the fixture mapping from six
 distal-to-proximal acquisition stops to physical contact coordinates at 11 mm
 spacing. Panels (a) and (b) share one morphology-row height, gap, and material
 separator contract so their six row centers coincide in the composed figure.
+The atlas receives slightly more horizontal space so its cropped photographs
+nearly fill each row with minimal within-material gaps; the paired response-map
+axes use square plot boxes on those same row centers.
 `fig5a.py` selects auditable raw 10 mm-sphere, repetition-1, 15 N
 frames and one temporally nearest real unloaded frame per specimen. Every cell
 uses the same fixed camera-coordinate crop. Solaris retains the stored RGB
@@ -1243,16 +1299,17 @@ per contact row marks its largest regional change without connecting the
 markers or adding a fitted trend. The paired per-repetition values and plotted
 medians are exported to `fig5b_region_response.csv`. The two uncollected Dragon
 Skin angled-opt conditions remain explicit non-numerical placeholders.
-`fig5c.py` reads the same 128-bin measured hold profiles directly. For each
-material, morphology, indenter, force, and contact location it first takes the
-median of exactly five complete repetitions. It then computes the RMS profile
-distance for each of the five neighboring 11 mm contact pairs at each of the
-four 2/5/10/15 N force states. The grouped-bar height is the median of those 20
-absolute camera-DN separations; Q1, Q3, and IQR remain in the audit table while
-bar annotations report improvement over the corresponding material/indenter
-baseline. No force, profile, baseline, or repeat-variability normalization is
-applied. The 20 underlying values are exported separately, and unmeasured
-Dragon Skin angled-opt entries retain fixed textual placeholder slots.
+`fig5c.py` reads the existing morphology-level slope-profile metric directly
+from each material's `results/morphology_metrics.csv`. Grouped-bar heights are
+`D_neighbor_median_DN_per_N`: the median RMS difference between neighboring
+11 mm contact-location templates in measured optical load-response slope
+profiles. The four material/indenter groups share one absolute DN/N axis;
+optimized-bar annotations report signed improvement relative to the matching
+baseline without changing the bar height. The stored neighboring-pair IQR is
+preserved in `fig5c_metrics.csv` but omitted from the compact panel. No
+repeat-variability division or baseline normalization is used for the plotted
+metric, and unmeasured Dragon Skin angled-opt entries retain fixed textual
+placeholder slots.
 `fig5.py` composes these panels with nested
 Matplotlib GridSpecs at the exact 7.16-inch double-column width. The final PDF
 embeds raw atlas images as raster content while retaining all axes, heatmaps,

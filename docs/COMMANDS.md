@@ -224,6 +224,60 @@ loaded-run pairing or choose a preferred unloaded reference.
 `suspect_runs.csv` is a deterministic manual-inspection ranking and never
 repairs or relabels the dataset.
 
+Run the staged rigid-body indentation-tracking feasibility study on the stored
+Solaris Baseline 10 mm-sphere data. Inspect the first command's overlay before
+running the sample. Run the full stage only if the sample's individual-frame,
+fixture-drift, transverse-motion, monotonicity, and repetition evidence is
+mechanically consistent:
+
+```bash
+conda run --no-capture-output -n lit \
+  python -u validation/optomech/hardware_indentation_tracking.py --stage manual
+conda run --no-capture-output -n lit \
+  python -u validation/optomech/hardware_indentation_tracking.py --stage sample
+conda run --no-capture-output -n lit \
+  python -u validation/optomech/hardware_indentation_tracking.py --stage full
+```
+
+The two fixed manual ROIs and the corrected 0--50 mm fixture-stop mapping are
+stored in `validation/optomech/hardware_indentation_tracking_config.json`.
+Outputs are written beneath
+`output/validation/hardware_indentation_tracking/`. This study reports pixels,
+does not infer an image-to-mm scale, does not populate `S_OM`, and does not
+modify Figure 5.
+
+Run the separate vertically mean-reduced signed-profile 1-D NCC study on the
+exact same fixed 12-run sample. This command has no full-session mode, never
+calls the older 2-D tracking entry point, and retains the previous
+vertical-median output for the controlled A/B comparison:
+
+```bash
+conda run --no-capture-output -n lit \
+  python -u validation/optomech/hardware_indentation_tracking_1d.py
+```
+
+Its Markdown, hold/frame tables, complete NCC lag curves,
+direct-versus-sequential diagnostic, synthetic translation check, and three
+figures are written under
+`output/validation/hardware_indentation_tracking_1d_mean/`. The result is an
+image-space rigid-shaft indentation proxy in pixels only; it does not modify
+the preceding 2-D output, Figure 5, or any production metric.
+
+Run the separate direct rigid-edge geometry study on the same exact 12-run
+sample. It uses row-wise signed Scharr-x peaks and robust left/right shaft
+lines plus one fixed fixture edge; it does not use phase correlation or NCC:
+
+```bash
+conda run --no-capture-output -n lit \
+  python -u validation/optomech/hardware_indentation_tracking_edges.py
+```
+
+The hold/frame geometry tables, synthetic whole-ROI translation check,
+reference definitions, Markdown conclusion, and four diagnostic figures are
+written under `output/validation/hardware_indentation_tracking_edges/`. The
+study is pixel-domain and read-only, stops at the fixed sample, and does not
+modify `S_OM` or Figure 5.
+
 Render the standalone Figure 5 panels, selection/metric audit tables, and the
 final IEEE double-column PDF/PNG from the current physical datasets and compact
 analysis summaries:
@@ -236,7 +290,7 @@ conda run --no-capture-output -n lit \
 Outputs are written beside the scripts under `figures/figure5/`:
 `fig5a.png`, `fig5b.png`, `fig5c.png`, `fig5.pdf`, `fig5.png`,
 `fig5a_selection_manifest.csv`, `fig5b_region_response.csv`, and
-`fig5c_neighbor_separations.csv`, and `fig5c_metrics.csv`. The raw atlas uses
+`fig5c_metrics.csv`. The raw atlas uses
 the 10 mm sphere, repetition 1, and the frame closest to 15 N at five physical
 11 mm-spaced fixture positions. Solaris uses stored RGB values directly; all
 measured Dragon Skin atlas cells use one documented +0.25 EV display exposure.

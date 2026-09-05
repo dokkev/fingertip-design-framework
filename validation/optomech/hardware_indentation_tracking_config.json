@@ -1,0 +1,29 @@
+{
+  "session_path": "output/contact_dataset/2026-09-04_solaris_baseline_01",
+  "indenter": "sphere_10mm",
+  "moving_roi_xywh": [1060, 130, 150, 690],
+  "fixture_roi_xywh": [1200, 820, 680, 250],
+  "manual_run_id": "run_0001",
+  "sample_run_ids": [
+    "run_0001",
+    "run_0002",
+    "run_0006",
+    "run_0007",
+    "run_0011",
+    "run_0012",
+    "run_0016",
+    "run_0017",
+    "run_0021",
+    "run_0022",
+    "run_0026",
+    "run_0027"
+  ],
+  "hole_positions_mm": {
+    "1": 0.0,
+    "2": 10.0,
+    "3": 20.0,
+    "4": 30.0,
+    "5": 40.0,
+    "6": 50.0
+  }
+}

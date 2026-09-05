@@ -1,4 +1,4 @@
-"""Figure 5(c): measured neighboring-contact spatial separation."""
+"""Figure 5(c): neighboring-contact load-response separation."""
 
 from __future__ import annotations
 
@@ -18,18 +18,14 @@ from matplotlib.patches import Patch  # noqa: E402
 from lumo.visualization import DEFAULT_STYLE, publication_context, save_figure  # noqa: E402
 
 from .config import (  # noqa: E402
-    ALL_HOLES,
     ANALYSIS_ROOTS,
     COMPARISON_CONDITIONS,
     COMPARISON_MORPHOLOGIES,
     COMPARISON_TITLES,
     FIGURE_DIRECTORY,
-    HOLE_TO_CONTACT_X_MM,
-    require_available_inputs,
 )
 
 
-FORCE_TARGETS_N = (2.0, 5.0, 10.0, 15.0)
 MORPHOLOGY_COLORS = {
     "baseline": "#B8BCC2",
     "flat_opt": "#4F7180",
@@ -37,183 +33,94 @@ MORPHOLOGY_COLORS = {
 }
 
 
-def _text_array(values: np.ndarray) -> np.ndarray:
-    return np.asarray(values).astype(str)
+def load_spatial_metrics() -> list[dict[str, object]]:
+    """Read stored slope-profile separation and add baseline improvements."""
 
-
-def _load_profiles(path: Path) -> dict[str, np.ndarray]:
-    with np.load(path, allow_pickle=False) as bundle:
-        required = {
-            "profiles",
-            "material",
-            "morphology",
-            "run_status",
-            "indenter",
-            "hole_index",
-            "repetition_index",
-            "target_force_n",
-        }
-        missing = required.difference(bundle.files)
-        if missing:
-            raise KeyError(
-                f"missing Figure 5(c) profile fields in {path}: {sorted(missing)}"
+    source_rows: dict[tuple[str, str, str], dict[str, str]] = {}
+    for expected_material, root in ANALYSIS_ROOTS.items():
+        path = root / "results" / "morphology_metrics.csv"
+        if not path.is_file():
+            raise FileNotFoundError(
+                f"missing required {expected_material} analysis artifact: {path}"
             )
-        return {name: np.asarray(bundle[name]) for name in required}
+        with path.open(newline="", encoding="utf-8") as stream:
+            for row in csv.DictReader(stream):
+                if row["material"] != expected_material:
+                    continue
+                key = (row["material"], row["morphology"], row["indenter"])
+                if key in source_rows:
+                    raise RuntimeError(f"duplicate Figure 5(c) metric row: {key}")
+                source_rows[key] = row
 
-
-def load_spatial_separation_metrics(
-) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
-    """Compute all same-force neighbor distances and morphology summaries."""
-
-    require_available_inputs()
-    bundles = {
-        material: _load_profiles(
-            root / "raw_data_summary" / "longitudinal_profiles.npz"
-        )
-        for material, root in ANALYSIS_ROOTS.items()
-    }
-    neighbor_rows: list[dict[str, object]] = []
-    summary_rows: list[dict[str, object]] = []
-
+    output: list[dict[str, object]] = []
     for material, indenter, _ in COMPARISON_CONDITIONS:
-        data = bundles[material]
-        profiles = np.asarray(data["profiles"], dtype=np.float64)
-        if profiles.ndim != 2 or profiles.shape[1] != 128:
-            raise ValueError(
-                f"Figure 5(c) requires 128-bin profiles, got {profiles.shape}"
-            )
-        material_values = _text_array(data["material"])
-        morphology_values = _text_array(data["morphology"])
-        status_values = _text_array(data["run_status"])
-        indenter_values = _text_array(data["indenter"])
-        hole_values = np.asarray(data["hole_index"], dtype=np.int64)
-        repetition_values = np.asarray(data["repetition_index"], dtype=np.int64)
-        force_values = np.asarray(data["target_force_n"], dtype=np.float64)
+        baseline_key = (material, "baseline", indenter)
+        if baseline_key not in source_rows:
+            raise RuntimeError(f"missing Figure 5(c) baseline metric: {baseline_key}")
+        baseline_value = float(
+            source_rows[baseline_key]["D_neighbor_median_DN_per_N"]
+        )
+        if not np.isfinite(baseline_value) or baseline_value <= 0.0:
+            raise ValueError(f"invalid Figure 5(c) baseline: {baseline_key}")
 
-        condition_summaries: list[dict[str, object]] = []
         for morphology in COMPARISON_MORPHOLOGIES:
-            if material == "dragon_skin" and morphology == "angled_opt":
-                condition_summaries.append(
-                    {
-                        "material": material,
-                        "morphology": morphology,
-                        "indenter": indenter,
-                        "D_spatial_median_DN": float("nan"),
-                        "D_spatial_q1_DN": float("nan"),
-                        "D_spatial_q3_DN": float("nan"),
-                        "D_spatial_iqr_DN": float("nan"),
-                        "baseline_D_spatial_DN": float("nan"),
-                        "improvement_percent": float("nan"),
-                        "status": "pending",
-                    }
-                )
-                continue
-
-            separations: list[float] = []
-            for force_n in FORCE_TARGETS_N:
-                templates: dict[int, np.ndarray] = {}
-                for hole_index in ALL_HOLES:
-                    selected = np.flatnonzero(
-                        (material_values == material)
-                        & (morphology_values == morphology)
-                        & (status_values == "complete")
-                        & (indenter_values == indenter)
-                        & (hole_values == hole_index)
-                        & np.isclose(
-                            force_values, force_n, rtol=0.0, atol=1.0e-9
-                        )
-                    )
-                    repetitions = repetition_values[selected]
-                    unique_repetitions, counts = np.unique(
-                        repetitions, return_counts=True
-                    )
-                    if (
-                        selected.size != 5
-                        or unique_repetitions.size != 5
-                        or np.any(counts != 1)
-                    ):
-                        identity = (
-                            material,
-                            morphology,
-                            indenter,
-                            force_n,
-                            hole_index,
-                        )
-                        raise RuntimeError(
-                            "Figure 5(c) requires exactly five unique complete "
-                            f"repetitions for {identity}; found repetitions "
-                            f"{repetitions.tolist()}"
-                        )
-                    selected = selected[np.argsort(repetitions)]
-                    templates[hole_index] = np.median(profiles[selected], axis=0)
-
-                for hole_i, hole_j in zip(
-                    ALL_HOLES[:-1], ALL_HOLES[1:], strict=True
-                ):
-                    difference = templates[hole_i] - templates[hole_j]
-                    separation = float(np.sqrt(np.mean(np.square(difference))))
-                    if not np.isfinite(separation):
-                        raise ValueError(
-                            "non-finite Figure 5(c) neighboring-contact separation"
-                        )
-                    separations.append(separation)
-                    neighbor_rows.append(
+            key = (material, morphology, indenter)
+            source = source_rows.get(key)
+            if source is None:
+                if material == "dragon_skin" and morphology == "angled_opt":
+                    output.append(
                         {
                             "material": material,
                             "morphology": morphology,
                             "indenter": indenter,
-                            "force_n": force_n,
-                            "contact_i_mm": HOLE_TO_CONTACT_X_MM[hole_i],
-                            "contact_j_mm": HOLE_TO_CONTACT_X_MM[hole_j],
-                            "D_neighbor_DN": separation,
+                            "D_neighbor_median_DN_per_N": float("nan"),
+                            "D_neighbor_IQR_DN_per_N": float("nan"),
+                            "baseline_D_neighbor_DN_per_N": baseline_value,
+                            "improvement_percent": float("nan"),
+                            "status": "pending",
                         }
                     )
+                    continue
+                raise RuntimeError(f"missing required Figure 5(c) metric: {key}")
 
-            if len(separations) != 20:
-                raise AssertionError(
-                    f"expected 20 Figure 5(c) separations, found {len(separations)}"
-                )
-            q1, median, q3 = np.quantile(separations, (0.25, 0.5, 0.75))
-            condition_summaries.append(
+            separation = float(source["D_neighbor_median_DN_per_N"])
+            iqr = float(source["D_neighbor_IQR_DN_per_N"])
+            if not np.isfinite(separation) or separation <= 0.0:
+                raise ValueError(f"invalid Figure 5(c) separation: {key}")
+            if not np.isfinite(iqr) or iqr < 0.0:
+                raise ValueError(f"invalid Figure 5(c) separation IQR: {key}")
+            output.append(
                 {
                     "material": material,
                     "morphology": morphology,
                     "indenter": indenter,
-                    "D_spatial_median_DN": float(median),
-                    "D_spatial_q1_DN": float(q1),
-                    "D_spatial_q3_DN": float(q3),
-                    "D_spatial_iqr_DN": float(q3 - q1),
-                    "baseline_D_spatial_DN": float("nan"),
-                    "improvement_percent": float("nan"),
+                    "D_neighbor_median_DN_per_N": separation,
+                    "D_neighbor_IQR_DN_per_N": iqr,
+                    "baseline_D_neighbor_DN_per_N": baseline_value,
+                    "improvement_percent": 100.0
+                    * (separation / baseline_value - 1.0),
                     "status": "measured",
                 }
             )
-
-        baseline = next(
-            row
-            for row in condition_summaries
-            if row["morphology"] == "baseline" and row["status"] == "measured"
-        )
-        baseline_value = float(baseline["D_spatial_median_DN"])
-        if not np.isfinite(baseline_value) or baseline_value <= 0.0:
-            raise ValueError(
-                f"invalid Figure 5(c) baseline for {(material, indenter)}"
-            )
-        for row in condition_summaries:
-            row["baseline_D_spatial_DN"] = baseline_value
-            if row["status"] == "measured":
-                value = float(row["D_spatial_median_DN"])
-                row["improvement_percent"] = 100.0 * (
-                    value / baseline_value - 1.0
-                )
-        summary_rows.extend(condition_summaries)
-
-    return neighbor_rows, summary_rows
+    return output
 
 
-def _write_csv(
-    rows: list[dict[str, object]], path: Path, fields: tuple[str, ...]
+def write_metrics(
+    rows: list[dict[str, object]],
+    path: Path = FIGURE_DIRECTORY / "fig5c_metrics.csv",
 ) -> Path:
+    """Persist the exact stored bar metric and derived baseline comparison."""
+
+    fields = (
+        "material",
+        "morphology",
+        "indenter",
+        "D_neighbor_median_DN_per_N",
+        "D_neighbor_IQR_DN_per_N",
+        "baseline_D_neighbor_DN_per_N",
+        "improvement_percent",
+        "status",
+    )
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as stream:
         writer = csv.DictWriter(stream, fieldnames=fields, lineterminator="\n")
@@ -222,49 +129,24 @@ def _write_csv(
     return path
 
 
-def write_neighbor_separations(
-    rows: list[dict[str, object]],
-    path: Path = FIGURE_DIRECTORY / "fig5c_neighbor_separations.csv",
-) -> Path:
-    """Persist all 20 force/location-pair values per measured condition."""
-
-    return _write_csv(
-        rows,
-        path,
-        (
-            "material",
-            "morphology",
-            "indenter",
-            "force_n",
-            "contact_i_mm",
-            "contact_j_mm",
-            "D_neighbor_DN",
-        ),
+def _print_metrics(rows: list[dict[str, object]]) -> None:
+    print(
+        f"{'material':<13} {'indenter':<13} {'morphology':<12} "
+        f"{'D_neighbor [DN/N]':>18} {'improvement [%]':>17}"
     )
-
-
-def write_metrics(
-    rows: list[dict[str, object]],
-    path: Path = FIGURE_DIRECTORY / "fig5c_metrics.csv",
-) -> Path:
-    """Persist the morphology-level bar heights and supporting quartiles."""
-
-    return _write_csv(
-        rows,
-        path,
-        (
-            "material",
-            "morphology",
-            "indenter",
-            "D_spatial_median_DN",
-            "D_spatial_q1_DN",
-            "D_spatial_q3_DN",
-            "D_spatial_iqr_DN",
-            "baseline_D_spatial_DN",
-            "improvement_percent",
-            "status",
-        ),
-    )
+    for row in rows:
+        if row["status"] == "pending":
+            separation_text = "pending"
+            improvement_text = "pending"
+        else:
+            separation_text = f"{float(row['D_neighbor_median_DN_per_N']):.4f}"
+            improvement_text = f"{float(row['improvement_percent']):+.1f}"
+        material = str(row["material"]).replace("dragon_skin", "Dragon Skin")
+        print(
+            f"{material:<13} {str(row['indenter']):<13} "
+            f"{str(row['morphology']):<12} {separation_text:>18} "
+            f"{improvement_text:>17}"
+        )
 
 
 def render_panel(
@@ -272,22 +154,19 @@ def render_panel(
     subplot_spec: SubplotSpec,
     *,
     panel_label: str = "(c)",
-    metrics: tuple[list[dict[str, object]], list[dict[str, object]]] | None = None,
+    metrics: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
-    """Render absolute separation bars with baseline-relative annotations."""
+    """Render absolute slope-profile separation with relative annotations."""
 
-    neighbor_rows, summary_rows = (
-        load_spatial_separation_metrics() if metrics is None else metrics
-    )
-    write_neighbor_separations(neighbor_rows)
-    write_metrics(summary_rows)
+    rows = load_spatial_metrics() if metrics is None else metrics
+    write_metrics(rows)
     lookup = {
         (
             str(row["material"]),
             str(row["indenter"]),
             str(row["morphology"]),
         ): row
-        for row in summary_rows
+        for row in rows
     }
 
     grid = subplot_spec.subgridspec(
@@ -346,8 +225,8 @@ def render_panel(
     offsets = np.asarray((-0.24, 0.0, 0.24), dtype=np.float64)
     bar_width = 0.205
     measured_values = [
-        float(row["D_spatial_median_DN"])
-        for row in summary_rows
+        float(row["D_neighbor_median_DN_per_N"])
+        for row in rows
         if row["status"] == "measured"
     ]
     y_max = max(measured_values) * 1.22
@@ -371,7 +250,7 @@ def render_panel(
                 )
                 continue
 
-            value = float(row["D_spatial_median_DN"])
+            value = float(row["D_neighbor_median_DN_per_N"])
             axis.bar(
                 x,
                 value,
@@ -409,7 +288,7 @@ def render_panel(
     axis.text(
         0.015,
         0.52,
-        "Spatial separation [camera DN]",
+        "Spatial separation [camera DN/N]",
         transform=axis.transAxes,
         fontsize=4.8,
         rotation=90,
@@ -428,21 +307,22 @@ def render_panel(
 
     return {
         "axes": (axis,),
-        "neighbor_separations": neighbor_rows,
-        "metrics": summary_rows,
+        "metrics": rows,
         "y_limit": y_max,
     }
 
 
 def main() -> None:
-    """Export a standalone debug render of Figure 5(c)."""
+    """Export a standalone debug render and print its source metrics."""
 
+    rows = load_spatial_metrics()
+    _print_metrics(rows)
     with publication_context(DEFAULT_STYLE):
         figure = plt.figure(figsize=(3.15, 4.25))
         grid = figure.add_gridspec(
             1, 1, left=0.03, right=0.985, bottom=0.025, top=0.99
         )
-        render_panel(figure, grid[0, 0])
+        render_panel(figure, grid[0, 0], metrics=rows)
         save_figure(
             figure,
             FIGURE_DIRECTORY / "fig5c",

@@ -30,7 +30,7 @@ def build_figure() -> plt.Figure:
         right=0.992,
         bottom=0.065,
         top=0.994,
-        width_ratios=(0.37, 0.41, 0.22),
+        width_ratios=(0.41, 0.37, 0.22),
         wspace=0.025,
     )
     render_panel_a(figure, outer[0], panel_label="(a)")
