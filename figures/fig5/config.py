@@ -57,7 +57,10 @@ MORPHOLOGY_CONDITIONS = (
         "2026-09-04_dragon_skin_flat_opt",
     ),
     MorphologyCondition(
-        "dragon_skin", "angled_opt", "Dragon Skin Angled-opt", None
+        "dragon_skin",
+        "angled_opt",
+        "Dragon Skin Angled-opt",
+        "2026-09-06_dragon_skin_angled_opt",
     ),
 )
 
@@ -70,6 +73,15 @@ ANALYSIS_ROOTS = {
     / "output"
     / "analysis"
     / "dragon_skin_morphology_comparison",
+}
+
+# This repeated baseline acquisition contains only the 30 mm indenter and has
+# its own unloaded reference. It replaces only that Figure 5 condition.
+ANALYSIS_CONDITION_OVERRIDES = {
+    ("dragon_skin", "baseline", "sphere_30mm"): REPOSITORY_ROOT
+    / "output"
+    / "analysis"
+    / "dragon_skin_baseline_30mm_rerun",
 }
 
 COMPARISON_MORPHOLOGIES = ("baseline", "flat_opt", "angled_opt")
@@ -88,16 +100,16 @@ MORPHOLOGY_TABLE_HEIGHT_RATIOS = (0.24, 0.20, 1.0, 1.0, 1.0, 0.10, 1.0, 1.0, 1.0
 MORPHOLOGY_TABLE_ROW_SLOTS = (2, 3, 4, 6, 7, 8)
 MORPHOLOGY_TABLE_HSPACE = 0.006
 
-# The fixture has six equally spaced stops across its 55 mm travel. Hole 1 is
-# the distal stop and hole 6 is proximal. Coordinates are measured from the
-# distal stop, so the acquisition labels map to physical positions explicitly.
+# The fixture has six measured stops at 10 mm spacing. Hole 1 is the distal
+# stop and hole 6 is proximal. Coordinates are measured from the distal stop;
+# this fixture spacing is independent of the fingertip's 11 mm LED pitch.
 HOLE_TO_CONTACT_X_MM = {
     1: 0.0,
-    2: 11.0,
-    3: 22.0,
-    4: 33.0,
-    5: 44.0,
-    6: 55.0,
+    2: 10.0,
+    3: 20.0,
+    4: 30.0,
+    5: 40.0,
+    6: 50.0,
 }
 
 # Five consecutive locations keep the raw-image atlas legible. The response
@@ -120,7 +132,7 @@ ATLAS_CROP_XYXY = (820, 170, 1170, 660)
 
 
 def require_available_inputs() -> None:
-    """Fail on missing required data while allowing the one pending specimen."""
+    """Fail when a required Figure 5 session or analysis artifact is missing."""
 
     for condition in MORPHOLOGY_CONDITIONS:
         if condition.pending:
@@ -136,10 +148,17 @@ def require_available_inputs() -> None:
             raise FileNotFoundError(
                 f"missing required {material} analysis artifact: {path}"
             )
-
+    for condition, root in ANALYSIS_CONDITION_OVERRIDES.items():
+        profile_path = root / "raw_data_summary" / "longitudinal_profiles.npz"
+        metric_path = root / "results" / "morphology_metrics.csv"
+        if not profile_path.is_file() or not metric_path.is_file():
+            raise FileNotFoundError(
+                f"missing required Figure 5 override for {condition}: {root}"
+            )
 
 __all__ = [
     "ALL_HOLES",
+    "ANALYSIS_CONDITION_OVERRIDES",
     "ANALYSIS_ROOTS",
     "ATLAS_CROP_XYXY",
     "ATLAS_DISPLAY_EXPOSURE_EV_BY_MATERIAL",

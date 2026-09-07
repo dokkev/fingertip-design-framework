@@ -113,8 +113,8 @@ def plot_structural_ablation_schematic(
     if sample_count <= 0:
         raise ValueError("sample_count must be positive")
 
-    centers_x = (-5.6, 0.0, 5.6)
-    scale = 0.52
+    centers_x = (-6.7, 0.0, 6.7)
+    scale = 0.46
     _draw_structure(
         axes,
         centers_x[0],
@@ -153,9 +153,21 @@ def plot_structural_ablation_schematic(
     for center_x, name in zip(centers_x, names, strict=True):
         axes.text(center_x, -2.25, name, ha="center", va="top", fontsize=6.3)
 
+    structure_half_width = 4.8 * scale
+    arrow_clearance = 0.12
     transitions = (
-        (-3.05, -2.62, "+ carrier", style.colors.mechanical),
-        (2.62, 3.05, "+ void", "#7560A8"),
+        (
+            centers_x[0] + structure_half_width + arrow_clearance,
+            centers_x[1] - structure_half_width - arrow_clearance,
+            "+ carrier",
+            style.colors.mechanical,
+        ),
+        (
+            centers_x[1] + structure_half_width + arrow_clearance,
+            centers_x[2] - structure_half_width - arrow_clearance,
+            "+ void",
+            "#7560A8",
+        ),
     )
     for start, end, label, color in transitions:
         axes.annotate(
@@ -174,7 +186,7 @@ def plot_structural_ablation_schematic(
             fontsize=5.7,
         )
 
-    axes.set_xlim(-8.55, 8.55)
+    axes.set_xlim(-9.10, 9.10)
     axes.set_ylim(-3.15, 3.15)
     axes.set_aspect("equal", adjustable="box")
     axes.axis("off")
@@ -332,17 +344,6 @@ def plot_void_coupled_response(
         fontsize=5.5,
         linespacing=1.15,
         bbox={"facecolor": "white", "edgecolor": "none", "pad": 0.8},
-    )
-    axes.text(
-        0.97,
-        0.06,
-        rf"$\times\;w_v=0$, $n={np.count_nonzero(zero)}$",
-        transform=axes.transAxes,
-        ha="right",
-        va="bottom",
-        fontsize=5.6,
-        color="#666666",
-        bbox={"facecolor": "white", "edgecolor": "none", "pad": 0.6},
     )
     x_padding = 0.05 * max(float(np.ptp(mechanics_display)), 10.0)
     y_padding = 0.12 * max(float(np.ptp(optical_display)), 1.0)

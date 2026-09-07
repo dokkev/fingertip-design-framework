@@ -535,18 +535,31 @@ into one quantitative Pareto cloud. Figure 3 instead shows four separately
 scaled empirical Pareto small multiples. The composition recomputes
 non-dominance, requires exact agreement with both stored `is_pareto` flags and
 `pareto.csv`, and recomputes each post-hoc equal-relative-performance balanced
-trial. Pareto solutions share the same blue-to-purple `w_void` encoding as the
+trial. The paper-facing panel labels these campaign pairs `Flat` and `Curved`
+instead of exposing their internal angle schedules. Pareto solutions share the
+same blue-to-purple `w_void` encoding as the
 ablation void-effect panel; all other evaluations remain neutral gray. The
-final composition uses two visually bounded super-panels. Paired structural
-analysis groups the structural counterfactual with stacked carrier and
-lateral-void evidence; morphology optimization groups the 2 x 2 Pareto block.
-Within them, all six quantitative axes occupy one shared 2 x 3 board and
-therefore share exact row, column, and physical-size alignment. One `w_void`
-color scale beside the coupled-void panel applies to both its scatter and the
-optimized Pareto points.
+final composition avoids decorative outer bounding boxes: panel titles and the
+native quantitative-axis spines provide the hierarchy. Paired structural
+analysis groups the structural counterfactual with carrier and lateral-void
+evidence; morphology optimization groups a compact 2 x 2 block of landscape
+Pareto axes. Each Pareto axis has the same physical width as a structural
+response axis, and all four Pareto axes share one equal size within panel (d).
+Its two columns remain tightly spaced, while its two rows use the exact same
+expanded schematic-to-response gap and outer vertical boundaries as the
+left-side panel grid. This leaves a clearer visual break between the structural
+and optimization blocks.
+All four Pareto axes retain numerical tick labels. Their y values occupy the
+outer perimeter, while the upper-row x values sit just inside their lower
+spines so the nearly closed internal seams remain uncluttered.
+The shared optimization legend occupies a separate vertical strip immediately
+to the right of the 2 x 2 data block. One `w_void` color scale beside the
+coupled-void panel applies to both its scatter and the optimized Pareto points.
+Figure 3 uses one figure-local IEEE double-column typography hierarchy across
+all quantitative panels: 7 pt axis labels and 6 pt numerical tick labels.
 
 Reusable axes-only panel functions live in `lumo.visualization.ablation`;
-`figures/fig3.py` alone loads the completed ablation and optimization artifacts,
+`figures/fig3/fig3.py` alone loads the completed ablation and optimization artifacts,
 validates their contracts, composes the nested GridSpec, writes the validation
 summary, and exports the paper artifacts.
 
@@ -1096,6 +1109,15 @@ stored separately with the target and tracking error. Explicit `loading`,
 the final low dwell, a continuous low-force release gate closes the independent
 run.
 
+Every camera-rate force observation received during `CYCLING` also updates a
+contact-continuity QC accumulator. It records the minimum observed force and
+counts distinct below-threshold episodes without changing the trajectory. The
+history writer persists these values and `contact_loss_detected` in
+`trajectory.json`; later analysis, rather than online acquisition, decides
+whether to exclude a warned run. Nominal phase remains distinct from the actual
+force derivative, so actual-branch monotonicity and turnaround trimming are
+offline analysis responsibilities.
+
 `HistoryDatasetWriter` owns history format version 1 under
 `output/contact_history/`. One completed run contains one continuous
 `trajectory/` with lossless PNG frames, synchronized raw wrench rows, trajectory
@@ -1112,8 +1134,22 @@ isolated under `output/contact_history/mock/`.
 uses the same fixed D435 photometric controls and nearest-host-time Rokubi
 synchronization as the discrete collector but sends no actuator commands. Its
 vertical gauge displays actual force and the time-varying target line without a
-ramp acceptance band. Series repetitions are created only after the preceding
-trajectory satisfies the full-release gate.
+ramp acceptance band. The default 11.375 N/s trajectory completes seven cycles
+between 2 and 15 N in 30 s while preserving the 1 s endpoint dwells and 5 Hz
+image capture. Series repetitions are created only after the preceding
+trajectory satisfies the configured 2 N release gate for 0.5 s.
+
+`experiments.analysis.contact_history` is the read-only analysis counterpart to
+history format v1. It calibrates each retained run from the nearest independent
+unloaded capture, forms the same 128-bin longitudinal Green-DN representation
+used by morphology analysis, and matches nominal loading and unloading branches
+by actual measured force without extrapolation. Primary summaries exclude runs
+with contact-loss warnings or acquisition incompleteness. The three compared
+sessions must share one material and provide baseline, flat-opt, and angled-opt
+morphologies. It reports the direct loading--unloading optical gap,
+signal-normalized history dependence, and within-one-contact cycle variation;
+it does not label any of them as a specific material mechanism.
+`scripts/analyze_contact_history.py` is its command-line entry point.
 
 `experiments/localization/` owns shared pure NumPy/OpenCV algorithms for the
 physical fingertip. Offline characterization and online execution import these
@@ -1279,8 +1315,8 @@ workflow is one manually inspected run, then 6--12 runs spanning all six
 locations, and only then a full session if the signal is mechanically
 consistent. Results remain in pixels because no trusted image-to-mm calibration
 is available, and they do not populate `S_OM` or any Figure 5 input. This study
-uses the corrected fixture positions 0, 10, 20, 30, 40, and 50 mm and explicitly
-reports that Figure 5 still carries the older 11 mm mapping.
+uses the corrected fixture positions 0, 10, 20, 30, 40, and 50 mm, matching
+Figure 5.
 
 `validation/optomech/hardware_indentation_tracking_1d.py` is a separate,
 read-only follow-up to that 2-D baseline. It uses the same fixed 12-run Solaris
@@ -1317,7 +1353,7 @@ are preserved under
 cannot populate `S_OM`, change Figure 5, or promote itself to production.
 
 `validation/optomech/hardware_unloaded_optical_activation.py` is a separate
-read-only optical-reference feasibility study over the five available Figure 5
+read-only optical-reference feasibility study over the six available Figure 5
 specimen sessions. It constructs exactly one production `OpticalStrip` from
 the temporal median of every unloaded frame in a session and reuses that same
 strip for every unloaded and loaded 128-bin Green profile. Each complete run is
@@ -1329,15 +1365,17 @@ Its fixture coordinates are the corrected 0, 10, 20, 30, 40, and 50 mm stops.
 It does not divide by force, interpret Unloaded as 0 N, alter Figure 5, or define
 a production or paper metric.
 
-`figures/figure5/` owns the self-contained physical-hardware Figure 5. Its
-configuration names the five available fabricated specimens, the intentionally
-pending Dragon Skin angled-opt specimen, and the fixture mapping from six
-distal-to-proximal acquisition stops to physical contact coordinates at 11 mm
-spacing. Panels (a) and (b) share one morphology-row height, gap, and material
+`figures/fig5/` owns the self-contained physical-hardware Figure 5. Its
+configuration names the six measured fabricated specimens and maps the six
+distal-to-proximal acquisition stops to physical contact coordinates at 10 mm
+spacing. This measured fixture spacing is separate from the fingertip's 11 mm
+LED pitch. Panels (a) and (b) share one morphology-row height, gap, and material
 separator contract so their six row centers coincide in the composed figure.
 The atlas receives slightly more horizontal space so its cropped photographs
 nearly fill each row with minimal within-material gaps; the paired response-map
-axes use square plot boxes on those same row centers.
+axes use square plot boxes on those same row centers. Morphology names are
+printed once beside panel (a); panel (b) continues the aligned rows without
+duplicating those labels.
 `fig5a.py` selects auditable raw 10 mm-sphere, repetition-1, 15 N
 frames and one temporally nearest real unloaded frame per specimen. Every cell
 uses the same fixed camera-coordinate crop. Solaris retains the stored RGB
@@ -1347,6 +1385,9 @@ normalization or adaptive enhancement, and the fixed material-level display
 exposure is recorded in the selection manifest.
 `fig5b.py` reads the compact Solaris and Dragon Skin hold profiles from
 `longitudinal_profiles.npz`; it does not consume fitted load-response slopes.
+The separately repeated Dragon Skin baseline 30 mm acquisition is analyzed
+with its own unloaded reference and overrides only that condition; its 10 mm
+result remains sourced from the earlier complete session.
 Within each independent repetition it subtracts the 2 N profile from the 15 N
 profile, partitions the normalized distal-to-proximal span into six fixed
 regions, and computes one RMS change magnitude per region before taking the
@@ -1355,24 +1396,27 @@ and places the 10 and 30 mm sphere maps in two columns. All ten measured 6-by-6
 matrices share a zero-based Viridis scale in camera DN. One outlined white `x`
 per contact row marks its largest regional change without connecting the
 markers or adding a fitted trend. The paired per-repetition values and plotted
-medians are exported to `fig5b_region_response.csv`. The two uncollected Dragon
-Skin angled-opt conditions remain explicit non-numerical placeholders.
-`fig5c.py` reads the existing morphology-level slope-profile metric directly
+medians are exported to `fig5b_region_response.csv`. The two Dragon Skin
+angled-opt indenter conditions are populated from the completed physical
+dataset.
+`fig5c.py` reads the existing morphology-level slope-profile metrics directly
 from each material's `results/morphology_metrics.csv`. Grouped-bar heights are
-`D_neighbor_median_DN_per_N`: the median RMS difference between neighboring
-11 mm contact-location templates in measured optical load-response slope
-profiles. The four material/indenter groups share one absolute DN/N axis;
-optimized-bar annotations report signed improvement relative to the matching
-baseline without changing the bar height. The stored neighboring-pair IQR is
-preserved in `fig5c_metrics.csv` but omitted from the compact panel. No
-repeat-variability division or baseline normalization is used for the plotted
-metric, and unmeasured Dragon Skin angled-opt entries retain fixed textual
-placeholder slots.
+the stored dimensionless `D_neighbor_over_W`: neighboring-contact separation
+in measured optical load-response profiles divided by same-location variation
+across independent repeated contacts. Each stored ratio is checked against
+`D_neighbor_median_DN_per_N / W_median_DN_per_N`; both components and their
+stored IQRs remain visible in `fig5c_metrics.csv`. The four
+material/indenter groups share one absolute ratio axis, while optimized-bar
+annotations report signed improvement relative to the matching baseline
+without normalizing baseline bars to one. No ratio error bars are inferred
+from the component IQRs; all six specimens are measured, so the final panel has
+no pending entries.
 `fig5.py` composes these panels with nested
 Matplotlib GridSpecs at the exact 7.16-inch double-column width. The final PDF
 embeds raw atlas images as raster content while retaining all axes, heatmaps,
 labels, and annotations as native Matplotlib artists; it never stitches
-rendered panel screenshots.
+rendered panel screenshots. The normal Figure 5 command writes only the final
+`fig5.pdf` and `fig5.png`; it does not export redundant panel-level images.
 
 `optical_features.py` owns pure feature extraction. `DenseProfileConfig`
 selects brightest-10% red, mean red, absolute high-pass red, red gradient, or
@@ -1538,10 +1582,11 @@ does not consume the optical green channel.
 
 `layout.py` creates uniform axes arrays or caller-owned Matplotlib `GridSpec`
 layouts, adds bold panel labels, renders one panel standalone, and saves PDF,
-SVG, or high-resolution PNG output. Its `add_figure_box()` helper owns the one
-rounded white-panel frame used by both Figure 2 and Figure 3, including border
-color, stroke, padding, and corner radius. Figure composition owns panel labels
-and file output; panel functions remain unaware of both.
+SVG, or high-resolution PNG output. Its `add_figure_box()` helper owns the
+optional rounded white-panel frame used by Figure 2, including border color,
+stroke, padding, and corner radius; Figure 3 intentionally uses no decorative
+outer frames. Figure composition owns panel labels and file output; panel
+functions remain unaware of both.
 
 The package accepts already prepared numerical arrays or image arrays. It does
 not contain experiment-specific paths, campaign loading, data preprocessing,
@@ -1549,13 +1594,17 @@ Newton, OptiX, or Ax calls. A caller may therefore use the same panels with
 simulation results, experimental measurements, standalone inspection, and
 multi-panel paper figures.
 
-`figures/fig2.py` is the finalized paper Figure 2 composition using this
+`figures/fig2/fig2.py` is the finalized paper Figure 2 composition using this
 contract. It loads one frozen Newton state, replays the unloaded and loaded
 meshes through OptiX with common deterministic samples, and composes the
 existing parameterization, mechanics, optical, and Bayesian-optimization
 panels. Artifact loading, transport replay, inter-panel arrows, and export
 remain in the figure composition; the reusable plotting layer stays free of
-simulation ownership.
+simulation ownership. Its fixed 7.16-inch double-column composition uses a
+compact 2.80-inch canvas and a figure-local readable hierarchy of 8.2 pt panel
+titles, 7.5 pt axis/response labels, and 6.0--6.4 pt supporting text. Panel (a)
+shows the five optimized morphology variables in red and the fixed or derived
+geometric dimensions in black.
 
 One-off experimental figure scripts own their artifact discovery and figure
 composition rather than adding experiment paths to `lumo.visualization`.

@@ -16,7 +16,7 @@ import numpy as np  # noqa: E402
 import warp as wp  # noqa: E402
 from matplotlib.collections import LineCollection, PolyCollection  # noqa: E402
 
-from figure_2_optomechanical_pipeline import _load_frozen_state  # noqa: E402
+from figures.fig2.fig2 import _load_frozen_state  # noqa: E402
 from fingertip_mesh_states import (  # noqa: E402
     _emissions,
     _make_leds,
@@ -533,21 +533,9 @@ def _export_newton_panel(
 
     with publication_context():
         figure = plt.figure(figsize=(4.0, 3.25))
-        image_axis = figure.add_axes((0.0, 0.13, 1.0, 0.87))
+        image_axis = figure.add_axes((0.0, 0.0, 1.0, 1.0))
         image_axis.imshow(_crop_viewer_background(frame))
         image_axis.set_axis_off()
-        colorbar_axis = figure.add_axes((0.20, 0.055, 0.60, 0.035))
-        scalar_map = matplotlib.cm.ScalarMappable(
-            norm=stress_norm,
-            cmap=stress_colormap,
-        )
-        colorbar = figure.colorbar(
-            scalar_map,
-            cax=colorbar_axis,
-            orientation="horizontal",
-            ticks=(0.0, 5.0, 10.0, 25.0, 50.0, 100.0),
-        )
-        colorbar.set_label("Elastic von Mises stress (kPa)", labelpad=1.0)
     _save_matplotlib_panel(figure, "c_newton_mechanics.png")
 
 

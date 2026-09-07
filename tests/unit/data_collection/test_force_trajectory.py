@@ -30,11 +30,11 @@ CONFIG = ForceTrajectoryConfig(
 def test_default_trajectory_timing_contract() -> None:
     config = ForceTrajectoryConfig()
 
-    assert config.ramp_duration_s == 13.0
-    assert config.nominal_cycle_duration_s == 28.0
+    assert config.ramp_duration_s == pytest.approx(8.0 / 7.0)
+    assert config.nominal_cycle_duration_s == pytest.approx(30.0 / 7.0)
     assert config.total_cycles == 7
-    assert config.nominal_trajectory_duration_s == 196.0
-    assert config.expected_capture_count == 980
+    assert config.nominal_trajectory_duration_s == pytest.approx(30.0)
+    assert config.expected_capture_count == 150
 
 
 @pytest.mark.parametrize(
@@ -48,7 +48,8 @@ def test_default_trajectory_timing_contract() -> None:
         {"conditioning_cycles": -1},
         {"measurement_cycles": 0},
         {"capture_rate_hz": 0.0},
-        {"release_max_force_n": 2.0},
+        {"contact_loss_threshold_n": 2.0},
+        {"release_max_force_n": 15.0},
     ),
 )
 def test_invalid_config_is_rejected(changes: dict[str, float | int]) -> None:
@@ -156,6 +157,22 @@ def test_actual_force_tracking_error_never_resets_cycling() -> None:
     assert far_above.state is ForceTrajectoryState.CYCLING
     assert far_above.phase is ForceTrajectoryPhase.HIGH_DWELL
     assert far_above.tracking_error_n == pytest.approx(96.0)
+
+
+def test_contact_continuity_qc_counts_loss_episodes_without_resetting() -> None:
+    controller = ForceTrajectoryController(CONFIG)
+    start = _start_cycling(controller)
+
+    controller.update(start + 0.1, 1.8)
+    controller.update(start + 0.2, 0.8)
+    controller.update(start + 0.3, 0.4)
+    controller.update(start + 0.4, 1.4)
+    final = controller.update(start + 0.5, 0.9)
+
+    assert final.state is ForceTrajectoryState.CYCLING
+    assert controller.min_actual_force_seen_during_cycling_n == 0.4
+    assert controller.contact_loss_event_count == 2
+    assert controller.contact_loss_detected
 
 
 def test_exact_cycle_end_waits_for_release_then_completes() -> None:

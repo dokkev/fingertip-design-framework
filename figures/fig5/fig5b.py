@@ -19,6 +19,7 @@ from lumo.visualization import DEFAULT_STYLE, publication_context, save_figure  
 
 from .config import (  # noqa: E402
     ALL_HOLES,
+    ANALYSIS_CONDITION_OVERRIDES,
     ANALYSIS_ROOTS,
     COMPARISON_CONDITIONS,
     COMPARISON_MORPHOLOGIES,
@@ -82,30 +83,6 @@ def load_optical_change_maps() -> tuple[
     response_maps: dict[tuple[str, str, str], np.ndarray | None] = {}
     audit_rows: list[dict[str, object]] = []
     for candidate_material, root in ANALYSIS_ROOTS.items():
-        path = root / "raw_data_summary" / "longitudinal_profiles.npz"
-        with np.load(path, allow_pickle=False) as data:
-            current_coordinate = np.asarray(
-                data["longitudinal_coordinate"], dtype=np.float64
-            )
-            profiles = np.asarray(data["profiles"], dtype=np.float64)
-            specimen = np.asarray(data["specimen_id"]).astype(str)
-            material = np.asarray(data["material"]).astype(str)
-            morphology = np.asarray(data["morphology"]).astype(str)
-            run_id = np.asarray(data["run_id"]).astype(str)
-            indenter = np.asarray(data["indenter"]).astype(str)
-            holes = np.asarray(data["hole_index"], dtype=np.int64)
-            repetition = np.asarray(data["repetition_index"], dtype=np.int64)
-            target_force = np.asarray(data["target_force_n"], dtype=np.float64)
-            actual_force = np.asarray(data["actual_force_n"], dtype=np.float64)
-            status = np.asarray(data["run_status"]).astype(str)
-
-        if coordinate is None:
-            coordinate = current_coordinate
-            region_edges, region_indices = _fixed_region_indices(coordinate)
-        elif not np.array_equal(coordinate, current_coordinate):
-            raise RuntimeError("Figure 5(b) summaries use different optical coordinates")
-        assert region_edges is not None and region_indices is not None
-
         material_indenters = [
             candidate_indenter
             for row_material, candidate_indenter, _ in COMPARISON_CONDITIONS
@@ -118,12 +95,38 @@ def load_optical_change_maps() -> tuple[
                     candidate_indenter,
                     candidate_morphology,
                 )
-                if (
-                    candidate_material == "dragon_skin"
-                    and candidate_morphology == "angled_opt"
-                ):
-                    response_maps[key] = None
-                    continue
+                source_root = ANALYSIS_CONDITION_OVERRIDES.get(
+                    (candidate_material, candidate_morphology, candidate_indenter),
+                    root,
+                )
+                path = source_root / "raw_data_summary" / "longitudinal_profiles.npz"
+                with np.load(path, allow_pickle=False) as data:
+                    current_coordinate = np.asarray(
+                        data["longitudinal_coordinate"], dtype=np.float64
+                    )
+                    profiles = np.asarray(data["profiles"], dtype=np.float64)
+                    specimen = np.asarray(data["specimen_id"]).astype(str)
+                    material = np.asarray(data["material"]).astype(str)
+                    morphology = np.asarray(data["morphology"]).astype(str)
+                    run_id = np.asarray(data["run_id"]).astype(str)
+                    indenter = np.asarray(data["indenter"]).astype(str)
+                    holes = np.asarray(data["hole_index"], dtype=np.int64)
+                    repetition = np.asarray(data["repetition_index"], dtype=np.int64)
+                    target_force = np.asarray(
+                        data["target_force_n"], dtype=np.float64
+                    )
+                    actual_force = np.asarray(data["actual_force_n"], dtype=np.float64)
+                    status = np.asarray(data["run_status"]).astype(str)
+
+                if coordinate is None:
+                    coordinate = current_coordinate
+                    region_edges, region_indices = _fixed_region_indices(coordinate)
+                elif not np.array_equal(coordinate, current_coordinate):
+                    raise RuntimeError(
+                        "Figure 5(b) summaries use different optical coordinates"
+                    )
+                assert region_edges is not None and region_indices is not None
+
                 contact_rows = []
                 for hole in ALL_HOLES:
                     condition_mask = (
@@ -287,9 +290,9 @@ def render_panel(
 
     grid = subplot_spec.subgridspec(
         9,
-        6,
+        5,
         height_ratios=MORPHOLOGY_TABLE_HEIGHT_RATIOS,
-        width_ratios=(0.10, 0.54, 1.0, 1.0, 0.055, 0.13),
+        width_ratios=(0.10, 1.0, 1.0, 0.055, 0.13),
         hspace=MORPHOLOGY_TABLE_HSPACE,
         wspace=0.045,
     )
@@ -312,7 +315,7 @@ def render_panel(
         va="center",
     )
 
-    for column, (_, column_title) in enumerate(INDENTER_COLUMNS, start=2):
+    for column, (_, column_title) in enumerate(INDENTER_COLUMNS, start=1):
         column_axis = figure.add_subplot(grid[1, column])
         column_axis.axis("off")
         column_axis.text(
@@ -344,19 +347,7 @@ def render_panel(
     for row_index, (condition, row_slot) in enumerate(
         zip(MORPHOLOGY_CONDITIONS, MORPHOLOGY_TABLE_ROW_SLOTS, strict=True)
     ):
-        row_label_axis = figure.add_subplot(grid[row_slot, 1])
-        row_label_axis.axis("off")
-        material_name, morphology_name = condition.display_name.rsplit(" ", 1)
-        row_label_axis.text(
-            0.0,
-            0.5,
-            f"{material_name}\n{morphology_name}",
-            fontsize=4.9,
-            ha="left",
-            va="center",
-            linespacing=1.08,
-        )
-        for column, (candidate_indenter, _) in enumerate(INDENTER_COLUMNS, start=2):
+        for column, (candidate_indenter, _) in enumerate(INDENTER_COLUMNS, start=1):
             axis = figure.add_subplot(grid[row_slot, column])
             key = (condition.material, candidate_indenter, condition.morphology)
             values = responses[key]
@@ -399,7 +390,7 @@ def render_panel(
                         path_effects.Normal(),
                     ]
                 )
-            if column == 2 and row_index in (0, 3):
+            if column == 1 and row_index in (0, 3):
                 axis.set_yticks(physical_locations)
             else:
                 axis.set_yticks([])
@@ -408,7 +399,7 @@ def render_panel(
                     np.arange(N_LONGITUDINAL_REGIONS),
                     tuple(f"R{region}" for region in range(1, N_LONGITUDINAL_REGIONS + 1)),
                 )
-                if column == 2:
+                if column == 1:
                     axis.text(
                         0.0,
                         -0.25,
@@ -438,7 +429,7 @@ def render_panel(
             axes.append(axis)
 
     assert image is not None
-    colorbar_axis = figure.add_subplot(grid[2:, 4])
+    colorbar_axis = figure.add_subplot(grid[2:, 3])
     colorbar = figure.colorbar(image, cax=colorbar_axis)
     colorbar.ax.set_title("2–15 N optical\nchange [DN]", fontsize=3.9, pad=1.5)
     colorbar.ax.tick_params(labelsize=4.5, length=1.5, pad=0.8)

@@ -28,7 +28,7 @@ from lumo.visualization import (  # noqa: E402
 )
 
 
-_ROOT = Path(__file__).resolve().parents[1]
+_ROOT = Path(__file__).resolve().parents[2]
 _INPUT = (
     _ROOT
     / "output"
@@ -42,6 +42,10 @@ _LOADED_SCENARIO = "sphere_15mm_y+0mm"
 _LOADED_FORCE_N = 10.0
 _OPTIX_X_LIMITS_MM = (-16.0, 16.0)
 _OPTIX_Z_LIMITS_MM = (-19.0, 14.0)
+_PANEL_TITLE_SIZE_PT = 8.2
+_AXIS_LABEL_SIZE_PT = 7.5
+_BODY_TEXT_SIZE_PT = 6.4
+_BONDING_COLOR = "#B8860B"
 
 _VARIABLE_FONT_RC = {
     "mathtext.fontset": "custom",
@@ -210,7 +214,7 @@ def _add_panel_frame(
         f"({label})",
         ha="left",
         va="top",
-        fontsize=7.7,
+        fontsize=_PANEL_TITLE_SIZE_PT,
         fontweight="bold",
         color="#111111",
     )
@@ -220,7 +224,7 @@ def _add_panel_frame(
         title,
         ha="left",
         va="top",
-        fontsize=7.7,
+        fontsize=_PANEL_TITLE_SIZE_PT,
         color="#111111",
     )
     figure.text(
@@ -229,7 +233,7 @@ def _add_panel_frame(
         subtitle,
         ha="center",
         va="top",
-        fontsize=7.0,
+        fontsize=_AXIS_LABEL_SIZE_PT,
         fontstyle="italic",
         color="#252525",
     )
@@ -260,10 +264,11 @@ def _add_flow_arrow(
 
 def _draw_parameterization(figure: plt.Figure, fingertip: Fingertip) -> None:
     x0, y0, x1, y1 = _PANEL_BOXES[0]
-    axis = figure.add_axes((x0 + 0.004, y0 + 0.135, x1 - x0 - 0.008, y1 - y0 - 0.205))
+    axis = figure.add_axes((x0 + 0.004, y0 + 0.170, x1 - x0 - 0.008, y1 - y0 - 0.205))
     parameter_style = replace(
         DEFAULT_STYLE,
-        axis_label_font_size_pt=7.2,
+        colors=replace(DEFAULT_STYLE.colors, mechanical=_BONDING_COLOR),
+        axis_label_font_size_pt=_AXIS_LABEL_SIZE_PT,
         tick_font_size_pt=7.0,
         line_width_pt=0.95,
         spine_width_pt=0.55,
@@ -274,7 +279,7 @@ def _draw_parameterization(figure: plt.Figure, fingertip: Fingertip) -> None:
         axis,
         fingertip,
         show_legend=False,
-        show_fixed_dimensions=False,
+        show_fixed_dimensions=True,
         style=parameter_style,
     )
     axis.set_xlim(-20.5, 20.5)
@@ -302,7 +307,7 @@ def _draw_parameterization(figure: plt.Figure, fingertip: Fingertip) -> None:
         "Design vector",
         ha="center",
         va="center",
-        fontsize=7.0,
+        fontsize=_AXIS_LABEL_SIZE_PT,
         color="#222222",
     )
     figure.text(
@@ -311,7 +316,7 @@ def _draw_parameterization(figure: plt.Figure, fingertip: Fingertip) -> None:
         r"$\boldsymbol{\theta}=[h_{\rm fp},h_{\rm ep},w_s,h_s,w_v]$",
         ha="center",
         va="center",
-        fontsize=7.4,
+        fontsize=7.8,
         color="#222222",
     )
 
@@ -319,14 +324,14 @@ def _draw_parameterization(figure: plt.Figure, fingertip: Fingertip) -> None:
 def _draw_mechanics(figure: plt.Figure) -> None:
     x0, y0, x1, y1 = _PANEL_BOXES[1]
 
-    render_axis = figure.add_axes((x0 + 0.004, y0 + 0.305, x1 - x0 - 0.008, 0.370))
+    render_axis = figure.add_axes((x0 + 0.004, y0 + 0.360, x1 - x0 - 0.008, 0.370))
     render_axis.imshow(_panel_image("c_newton_mechanics.png"))
     render_axis.set_axis_off()
     force_x = x0 + 0.55 * (x1 - x0)
     figure.add_artist(
         FancyArrowPatch(
-            (force_x, y0 + 0.420),
-            (force_x, y0 + 0.500),
+            (force_x, y0 + 0.475),
+            (force_x, y0 + 0.555),
             transform=figure.transFigure,
             arrowstyle="-|>",
             mutation_scale=8.5,
@@ -337,11 +342,11 @@ def _draw_mechanics(figure: plt.Figure) -> None:
     )
     figure.text(
         force_x - 0.008,
-        y0 + 0.460,
+        y0 + 0.515,
         r"$F_{\mathrm{ext}}$",
         ha="right",
         va="center",
-        fontsize=7.0,
+        fontsize=_AXIS_LABEL_SIZE_PT,
         color=DEFAULT_STYLE.colors.optimization,
     )
 
@@ -349,25 +354,29 @@ def _draw_mechanics(figure: plt.Figure) -> None:
     displacement_limit_mm = float(checkpoint_displacement_mm[-1])
     force_limit_n = float(checkpoint_force_n[-1])
     displacement_mm = np.linspace(0.0, displacement_limit_mm, 160)
-    exponential_shape = 1.6
+    exponential_shape = 5.0
     force_n = force_limit_n * np.expm1(
         exponential_shape * displacement_mm / displacement_limit_mm
     ) / np.expm1(exponential_shape)
-    curve_axis = figure.add_axes((x0 + 0.018, y0 + 0.120, x1 - x0 - 0.036, 0.150))
+    curve_axis = figure.add_axes((x0 + 0.018, y0 + 0.135, x1 - x0 - 0.036, 0.150))
     curve_axis.plot(
         displacement_mm,
         force_n,
-        color=DEFAULT_STYLE.colors.mechanical,
+        color=DEFAULT_STYLE.colors.optimization,
         linewidth=1.35,
     )
     curve_axis.fill_between(
         displacement_mm,
         force_n,
-        color=DEFAULT_STYLE.colors.mechanical,
+        color=DEFAULT_STYLE.colors.optimization,
         alpha=0.08,
     )
-    curve_axis.set_xlabel("Displacement [mm]", fontsize=7.0, labelpad=1.0)
-    curve_axis.set_ylabel("Force [N]", fontsize=7.0, labelpad=1.0)
+    curve_axis.set_xlabel(
+        "Displacement [mm]",
+        fontsize=_AXIS_LABEL_SIZE_PT,
+        labelpad=1.0,
+    )
+    curve_axis.set_ylabel("Force [N]", fontsize=_AXIS_LABEL_SIZE_PT, labelpad=1.0)
     curve_axis.set_xticks(())
     curve_axis.set_yticks(())
     curve_axis.set_xlim(left=0.0)
@@ -379,9 +388,9 @@ def _draw_mechanics(figure: plt.Figure) -> None:
         transform=curve_axis.transAxes,
         ha="left",
         va="top",
-        fontsize=5.7,
+        fontsize=_BODY_TEXT_SIZE_PT,
         fontstyle="italic",
-        color=DEFAULT_STYLE.colors.mechanical,
+        color=DEFAULT_STYLE.colors.optimization,
     )
     for spine in curve_axis.spines.values():
         spine.set_color("#222222")
@@ -392,17 +401,17 @@ def _draw_mechanics(figure: plt.Figure) -> None:
         r"Mechanical Response $\rightarrow J_{\mathrm{contact}}$",
         ha="center",
         va="center",
-        fontsize=7.0,
+        fontsize=_AXIS_LABEL_SIZE_PT,
         color="#222222",
     )
 
 
 def _draw_optics(figure: plt.Figure, fingertip: Fingertip) -> None:
     x0, y0, x1, y1 = _PANEL_BOXES[2]
-    image_height = 0.268
+    image_height = 0.255
     image_width = x1 - x0 - 0.016
-    unloaded_axis = figure.add_axes((x0 + 0.008, y0 + 0.405, image_width, image_height))
-    loaded_axis = figure.add_axes((x0 + 0.008, y0 + 0.115, image_width, image_height))
+    unloaded_axis = figure.add_axes((x0 + 0.008, y0 + 0.445, image_width, image_height))
+    loaded_axis = figure.add_axes((x0 + 0.008, y0 + 0.160, image_width, image_height))
     unloaded_image = _color_optix_led_source(
         _panel_image("d_unloaded_optix.png"),
         fingertip,
@@ -428,7 +437,7 @@ def _draw_optics(figure: plt.Figure, fingertip: Fingertip) -> None:
             transform=axis.transAxes,
             ha="left",
             va="top",
-            fontsize=6.2,
+            fontsize=_BODY_TEXT_SIZE_PT,
             color="#222222",
             bbox={
                 "boxstyle": "round,pad=0.06",
@@ -444,7 +453,7 @@ def _draw_optics(figure: plt.Figure, fingertip: Fingertip) -> None:
         r"Optical Response $\rightarrow J_{\mathrm{obs}}$",
         ha="center",
         va="center",
-        fontsize=7.0,
+        fontsize=_AXIS_LABEL_SIZE_PT,
         color="#222222",
     )
 
@@ -516,15 +525,23 @@ def _draw_bayesian_optimization(figure: plt.Figure) -> None:
         label="Next query",
         zorder=6,
     )
-    bo_axis.set_xlabel(r"$J_{\mathrm{contact}}$", fontsize=7.0, labelpad=1.0)
-    bo_axis.set_ylabel(r"$J_{\mathrm{obs}}$", fontsize=7.0, labelpad=1.0)
+    bo_axis.set_xlabel(
+        r"$J_{\mathrm{contact}}$",
+        fontsize=_AXIS_LABEL_SIZE_PT,
+        labelpad=1.0,
+    )
+    bo_axis.set_ylabel(
+        r"$J_{\mathrm{obs}}$",
+        fontsize=_AXIS_LABEL_SIZE_PT,
+        labelpad=1.0,
+    )
     bo_axis.set_xticks(())
     bo_axis.set_yticks(())
     bo_axis.set_xlim(0.15, 0.95)
     bo_axis.set_ylim(0.10, 0.95)
     bo_axis.legend(
         loc="lower left",
-        fontsize=5.4,
+        fontsize=6.0,
         frameon=True,
         framealpha=0.92,
         borderpad=0.18,
@@ -539,8 +556,8 @@ def _draw_bayesian_optimization(figure: plt.Figure) -> None:
 
     figure.add_artist(
         FancyArrowPatch(
-            (0.5 * (x0 + x1), y0 + 0.255),
-            (0.5 * (x0 + x1), y0 + 0.123),
+            (0.5 * (x0 + x1), y0 + 0.235),
+            (0.5 * (x0 + x1), y0 + 0.160),
             transform=figure.transFigure,
             arrowstyle="-|>",
             mutation_scale=7.0,
@@ -550,7 +567,7 @@ def _draw_bayesian_optimization(figure: plt.Figure) -> None:
     )
     figure.add_artist(
         FancyBboxPatch(
-            (x0 + 0.030, y0 + 0.025),
+            (x0 + 0.030, y0 + 0.060),
             x1 - x0 - 0.060,
             0.075,
             boxstyle="round,pad=0.004,rounding_size=0.005",
@@ -562,11 +579,11 @@ def _draw_bayesian_optimization(figure: plt.Figure) -> None:
     )
     figure.text(
         0.5 * (x0 + x1),
-        y0 + 0.0625,
+        y0 + 0.0975,
         "Propose next morphology\n" + r"$\boldsymbol{\theta}_{i+1}$",
         ha="center",
         va="center",
-        fontsize=5.8,
+        fontsize=_BODY_TEXT_SIZE_PT,
         color="#222222",
         linespacing=0.90,
     )
@@ -608,7 +625,7 @@ def _add_feedback_loop(figure: plt.Figure) -> None:
         "Update morphology and iterate",
         ha="center",
         va="top",
-        fontsize=6.0,
+        fontsize=_BODY_TEXT_SIZE_PT,
         fontstyle="italic",
         color="#333333",
     )
@@ -623,21 +640,21 @@ def _add_shared_legend(figure: plt.Figure) -> None:
             edgecolor="#087A49",
             label="LED / light source",
         ),
-        Line2D((), (), color=DEFAULT_STYLE.colors.mechanical, linestyle="--", linewidth=1.0, label="Bonding surface"),
+        Line2D((), (), color=_BONDING_COLOR, linestyle="--", linewidth=1.0, label="Bonding surface"),
         Line2D((), (), marker="o", linestyle="none", markerfacecolor="#8B8B8B", markeredgecolor="#555555", markersize=5.5, label="Spherical indenter"),
         Line2D((), (), color="#008C67", linewidth=1.0, label="Optical ray path"),
     )
     legend = figure.legend(
         handles=handles,
         loc="lower center",
-        bbox_to_anchor=(0.5, 1.002),
+        bbox_to_anchor=(0.5, 0.981),
         ncol=6,
         frameon=True,
         fancybox=True,
         framealpha=1.0,
         facecolor="white",
         edgecolor="#A8A8A8",
-        fontsize=5.9,
+        fontsize=_BODY_TEXT_SIZE_PT,
         handlelength=1.35,
         handleheight=0.75,
         handletextpad=0.40,
@@ -667,7 +684,7 @@ def main() -> None:
         )
     )
     with publication_context(), matplotlib.rc_context(rc=_VARIABLE_FONT_RC):
-        figure = plt.figure(figsize=(7.16, 3.75))
+        figure = plt.figure(figsize=(7.16, 2.80))
         for box, label, title, subtitle in zip(
             _PANEL_BOXES,
             ("a", "b", "c", "d"),
@@ -699,6 +716,7 @@ def main() -> None:
             figure,
             _OUTPUT_STEM,
             formats=("pdf", "svg", "png"),
+            pad_inches=0.005,
         )
         plt.close(figure)
 

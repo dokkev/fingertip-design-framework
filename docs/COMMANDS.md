@@ -146,24 +146,36 @@ conda run --no-capture-output -n lit \
 
 One run establishes one physical contact near 2 N, then keeps that contact
 engaged while cycling continuously between 2 and 15 N. The default loading and
-unloading ramps are 1 N/s, with a 1 s dwell at 15 N and a 1 s dwell at 2 N.
+unloading ramps are 11.375 N/s, with a 1 s dwell at 15 N and a 1 s dwell at
+2 N.
 The first two cycles are labeled `conditioning`; the following five are labeled
 `measurement`, but both roles are saved. Do not release the indenter between
-cycles. After the seventh cycle, the run is finalized only after force remains
-at or below 1 N for 0.5 s. A series creates its next independent repetition
-only after that complete release.
+cycles. After the seventh cycle, the run is finalized after force remains at or
+below 2 N for 0.5 s. A series creates its next independent repetition
+only after that release gate.
 
 The moving target is operator guidance, not force control or an acceptance
 band. The trajectory advances only from monotonic elapsed time and never resets
 when measured force leads or lags the target. Every scheduled synchronized
 observation records the actual Rokubi wrench, actual force magnitude, target,
 explicit loading/dwell/unloading phase, cycle role, and tracking error. Later
-analysis must compare branches at matched actual measured force.
+analysis must compare branches at matched actual measured force. Independently
+of the 5 Hz saved images, every camera-rate force observation during `CYCLING`
+updates a contact-continuity diagnostic. `trajectory.json` records the minimum
+force seen, the number of distinct excursions at or below the default 1 N
+contact-loss threshold, and a warning boolean. These diagnostics never reset or
+reject acquisition. A camera-frame drop remains separately reported because a
+loss occurring entirely inside that observation gap cannot be detected.
+
+The stored `phase` is the nominal elapsed-time branch. It is deliberately not
+rewritten from the measured force. Offline history analysis must therefore also
+check actual-force monotonicity, handle turnaround neighborhoods, and match
+loading and unloading observations by actual force.
 
 The camera remains 1920 x 1080 at 30 FPS with fixed 1500 µs exposure, gain 0,
 and 4600 K white balance. Lossless RGB observations are selected at 5 Hz by
-elapsed time. At the defaults, each ramp lasts 13 s, a cycle lasts 28 s, and
-the seven-cycle trajectory lasts exactly 196 s. This produces 980 scheduled
+elapsed time. At the defaults, each ramp lasts 8/7 s, each cycle lasts 30/7 s,
+and the seven-cycle trajectory lasts exactly 30 s. This produces 150 scheduled
 trajectory observations when none are missed. The preload and final release
 each add at least 0.5 s; operator waiting time is additional.
 
@@ -201,6 +213,29 @@ conda run --no-capture-output -n lit \
 
 Mock sessions are written only under `output/contact_history/mock/` and are
 marked as non-physical data in both the GUI and `session.json`.
+
+Analyze three same-material history sessions using actual-force branch matching
+(Dragon Skin example):
+
+```bash
+conda run --no-capture-output -n lit \
+  python -u scripts/analyze_contact_history.py \
+    output/contact_history/2026-09-06_dragon_skin_baseline \
+    output/contact_history/2026-09-06_dragon_skin_flat_opt \
+    output/contact_history/2026-09-06_dragon_skin_angled_opt \
+    --repeat-metrics \
+      output/analysis/dragon_skin_morphology_comparison/results/morphology_metrics.csv \
+    --output output/analysis/dragon_skin_contact_history
+```
+
+The analysis uses only indenter/contact-location conditions present in all
+three sessions and excludes contact-loss or incomplete runs from primary
+metrics. Loading and unloading profiles are interpolated only inside their
+measured actual-force overlap on a 3--14 N grid; no extrapolation is performed.
+The report records the common force interval with at least 50% measurement-cycle
+coverage in every morphology. Independent-contact `W_repeat` and same-contact
+`W_cycle` have different physical units, so their comparison is made only after
+normalizing each metric to its own material-specific baseline.
 
 ## Live D435 contact localization
 
@@ -364,25 +399,29 @@ outputs beneath `output/validation/hardware_unloaded_optical_activation/`.
 The reported RMS activation has camera-DN units and is not force-normalized.
 This validation neither modifies Figure 5 nor registers a production metric.
 
-Render the standalone Figure 5 panels, selection/metric audit tables, and the
-final IEEE double-column PDF/PNG from the current physical datasets and compact
-analysis summaries:
+Render the final IEEE double-column Figure 5 PDF/PNG from the current physical
+datasets and compact analysis summaries:
 
 ```bash
 conda run --no-capture-output -n lit \
-  python -m figures.figure5.fig5
+  python -m figures.fig5.fig5
 ```
 
-Outputs are written beside the scripts under `figures/figure5/`:
-`fig5a.png`, `fig5b.png`, `fig5c.png`, `fig5.pdf`, `fig5.png`,
-`fig5a_selection_manifest.csv`, `fig5b_region_response.csv`, and
-`fig5c_metrics.csv`. The raw atlas uses
+Outputs are written beside the scripts under `figures/fig5/`:
+`fig5.pdf`, `fig5.png`, `fig5a_selection_manifest.csv`,
+`fig5b_region_response.csv`, and `fig5c_metrics.csv`. Panel-level PNG/PDF files
+are not exported. The raw atlas uses
 the 10 mm sphere, repetition 1, and the frame closest to 15 N at five physical
-11 mm-spaced fixture positions. Solaris uses stored RGB values directly; all
+10 mm-spaced fixture positions (the separate LED pitch remains 11 mm). Solaris
+uses stored RGB values directly; all
 measured Dragon Skin atlas cells use one documented +0.25 EV display exposure.
-No per-cell normalization is applied. Dragon Skin angled-opt remains visibly pending
-until that physical dataset exists; the renderer never substitutes numerical
-or image data for it.
+No per-cell normalization is applied. Dragon Skin angled-opt is loaded from its
+completed 2026-09-06 physical dataset. The separately repeated 2026-09-06
+Dragon Skin baseline session supplies only the 30 mm condition through an
+explicit analysis override. Figure 5(c) plots the absolute stored dimensionless
+`D_neighbor_over_W` ratio; optimized-bar labels show percentage improvement
+relative to the corresponding material/indenter baseline without normalizing
+the baseline bar height.
 
 Replay the smooth emissive segmentation on the checked-in 13-image reference
 set, report fixed-extrinsic stability/runtime, and regenerate its overlays:
@@ -550,11 +589,11 @@ production Newton state and a deterministic OptiX replay:
 
 ```bash
 conda run --no-capture-output -n lit \
-  python -u figures/fig2.py
+  python -m figures.fig2.fig2
 ```
 
 The script writes `fig2.pdf`, `fig2.svg`, and `fig2.png` beside its source in
-`figures/` and does not rerun Newton.
+`figures/fig2/` and does not rerun Newton.
 
 Smoke-test each structural mechanics ablation through its 2 N checkpoint:
 
@@ -610,14 +649,15 @@ conda run --no-capture-output -n lit \
 conda run --no-capture-output -n lit \
   python -u validation/contact-physics/multi_design_void_ablation.py --all
 conda run --no-capture-output -n lit \
-  python -u figures/fig3.py
+  python -m figures.fig3.fig3
 ```
 
 The primary study writes its catalog, manifest, per-variant raw NPZ states,
 paired CSV, JSON summary, and report beneath
 `output/validation/multi_design_void_ablation/`. The finalized composition
 source and its `fig3.pdf`/`fig3.svg`/`fig3.png` exports live together beneath
-`figures/`. `figures/fig3.py` also reads the four completed 160-observation BO
+`figures/fig3/`. `figures/fig3/fig3.py` also reads the four completed
+160-observation BO
 trial tables, validates their objective directions, recomputes empirical
 Pareto membership and balanced trials, and writes `figure3_validation.md` next
 to the ablation report. It uses four Pareto small multiples because the

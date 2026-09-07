@@ -781,7 +781,8 @@ class ContactHistoryApp:
         if update.state is ForceTrajectoryState.COMPLETE:
             start = self.trajectory.trajectory_start_time_s
             end = self.trajectory.trajectory_end_time_s
-            assert start is not None and end is not None
+            minimum_force = self.trajectory.min_actual_force_seen_during_cycling_n
+            assert start is not None and end is not None and minimum_force is not None
             self.writer.complete_run(
                 self.active_run,
                 trajectory_start_host_time_s=start,
@@ -790,6 +791,8 @@ class ContactHistoryApp:
                     self.camera_reader.dropped_frame_count - self.run_camera_drop_start
                 ),
                 missed_capture_deadline_count=self.trajectory.missed_capture_deadlines,
+                min_actual_force_seen_during_cycling_n=minimum_force,
+                contact_loss_event_count=self.trajectory.contact_loss_event_count,
             )
             self.series_completed += 1
             self.series_text.set(
@@ -1076,7 +1079,7 @@ def _arguments() -> argparse.Namespace:
     parser.add_argument("--bota-port", default="/dev/ttyUSB0")
     parser.add_argument("--min-force-n", type=float, default=2.0)
     parser.add_argument("--max-force-n", type=float, default=15.0)
-    parser.add_argument("--ramp-rate-n-per-s", type=float, default=1.0)
+    parser.add_argument("--ramp-rate-n-per-s", type=float, default=11.375)
     parser.add_argument("--low-dwell-s", type=float, default=1.0)
     parser.add_argument("--high-dwell-s", type=float, default=1.0)
     parser.add_argument("--conditioning-cycles", type=int, default=2)
@@ -1091,7 +1094,8 @@ def _arguments() -> argparse.Namespace:
     parser.add_argument("--camera-serial")
     parser.add_argument("--preload-tolerance-n", type=float, default=1.0)
     parser.add_argument("--preload-settle-s", type=float, default=0.5)
-    parser.add_argument("--release-max-force-n", type=float, default=1.0)
+    parser.add_argument("--contact-loss-threshold-n", type=float, default=1.0)
+    parser.add_argument("--release-max-force-n", type=float, default=2.0)
     parser.add_argument("--release-settle-s", type=float, default=0.5)
     parser.add_argument("--mock", action="store_true")
     parser.add_argument("--mock-smoke", action="store_true", help=argparse.SUPPRESS)
@@ -1113,6 +1117,7 @@ def main() -> None:
         measurement_cycles=args.measurement_cycles,
         preload_tolerance_n=args.preload_tolerance_n,
         preload_settle_s=args.preload_settle_s,
+        contact_loss_threshold_n=args.contact_loss_threshold_n,
         release_max_force_n=args.release_max_force_n,
         release_settle_s=args.release_settle_s,
         capture_rate_hz=args.capture_rate_hz,

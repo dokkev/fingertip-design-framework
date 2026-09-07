@@ -1,4 +1,4 @@
-"""Figure 5(c): neighboring-contact load-response separation."""
+"""Figure 5(c): spatial distinguishability relative to repeat variation."""
 
 from __future__ import annotations
 
@@ -15,9 +15,11 @@ from matplotlib.figure import Figure  # noqa: E402
 from matplotlib.gridspec import SubplotSpec  # noqa: E402
 from matplotlib.patches import Patch  # noqa: E402
 
+from experiments.analysis.metrics import morphology_metrics, spatial_metrics  # noqa: E402
 from lumo.visualization import DEFAULT_STYLE, publication_context, save_figure  # noqa: E402
 
 from .config import (  # noqa: E402
+    ANALYSIS_CONDITION_OVERRIDES,
     ANALYSIS_ROOTS,
     COMPARISON_CONDITIONS,
     COMPARISON_MORPHOLOGIES,
@@ -32,9 +34,78 @@ MORPHOLOGY_COLORS = {
     "angled_opt": "#A87446",
 }
 
+# run_0045 failed the production large-force-spread QC at the 2 N state.
+# Keep the raw dataset intact and make the Figure 5(c)-only exclusion explicit.
+FIGURE_5C_EXCLUDED_RUN_IDS = {
+    ("dragon_skin", "angled_opt", "sphere_30mm"): ("run_0045",),
+}
+
+
+def _metrics_with_run_exclusions(
+    key: tuple[str, str, str],
+    excluded_run_ids: tuple[str, ...],
+) -> dict[str, object]:
+    """Re-evaluate one stored condition with exact production metric functions."""
+
+    material, morphology, indenter = key
+    root = ANALYSIS_CONDITION_OVERRIDES.get(key, ANALYSIS_ROOTS[material])
+    rows_path = root / "results" / "run_metrics.csv"
+    profiles_path = root / "raw_data_summary" / "load_response_profiles.npz"
+
+    with rows_path.open(newline="", encoding="utf-8") as stream:
+        all_rows = list(csv.DictReader(stream))
+    with np.load(profiles_path, allow_pickle=False) as archive:
+        slope_profiles = np.asarray(archive["slope_profiles"], dtype=np.float64)
+        profile_keys = list(
+            zip(
+                archive["material"].astype(str),
+                archive["morphology"].astype(str),
+                archive["indenter"].astype(str),
+                archive["run_id"].astype(str),
+                strict=True,
+            )
+        )
+
+    profile_lookup = {
+        profile_key: slope_profiles[index]
+        for index, profile_key in enumerate(profile_keys)
+    }
+    excluded = set(excluded_run_ids)
+    found_excluded: set[str] = set()
+    selected_rows: list[dict[str, object]] = []
+    selected_profiles: list[np.ndarray] = []
+    for row in all_rows:
+        row_key = (row["material"], row["morphology"], row["indenter"])
+        if row_key != key:
+            continue
+        run_id = row["run_id"]
+        if run_id in excluded:
+            found_excluded.add(run_id)
+            continue
+        profile_key = (*key, run_id)
+        if profile_key not in profile_lookup:
+            raise RuntimeError(f"missing Figure 5(c) slope profile: {profile_key}")
+        selected_rows.append(row)
+        selected_profiles.append(profile_lookup[profile_key])
+
+    missing = excluded - found_excluded
+    if missing:
+        raise RuntimeError(
+            f"Figure 5(c) exclusions were not found for {key}: {sorted(missing)}"
+        )
+    neighboring, variability = spatial_metrics(
+        selected_rows,
+        np.asarray(selected_profiles, dtype=np.float64),
+        hole_spacing_mm=10.0,
+    )
+    summary = morphology_metrics(selected_rows, neighboring, variability)
+    if len(summary) != 1:
+        raise RuntimeError(f"expected one filtered Figure 5(c) metric row for {key}")
+    return summary[0] | {"excluded_run_ids": ";".join(excluded_run_ids)}
+
 
 def load_spatial_metrics() -> list[dict[str, object]]:
-    """Read stored slope-profile separation and add baseline improvements."""
+    """Read stored D/W metrics and add matching-baseline improvements."""
 
     source_rows: dict[tuple[str, str, str], dict[str, str]] = {}
     for expected_material, root in ANALYSIS_ROOTS.items():
@@ -52,53 +123,71 @@ def load_spatial_metrics() -> list[dict[str, object]]:
                     raise RuntimeError(f"duplicate Figure 5(c) metric row: {key}")
                 source_rows[key] = row
 
+    for override_key, root in ANALYSIS_CONDITION_OVERRIDES.items():
+        path = root / "results" / "morphology_metrics.csv"
+        replacement = None
+        with path.open(newline="", encoding="utf-8") as stream:
+            for row in csv.DictReader(stream):
+                key = (row["material"], row["morphology"], row["indenter"])
+                if key == override_key:
+                    replacement = row
+                    break
+        if replacement is None:
+            raise RuntimeError(f"missing Figure 5(c) override metric: {override_key}")
+        source_rows[override_key] = replacement
+
+    for key, excluded_run_ids in FIGURE_5C_EXCLUDED_RUN_IDS.items():
+        source_rows[key] = _metrics_with_run_exclusions(key, excluded_run_ids)
+
     output: list[dict[str, object]] = []
     for material, indenter, _ in COMPARISON_CONDITIONS:
         baseline_key = (material, "baseline", indenter)
         if baseline_key not in source_rows:
             raise RuntimeError(f"missing Figure 5(c) baseline metric: {baseline_key}")
-        baseline_value = float(
-            source_rows[baseline_key]["D_neighbor_median_DN_per_N"]
-        )
-        if not np.isfinite(baseline_value) or baseline_value <= 0.0:
+        baseline_ratio = float(source_rows[baseline_key]["D_neighbor_over_W"])
+        if not np.isfinite(baseline_ratio) or baseline_ratio <= 0.0:
             raise ValueError(f"invalid Figure 5(c) baseline: {baseline_key}")
 
         for morphology in COMPARISON_MORPHOLOGIES:
             key = (material, morphology, indenter)
             source = source_rows.get(key)
             if source is None:
-                if material == "dragon_skin" and morphology == "angled_opt":
-                    output.append(
-                        {
-                            "material": material,
-                            "morphology": morphology,
-                            "indenter": indenter,
-                            "D_neighbor_median_DN_per_N": float("nan"),
-                            "D_neighbor_IQR_DN_per_N": float("nan"),
-                            "baseline_D_neighbor_DN_per_N": baseline_value,
-                            "improvement_percent": float("nan"),
-                            "status": "pending",
-                        }
-                    )
-                    continue
                 raise RuntimeError(f"missing required Figure 5(c) metric: {key}")
 
             separation = float(source["D_neighbor_median_DN_per_N"])
-            iqr = float(source["D_neighbor_IQR_DN_per_N"])
+            separation_iqr = float(source["D_neighbor_IQR_DN_per_N"])
+            repeat_variation = float(source["W_median_DN_per_N"])
+            repeat_variation_iqr = float(source["W_IQR_DN_per_N"])
+            ratio = float(source["D_neighbor_over_W"])
             if not np.isfinite(separation) or separation <= 0.0:
                 raise ValueError(f"invalid Figure 5(c) separation: {key}")
-            if not np.isfinite(iqr) or iqr < 0.0:
+            if not np.isfinite(separation_iqr) or separation_iqr < 0.0:
                 raise ValueError(f"invalid Figure 5(c) separation IQR: {key}")
+            if not np.isfinite(repeat_variation) or repeat_variation <= 0.0:
+                raise ValueError(f"invalid Figure 5(c) repeat variation: {key}")
+            if not np.isfinite(repeat_variation_iqr) or repeat_variation_iqr < 0.0:
+                raise ValueError(f"invalid Figure 5(c) repeat-variation IQR: {key}")
+            if not np.isfinite(ratio) or ratio <= 0.0:
+                raise ValueError(f"invalid Figure 5(c) D/W ratio: {key}")
+            expected_ratio = separation / repeat_variation
+            if not np.isclose(ratio, expected_ratio, rtol=1.0e-9, atol=1.0e-12):
+                raise ValueError(
+                    "inconsistent stored Figure 5(c) D/W ratio for "
+                    f"{key}: stored={ratio:.12g}, D/W={expected_ratio:.12g}"
+                )
             output.append(
                 {
                     "material": material,
                     "morphology": morphology,
                     "indenter": indenter,
                     "D_neighbor_median_DN_per_N": separation,
-                    "D_neighbor_IQR_DN_per_N": iqr,
-                    "baseline_D_neighbor_DN_per_N": baseline_value,
-                    "improvement_percent": 100.0
-                    * (separation / baseline_value - 1.0),
+                    "D_neighbor_IQR_DN_per_N": separation_iqr,
+                    "W_median_DN_per_N": repeat_variation,
+                    "W_IQR_DN_per_N": repeat_variation_iqr,
+                    "D_neighbor_over_W": ratio,
+                    "baseline_D_neighbor_over_W": baseline_ratio,
+                    "improvement_percent": 100.0 * (ratio / baseline_ratio - 1.0),
+                    "excluded_run_ids": source.get("excluded_run_ids", ""),
                     "status": "measured",
                 }
             )
@@ -117,8 +206,12 @@ def write_metrics(
         "indenter",
         "D_neighbor_median_DN_per_N",
         "D_neighbor_IQR_DN_per_N",
-        "baseline_D_neighbor_DN_per_N",
+        "W_median_DN_per_N",
+        "W_IQR_DN_per_N",
+        "D_neighbor_over_W",
+        "baseline_D_neighbor_over_W",
         "improvement_percent",
+        "excluded_run_ids",
         "status",
     )
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -132,19 +225,25 @@ def write_metrics(
 def _print_metrics(rows: list[dict[str, object]]) -> None:
     print(
         f"{'material':<13} {'indenter':<13} {'morphology':<12} "
-        f"{'D_neighbor [DN/N]':>18} {'improvement [%]':>17}"
+        f"{'D_neighbor':>12} {'W_repeat':>12} {'D/W':>10} "
+        f"{'improvement [%]':>17}"
     )
     for row in rows:
         if row["status"] == "pending":
             separation_text = "pending"
+            repeat_text = "pending"
+            ratio_text = "pending"
             improvement_text = "pending"
         else:
             separation_text = f"{float(row['D_neighbor_median_DN_per_N']):.4f}"
+            repeat_text = f"{float(row['W_median_DN_per_N']):.4f}"
+            ratio_text = f"{float(row['D_neighbor_over_W']):.4f}"
             improvement_text = f"{float(row['improvement_percent']):+.1f}"
         material = str(row["material"]).replace("dragon_skin", "Dragon Skin")
         print(
             f"{material:<13} {str(row['indenter']):<13} "
-            f"{str(row['morphology']):<12} {separation_text:>18} "
+            f"{str(row['morphology']):<12} {separation_text:>12} "
+            f"{repeat_text:>12} {ratio_text:>10} "
             f"{improvement_text:>17}"
         )
 
@@ -156,7 +255,7 @@ def render_panel(
     panel_label: str = "(c)",
     metrics: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
-    """Render absolute slope-profile separation with relative annotations."""
+    """Render absolute stored D/W values with baseline-relative annotations."""
 
     rows = load_spatial_metrics() if metrics is None else metrics
     write_metrics(rows)
@@ -188,7 +287,7 @@ def render_panel(
     title_axis.text(
         0.21,
         0.55,
-        "Spatial separation across\nhardware conditions",
+        "Spatial distinguishability\nrelative to repeat variation",
         fontsize=5.7,
         fontweight="bold",
         va="center",
@@ -225,7 +324,7 @@ def render_panel(
     offsets = np.asarray((-0.24, 0.0, 0.24), dtype=np.float64)
     bar_width = 0.205
     measured_values = [
-        float(row["D_neighbor_median_DN_per_N"])
+        float(row["D_neighbor_over_W"])
         for row in rows
         if row["status"] == "measured"
     ]
@@ -250,7 +349,7 @@ def render_panel(
                 )
                 continue
 
-            value = float(row["D_neighbor_median_DN_per_N"])
+            value = float(row["D_neighbor_over_W"])
             axis.bar(
                 x,
                 value,
@@ -288,7 +387,7 @@ def render_panel(
     axis.text(
         0.015,
         0.52,
-        "Spatial separation [camera DN/N]",
+        r"$D_{\mathrm{neighbor}} / W_{\mathrm{repeat}}$",
         transform=axis.transAxes,
         fontsize=4.8,
         rotation=90,
@@ -320,7 +419,7 @@ def main() -> None:
     with publication_context(DEFAULT_STYLE):
         figure = plt.figure(figsize=(3.15, 4.25))
         grid = figure.add_gridspec(
-            1, 1, left=0.03, right=0.985, bottom=0.025, top=0.99
+            1, 1, left=0.065, right=0.985, bottom=0.025, top=0.99
         )
         render_panel(figure, grid[0, 0], metrics=rows)
         save_figure(

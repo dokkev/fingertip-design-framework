@@ -192,6 +192,7 @@ class HistorySessionMetadata:
                 "measurement_cycles": config.measurement_cycles,
                 "preload_tolerance_n": config.preload_tolerance_n,
                 "preload_settle_s": config.preload_settle_s,
+                "contact_loss_threshold_n": config.contact_loss_threshold_n,
                 "release_max_force_n": config.release_max_force_n,
                 "release_settle_s": config.release_settle_s,
                 "capture_rate_hz": config.capture_rate_hz,
@@ -436,6 +437,8 @@ class HistoryDatasetWriter:
         trajectory_end_host_time_s: float,
         dropped_camera_frame_count: int,
         missed_capture_deadline_count: int,
+        min_actual_force_seen_during_cycling_n: float,
+        contact_loss_event_count: int,
     ) -> None:
         self._ensure_open()
         start = float(trajectory_start_host_time_s)
@@ -445,9 +448,15 @@ class HistoryDatasetWriter:
         for name, value in (
             ("dropped_camera_frame_count", dropped_camera_frame_count),
             ("missed_capture_deadline_count", missed_capture_deadline_count),
+            ("contact_loss_event_count", contact_loss_event_count),
         ):
             if not isinstance(value, int) or isinstance(value, bool) or value < 0:
                 raise ValueError(f"{name} must be a nonnegative integer")
+        minimum_cycling_force = float(min_actual_force_seen_during_cycling_n)
+        if not math.isfinite(minimum_cycling_force) or minimum_cycling_force < 0.0:
+            raise ValueError(
+                "min_actual_force_seen_during_cycling_n must be finite and nonnegative"
+            )
         with self._lock:
             writer_drops = self._writer_drops[run.run_id]
 
@@ -482,6 +491,10 @@ class HistoryDatasetWriter:
                     "dropped_camera_frame_count": dropped_camera_frame_count,
                     "dropped_writer_frame_count": writer_drops,
                     "missed_capture_deadline_count": missed_capture_deadline_count,
+                    "contact_loss_threshold_N": config.contact_loss_threshold_n,
+                    "min_actual_force_seen_during_cycling_N": minimum_cycling_force,
+                    "contact_loss_event_count": contact_loss_event_count,
+                    "contact_loss_detected": contact_loss_event_count > 0,
                     "observed_min_actual_force_n": min(actual) if actual else None,
                     "observed_max_actual_force_n": max(actual) if actual else None,
                     "observed_rms_tracking_error_n": (

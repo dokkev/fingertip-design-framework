@@ -119,6 +119,8 @@ def _complete_run(writer: HistoryDatasetWriter):
         trajectory_end_host_time_s=12.0,
         dropped_camera_frame_count=1,
         missed_capture_deadline_count=2,
+        min_actual_force_seen_during_cycling_n=0.75,
+        contact_loss_event_count=1,
     )
     writer.flush()
     return run
@@ -144,6 +146,7 @@ def test_session_metadata_persists_history_format_and_trajectory(
         "max_force_n": 3.0,
         "measurement_cycles": 1,
         "min_force_n": 2.0,
+        "contact_loss_threshold_n": 1.0,
         "preload_settle_s": 0.5,
         "preload_tolerance_n": 1.0,
         "ramp_rate_n_per_s": 2.0,
@@ -207,6 +210,10 @@ def test_trajectory_json_records_saved_and_missing_observations(tmp_path: Path) 
     assert stored["dropped_camera_frame_count"] == 1
     assert stored["dropped_writer_frame_count"] == 0
     assert stored["missed_capture_deadline_count"] == 2
+    assert stored["contact_loss_threshold_N"] == 1.0
+    assert stored["min_actual_force_seen_during_cycling_N"] == 0.75
+    assert stored["contact_loss_event_count"] == 1
+    assert stored["contact_loss_detected"] is True
     assert stored["total_conditioning_cycles"] == 1
     assert stored["total_measurement_cycles"] == 1
 
@@ -272,6 +279,8 @@ def test_writer_overrun_preserves_run_and_records_missing_frame(
             trajectory_end_host_time_s=12.0,
             dropped_camera_frame_count=0,
             missed_capture_deadline_count=0,
+            min_actual_force_seen_during_cycling_n=2.0,
+            contact_loss_event_count=0,
         )
         release.set()
         writer.flush()

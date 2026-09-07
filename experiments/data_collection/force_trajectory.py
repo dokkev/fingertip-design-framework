@@ -13,14 +13,15 @@ class ForceTrajectoryConfig:
 
     min_force_n: float = 2.0
     max_force_n: float = 15.0
-    ramp_rate_n_per_s: float = 1.0
+    ramp_rate_n_per_s: float = 11.375
     low_dwell_s: float = 1.0
     high_dwell_s: float = 1.0
     conditioning_cycles: int = 2
     measurement_cycles: int = 5
     preload_tolerance_n: float = 1.0
     preload_settle_s: float = 0.5
-    release_max_force_n: float = 1.0
+    contact_loss_threshold_n: float = 1.0
+    release_max_force_n: float = 2.0
     release_settle_s: float = 0.5
     capture_rate_hz: float = 5.0
 
@@ -33,6 +34,7 @@ class ForceTrajectoryConfig:
             "high_dwell_s",
             "preload_tolerance_n",
             "preload_settle_s",
+            "contact_loss_threshold_n",
             "release_settle_s",
             "capture_rate_hz",
         )
@@ -47,8 +49,10 @@ class ForceTrajectoryConfig:
         object.__setattr__(self, "release_max_force_n", release)
         if self.max_force_n <= self.min_force_n:
             raise ValueError("max_force_n must be greater than min_force_n")
-        if self.release_max_force_n >= self.min_force_n:
-            raise ValueError("release_max_force_n must be below min_force_n")
+        if self.release_max_force_n >= self.max_force_n:
+            raise ValueError("release_max_force_n must be below max_force_n")
+        if self.contact_loss_threshold_n >= self.min_force_n:
+            raise ValueError("contact_loss_threshold_n must be below min_force_n")
         for name in ("conditioning_cycles", "measurement_cycles"):
             value = getattr(self, name)
             if not isinstance(value, int) or isinstance(value, bool):
@@ -151,6 +155,9 @@ class ForceTrajectoryController:
         self._trajectory_ended_s: float | None = None
         self._next_capture_index: int | None = None
         self._missed_capture_deadlines = 0
+        self._minimum_cycling_force_n: float | None = None
+        self._contact_loss_event_count = 0
+        self._contact_loss_active = False
 
     @property
     def state(self) -> ForceTrajectoryState:
@@ -167,6 +174,18 @@ class ForceTrajectoryController:
     @property
     def missed_capture_deadlines(self) -> int:
         return self._missed_capture_deadlines
+
+    @property
+    def min_actual_force_seen_during_cycling_n(self) -> float | None:
+        return self._minimum_cycling_force_n
+
+    @property
+    def contact_loss_event_count(self) -> int:
+        return self._contact_loss_event_count
+
+    @property
+    def contact_loss_detected(self) -> bool:
+        return self._contact_loss_event_count > 0
 
     def start(self, now_s: float) -> ForceTrajectoryUpdate:
         now = self._validate_time(now_s, first=True)
@@ -222,6 +241,7 @@ class ForceTrajectoryController:
                 self._cycle_index = None
                 events.append(ForceTrajectoryEvent.WAITING_FOR_RELEASE)
             else:
+                self._observe_contact_continuity(actual)
                 previous_phase = self._phase
                 previous_cycle = self._cycle_index
                 self._set_schedule_position(elapsed)
@@ -250,6 +270,18 @@ class ForceTrajectoryController:
             missed_capture_deadlines=missed_now,
             events=tuple(events),
         )
+
+    def _observe_contact_continuity(self, actual_force_n: float) -> None:
+        if self._minimum_cycling_force_n is None:
+            self._minimum_cycling_force_n = actual_force_n
+        else:
+            self._minimum_cycling_force_n = min(
+                self._minimum_cycling_force_n, actual_force_n
+            )
+        contact_lost = actual_force_n <= self.config.contact_loss_threshold_n
+        if contact_lost and not self._contact_loss_active:
+            self._contact_loss_event_count += 1
+        self._contact_loss_active = contact_lost
 
     def abort(self, now_s: float) -> ForceTrajectoryUpdate:
         now = self._validate_time(now_s)

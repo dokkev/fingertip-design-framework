@@ -85,7 +85,7 @@ def _dimension(
             arrow_end,
             arrowstyle=arrow_style,
             mutation_scale=7.0,
-            linewidth=style.line_width_pt,
+            linewidth=0.7 * style.line_width_pt,
             color=color,
             shrinkA=0.0,
             shrinkB=0.0,
@@ -227,7 +227,7 @@ def plot_fingertip_parameterization(
     stem_half_width = 0.5 * geometry.stem_width_mm
     ellipse_bottom = silicone.ellipse_center_z_mm - silicone.ellipse_radius_z_mm
 
-    dimension_color = carrier_color
+    dimension_color = "#202020"
     extension_color = neutral
 
     if show_fixed_dimensions:
@@ -236,7 +236,7 @@ def plot_fingertip_parameterization(
                 _extension(
                     axes,
                     (x_mm, geometry.link_thickness_mm),
-                    (x_mm, 13.2),
+                    (x_mm, 13.7),
                     color=extension_color,
                     style=style,
                 )
@@ -244,8 +244,8 @@ def plot_fingertip_parameterization(
         artists.extend(
             _dimension(
                 axes,
-                (-half_width, 12.8),
-                (half_width, 12.8),
+                (-half_width, 13.4),
+                (half_width, 13.4),
                 _label(r"w_l", geometry.flat_pad_width_mm, show_values),
                 color=dimension_color,
                 style=style,
@@ -257,7 +257,7 @@ def plot_fingertip_parameterization(
                 _extension(
                     axes,
                     (x_mm, geometry.bond_extension_height_mm),
-                    (x_mm, 11.5),
+                    (x_mm, 12.1),
                     color=extension_color,
                     style=style,
                 )
@@ -265,8 +265,8 @@ def plot_fingertip_parameterization(
         artists.extend(
             _dimension(
                 axes,
-                (-half_width, 11.0),
-                (-bond_inner, 11.0),
+                (-half_width, 11.6),
+                (-bond_inner, 11.6),
                 _label(
                     r"w_{\mathrm{bf}}",
                     geometry.bond_extension_width_mm,
@@ -451,7 +451,7 @@ def plot_fingertip_parameterization(
                     silicone.minimum_silicone_thickness_mm,
                     show_values,
                 ),
-                color=mechanical_color,
+                color=dimension_color,
                 label_background=False,
                 label_offset=(-0.5, 1.1),
                 style=style,

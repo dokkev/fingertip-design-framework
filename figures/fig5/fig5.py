@@ -40,15 +40,8 @@ def build_figure() -> plt.Figure:
 
 
 def main() -> None:
-    """Render standalone panels and the final vector-native composition."""
+    """Render only the final vector-native composition."""
 
-    from .fig5a import main as render_a
-    from .fig5b import main as render_b
-    from .fig5c import main as render_c
-
-    render_a()
-    render_b()
-    render_c()
     with publication_context(DEFAULT_STYLE):
         figure = build_figure()
         save_figure(

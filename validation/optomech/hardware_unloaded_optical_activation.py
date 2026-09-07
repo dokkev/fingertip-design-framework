@@ -33,7 +33,7 @@ from experiments.analysis.optical import (  # noqa: E402
     rms_profile_distance,
     temporal_median_rgb,
 )
-from figures.figure5.config import (  # noqa: E402
+from figures.fig5.config import (  # noqa: E402
     ANALYSIS_ROOTS,
     MORPHOLOGY_CONDITIONS,
 )
