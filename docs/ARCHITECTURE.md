@@ -928,6 +928,20 @@ protocol, CRC validation, one background reader thread, six-axis tare offsets,
 a latest sample, and a short host-monotonic timestamp ring. It contains no
 experiment sequence or GUI policy.
 
+`CanIO` owns one synchronous `python-can` SocketCAN bus and exposes only classic
+CAN frame send, blocking receive with an explicit timeout, and idempotent
+shutdown. Linux configures the CAN interface and bitrate outside Python.
+`AK40_10` depends on a caller-owned `CanIO`, so multiple actuators may share one
+bus. It owns only the CubeMars AK40-10 MIT-mode ranges, packet conversion,
+explicit enable/disable/zero commands, and feedback decoding. Construction is
+passive: it neither enables, zeros, nor commands the actuator, and the actuator
+driver never closes the shared bus.
+
+`scripts/test_ak40_10.py` is the explicit, bounded hardware probe for this
+driver. It enters MIT mode for each operator-supplied CAN ID, reports every CAN
+frame observed during the finite feedback wait, and always exits MIT mode after
+a successful enable transmission. It sends no position, torque, or zero command.
+
 `experiments/hardware/` does not select localization algorithms, render a GUI,
 write experimental files, or hide reconnect/retry policy. A later camera
 backend can provide the same small RGB-frame lifecycle without changing its

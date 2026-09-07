@@ -33,6 +33,7 @@ camera = [
 ]
 acquisition = [
   "opencv-python>=5.0",
+  "python-can>=4.6",
   "pyrealsense2==2.58.4.10922",
   "pyserial>=3.5",
 ]

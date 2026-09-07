@@ -40,6 +40,21 @@ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 conda run --no-capture-output -n lit \
   python -m pytest -q tests/unit
 ```
 
+## CubeMars AK40-10 feedback probe
+
+Probe one or more explicitly supplied standard CAN IDs. Decimal `13` means
+`0x0D`; write `0x13` when hexadecimal `0x13` is intended:
+
+```bash
+conda run --no-capture-output -n lit \
+  python -u scripts/test_ak40_10.py --motor-id 0x13 13
+```
+
+For each ID, the command sends only the MIT enable frame, waits up to one second
+while printing all observed CAN traffic, and sends the MIT disable frame. It
+does not send a position, torque, or zero command. The Linux SocketCAN channel
+and 1 Mbps bus configuration must already exist outside Python.
+
 ## Physical contact dataset collection
 
 Install the D435, OpenCV, and Bota Rokubi serial dependencies:
