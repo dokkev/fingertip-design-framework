@@ -14,7 +14,7 @@ from experiments.analysis.dataset import index_session
 from experiments.analysis.fig5c_decoder import PaperFigureConfig
 from experiments.analysis.metrics import actual_force_magnitude
 from experiments.analysis.optical import load_rgb
-from lumo.visualization import DEFAULT_STYLE
+from lumo.visualization import DEFAULT_STYLE, SEMANTIC_COLORS
 
 from .config import (
     ATLAS_CROP_XYXY,
@@ -218,6 +218,25 @@ def _crop(rgb: np.ndarray) -> np.ndarray:
     return rgb[y0:y1, x0:x1]
 
 
+def _draw_indenter_loading_arrow(axis: object, contact_position_mm: float) -> None:
+    """Overlay the fixed right-to-left indenter approach on one loaded crop."""
+
+    shaft_center_y_px = 140.0 + 5.05 * contact_position_mm
+    axis.annotate(
+        "",
+        xy=(218.0, shaft_center_y_px),
+        xytext=(326.0, shaft_center_y_px),
+        arrowprops={
+            "arrowstyle": "-|>",
+            "color": SEMANTIC_COLORS["force"],
+            "linewidth": 0.70,
+            "mutation_scale": 5.0,
+            "shrinkA": 0.0,
+            "shrinkB": 0.0,
+        },
+    )
+
+
 def render_panel(
     figure: Figure,
     subplot_spec: SubplotSpec,
@@ -236,7 +255,7 @@ def render_panel(
         6,
         10,
         height_ratios=MORPHOLOGY_TABLE_HEIGHT_RATIOS,
-        width_ratios=(1.10, 1, 1, 1, 1, 0.06, 1, 1, 1, 1),
+        width_ratios=(1.05, 1, 1, 1, 1, 0.06, 1, 1, 1, 1),
         hspace=MORPHOLOGY_TABLE_HSPACE,
         wspace=0.003,
     )
@@ -253,7 +272,7 @@ def render_panel(
     title_axis.text(
         0.080,
         0.55,
-        "Measured optical signatures across contact locations",
+        "Optical signatures across contact locations",
         fontsize=6.2,
         fontweight="bold",
         va="center",
@@ -301,13 +320,18 @@ def render_panel(
     ):
         label_axis = figure.add_subplot(grid[row_slot, 0])
         label_axis.axis("off")
+        row_label = config.morphology_labels[morphology]
+        if row_label.startswith("Opt-"):
+            row_label = row_label.replace("-", "-\n", 1)
         label_axis.text(
             0.0,
             0.5,
-            config.morphology_labels[morphology],
-            fontsize=4.1,
+            row_label,
+            fontsize=5.0,
             ha="left",
             va="center",
+            linespacing=0.9,
+            clip_on=False,
         )
         for material, first_column in material_columns:
             condition = condition_lookup[(material, morphology)]
@@ -343,4 +367,10 @@ def render_panel(
                             rgb.astype(np.float32) * (2.0**exposure_ev), 0.0, 255.0
                         ).astype(np.uint8)
                     axis.imshow(rgb)
+                    selection = row[offset]
+                    if selection.displayed_contact_position_mm is not None:
+                        _draw_indenter_loading_arrow(
+                            axis,
+                            selection.displayed_contact_position_mm,
+                        )
     return selections

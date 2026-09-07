@@ -26,7 +26,7 @@ from .fig5c import build_confusion_matrices  # noqa: E402
 from .fig5c import render_panel as render_panel_c  # noqa: E402
 
 
-FIGURE_SIZE_IN = (DEFAULT_STYLE.double_column_width_in, 2.55)
+FIGURE_SIZE_IN = (DEFAULT_STYLE.double_column_width_in, 2.18)
 
 
 def build_figure(
@@ -43,7 +43,7 @@ def build_figure(
         right=0.992,
         bottom=0.095,
         top=0.994,
-        width_ratios=(0.40, 0.018, 0.30, 0.035, 0.30),
+        width_ratios=(0.42, 0.008, 0.29, 0.035, 0.29),
         wspace=0.0,
     )
     render_panel_a(figure, outer[0], config=config, panel_label="(a)")

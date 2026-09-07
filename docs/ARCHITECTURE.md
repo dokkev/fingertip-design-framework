@@ -1416,11 +1416,14 @@ Opt-Flat, and Opt-Curved. Panel (a) alone defines those row labels. Materials
 and physical test conditions run across columns, so each morphology can be
 followed horizontally through image, optical response, and decoding result.
 Panels (b) and (c) each use the same four columns: Solaris 10 mm, Solaris
-30 mm, Dragon Skin 10 mm, and Dragon Skin 30 mm. A vertical separator at twice
-the internal cell-border weight distinguishes the two material groups. The
-outer 0.40/0.30/0.30 width allocation keeps the image atlas dominant while
-giving the two quantitative panels equal weight. Single outer axis labels
-preserve space for square data cells.
+30 mm, Dragon Skin 10 mm, and Dragon Skin 30 mm. Panel (b) reserves a left
+axis-title gutter so its shared contact-coordinate title remains separate from
+the first heatmap's numeric ticks. A vertical separator at twice the internal
+cell-border weight distinguishes the two material groups. The
+outer 0.42/0.29/0.29 width allocation keeps the image atlas dominant while
+giving the two quantitative panels equal weight. Narrow inter-panel gutters and
+a compact row-label column enlarge the atlas images without changing their
+fixed crop. Single outer axis labels preserve space for square data cells.
 `fig5a.py`, `fig5b.py`, and `fig5c.py` are import-only panel plotting tools:
 they accept a caller-owned Matplotlib figure and subplot specification and do
 not select a backend, create standalone figures, or write panel-level images.
@@ -1434,7 +1437,9 @@ same fixed +0.275 EV display exposure, while every Dragon Skin cell receives
 the same fixed +0.525 EV display exposure for print readability. The renderer
 performs no per-cell
 normalization or adaptive enhancement, and the fixed material-level display
-exposure is recorded in the selection manifest.
+exposure is recorded in the selection manifest. Each loaded atlas cell overlays
+the same thin mechanics-red arrow on the physical indenter shaft to expose its
+right-to-left loading direction; unloaded cells remain unannotated.
 `fig5b.py` reads the compact Solaris and Dragon Skin hold profiles from
 `longitudinal_profiles.npz`; it does not consume fitted load-response slopes.
 The separately repeated Dragon Skin baseline and angled-opt 30 mm acquisitions
@@ -1471,10 +1476,10 @@ on [0, 1], formatted to one decimal place. Dark text is used on light cells and
 white text on the darkest cells. Zero cells, scalar accuracy subtitles, and the
 redundant colorbar remain omitted to keep the small matrices legible; the
 caption states that cell values are row-normalized decoding frequencies. A
-dedicated label column
-owns the single shared true-location axis title, true-location ticks appear
-only on the left matrix column, and predicted-location ticks appear only on the
-bottom matrix row.
+dedicated left-side label column owns the single shared true-location axis
+title without competing with panel (b)'s colorbar label. True-location ticks
+appear only on the left matrix column, and
+predicted-location ticks appear only on the bottom matrix row.
 The shared decoder output retains every per-sample prediction and the raw
 condition confusion tables for audit and appendix use.
 Neighboring-location accuracy, confusion counts, margins, every original
@@ -1487,7 +1492,7 @@ table independently as `fig5c_confusion_2x2.pdf` and `.png`. They reuse the
 existing held-out prediction table and do not rerun or alter the decoder unless
 the caller explicitly requests recomputation.
 `fig5.py` composes these panels with nested
-Matplotlib GridSpecs at the exact 7.16-inch double-column width and a 2.55-inch
+Matplotlib GridSpecs at the exact 7.16-inch double-column width and a 2.18-inch
 height. The final PDF
 embeds raw atlas images as raster content while retaining all axes, heatmaps,
 labels, and annotations as native Matplotlib artists; it never stitches

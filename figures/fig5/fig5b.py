@@ -30,8 +30,8 @@ from .config import (
 
 
 INDENTER_COLUMNS = (
-    ("sphere_10mm", "10 mm sphere"),
-    ("sphere_30mm", "30 mm sphere"),
+    ("sphere_10mm", "Ø10 mm\nsphere"),
+    ("sphere_30mm", "Ø30 mm\nsphere"),
 )
 PLOT_COLUMNS = (2, 3, 5, 6)
 N_LONGITUDINAL_REGIONS = 6
@@ -291,9 +291,9 @@ def render_panel(
     row_label_width = 0.13 if show_row_labels else 0.012
     grid = subplot_spec.subgridspec(
         6,
-        8,
+        9,
         height_ratios=MORPHOLOGY_TABLE_HEIGHT_RATIOS,
-        width_ratios=(0.10, row_label_width, 1, 1, 0.04, 1, 1, 0.045),
+        width_ratios=(0.23, row_label_width, 1, 1, 0.04, 1, 1, 0.045, 0.10),
         hspace=MORPHOLOGY_TABLE_HSPACE,
         wspace=0.02,
     )
@@ -310,7 +310,7 @@ def render_panel(
     title_axis.text(
         0.140,
         0.55,
-        "Measured optical change from 2 to 15 N",
+        "Optical signal change, 2-15 N",
         fontsize=6.2,
         fontweight="bold",
         va="center",
@@ -343,6 +343,7 @@ def render_panel(
             0.52,
             indenter_titles[candidate_indenter],
             fontsize=4.5,
+            linespacing=0.92,
             ha="center",
             va="center",
         )
@@ -355,7 +356,7 @@ def render_panel(
     shared_y_axis = figure.add_subplot(grid[3:, 0])
     shared_y_axis.axis("off")
     shared_y_axis.text(
-        -0.70,
+        0.0,
         0.5,
         r"$X_{\mathrm{contact}}$ [mm]",
         fontsize=3.9,
@@ -470,12 +471,12 @@ def render_panel(
     assert image is not None
     colorbar_axis = figure.add_subplot(grid[3:, 7])
     colorbar = figure.colorbar(image, cax=colorbar_axis)
-    colorbar.ax.set_title(
-        "$\\Delta$ signal\n[DN]",
-        fontsize=3.1,
-        pad=1.0,
-        x=1.0,
-        ha="right",
+    colorbar.ax.set_ylabel(
+        "Optical change [DN]",
+        fontsize=3.6,
+        rotation=90,
+        labelpad=2.0,
+        va="center",
     )
     colorbar.ax.tick_params(labelsize=4.5, length=1.5, pad=0.8)
     colorbar.outline.set_linewidth(0.45)

@@ -102,7 +102,7 @@ def _style_matrix_axis(
     axis.set_yticklabels(tick_labels if show_y_tick_labels else ())
     axis.tick_params(
         axis="both",
-        labelsize=2.9 * font_scale,
+        labelsize=2.5 * font_scale,
         length=1.1,
         pad=0.45,
     )
@@ -130,16 +130,17 @@ def render_panel(
     morphology_label_width = 0.13 if show_row_labels else 0.012
     grid = subplot_spec.subgridspec(
         6,
-        7,
+        8,
         height_ratios=MORPHOLOGY_TABLE_HEIGHT_RATIOS,
         width_ratios=(
-            0.10,
+            0.20,
             morphology_label_width,
             1,
             1,
             0.04,
             1,
             1,
+            0.02,
         ),
         hspace=MORPHOLOGY_TABLE_HSPACE,
         wspace=0.02,
@@ -187,8 +188,9 @@ def render_panel(
         column_axis.text(
             0.5,
             0.52,
-            config.indenter_labels[indenter],
-            fontsize=5.0 * font_scale,
+            f"Ø{config.indenter_labels[indenter]}".replace(" sphere", "\nsphere"),
+            fontsize=4.5 * font_scale,
+            linespacing=0.92,
             ha="center",
             va="center",
         )
@@ -198,7 +200,7 @@ def render_panel(
     shared_y_axis = figure.add_subplot(grid[3:, 0])
     shared_y_axis.axis("off")
     shared_y_axis.text(
-        -0.70,
+        0.0,
         0.5,
         "True contact location [mm]",
         fontsize=3.8 * font_scale,
@@ -261,7 +263,7 @@ def render_panel(
                     true_index,
                     f"{percentage / 100.0:.1f}",
                     color=text_color,
-                    fontsize=2.9 * font_scale,
+                    fontsize=3.55 * font_scale,
                     ha="center",
                     va="center",
                 )
