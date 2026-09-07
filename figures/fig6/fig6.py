@@ -1,4 +1,4 @@
-"""Compose the four-panel Figure 6 perception-workload analysis."""
+"""Compose the canonical double-column Figure 6 analysis."""
 
 from __future__ import annotations
 
@@ -31,9 +31,30 @@ from experiments.analysis.fig5c_decoder import (  # noqa: E402
 from lumo.visualization import (  # noqa: E402
     DEFAULT_STYLE,
     EDGE_COLOR,
+    STRUCTURAL_FONT_FAMILY,
     publication_context,
     save_figure,
 )
+
+
+FIGURE_DIRECTORY = Path(__file__).resolve().parent
+DEFAULT_OUTPUT_STEM = FIGURE_DIRECTORY / "fig6"
+FIGURE_SIZE_IN = (DEFAULT_STYLE.double_column_width_in, 4.15)
+PANEL_A_MORPHOLOGIES = ("flat_opt", "angled_opt")
+DEFAULT_CYCLE_SUMMARIES = {
+    "solaris": REPOSITORY_ROOT
+    / "output"
+    / "analysis"
+    / "solaris_contact_history"
+    / "results"
+    / "same_contact_repeatability_summary.csv",
+    "dragon_skin": REPOSITORY_ROOT
+    / "output"
+    / "analysis"
+    / "dragon_skin_contact_history"
+    / "results"
+    / "same_contact_repeatability_summary.csv",
+}
 
 
 def _measured(rows: list[dict[str, str]]) -> list[dict[str, str]]:
@@ -54,22 +75,351 @@ def _lookup(rows: list[dict[str, str]]) -> dict[tuple[str, str, str], dict[str, 
     }
 
 
+def _cycle_lookup(path: Path) -> dict[str, dict[str, str]]:
+    rows = read_csv(path)
+    lookup = {row["morphology"]: row for row in rows}
+    required = {"baseline", *PANEL_A_MORPHOLOGIES}
+    if set(lookup) != required:
+        raise RuntimeError(
+            f"expected exactly {sorted(required)} in {path}, got {sorted(lookup)}"
+        )
+    return lookup
+
+
+def _load_panel_a_variability(
+    config: PaperFigureConfig,
+    recontact_rows: list[dict[str, str]],
+) -> list[dict[str, object]]:
+    """Join separated 10 mm maintained-contact and re-contact summaries."""
+
+    recontact = _lookup(recontact_rows)
+    output = []
+    for material in config.materials:
+        cycle = _cycle_lookup(DEFAULT_CYCLE_SUMMARIES[material])
+        cycle_baseline = float(cycle["baseline"]["W_cycle_median_dn"])
+        recontact_baseline_row = recontact[(material, "sphere_10mm", "baseline")]
+        if recontact_baseline_row["status"] != "measured":
+            raise RuntimeError(f"missing 10 mm baseline W_recontact for {material}")
+        recontact_baseline = float(recontact_baseline_row["W_contact_DN_per_N"])
+        if cycle_baseline <= 0.0 or recontact_baseline <= 0.0:
+            raise RuntimeError(f"non-positive variability baseline for {material}")
+        for morphology in PANEL_A_MORPHOLOGIES:
+            cycle_value = float(cycle[morphology]["W_cycle_median_dn"])
+            recontact_row = recontact[(material, "sphere_10mm", morphology)]
+            if recontact_row["status"] != "measured":
+                raise RuntimeError(
+                    f"missing 10 mm W_recontact for {material}/{morphology}"
+                )
+            recontact_value = float(recontact_row["W_contact_DN_per_N"])
+            output.append(
+                {
+                    "material": material,
+                    "morphology": morphology,
+                    "cycle_variability_change_percent": 100.0
+                    * (cycle_value - cycle_baseline)
+                    / cycle_baseline,
+                    "recontact_variability_change_percent": 100.0
+                    * (recontact_value - recontact_baseline)
+                    / recontact_baseline,
+                }
+            )
+    return output
+
+
 def _style_axis(axis: plt.Axes) -> None:
     axis.spines["top"].set_visible(False)
     axis.spines["right"].set_visible(False)
     axis.spines["left"].set_color("#777777")
     axis.spines["bottom"].set_color("#777777")
     axis.grid(axis="y", color="#E3E3E3", linewidth=0.45, zorder=0)
-    axis.tick_params(labelsize=6.0, length=2.0, pad=1.5)
+    axis.tick_params(
+        labelsize=DEFAULT_STYLE.tick_font_size_pt,
+        length=DEFAULT_STYLE.tick_length_pt,
+        width=DEFAULT_STYLE.tick_width_pt,
+        pad=1.5,
+    )
 
 
 def _panel_title(axis: plt.Axes, label: str, title: str) -> None:
+    axis.text(
+        0.0,
+        1.025,
+        label,
+        transform=axis.transAxes,
+        fontsize=DEFAULT_STYLE.panel_label_font_size_pt,
+        fontweight="normal",
+        ha="left",
+        va="bottom",
+        clip_on=False,
+    )
     axis.set_title(
-        f"{label}  {title}",
-        loc="left",
-        fontsize=7.5,
-        fontweight="bold",
+        title,
+        loc="center",
+        fontsize=DEFAULT_STYLE.panel_title_font_size_pt,
+        fontweight="normal",
         pad=4.0,
+    )
+
+
+def _draw_panel_title(
+    figure: plt.Figure,
+    subplot_spec: Any,
+    panel_label: str,
+    title: str,
+) -> None:
+    """Place aligned panel labels and titles in figure coordinates."""
+
+    bounds = subplot_spec.get_position(figure)
+    y = bounds.y1 + 0.012
+    figure.text(
+        bounds.x0,
+        y,
+        panel_label,
+        fontsize=DEFAULT_STYLE.panel_label_font_size_pt,
+        fontweight="normal",
+        ha="left",
+        va="bottom",
+    )
+    figure.text(
+        0.5 * (bounds.x0 + bounds.x1),
+        y,
+        title,
+        fontsize=DEFAULT_STYLE.panel_title_font_size_pt,
+        fontweight="normal",
+        ha="center",
+        va="bottom",
+    )
+
+
+def _plot_variability_compact(
+    figure: plt.Figure,
+    subplot_spec: Any,
+    rows: list[dict[str, object]],
+    config: PaperFigureConfig,
+) -> None:
+    """Plot the existing 10 mm variability comparison in a narrow grid cell."""
+
+    grid = subplot_spec.subgridspec(
+        3,
+        2,
+        height_ratios=(0.12, 0.17, 1.0),
+        hspace=0.04,
+        wspace=0.22,
+    )
+    condition_axis = figure.add_subplot(grid[0, :])
+    condition_axis.axis("off")
+    condition_axis.text(
+        0.5,
+        0.50,
+        "10 mm sphere",
+        fontsize=DEFAULT_STYLE.condition_header_font_size_pt,
+        color="#555555",
+        ha="center",
+        va="center",
+    )
+
+    values = [
+        float(row[key])
+        for row in rows
+        for key in (
+            "cycle_variability_change_percent",
+            "recontact_variability_change_percent",
+        )
+    ]
+    limit = 10.0 * np.ceil(1.08 * max(abs(value) for value in values) / 10.0)
+    lookup = {(str(row["material"]), str(row["morphology"])): row for row in rows}
+    metric_columns = (
+        (
+            "cycle_variability_change_percent",
+            "Maintained contact",
+            r"$W_{\mathrm{cycle}}$",
+        ),
+        (
+            "recontact_variability_change_percent",
+            "Re-contact",
+            r"$W_{\mathrm{recontact}}$",
+        ),
+    )
+    centers = np.arange(len(config.materials), dtype=float)
+    offsets = {"flat_opt": -0.09, "angled_opt": 0.09}
+    for column, (value_key, header, notation) in enumerate(metric_columns):
+        header_axis = figure.add_subplot(grid[1, column])
+        header_axis.axis("off")
+        header_axis.text(
+            0.5,
+            0.50,
+            f"{header}\n{notation}",
+            fontsize=DEFAULT_STYLE.minimum_font_size_pt,
+            ha="center",
+            va="center",
+            linespacing=1.0,
+        )
+        axis = figure.add_subplot(grid[2, column])
+        for material_index, material in enumerate(config.materials):
+            for morphology in PANEL_A_MORPHOLOGIES:
+                row = lookup[(material, morphology)]
+                axis.scatter(
+                    centers[material_index] + offsets[morphology],
+                    float(row[value_key]),
+                    s=21,
+                    color=config.morphology_colors[morphology],
+                    edgecolor=EDGE_COLOR,
+                    linewidth=0.45,
+                    zorder=3,
+                )
+        axis.axhline(0.0, color="#777777", linewidth=0.65, linestyle="--", zorder=1)
+        axis.set_xlim(-0.34, len(config.materials) - 0.66)
+        axis.set_ylim(-limit, limit)
+        axis.set_xticks(centers, ("Solaris", "Dragon\nSkin"))
+        _style_axis(axis)
+        axis.tick_params(labelsize=DEFAULT_STYLE.minimum_font_size_pt, pad=1.0)
+        if column == 0:
+            axis.set_ylabel("Variability change [%]", labelpad=1.5)
+        else:
+            axis.tick_params(axis="y", labelleft=False)
+
+
+def _plot_calibration_compact(
+    figure: plt.Figure,
+    subplot_spec: Any,
+    rows: list[dict[str, str]],
+    config: PaperFigureConfig,
+) -> None:
+    """Render the production calibration curves in a compact 2-by-2 block."""
+
+    grid = subplot_spec.subgridspec(
+        3,
+        2,
+        height_ratios=(0.13, 1.0, 1.0),
+        hspace=0.16,
+        wspace=0.18,
+    )
+    for column, indenter in enumerate(config.indenters):
+        header_axis = figure.add_subplot(grid[0, column])
+        header_axis.axis("off")
+        header_axis.text(
+            0.5,
+            0.48,
+            config.indenter_labels[indenter].replace(" sphere", ""),
+            fontsize=DEFAULT_STYLE.condition_header_font_size_pt,
+            ha="center",
+            va="center",
+        )
+    measured = _measured(rows)
+    global_min = min(float(row["test_accuracy_q25"]) for row in measured)
+    y_min = max(0.0, 5.0 * np.floor((global_min - 7.0) / 5.0))
+    for condition_index, (material, indenter) in enumerate(
+        (
+            pair
+            for material in config.materials
+            for pair in (
+                (material, config.indenters[0]),
+                (material, config.indenters[1]),
+            )
+        )
+    ):
+        axis = figure.add_subplot(grid[1 + condition_index // 2, condition_index % 2])
+        for morphology in config.morphologies:
+            selected = sorted(
+                (
+                    row
+                    for row in measured
+                    if row["material"] == material
+                    and row["indenter"] == indenter
+                    and row["morphology_id"] == morphology
+                ),
+                key=lambda row: int(row["calibration_contacts_per_location"]),
+            )
+            if not selected:
+                continue
+            x = np.asarray(
+                [int(row["calibration_contacts_per_location"]) for row in selected]
+            )
+            mean = np.asarray([float(row["test_accuracy_mean"]) for row in selected])
+            q25 = np.asarray([float(row["test_accuracy_q25"]) for row in selected])
+            q75 = np.asarray([float(row["test_accuracy_q75"]) for row in selected])
+            color = config.morphology_colors[morphology]
+            axis.fill_between(x, q25, q75, color=color, alpha=0.12, linewidth=0.0)
+            axis.plot(x, mean, marker="o", markersize=2.5, color=color, linewidth=0.85)
+        axis.set_xlim(0.85, config.maximum_calibration_contacts + 0.15)
+        axis.set_ylim(y_min, 102.0)
+        axis.set_xticks(range(1, config.maximum_calibration_contacts + 1))
+        _style_axis(axis)
+        axis.tick_params(labelsize=DEFAULT_STYLE.minimum_font_size_pt, pad=1.0)
+        if condition_index // 2 == 0:
+            axis.tick_params(axis="x", labelbottom=False)
+        if condition_index % 2 == 1:
+            axis.tick_params(axis="y", labelleft=False)
+        if condition_index % 2 == 0:
+            axis.text(
+                0.04,
+                0.08,
+                config.material_labels[material],
+                transform=axis.transAxes,
+                fontsize=DEFAULT_STYLE.minimum_font_size_pt,
+                fontweight="bold",
+                fontfamily=STRUCTURAL_FONT_FAMILY,
+                color="#444444",
+                ha="left",
+                va="bottom",
+                bbox={
+                    "facecolor": "white",
+                    "edgecolor": "none",
+                    "alpha": 0.78,
+                    "pad": 0.5,
+                },
+            )
+
+    bounds = subplot_spec.get_position(figure)
+    figure.text(
+        bounds.x0 - 0.050,
+        0.5 * (bounds.y0 + bounds.y1),
+        "Accuracy [%]",
+        rotation=90,
+        fontsize=DEFAULT_STYLE.axis_label_font_size_pt,
+        ha="center",
+        va="center",
+    )
+    figure.text(
+        0.5 * (bounds.x0 + bounds.x1),
+        bounds.y0 - 0.040,
+        "Contacts / location",
+        fontsize=DEFAULT_STYLE.axis_label_font_size_pt,
+        ha="center",
+        va="top",
+    )
+
+
+def _plot_placeholder(axis: plt.Axes, *, description: str) -> None:
+    """Render one restrained, explicitly non-data placeholder panel."""
+
+    axis.set_facecolor("#FAFAFA")
+    axis.set_xticks(())
+    axis.set_yticks(())
+    axis.set_xlim(0.0, 1.0)
+    axis.set_ylim(0.0, 1.0)
+    for spine in axis.spines.values():
+        spine.set_visible(True)
+        spine.set_color("#BFC3C7")
+        spine.set_linewidth(DEFAULT_STYLE.spine_width_pt)
+    axis.text(
+        0.5,
+        0.55,
+        "Placeholder",
+        fontsize=DEFAULT_STYLE.annotation_font_size_pt,
+        color="#555555",
+        ha="center",
+        va="center",
+    )
+    axis.text(
+        0.5,
+        0.43,
+        description,
+        fontsize=DEFAULT_STYLE.minimum_font_size_pt,
+        color="#777777",
+        ha="center",
+        va="center",
+        linespacing=1.15,
     )
 
 
@@ -86,8 +436,9 @@ def _group_condition_ticks(axis: plt.Axes, config: PaperFigureConfig) -> None:
             -0.145,
             config.material_labels[material],
             transform=axis.get_xaxis_transform(),
-            fontsize=5.7,
+            fontsize=DEFAULT_STYLE.group_header_font_size_pt,
             fontweight="bold",
+            fontfamily=STRUCTURAL_FONT_FAMILY,
             ha="center",
             va="top",
             clip_on=False,
@@ -103,6 +454,7 @@ def _plot_condition_bars(
     panel_label: str,
     title: str,
     y_label: str,
+    show_title: bool = True,
 ) -> None:
     lookup = _lookup(rows)
     centers = np.arange(len(config.materials) * len(config.indenters), dtype=float)
@@ -122,7 +474,7 @@ def _plot_condition_bars(
                         rotation=90,
                         ha="center",
                         va="bottom",
-                        fontsize=5.0,
+                        fontsize=DEFAULT_STYLE.minimum_font_size_pt,
                     )
                     continue
                 value = float(row[value_key])
@@ -140,7 +492,8 @@ def _plot_condition_bars(
     axis.set_ylim(0.0, 1.12 * max(measured_values))
     _group_condition_ticks(axis, config)
     axis.set_ylabel(y_label)
-    _panel_title(axis, panel_label, title)
+    if show_title:
+        _panel_title(axis, panel_label, title)
     _style_axis(axis)
     axis.tick_params(axis="x", length=0.0)
 
@@ -165,6 +518,8 @@ def _plot_distinguishability(
     axis: plt.Axes,
     rows: list[dict[str, str]],
     config: PaperFigureConfig,
+    *,
+    show_title: bool = True,
 ) -> None:
     _plot_condition_bars(
         axis,
@@ -174,6 +529,7 @@ def _plot_distinguishability(
         panel_label="(b)",
         title="Re-contact distinguishability",
         y_label=r"$Q_{\mathrm{recontact}}$",
+        show_title=show_title,
     )
 
 
@@ -181,6 +537,9 @@ def _plot_scalar_spatial(
     axis: plt.Axes,
     rows: list[dict[str, str]],
     config: PaperFigureConfig,
+    *,
+    show_title: bool = True,
+    legend_location: str = "lower right",
 ) -> None:
     lookup = _lookup(rows)
     centers = np.arange(len(config.materials) * len(config.indenters), dtype=float)
@@ -223,7 +582,8 @@ def _plot_scalar_spatial(
     axis.set_ylim(max(0.0, 5.0 * np.floor((min(all_values) - 5.0) / 5.0)), 102.0)
     _group_condition_ticks(axis, config)
     axis.set_ylabel("Localization accuracy [%]")
-    _panel_title(axis, "(c)", "Spatial decoding")
+    if show_title:
+        _panel_title(axis, "(c)", "Spatial vs. scalar decoding")
     _style_axis(axis)
     axis.tick_params(axis="x", length=0.0)
     axis.legend(
@@ -247,9 +607,9 @@ def _plot_scalar_spatial(
                 label="6-region spatial",
             ),
         ),
-        loc="lower right",
+        loc=legend_location,
         frameon=False,
-        fontsize=5.5,
+        fontsize=DEFAULT_STYLE.annotation_font_size_pt,
         handletextpad=0.35,
         labelspacing=0.25,
     )
@@ -274,9 +634,17 @@ def _plot_calibration(
     title_axis.text(
         0.0,
         0.55,
-        "(d)  Calibration burden",
-        fontsize=7.5,
-        fontweight="bold",
+        "(d)",
+        fontsize=DEFAULT_STYLE.panel_label_font_size_pt,
+        fontweight="normal",
+        va="center",
+    )
+    title_axis.text(
+        0.065,
+        0.55,
+        "Calibration-set size",
+        fontsize=DEFAULT_STYLE.panel_title_font_size_pt,
+        fontweight="normal",
         va="center",
     )
     for column, indenter in enumerate(config.indenters, start=2):
@@ -286,7 +654,7 @@ def _plot_calibration(
             0.5,
             0.5,
             config.indenter_labels[indenter].replace(" sphere", ""),
-            fontsize=6.0,
+            fontsize=DEFAULT_STYLE.condition_header_font_size_pt,
             ha="center",
             va="center",
         )
@@ -297,7 +665,7 @@ def _plot_calibration(
         0.5,
         "Accuracy [%]",
         rotation=90,
-        fontsize=5.8,
+        fontsize=DEFAULT_STYLE.axis_label_font_size_pt,
         ha="center",
         va="center",
     )
@@ -309,8 +677,9 @@ def _plot_calibration(
             0.5,
             config.material_labels[material],
             rotation=90,
-            fontsize=5.8,
+            fontsize=DEFAULT_STYLE.group_header_font_size_pt,
             fontweight="bold",
+            fontfamily=STRUCTURAL_FONT_FAMILY,
             ha="center",
             va="center",
         )
@@ -357,9 +726,11 @@ def _plot_calibration(
         axis.set_ylim(y_min, 102.0)
         axis.set_xticks(range(1, config.maximum_calibration_contacts + 1))
         if condition_index // 2 == 1:
-            axis.set_xlabel("Contacts / location", fontsize=5.8)
+            axis.set_xlabel(
+                "Contacts / location",
+                fontsize=DEFAULT_STYLE.axis_label_font_size_pt,
+            )
         _style_axis(axis)
-        axis.tick_params(labelsize=5.2)
         if condition_index // 2 == 0:
             axis.tick_params(axis="x", labelbottom=False)
         if condition_index % 2 == 1:
@@ -368,31 +739,91 @@ def _plot_calibration(
     return tuple(axes)
 
 
-def build_figure(config: PaperFigureConfig) -> plt.Figure:
-    """Build Figure 6 from the compact machine-readable summaries."""
+def _load_inputs(
+    config: PaperFigureConfig,
+    *,
+    recompute: bool,
+) -> tuple[
+    list[dict[str, object]],
+    list[dict[str, str]],
+    list[dict[str, str]],
+    list[dict[str, str]],
+]:
+    """Load the fixed Figure 6 summaries without changing their metrics."""
 
     output = config.analysis_output_directory
-    distinguishability = read_csv(output / "fig6b_spatial_distinguishability.csv")
-    scalar_spatial = read_csv(output / "fig6c_scalar_vs_spatial.csv")
-    calibration = read_csv(output / "fig6d_calibration_burden.csv")
+    required = (
+        "fig6b_spatial_distinguishability.csv",
+        "fig6c_scalar_vs_spatial.csv",
+        "fig6d_calibration_burden.csv",
+    )
+    if recompute or any(not (output / name).is_file() for name in required):
+        run_analysis(config)
 
-    figure = plt.figure(figsize=(DEFAULT_STYLE.double_column_width_in, 4.75))
+    distinguishability = read_csv(output / required[0])
+    scalar_spatial = read_csv(output / required[1])
+    calibration = read_csv(output / required[2])
+    variability = _load_panel_a_variability(config, distinguishability)
+    return variability, distinguishability, scalar_spatial, calibration
+
+
+def build_figure(
+    config: PaperFigureConfig,
+    variability: list[dict[str, object]],
+    distinguishability: list[dict[str, str]],
+    scalar_spatial: list[dict[str, str]],
+    calibration: list[dict[str, str]],
+) -> plt.Figure:
+    """Build the canonical 2-by-3 Figure 6 at IEEE double-column width."""
+
+    figure = plt.figure(figsize=FIGURE_SIZE_IN)
     grid = figure.add_gridspec(
         2,
-        2,
-        left=0.070,
+        3,
+        left=0.072,
         right=0.992,
         bottom=0.075,
-        top=0.925,
-        hspace=0.34,
-        wspace=0.26,
+        top=0.895,
+        height_ratios=(0.72, 1.08),
+        hspace=0.33,
+        wspace=0.32,
     )
-    _plot_recontact_consistency(
-        figure.add_subplot(grid[0, 0]), distinguishability, config
+
+    _plot_variability_compact(figure, grid[0, 0], variability, config)
+    _plot_distinguishability(
+        figure.add_subplot(grid[0, 1]),
+        distinguishability,
+        config,
+        show_title=False,
     )
-    _plot_distinguishability(figure.add_subplot(grid[0, 1]), distinguishability, config)
-    _plot_scalar_spatial(figure.add_subplot(grid[1, 0]), scalar_spatial, config)
-    _plot_calibration(figure, grid[1, 1], calibration, config)
+    _plot_scalar_spatial(
+        figure.add_subplot(grid[0, 2]),
+        scalar_spatial,
+        config,
+        show_title=False,
+        legend_location="lower left",
+    )
+    _plot_calibration_compact(figure, grid[1, 0], calibration, config)
+    _plot_placeholder(
+        figure.add_subplot(grid[1, 1]),
+        description="Camera angle, illumination,\nand force/location sensing",
+    )
+    _plot_placeholder(
+        figure.add_subplot(grid[1, 2]),
+        description="Long-horizon cyclic\nloading evaluation",
+    )
+
+    panel_titles = (
+        (grid[0, 0], "(a)", "Contact-state variability"),
+        (grid[0, 1], "(b)", "Re-contact distinguishability"),
+        (grid[0, 2], "(c)", "Spatial vs. scalar decoding"),
+        (grid[1, 0], "(d)", "Calibration-set size"),
+        (grid[1, 1], "(e)", "Sensing robustness"),
+        (grid[1, 2], "(f)", "Cyclic stability"),
+    )
+    for subplot_spec, panel_label, title in panel_titles:
+        _draw_panel_title(figure, subplot_spec, panel_label, title)
+
     figure.legend(
         handles=[
             Patch(
@@ -407,9 +838,9 @@ def build_figure(config: PaperFigureConfig) -> plt.Figure:
         bbox_to_anchor=(0.5, 0.995),
         ncol=len(config.morphologies),
         frameon=False,
-        fontsize=6.5,
-        columnspacing=1.2,
-        handletextpad=0.45,
+        fontsize=DEFAULT_STYLE.legend_font_size_pt,
+        columnspacing=1.0,
+        handletextpad=0.4,
     )
     return figure
 
@@ -417,23 +848,15 @@ def build_figure(config: PaperFigureConfig) -> plt.Figure:
 def save_final(
     config: PaperFigureConfig, *, recompute: bool = False
 ) -> tuple[Path, ...]:
-    """Write the final Figure 6 PDF and PNG."""
+    """Write the one canonical Figure 6 PDF and PNG."""
 
-    required = (
-        "fig6b_spatial_distinguishability.csv",
-        "fig6c_scalar_vs_spatial.csv",
-        "fig6d_calibration_burden.csv",
-    )
-    if recompute or any(
-        not (config.analysis_output_directory / name).is_file() for name in required
-    ):
-        run_analysis(config)
-    config.figure6_output_directory.mkdir(parents=True, exist_ok=True)
+    inputs = _load_inputs(config, recompute=recompute)
+    DEFAULT_OUTPUT_STEM.parent.mkdir(parents=True, exist_ok=True)
     with publication_context(DEFAULT_STYLE):
-        figure = build_figure(config)
+        figure = build_figure(config, *inputs)
         outputs = save_figure(
             figure,
-            config.figure6_output_directory / "fig6_final",
+            DEFAULT_OUTPUT_STEM,
             formats=("pdf", "png"),
             bbox_inches=None,
             pad_inches=0.0,

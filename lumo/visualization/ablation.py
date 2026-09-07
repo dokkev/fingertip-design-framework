@@ -178,7 +178,7 @@ def plot_structural_ablation_schematic(
         )
         axes.text(
             0.5 * (start + end),
-            0.70,
+            2.05,
             label,
             ha="center",
             va="center",

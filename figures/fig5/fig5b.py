@@ -10,7 +10,12 @@ from matplotlib.colors import Normalize
 from matplotlib.figure import Figure
 from matplotlib.gridspec import SubplotSpec
 
-from lumo.visualization import DEFAULT_STYLE, MATERIAL_LABELS, PAPER_LABELS
+from lumo.visualization import (
+    DEFAULT_STYLE,
+    MATERIAL_LABELS,
+    PAPER_LABELS,
+    STRUCTURAL_FONT_FAMILY,
+)
 
 from .config import (
     ALL_HOLES,
@@ -304,15 +309,15 @@ def render_panel(
         0.55,
         panel_label,
         fontsize=DEFAULT_STYLE.panel_label_font_size_pt,
-        fontweight="bold",
+        fontweight="normal",
         va="center",
     )
     title_axis.text(
         0.140,
         0.55,
         "Optical signal change, 2-15 N",
-        fontsize=6.2,
-        fontweight="bold",
+        fontsize=DEFAULT_STYLE.panel_title_font_size_pt,
+        fontweight="normal",
         va="center",
     )
 
@@ -326,8 +331,9 @@ def render_panel(
             0.5,
             0.55,
             MATERIAL_LABELS[material],
-            fontsize=4.8,
+            fontsize=DEFAULT_STYLE.group_header_font_size_pt,
             fontweight="bold",
+            fontfamily=STRUCTURAL_FONT_FAMILY,
             ha="center",
             va="center",
         )
@@ -342,7 +348,7 @@ def render_panel(
             0.5,
             0.52,
             indenter_titles[candidate_indenter],
-            fontsize=4.5,
+            fontsize=DEFAULT_STYLE.minimum_font_size_pt,
             linespacing=0.92,
             ha="center",
             va="center",
@@ -359,7 +365,7 @@ def render_panel(
         0.0,
         0.5,
         r"$X_{\mathrm{contact}}$ [mm]",
-        fontsize=3.9,
+        fontsize=DEFAULT_STYLE.minimum_font_size_pt,
         rotation=90,
         ha="center",
         va="center",
@@ -386,7 +392,7 @@ def render_panel(
                 0.05,
                 0.5,
                 PAPER_LABELS[morphology],
-                fontsize=3.7,
+                fontsize=DEFAULT_STYLE.minimum_font_size_pt,
                 ha="left",
                 va="center",
             )
@@ -405,7 +411,7 @@ def render_panel(
                     0.5,
                     "pending",
                     transform=axis.transAxes,
-                    fontsize=5.5,
+                    fontsize=DEFAULT_STYLE.annotation_font_size_pt,
                     color="#888888",
                     ha="center",
                     va="center",
@@ -455,13 +461,15 @@ def render_panel(
                         -0.15,
                         "Distal",
                         transform=axis.transAxes,
-                        fontsize=4.4,
+                        fontsize=DEFAULT_STYLE.minimum_font_size_pt,
                         ha="left",
                         va="top",
                     )
             else:
                 axis.set_xticks([])
-            axis.tick_params(labelsize=3.8, length=1.3, pad=0.6)
+            # Six region labels share a sub-half-inch matrix. This is the one
+            # dense-panel exception to the 6 pt minimum in figures/README.md.
+            axis.tick_params(labelsize=5.2, length=1.3, pad=0.6)
             axis.set_box_aspect(1.0)
             for spine in axis.spines.values():
                 spine.set_linewidth(0.45)
@@ -473,19 +481,23 @@ def render_panel(
     colorbar = figure.colorbar(image, cax=colorbar_axis)
     colorbar.ax.set_ylabel(
         "Optical change [DN]",
-        fontsize=3.6,
+        fontsize=DEFAULT_STYLE.minimum_font_size_pt,
         rotation=90,
         labelpad=2.0,
         va="center",
     )
-    colorbar.ax.tick_params(labelsize=4.5, length=1.5, pad=0.8)
+    colorbar.ax.tick_params(
+        labelsize=DEFAULT_STYLE.minimum_font_size_pt,
+        length=1.5,
+        pad=0.8,
+    )
     colorbar.outline.set_linewidth(0.45)
     body_position = grid[3:, 2:7].get_position(figure)
     figure.text(
         body_position.x1,
         body_position.y0 - 0.014,
         "Proximal",
-        fontsize=4.4,
+        fontsize=DEFAULT_STYLE.minimum_font_size_pt,
         ha="right",
         va="top",
     )

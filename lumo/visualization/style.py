@@ -32,10 +32,11 @@ MATERIAL_LABELS = {
 }
 
 EDGE_COLOR = "#4C5055"
+STRUCTURAL_FONT_FAMILY = "Liberation Sans"
 
 SEMANTIC_COLORS = {
     "rigid": "#59616B",
-    "pad": "#E0D797",
+    "pad": "#F2F1ED",
     "led": "#009E73",
     "force": "#D62728",
 }
@@ -67,6 +68,11 @@ class PublicationStyle:
     axis_label_font_size_pt: float = 8.0
     legend_font_size_pt: float = 7.0
     panel_label_font_size_pt: float = 9.0
+    panel_title_font_size_pt: float = 8.0
+    group_header_font_size_pt: float = 7.0
+    condition_header_font_size_pt: float = 7.0
+    annotation_font_size_pt: float = 6.5
+    minimum_font_size_pt: float = 6.0
     line_width_pt: float = 1.2
     marker_size_pt: float = 4.5
     spine_width_pt: float = 0.7
@@ -89,18 +95,23 @@ class PublicationStyle:
         """Return Matplotlib parameters shared by all publication figures."""
 
         return {
-            "font.family": "sans-serif",
+            "font.family": "Helvetica Light",
             "font.sans-serif": [
                 "Helvetica Light",
-                "Arial",
                 "Helvetica",
+                "Arial",
                 "Liberation Sans",
                 "DejaVu Sans",
             ],
             "font.size": self.base_font_size_pt,
+            # The selected family is itself the Helvetica Light face. Request
+            # its regular style instead of an unavailable synthetic weight.
+            "font.weight": "normal",
             "axes.labelsize": self.axis_label_font_size_pt,
+            "axes.labelweight": "normal",
             "axes.linewidth": self.spine_width_pt,
             "axes.titlesize": self.axis_label_font_size_pt,
+            "axes.titleweight": "normal",
             "xtick.labelsize": self.tick_font_size_pt,
             "ytick.labelsize": self.tick_font_size_pt,
             "xtick.major.width": self.tick_width_pt,
@@ -110,9 +121,10 @@ class PublicationStyle:
             "legend.fontsize": self.legend_font_size_pt,
             "mathtext.fontset": "custom",
             "mathtext.rm": "Helvetica Light",
-            "mathtext.it": "Helvetica Light",
-            "mathtext.bf": "Helvetica Light",
+            "mathtext.it": "Liberation Sans:italic",
+            "mathtext.bf": "Liberation Sans:bold",
             "mathtext.sf": "Helvetica Light",
+            "mathtext.cal": "Liberation Sans",
             "lines.linewidth": self.line_width_pt,
             "lines.markersize": self.marker_size_pt,
             "figure.facecolor": "white",

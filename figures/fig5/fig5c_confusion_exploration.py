@@ -9,6 +9,9 @@ from experiments.analysis.fig5c_decoder import DEFAULT_CONFIG_PATH, load_config
 from experiments.analysis.plot_fig5c import save_panel
 
 
+DEFAULT_OUTPUT_DIRECTORY = Path(__file__).resolve().parent / "exploration"
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH)
@@ -21,7 +24,7 @@ def main() -> None:
         output_directory=(
             arguments.output_directory.resolve()
             if arguments.output_directory is not None
-            else None
+            else DEFAULT_OUTPUT_DIRECTORY
         ),
     ):
         print(path)

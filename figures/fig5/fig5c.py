@@ -9,7 +9,7 @@ from matplotlib.figure import Figure
 from matplotlib.gridspec import SubplotSpec
 
 from experiments.analysis.fig5c_decoder import PaperFigureConfig
-from lumo.visualization import DEFAULT_STYLE
+from lumo.visualization import DEFAULT_STYLE, STRUCTURAL_FONT_FAMILY
 
 from .config import (
     COMPARISON_CONDITIONS,
@@ -102,7 +102,10 @@ def _style_matrix_axis(
     axis.set_yticklabels(tick_labels if show_y_tick_labels else ())
     axis.tick_params(
         axis="both",
-        labelsize=2.5 * font_scale,
+        # A 6-by-6 matrix is only a few tenths of an inch wide in the final
+        # three-panel composition. Keep this localized dense-grid exception
+        # above 4 pt rather than shrinking the shared figure typography.
+        labelsize=3.8 * font_scale,
         length=1.1,
         pad=0.45,
     )
@@ -152,15 +155,15 @@ def render_panel(
         0.55,
         panel_label,
         fontsize=DEFAULT_STYLE.panel_label_font_size_pt * font_scale,
-        fontweight="bold",
+        fontweight="normal",
         va="center",
     )
     title_axis.text(
         0.170,
         0.55,
         "Contact-location decoding",
-        fontsize=5.8 * font_scale,
-        fontweight="bold",
+        fontsize=DEFAULT_STYLE.panel_title_font_size_pt * font_scale,
+        fontweight="normal",
         va="center",
     )
 
@@ -174,8 +177,9 @@ def render_panel(
             0.5,
             0.55,
             config.material_labels[material],
-            fontsize=4.8 * font_scale,
+            fontsize=DEFAULT_STYLE.group_header_font_size_pt * font_scale,
             fontweight="bold",
+            fontfamily=STRUCTURAL_FONT_FAMILY,
             ha="center",
             va="center",
         )
@@ -189,7 +193,7 @@ def render_panel(
             0.5,
             0.52,
             f"Ø{config.indenter_labels[indenter]}".replace(" sphere", "\nsphere"),
-            fontsize=4.5 * font_scale,
+            fontsize=DEFAULT_STYLE.minimum_font_size_pt * font_scale,
             linespacing=0.92,
             ha="center",
             va="center",
@@ -203,7 +207,7 @@ def render_panel(
         0.0,
         0.5,
         "True contact location [mm]",
-        fontsize=3.8 * font_scale,
+        fontsize=DEFAULT_STYLE.minimum_font_size_pt * font_scale,
         rotation=90,
         ha="center",
         va="center",
@@ -229,7 +233,7 @@ def render_panel(
                 0.05,
                 0.5,
                 config.morphology_labels[morphology],
-                fontsize=3.7 * font_scale,
+                fontsize=DEFAULT_STYLE.minimum_font_size_pt * font_scale,
                 ha="left",
                 va="center",
             )
@@ -263,7 +267,7 @@ def render_panel(
                     true_index,
                     f"{percentage / 100.0:.1f}",
                     color=text_color,
-                    fontsize=3.55 * font_scale,
+                    fontsize=3.8 * font_scale,
                     ha="center",
                     va="center",
                 )
@@ -287,7 +291,7 @@ def render_panel(
         0.5 * (body_position.x0 + body_position.x1),
         body_position.y0 - 0.014,
         "Predicted contact location [mm]",
-        fontsize=3.8 * font_scale,
+        fontsize=DEFAULT_STYLE.annotation_font_size_pt * font_scale,
         ha="center",
         va="top",
     )

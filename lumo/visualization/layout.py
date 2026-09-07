@@ -118,7 +118,7 @@ def add_panel_labels(
     y: float = 1.05,
     style: PublicationStyle = DEFAULT_STYLE,
 ) -> tuple[Text, ...]:
-    """Add bold panel labels in axes coordinates at composition time."""
+    """Add light-weight panel labels in axes coordinates at composition time."""
 
     axes_list = (
         list(axes.flat)
@@ -135,7 +135,7 @@ def add_panel_labels(
             y,
             label,
             transform=axes_item.transAxes,
-            fontweight="bold",
+            fontweight="normal",
             fontsize=style.panel_label_font_size_pt,
             ha="left",
             va="bottom",

@@ -56,7 +56,7 @@ Preferred fallback order:
 
 | Element | Size | Weight/style |
 | --- | ---: | --- |
-| Panel label `(a)`, `(b)`, ... | **9 pt** | **bold**, upright |
+| Panel label `(a)`, `(b)`, ... | **9 pt** | Helvetica Light, upright |
 | Panel title | **8 pt** | Helvetica Light, upright |
 | Axis label | **8 pt** | Helvetica Light, upright |
 | Base plot text | **8 pt** | Helvetica Light, upright |
@@ -74,10 +74,8 @@ preview.
 
 Bold is a structural cue, not an emphasis style.
 
-Use bold only for:
-
-- panel labels such as **`(a)`**;
-- major row/column group headers when needed to distinguish hierarchy, e.g.
+Use bold only for major row/column group headers when needed to distinguish
+hierarchy, e.g.
   **Solaris** and **Dragon Skin**.
 
 Do **not** bold:
@@ -92,6 +90,10 @@ Do **not** bold:
 Ordinary prose remains Helvetica Light. When a bold structural element is
 needed, use the corresponding Helvetica/Arial bold face rather than trying to
 make the light face carry visual emphasis.
+
+The current environment provides only the Helvetica Light face. Therefore the
+shared style uses Liberation Sans Bold, an Arial-compatible fallback, only for
+bold group headers. Panel labels and ordinary text remain Helvetica Light.
 
 ### Italic
 
@@ -115,19 +117,25 @@ Examples:
 Rules:
 
 - Panel labels are lowercase letters in parentheses: `(a)`, `(b)`, ...
-- Panel labels are **bold**; title text is **Helvetica Light**.
-- Panel titles are **left aligned** to the left edge of the panel.
+- Panel labels and title text use Helvetica Light; the 9 pt label remains
+  distinct from the 8 pt title through size rather than weight.
+- Center each panel title within the full width of its owning subfigure. The
+  title center must follow the subfigure bounds, not the visible data-axis
+  bounds of one nested subplot.
+- Keep the panel label at the subfigure's upper-left edge; center only the title
+  text. This preserves fast `(a)`, `(b)`, ... scanning while aligning titles
+  consistently across heterogeneous panel layouts.
 - Align titles to a common vertical baseline within each figure row.
 - Use sentence case.
 - Prefer **2--5 words**.
 - Do not end panel titles with a period.
 - Avoid sentence-like claims such as `Decoding improves without increased
   signal magnitude`; move interpretation to the caption or manuscript text.
-- Do not center ordinary panel titles. Centered text is reserved for shared
-  column/group headers such as `10 mm`, `30 mm`, `Solaris`, or `Dragon Skin`.
+- Shared column/group headers such as `10 mm`, `30 mm`, `Solaris`, or
+  `Dragon Skin` remain independently centered over the groups they describe.
 
 When Matplotlib cannot style the panel label and title independently with
-`Axes.set_title`, place the bold panel label and light-weight title as separate
+`Axes.set_title`, place the larger panel label and light-weight title as separate
 text artists rather than making the entire title bold.
 
 ## 4. Axis labels and ticks
@@ -206,7 +214,7 @@ channels.
 | Meaning | Color |
 | --- | --- |
 | Rigid carrier | `#59616B` |
-| Deformable pad | `#E0D797` |
+| Deformable pad | `#F2F1ED` |
 | LED / optical source | `#009E73` |
 | Force / mechanics highlight | `#D62728` |
 
@@ -314,7 +322,7 @@ Before accepting a figure:
 1. Export at the exact final IEEE width.
 2. Open the PDF at approximately manuscript display size, not only zoomed in.
 3. Verify that 7 pt ticks and 6.5 pt annotations remain legible.
-4. Check that panel labels are the only routinely bold text.
+4. Check that panel labels are light and only major group headers are bold.
 5. Check that prose titles/labels use Helvetica Light, are upright, and are not
    accidentally rendered bold.
 6. Confirm that morphology colors and paper-facing names match this file.
@@ -322,3 +330,41 @@ Before accepting a figure:
    whitespace.
 8. Confirm that the panel title describes the measurement rather than making an
    unsupported conclusion.
+
+## 15. Source and output organization
+
+Every manuscript figure owns one directory named `figN`:
+
+```text
+figures/
+  README.md
+  fig2/
+    fig2.py
+    fig2.pdf
+    fig2.png
+  fig3/
+    fig3.py
+    fig3.pdf
+    fig3.png
+  fig5/
+    fig5.py
+    fig5_final.pdf
+    fig5_final.png
+    exploration/
+  fig6/
+    fig6.py
+    fig6.pdf
+    fig6.png
+```
+
+- Keep composition scripts, panel tools, audit CSVs, and final outputs under
+  the directory of the figure that owns them.
+- Do not place figure-specific scripts or generated artifacts directly under
+  `figures/`, and do not recreate a generic `figures/output/` directory.
+- Put non-production visual alternatives under the owning figure's
+  `exploration/` directory, with names that distinguish them from the final
+  manuscript output.
+- Python bytecode and render-review files are temporary. Keep them out of the
+  figure tree and remove them before handoff.
+- Stable historical output stems such as `fig5_final` may be
+  retained when changing them would break manuscript or documentation links.

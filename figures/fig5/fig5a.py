@@ -14,7 +14,11 @@ from experiments.analysis.dataset import index_session
 from experiments.analysis.fig5c_decoder import PaperFigureConfig
 from experiments.analysis.metrics import actual_force_magnitude
 from experiments.analysis.optical import load_rgb
-from lumo.visualization import DEFAULT_STYLE, SEMANTIC_COLORS
+from lumo.visualization import (
+    DEFAULT_STYLE,
+    SEMANTIC_COLORS,
+    STRUCTURAL_FONT_FAMILY,
+)
 
 from .config import (
     ATLAS_CROP_XYXY,
@@ -255,7 +259,7 @@ def render_panel(
         6,
         10,
         height_ratios=MORPHOLOGY_TABLE_HEIGHT_RATIOS,
-        width_ratios=(1.05, 1, 1, 1, 1, 0.06, 1, 1, 1, 1),
+        width_ratios=(1.25, 1, 1, 1, 1, 0.06, 1, 1, 1, 1),
         hspace=MORPHOLOGY_TABLE_HSPACE,
         wspace=0.003,
     )
@@ -266,15 +270,15 @@ def render_panel(
         0.55,
         panel_label,
         fontsize=DEFAULT_STYLE.panel_label_font_size_pt,
-        fontweight="bold",
+        fontweight="normal",
         va="center",
     )
     title_axis.text(
         0.080,
         0.55,
         "Optical signatures across contact locations",
-        fontsize=6.2,
-        fontweight="bold",
+        fontsize=DEFAULT_STYLE.panel_title_font_size_pt,
+        fontweight="normal",
         va="center",
     )
 
@@ -290,15 +294,23 @@ def render_panel(
             0.5,
             0.55,
             config.material_labels[material],
-            fontsize=5.0,
+            fontsize=DEFAULT_STYLE.group_header_font_size_pt,
             fontweight="bold",
+            fontfamily=STRUCTURAL_FONT_FAMILY,
             ha="center",
             va="center",
         )
         for offset, header in enumerate(headers):
             axis = figure.add_subplot(grid[2, first_column + offset])
             axis.axis("off")
-            axis.text(0.5, 0.52, header, fontsize=4.5, ha="center", va="center")
+            axis.text(
+                0.5,
+                0.52,
+                header,
+                fontsize=DEFAULT_STYLE.minimum_font_size_pt,
+                ha="center",
+                va="center",
+            )
 
     separator_axis = figure.add_subplot(grid[1:, 5])
     separator_axis.axis("off")
@@ -327,7 +339,7 @@ def render_panel(
             0.0,
             0.5,
             row_label,
-            fontsize=5.0,
+            fontsize=DEFAULT_STYLE.group_header_font_size_pt,
             ha="left",
             va="center",
             linespacing=0.9,
@@ -354,7 +366,7 @@ def render_panel(
                         0.5,
                         "pending",
                         color="#777777",
-                        fontsize=5.3,
+                        fontsize=DEFAULT_STYLE.annotation_font_size_pt,
                         ha="center",
                         va="center",
                         transform=axis.transAxes,

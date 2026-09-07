@@ -563,18 +563,22 @@ analysis groups the structural counterfactual with carrier and lateral-void
 evidence; morphology optimization groups a compact 2 x 2 block of landscape
 Pareto axes. Each Pareto axis has the same physical width as a structural
 response axis, and all four Pareto axes share one equal size within panel (d).
-Its two columns remain tightly spaced, while its two rows use the exact same
-expanded schematic-to-response gap and outer vertical boundaries as the
-left-side panel grid. This leaves a clearer visual break between the structural
-and optimization blocks.
+The carrier and void transition labels occupy the clear band above the three
+structural silhouettes rather than sharing their drawing area.
+Its two columns remain tightly spaced. The lower row keeps the same lower
+boundary as the structural response panels, while a compact horizontal legend
+occupies the top boundary aligned with panel (a). The upper Pareto row sits
+below that legend and the inter-row gap is intentionally smaller than the
+left-side schematic-to-response gap. This leaves a clearer visual break between
+the structural and optimization blocks without wasting vertical plot space.
 All four Pareto axes retain numerical tick labels. Their y values occupy the
 outer perimeter, while the upper-row x values sit just inside their lower
 spines so the nearly closed internal seams remain uncluttered.
-The shared optimization legend occupies a separate vertical strip immediately
-to the right of the 2 x 2 data block. One `w_void` color scale beside the
-coupled-void panel applies to both its scatter and the optimized Pareto points.
-Figure 3 uses one figure-local IEEE double-column typography hierarchy across
-all quantitative panels: 7 pt axis labels and 6 pt numerical tick labels.
+The shared optimization legend is one horizontal row above the 2 x 2 data
+block. One `w_void` color scale beside the coupled-void panel applies to both
+its scatter and the optimized Pareto points; its vertical label and the inset
+Pareto block leave a clear inter-panel gutter. Figure 3 uses the shared IEEE
+double-column typography hierarchy across all quantitative panels.
 
 Reusable axes-only panel functions live in `lumo.visualization.ablation`;
 `figures/fig3/fig3.py` alone loads the completed ablation and optimization artifacts,
@@ -1487,8 +1491,8 @@ per-sample prediction, and baseline-relative changes remain available in the
 shared compact analysis outputs. The separate spatial-distinguishability ratio
 remains in Figure 6(b).
 `experiments.analysis.plot_fig5c` and its convenience entry point
-`figures/fig5c_confusion_exploration.py` render the same aligned confusion
-table independently as `fig5c_confusion_2x2.pdf` and `.png`. They reuse the
+`figures/fig5/fig5c_confusion_exploration.py` render the same aligned confusion
+table independently below `figures/fig5/exploration/`. They reuse the
 existing held-out prediction table and do not rerun or alter the decoder unless
 the caller explicitly requests recomputation.
 `fig5.py` composes these panels with nested
@@ -1498,38 +1502,21 @@ embeds raw atlas images as raster content while retaining all axes, heatmaps,
 labels, and annotations as native Matplotlib artists; it never stitches
 rendered panel screenshots. It writes `fig5_final.pdf` and `fig5_final.png`.
 
-`figures.fig6.fig6` owns and builds the four-panel perception-workload
-follow-up from the same compact analysis tables. Panel (a) plots the independent
-same-location re-contact variation stored internally as `W_contact` and labels
-that quantity paper-facing as `W_recontact`. Panel (b) reads the established
+`figures.fig6.fig6` is the sole Figure 6 renderer. It composes the current
+analyses at the exact 7.16-inch IEEE double-column width in a 2-by-3 grid.
+Panel (a) compares baseline-relative maintained-contact `W_cycle` and
+independently re-established-contact `W_recontact` variability for the 10 mm
+sphere without pooling their absolute units. Panel (b) reads the established
 slope-profile `D_neighbor`, validates the stored ratio, and labels
-`D_neighbor / W_contact` paper-facing as `Q_recontact`. This naming distinguishes
-independently re-established contacts from cyclic within-contact `W_cycle`,
-which is not substituted into either panel. Panel (c) compares the scalar-only and six-region
-observers under the identical leave-one-repetition-out split. Panel (d) uses
-deterministic calibration-repetition subsets to measure accuracy with one to
-four contacts per location. Figure 6 uses short quantity-based panel titles and
-axis labels; panels (b) and (c) group the repeated 10 and 30 mm conditions
-under one material label, while panel (d) uses material row labels and indenter
-column headers instead of four repeated condition titles. `paper_figures.yaml` owns data roots, condition
-overrides, indenter labels, feature forces, contact-position mapping, and the
-resampling seed; paper-facing material/morphology labels and morphology colors
-come from `lumo.visualization.style`. Figure 6 writes
-`fig6_final.pdf` and `fig6_final.png`.
-
-`figures.fig6.fig6_singlecol_alt` is a separate 3.5-inch-wide candidate path;
-it does not overwrite or change the production Figure 6 renderer. Panels
-(b)--(d) reuse the frozen production support tables and plotting definitions.
-Panel (a) is a baseline-relative comparison of two deliberately separate
-variability measures for the 10 mm sphere: maintained-contact `W_cycle` from
-the Solaris and Dragon Skin contact-history summaries, and independently
-re-established-contact `W_recontact` from the frozen production
-distinguishability table. Only percent changes from each material's matched
-baseline share the visual axis; the raw values are not pooled because
-`W_cycle` is measured in DN whereas `W_recontact` is measured in DN/N. A
-panel-specific audit CSV retains both absolute values, both relative changes,
-and the exact source paths. This exploratory join does not alter either source
-analysis or the production Figure 6 renderer.
+`D_neighbor / W_contact` paper-facing as `Q_recontact`. Panel (c) compares the
+scalar-only and six-region observers under the identical
+leave-one-repetition-out split. Panel (d) uses deterministic
+calibration-repetition subsets to measure accuracy with one to four contacts
+per location. Panels (e) and (f) are visibly labeled, non-data placeholders
+for future sensing-robustness and cyclic-stability results. Configuration,
+paper-facing labels, and morphology colors remain owned by
+`paper_figures.yaml` and `lumo.visualization.style`. The renderer writes only
+`fig6.pdf` and `fig6.png` under `figures/fig6/`.
 
 The shared analysis writes machine-readable condition summaries, per-sample
 predictions, confusion matrices, magnitude/accuracy data, spatial
@@ -1694,16 +1681,22 @@ constructed `Fingertip`; it derives every outline and dimension from that
 object and shows the fixed LED-station recess rather than duplicating geometry
 constants in a figure script.
 
-`style.py` is the sole source for final-size single- and double-column widths,
-typography, line and marker dimensions, semantic colors, and design-status
-markers. Green denotes optical signal, orange denotes external mechanics,
-neutral milky white denotes compliant silicone, and charcoal denotes the rigid
-carrier. Dragon Skin and Solaris use a purple/blue pair so material identity
-does not consume the optical green channel.
+`figures/README.md` owns the paper-facing figure contract. `style.py` is its
+executable source for exact single- and double-column widths, final-size
+typography, line and marker dimensions, morphology labels and colors, semantic
+colors, and design-status markers. Ordinary text uses the installed Helvetica
+Light face; only major group headers use an Arial-compatible bold fallback.
+Panel labels remain light and are distinguished by their 9 pt size. Baseline,
+Opt-Flat, and Opt-Curved use the
+shared gray, teal-blue, and orange morphology palette. That identity palette is
+kept separate from the rigid-carrier, deformable-pad, optical-source, and force
+semantic colors. The shared deformable-pad color is the original translucent
+milky silicone tone; stress-rendered simulation images retain their own scalar
+field colors instead of inheriting that schematic fill.
 
 `layout.py` creates uniform axes arrays or caller-owned Matplotlib `GridSpec`
-layouts, adds bold panel labels, renders one panel standalone, and saves PDF,
-SVG, or high-resolution PNG output. Its `add_figure_box()` helper owns the
+layouts, adds light-weight panel labels, renders one panel standalone, and
+saves PDF, SVG, or high-resolution PNG output. Its `add_figure_box()` helper owns the
 optional rounded white-panel frame used by Figure 2, including border color,
 stroke, padding, and corner radius; Figure 3 intentionally uses no decorative
 outer frames. Figure composition owns panel labels and file output; panel
@@ -1722,17 +1715,20 @@ existing parameterization, mechanics, optical, and Bayesian-optimization
 panels. Artifact loading, transport replay, inter-panel arrows, and export
 remain in the figure composition; the reusable plotting layer stays free of
 simulation ownership. Its fixed 7.16-inch double-column composition uses a
-compact 2.80-inch canvas and a figure-local readable hierarchy of 8.2 pt panel
-titles, 7.5 pt axis/response labels, and 6.0--6.4 pt supporting text. Panel (a)
-shows the five optimized morphology variables in red and the fixed or derived
-geometric dimensions in black.
+compact 2.80-inch canvas and the shared final-size hierarchy: 9 pt light panel
+labels, 8 pt light panel titles and axis labels, and 6--7 pt supporting text.
+The panel frames sit below the shared legend with an explicit clear band, and
+each panel reserves a consistent title-to-content gap so schematics and renders
+cannot intrude into the panel-title line.
+Panel (a) shows the five optimized morphology variables in red and the fixed or
+derived geometric dimensions in black.
 
-One-off experimental figure scripts own their artifact discovery and figure
-composition rather than adding experiment paths to `lumo.visualization`.
-`figures/brightest10_red_contact_sweep.py` is one such script: it detects the
-fixed-camera five-LED array, measures the brightest-10% red response in
-spacing-scaled ROIs, and explicitly falls back to a median-centered exploratory
-view when the experiment directory has no unloaded frame.
+Figure-specific composition scripts, panel tools, audit tables, and outputs
+live under their owning `figures/figN/` directory rather than adding experiment
+paths to `lumo.visualization`. Non-production alternatives live under the
+owning figure's `exploration/` directory; figure-specific scripts and generated
+artifacts do not live directly under `figures/` or a generic `figures/output/`
+tree.
 
 ### `lumo/util/`
 

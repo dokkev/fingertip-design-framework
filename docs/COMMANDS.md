@@ -505,26 +505,18 @@ conda run --no-capture-output -n lit \
   python -m figures.fig6.fig6 \
   --config experiments/analysis/configs/paper_figures.yaml
 conda run --no-capture-output -n lit \
-  python -m figures.fig6.fig6_singlecol_alt \
-  --config experiments/analysis/configs/paper_figures.yaml
-conda run --no-capture-output -n lit \
   python -m experiments.analysis.build_fig5_fig6 \
   --config experiments/analysis/configs/paper_figures.yaml
 ```
 
-The alternate command writes a separate 3.5-inch-wide
-`fig6_singlecol_alt.pdf/png` without overwriting `fig6_final.*`. Its panel (a)
-compares baseline-relative changes in maintained-contact `W_cycle` and
-independent re-contact `W_recontact` for the 10 mm sphere. `W_cycle` is read
-only from the separately generated Solaris and Dragon Skin contact-history
-summaries; `W_recontact` and panels (b)--(d) continue to use the frozen
-production Figure 6 support tables. The companion
-`fig6_singlecol_alt_panel_a_variability.csv` records the absolute source values,
-baseline-relative changes, and source paths. The two metrics have different
-absolute units and are not pooled.
+The Figure 6 command writes the canonical exact-7.16-inch double-column
+`fig6.pdf/png`. It lays out contact-state variability, re-contact
+distinguishability, spatial-versus-scalar decoding, and calibration-set-size
+analyses in a 2-by-3 grid. Panels (e) and (f) are explicitly non-data
+placeholders for sensing robustness and cyclic stability.
 
 The standalone panel writes `fig5c_confusion_2x2.pdf/png`; Figure 6 writes
-`fig6_final.pdf/png`. Add `--recompute` to any plotting/build command to
+`fig6.pdf/png`. Add `--recompute` to any plotting/build command to
 regenerate the compact analysis tables first.
 
 The convenience exploration entry point renders the same aligned Figure 5(c)
@@ -532,12 +524,12 @@ table without changing the full Figure 5 output:
 
 ```bash
 conda run --no-capture-output -n lit \
-  python figures/fig5c_confusion_exploration.py
+  python -m figures.fig5.fig5c_confusion_exploration
 ```
 
 The command reuses `fig5c_per_sample_predictions.csv` from the unchanged
-leave-one-repetition-out six-region decoder and writes the same
-`fig5c_confusion_2x2.pdf/png` outputs under `figures/fig5/`. Add `--recompute`
+leave-one-repetition-out six-region decoder and writes standalone
+`fig5c_confusion_2x2.pdf/png` outputs under `figures/fig5/exploration/`. Add `--recompute`
 only when the shared decoder tables themselves need to be regenerated.
 
 Replay the smooth emissive segmentation on the checked-in 13-image reference

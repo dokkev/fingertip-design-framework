@@ -42,8 +42,8 @@ _REPORT_PATH = (
     / "figure3_validation.md"
 )
 _OUTPUT_STEM = Path(__file__).resolve().with_suffix("")
-_AXIS_LABEL_SIZE_PT = 7.0
-_TICK_LABEL_SIZE_PT = 6.0
+_AXIS_LABEL_SIZE_PT = DEFAULT_STYLE.axis_label_font_size_pt
+_TICK_LABEL_SIZE_PT = DEFAULT_STYLE.tick_font_size_pt
 _VOID_CMAP = LinearSegmentedColormap.from_list(
     "viridis_truncated",
     plt.get_cmap("viridis")(np.linspace(0.05, 0.90, 256)),
@@ -63,6 +63,36 @@ _CAMPAIGNS = (
         "mobo_fingertip_orientation_robust_1_2_5_10_05mm_solaris_nominal",
     ),
 )
+
+
+def _add_panel_title(
+    figure: plt.Figure,
+    *,
+    x: float,
+    y: float,
+    label: str,
+    title: str,
+) -> None:
+    """Draw the README title hierarchy: larger label, light title."""
+
+    figure.text(
+        x,
+        y,
+        label,
+        ha="left",
+        va="bottom",
+        fontsize=DEFAULT_STYLE.panel_label_font_size_pt,
+        fontweight="normal",
+    )
+    figure.text(
+        x + 0.030,
+        y,
+        title,
+        ha="left",
+        va="bottom",
+        fontsize=DEFAULT_STYLE.panel_title_font_size_pt,
+        fontweight="normal",
+    )
 
 
 def _read_csv(path: Path) -> list[dict[str, str]]:
@@ -461,7 +491,7 @@ def main() -> None:
                 transform=axes.transAxes,
                 ha="left",
                 va="top",
-                fontsize=6.0,
+                fontsize=DEFAULT_STYLE.annotation_font_size_pt,
                 zorder=6,
                 bbox={
                     "facecolor": "white",
@@ -500,26 +530,30 @@ def main() -> None:
                 axes.yaxis.set_ticks_position("right")
                 axes.tick_params(axis="y", labelleft=False, labelright=True)
 
-        # Match the left-side row contract exactly: the optimization block
-        # shares its outer edges and uses the same schematic-to-response gap.
-        # All four Pareto axes therefore remain equal within panel (d).
+        # Keep the lower Pareto row aligned with the response panels. The top
+        # boundary is reserved for a horizontal legend instead of forcing the
+        # upper Pareto row to align with panel (a); this also closes the gap
+        # between the two Pareto rows.
         optimization_slot = outer[0, 1].get_position(figure)
         response_position = carrier_axes.get_position()
         pareto_width = response_position.width
-        structural_row_gap = structure_frame_bounds[1] - response_position.y1
-        pareto_height = 0.5 * (
-            structure_frame_bounds[3]
-            - response_position.y0
-            - structural_row_gap
-        )
         pareto_column_gap = 0.006
-        pareto_group_left = optimization_slot.x0 + 0.026
+        pareto_group_left = optimization_slot.x0 + 0.072
         pareto_x = (
             pareto_group_left,
             pareto_group_left + pareto_width + pareto_column_gap,
         )
+        legend_height = 0.070
+        legend_plot_gap = 0.010
+        pareto_row_gap = 0.022
+        pareto_group_top = (
+            structure_frame_bounds[3] - legend_height - legend_plot_gap
+        )
+        pareto_height = 0.5 * (
+            pareto_group_top - response_position.y0 - pareto_row_gap
+        )
         pareto_y = (
-            structure_frame_bounds[3] - pareto_height,
+            pareto_group_top - pareto_height,
             response_position.y0,
         )
         for axes, (row, column) in zip(
@@ -569,26 +603,24 @@ def main() -> None:
         response_title_y = carrier_axes.get_position().y1 + 0.006
         optimization_title_y = structure_title_y
         pareto_group_right = pareto_x[1] + pareto_width
-        pareto_group_bottom = response_position.y0
-        pareto_group_top = structure_frame_bounds[3]
         legend_axes = figure.add_axes(
             [
-                pareto_group_right + 0.012,
-                0.5 * (pareto_group_bottom + pareto_group_top - pareto_height),
-                optimization_slot.x1 - pareto_group_right - 0.012,
-                pareto_height,
+                pareto_group_left,
+                structure_frame_bounds[3] - legend_height,
+                pareto_group_right - pareto_group_left,
+                legend_height,
             ],
             frameon=False,
         )
         legend_axes.set_axis_off()
         legend_axes.legend(
             handles=legend_handles,
-            loc="center left",
-            ncol=1,
+            loc="center",
+            ncol=3,
             frameon=False,
+            columnspacing=0.8,
             handletextpad=0.25,
-            labelspacing=0.75,
-            fontsize=6.0,
+            fontsize=DEFAULT_STYLE.legend_font_size_pt,
         )
 
         void_position = void_axes.get_position()
@@ -606,11 +638,11 @@ def main() -> None:
             orientation="vertical",
             ticks=(0.0, 2.5, 5.0, 7.5),
         )
-        void_width_colorbar.ax.set_title(
-            "$w_v$\n[mm]",
+        void_width_colorbar.set_label(
+            r"$w_v$ [mm]",
             fontsize=_AXIS_LABEL_SIZE_PT,
-            linespacing=0.85,
-            pad=2.0,
+            rotation=90,
+            labelpad=1.5,
         )
         void_width_colorbar.ax.tick_params(
             labelsize=_TICK_LABEL_SIZE_PT,
@@ -620,42 +652,33 @@ def main() -> None:
         )
         void_width_colorbar.outline.set_linewidth(0.4)
 
-        panel_title_style = {
-            "va": "bottom",
-            "fontsize": 7.2,
-            "fontweight": "bold",
-        }
-        figure.text(
-            0.5 * (structure_frame_bounds[0] + structure_frame_bounds[2]),
-            structure_title_y,
-            "(a)  Structure",
-            ha="center",
-            **panel_title_style,
+        _add_panel_title(
+            figure,
+            x=structure_frame_bounds[0],
+            y=structure_title_y,
+            label="(a)",
+            title="Structure",
         )
-        figure.text(
-            0.5 * (optimization_slot.x0 + optimization_slot.x1),
-            optimization_title_y,
-            "(d)  Morphology Optimization",
-            ha="center",
-            **panel_title_style,
+        _add_panel_title(
+            figure,
+            x=carrier_axes.get_position().x0,
+            y=response_title_y,
+            label="(b)",
+            title="Carrier Contribution",
         )
-        figure.text(
-            0.5
-            * (
-                carrier_axes.get_position().x0
-                + carrier_axes.get_position().x1
-            ),
-            response_title_y,
-            "(b)  Carrier Contribution",
-            ha="center",
-            **panel_title_style,
+        _add_panel_title(
+            figure,
+            x=void_axes.get_position().x0,
+            y=response_title_y,
+            label="(c)",
+            title="Void Effect",
         )
-        figure.text(
-            0.5 * (void_axes.get_position().x0 + void_axes.get_position().x1),
-            response_title_y,
-            "(c)  Void Effect",
-            ha="center",
-            **panel_title_style,
+        _add_panel_title(
+            figure,
+            x=optimization_slot.x0,
+            y=optimization_title_y,
+            label="(d)",
+            title="Morphology Optimization",
         )
         outputs = save_figure(
             figure,

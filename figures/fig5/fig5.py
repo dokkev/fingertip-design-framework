@@ -43,7 +43,7 @@ def build_figure(
         right=0.992,
         bottom=0.095,
         top=0.994,
-        width_ratios=(0.42, 0.008, 0.29, 0.035, 0.29),
+        width_ratios=(0.40, 0.008, 0.29, 0.060, 0.29),
         wspace=0.0,
     )
     render_panel_a(figure, outer[0], config=config, panel_label="(a)")

@@ -42,24 +42,16 @@ _LOADED_SCENARIO = "sphere_15mm_y+0mm"
 _LOADED_FORCE_N = 10.0
 _OPTIX_X_LIMITS_MM = (-16.0, 16.0)
 _OPTIX_Z_LIMITS_MM = (-19.0, 14.0)
-_PANEL_TITLE_SIZE_PT = 8.2
-_AXIS_LABEL_SIZE_PT = 7.5
-_BODY_TEXT_SIZE_PT = 6.4
+_PANEL_TITLE_SIZE_PT = DEFAULT_STYLE.panel_title_font_size_pt
+_AXIS_LABEL_SIZE_PT = DEFAULT_STYLE.axis_label_font_size_pt
+_BODY_TEXT_SIZE_PT = DEFAULT_STYLE.annotation_font_size_pt
 _BONDING_COLOR = "#B8860B"
 
-_VARIABLE_FONT_RC = {
-    "mathtext.fontset": "custom",
-    "mathtext.rm": "Nimbus Roman",
-    "mathtext.it": "Nimbus Roman:italic",
-    "mathtext.bf": "Nimbus Roman:bold",
-    "mathtext.sf": "Nimbus Roman",
-}
-
 _PANEL_BOXES = (
-    (0.012, 0.185, 0.254, 0.965),
-    (0.282, 0.185, 0.512, 0.965),
-    (0.540, 0.185, 0.750, 0.965),
-    (0.778, 0.185, 0.988, 0.965),
+    (0.012, 0.160, 0.254, 0.915),
+    (0.282, 0.160, 0.512, 0.915),
+    (0.540, 0.160, 0.750, 0.915),
+    (0.778, 0.160, 0.988, 0.915),
 )
 
 
@@ -100,9 +92,7 @@ def _load_frozen_state() -> dict[str, object]:
             ),
             "indentation_mm": 1.0e3
             * float(data["indentations_m"][scenario_index, force_index]),
-            "sphere_diameter_mm": float(
-                data["sphere_diameters_mm"][scenario_index]
-            ),
+            "sphere_diameter_mm": float(data["sphere_diameters_mm"][scenario_index]),
         }
 
 
@@ -214,8 +204,8 @@ def _add_panel_frame(
         f"({label})",
         ha="left",
         va="top",
-        fontsize=_PANEL_TITLE_SIZE_PT,
-        fontweight="bold",
+        fontsize=DEFAULT_STYLE.panel_label_font_size_pt,
+        fontweight="normal",
         color="#111111",
     )
     figure.text(
@@ -234,7 +224,6 @@ def _add_panel_frame(
         ha="center",
         va="top",
         fontsize=_AXIS_LABEL_SIZE_PT,
-        fontstyle="italic",
         color="#252525",
     )
 
@@ -264,7 +253,7 @@ def _add_flow_arrow(
 
 def _draw_parameterization(figure: plt.Figure, fingertip: Fingertip) -> None:
     x0, y0, x1, y1 = _PANEL_BOXES[0]
-    axis = figure.add_axes((x0 + 0.004, y0 + 0.170, x1 - x0 - 0.008, y1 - y0 - 0.205))
+    axis = figure.add_axes((x0 + 0.004, y0 + 0.170, x1 - x0 - 0.008, y1 - y0 - 0.230))
     parameter_style = replace(
         DEFAULT_STYLE,
         colors=replace(DEFAULT_STYLE.colors, mechanical=_BONDING_COLOR),
@@ -324,7 +313,7 @@ def _draw_parameterization(figure: plt.Figure, fingertip: Fingertip) -> None:
 def _draw_mechanics(figure: plt.Figure) -> None:
     x0, y0, x1, y1 = _PANEL_BOXES[1]
 
-    render_axis = figure.add_axes((x0 + 0.004, y0 + 0.360, x1 - x0 - 0.008, 0.370))
+    render_axis = figure.add_axes((x0 + 0.004, y0 + 0.360, x1 - x0 - 0.008, 0.340))
     render_axis.imshow(_panel_image("c_newton_mechanics.png"))
     render_axis.set_axis_off()
     force_x = x0 + 0.55 * (x1 - x0)
@@ -355,9 +344,11 @@ def _draw_mechanics(figure: plt.Figure) -> None:
     force_limit_n = float(checkpoint_force_n[-1])
     displacement_mm = np.linspace(0.0, displacement_limit_mm, 160)
     exponential_shape = 5.0
-    force_n = force_limit_n * np.expm1(
-        exponential_shape * displacement_mm / displacement_limit_mm
-    ) / np.expm1(exponential_shape)
+    force_n = (
+        force_limit_n
+        * np.expm1(exponential_shape * displacement_mm / displacement_limit_mm)
+        / np.expm1(exponential_shape)
+    )
     curve_axis = figure.add_axes((x0 + 0.018, y0 + 0.135, x1 - x0 - 0.036, 0.150))
     curve_axis.plot(
         displacement_mm,
@@ -389,7 +380,6 @@ def _draw_mechanics(figure: plt.Figure) -> None:
         ha="left",
         va="top",
         fontsize=_BODY_TEXT_SIZE_PT,
-        fontstyle="italic",
         color=DEFAULT_STYLE.colors.optimization,
     )
     for spine in curve_axis.spines.values():
@@ -595,7 +585,11 @@ def _add_feedback_loop(figure: plt.Figure) -> None:
     y = 0.125
     figure.add_artist(
         Line2D(
-            (right_box[0] + 0.5 * (right_box[2] - right_box[0]), right_box[0] + 0.5 * (right_box[2] - right_box[0]), left_box[0] + 0.5 * (left_box[2] - left_box[0])),
+            (
+                right_box[0] + 0.5 * (right_box[2] - right_box[0]),
+                right_box[0] + 0.5 * (right_box[2] - right_box[0]),
+                left_box[0] + 0.5 * (left_box[2] - left_box[0]),
+            ),
             (right_box[1], y, y),
             transform=figure.transFigure,
             color="#333333",
@@ -626,28 +620,51 @@ def _add_feedback_loop(figure: plt.Figure) -> None:
         ha="center",
         va="top",
         fontsize=_BODY_TEXT_SIZE_PT,
-        fontstyle="italic",
         color="#333333",
     )
 
 
 def _add_shared_legend(figure: plt.Figure) -> None:
     handles = (
-        Patch(facecolor=DEFAULT_STYLE.colors.carrier, edgecolor="#34383C", label="Rigid carrier"),
-        Patch(facecolor=DEFAULT_STYLE.colors.silicone, edgecolor="#777777", label="Deformable pad"),
+        Patch(
+            facecolor=DEFAULT_STYLE.colors.carrier,
+            edgecolor="#34383C",
+            label="Rigid carrier",
+        ),
+        Patch(
+            facecolor=DEFAULT_STYLE.colors.silicone,
+            edgecolor="#777777",
+            label="Deformable pad",
+        ),
         Patch(
             facecolor=DEFAULT_STYLE.colors.optical,
             edgecolor="#087A49",
             label="LED / light source",
         ),
-        Line2D((), (), color=_BONDING_COLOR, linestyle="--", linewidth=1.0, label="Bonding surface"),
-        Line2D((), (), marker="o", linestyle="none", markerfacecolor="#8B8B8B", markeredgecolor="#555555", markersize=5.5, label="Spherical indenter"),
+        Line2D(
+            (),
+            (),
+            color=_BONDING_COLOR,
+            linestyle="--",
+            linewidth=1.0,
+            label="Bonding surface",
+        ),
+        Line2D(
+            (),
+            (),
+            marker="o",
+            linestyle="none",
+            markerfacecolor="#8B8B8B",
+            markeredgecolor="#555555",
+            markersize=5.5,
+            label="Spherical indenter",
+        ),
         Line2D((), (), color="#008C67", linewidth=1.0, label="Optical ray path"),
     )
     legend = figure.legend(
         handles=handles,
-        loc="lower center",
-        bbox_to_anchor=(0.5, 0.981),
+        loc="upper center",
+        bbox_to_anchor=(0.5, 0.998),
         ncol=6,
         frameon=True,
         fancybox=True,
@@ -683,8 +700,8 @@ def main() -> None:
             geometry=schematic_geometry,
         )
     )
-    with publication_context(), matplotlib.rc_context(rc=_VARIABLE_FONT_RC):
-        figure = plt.figure(figsize=(7.16, 2.80))
+    with publication_context():
+        figure = plt.figure(figsize=(DEFAULT_STYLE.double_column_width_in, 2.80))
         for box, label, title, subtitle in zip(
             _PANEL_BOXES,
             ("a", "b", "c", "d"),
@@ -708,7 +725,9 @@ def main() -> None:
         _draw_mechanics(figure)
         _draw_optics(figure, nominal_fingertip)
         _draw_bayesian_optimization(figure)
-        for left_box, right_box in zip(_PANEL_BOXES[:-1], _PANEL_BOXES[1:], strict=True):
+        for left_box, right_box in zip(
+            _PANEL_BOXES[:-1], _PANEL_BOXES[1:], strict=True
+        ):
             _add_flow_arrow(figure, left_box, right_box)
         _add_feedback_loop(figure)
         _add_shared_legend(figure)
@@ -716,7 +735,8 @@ def main() -> None:
             figure,
             _OUTPUT_STEM,
             formats=("pdf", "svg", "png"),
-            pad_inches=0.005,
+            bbox_inches=None,
+            pad_inches=0.0,
         )
         plt.close(figure)
 
