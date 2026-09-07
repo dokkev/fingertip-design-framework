@@ -118,7 +118,9 @@ def analyze_contact_history(
     measurement_cycles = [cycle for cycle in cycles if cycle["cycle_role"] == "measurement"]
     summary_grid = _common_summary_force_grid(measurement_cycles)
 
-    history_rows, history_summary = _history_metrics(measurement_cycles, summary_grid)
+    history_rows, history_run_rows, history_summary = _history_metrics(
+        measurement_cycles, summary_grid
+    )
     cycle_rows, cycle_summary = _cycle_repeatability(measurement_cycles, summary_grid)
     repeat_rows = _load_repeat_metrics(repeat_metrics_path, material)
 
@@ -131,6 +133,7 @@ def analyze_contact_history(
     qc_rows = [run for session in sessions for run in session["runs"]]
     _write_qc_csv(results / "run_qc.csv", qc_rows, common_conditions)
     _write_csv(results / "loading_unloading_gap.csv", history_rows)
+    _write_csv(results / "history_run_summary.csv", history_run_rows)
     _write_csv(results / "history_summary.csv", history_summary)
     _write_csv(results / "same_contact_repeatability.csv", cycle_rows)
     _write_csv(results / "same_contact_repeatability_summary.csv", cycle_summary)
@@ -422,50 +425,97 @@ def _common_summary_force_grid(cycles: list[dict[str, Any]]) -> np.ndarray:
 
 def _history_metrics(
     cycles: list[dict[str, Any]], summary_grid: np.ndarray
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     force_indices = [int(np.flatnonzero(FORCE_GRID_N == force)[0]) for force in summary_grid]
     curve_rows: list[dict[str, Any]] = []
+    run_rows: list[dict[str, Any]] = []
     summary_rows: list[dict[str, Any]] = []
     for morphology in MORPHOLOGY_ORDER:
         selected = [cycle for cycle in cycles if cycle["morphology"] == morphology]
+        grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for cycle in selected:
+            grouped[cycle["run_id"]].append(cycle)
+
         for force, force_index in zip(summary_grid, force_indices, strict=True):
-            values = np.asarray(
-                [cycle["gap"][force_index] for cycle in selected], dtype=np.float64
-            )
-            values = values[np.isfinite(values)]
+            values = []
+            cycle_count = 0
+            for run_cycles in grouped.values():
+                cycle_values = np.asarray(
+                    [cycle["gap"][force_index] for cycle in run_cycles],
+                    dtype=np.float64,
+                )
+                cycle_values = cycle_values[np.isfinite(cycle_values)]
+                if len(cycle_values):
+                    values.append(float(np.median(cycle_values)))
+                    cycle_count += len(cycle_values)
+            values_array = np.asarray(values, dtype=np.float64)
             curve_rows.append(
                 {
                     "morphology": morphology,
                     "actual_force_n": force,
-                    "cycle_count": len(values),
-                    "H_median_dn": float(np.median(values)),
-                    "H_q25_dn": float(np.percentile(values, 25)),
-                    "H_q75_dn": float(np.percentile(values, 75)),
+                    "run_count": len(values_array),
+                    "cycle_count": cycle_count,
+                    "H_median_dn": float(np.median(values_array)),
+                    "H_q25_dn": float(np.percentile(values_array, 25)),
+                    "H_q75_dn": float(np.percentile(values_array, 75)),
                 }
             )
 
-        cycle_metrics = []
         low_index, high_index = force_indices[0], force_indices[-1]
-        for cycle in selected:
-            if not np.isfinite(cycle["gap"][[low_index, high_index]]).all():
+        morphology_run_rows = []
+        for run_id, run_cycles in grouped.items():
+            cycle_metrics = []
+            for cycle in run_cycles:
+                if not np.isfinite(cycle["gap"][[low_index, high_index]]).all():
+                    continue
+                mean_low = 0.5 * (
+                    cycle["loading"][low_index] + cycle["unloading"][low_index]
+                )
+                mean_high = 0.5 * (
+                    cycle["loading"][high_index] + cycle["unloading"][high_index]
+                )
+                signal_span = float(np.sqrt(np.mean((mean_high - mean_low) ** 2)))
+                history = float(np.nanmedian(cycle["gap"][force_indices]))
+                relative = history / signal_span if signal_span > 0.0 else float("nan")
+                if np.isfinite(relative):
+                    cycle_metrics.append((history, signal_span, relative))
+            if not cycle_metrics:
                 continue
-            mean_low = 0.5 * (
-                cycle["loading"][low_index] + cycle["unloading"][low_index]
-            )
-            mean_high = 0.5 * (
-                cycle["loading"][high_index] + cycle["unloading"][high_index]
-            )
-            signal_span = float(np.sqrt(np.mean((mean_high - mean_low) ** 2)))
-            history = float(np.nanmedian(cycle["gap"][force_indices]))
-            relative = history / signal_span if signal_span > 0.0 else float("nan")
-            cycle_metrics.append((history, signal_span, relative))
-        values = np.asarray(cycle_metrics, dtype=np.float64)
+            values = np.asarray(cycle_metrics, dtype=np.float64)
+            first = run_cycles[0]
+            run_row = {
+                "morphology": morphology,
+                "run_id": run_id,
+                "hole_index": first["hole_index"],
+                "repetition_index": first["repetition_index"],
+                "eligible_cycle_count": len(values),
+                "H_median_dn": float(np.median(values[:, 0])),
+                "S_span_median_dn": float(np.median(values[:, 1])),
+                "H_rel_median": float(np.median(values[:, 2])),
+            }
+            run_rows.append(run_row)
+            morphology_run_rows.append(run_row)
+
+        values = np.asarray(
+            [
+                (
+                    row["H_median_dn"],
+                    row["S_span_median_dn"],
+                    row["H_rel_median"],
+                )
+                for row in morphology_run_rows
+            ],
+            dtype=np.float64,
+        )
         summary_rows.append(
             {
                 "morphology": morphology,
                 "force_low_n": float(summary_grid[0]),
                 "force_high_n": float(summary_grid[-1]),
-                "eligible_cycle_count": len(values),
+                "eligible_run_count": len(values),
+                "eligible_cycle_count": int(
+                    sum(row["eligible_cycle_count"] for row in morphology_run_rows)
+                ),
                 "H_median_dn": float(np.median(values[:, 0])),
                 "H_iqr_dn": float(np.subtract(*np.percentile(values[:, 0], (75, 25)))),
                 "S_span_median_dn": float(np.median(values[:, 1])),
@@ -475,7 +525,7 @@ def _history_metrics(
                 "H_rel_q75": float(np.percentile(values[:, 2], 75)),
             }
         )
-    return curve_rows, summary_rows
+    return curve_rows, run_rows, summary_rows
 
 
 def _cycle_repeatability(
@@ -837,6 +887,7 @@ def _write_report(
         "",
         "- Optical signature: fixed unloaded-calibrated 128-bin longitudinal Green-DN profile.",
         "- Branch matching: linear interpolation by actual measured force; nominal loading/unloading labels only; no extrapolation.",
+        "- Scalar aggregation: eligible cycles are reduced within each run first; morphology medians and quartiles use independent runs as the experimental units.",
         f"- Requested force grid: {FORCE_GRID_N[0]:g}--{FORCE_GRID_N[-1]:g} N in 0.5 N steps.",
         f"- Common >=50% cycle-coverage range used for scalar summaries: {summary_grid[0]:g}--{summary_grid[-1]:g} N.",
         "- Primary metrics exclude contact-loss warnings and acquisition/frame-count failures.",
@@ -866,7 +917,7 @@ def _write_report(
             "",
             "## History dependence and same-contact repeatability",
             "",
-            "| Morphology | eligible cycles | H [DN] | S_span [DN] | H_rel | W_cycle [DN] |",
+            "| Morphology | eligible runs (cycles) | H [DN] | S_span [DN] | H_rel | W_cycle [DN] |",
             "|---|---:|---:|---:|---:|---:|",
         ]
     )
@@ -874,7 +925,7 @@ def _write_report(
         h = history_by_name[morphology]
         w = cycle_by_name[morphology]
         lines.append(
-            f"| {MORPHOLOGY_LABELS[morphology]} | {h['eligible_cycle_count']} | "
+            f"| {MORPHOLOGY_LABELS[morphology]} | {h['eligible_run_count']} ({h['eligible_cycle_count']}) | "
             f"{h['H_median_dn']:.4f} | {h['S_span_median_dn']:.4f} | "
             f"{h['H_rel_median']:.4f} | {w['W_cycle_median_dn']:.4f} |"
         )

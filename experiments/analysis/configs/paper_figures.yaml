@@ -1,0 +1,51 @@
+analysis_output_directory: output/analysis/paper_figures
+figure5_output_directory: figures/fig5
+figure6_output_directory: figures/fig6
+
+profile_roots:
+  solaris: output/analysis/solaris_01_morphology_comparison
+  dragon_skin: output/analysis/dragon_skin_morphology_comparison
+
+condition_overrides:
+  - material: dragon_skin
+    morphology: baseline
+    indenter: sphere_30mm
+    root: output/analysis/dragon_skin_baseline_30mm_rerun
+  - material: dragon_skin
+    morphology: angled_opt
+    indenter: sphere_30mm
+    root: output/analysis/dragon_skin_angled_opt_30mm_02
+
+materials:
+  - solaris
+  - dragon_skin
+indenters:
+  - sphere_10mm
+  - sphere_30mm
+morphologies:
+  - baseline
+  - flat_opt
+  - angled_opt
+
+display_labels:
+  indenters:
+    sphere_10mm: 10 mm sphere
+    sphere_30mm: 30 mm sphere
+
+contact_positions_mm:
+  1: 0.0
+  2: 10.0
+  3: 20.0
+  4: 30.0
+  5: 40.0
+  6: 50.0
+
+feature:
+  low_force_n: 2.0
+  high_force_n: 5.0
+  region_count: 6
+
+calibration:
+  maximum_contacts_per_location: 4
+  maximum_resamples: 200
+  random_seed: 20260906

@@ -94,6 +94,24 @@ It shares only the concrete hardware boundary and nearest-host-time
 synchronization contract with the discrete collector. It does not add a mode
 switch to the discrete acquisition state machine or reinterpret format v3.
 
+Final physical observations have a separate read-only upload path:
+
+```text
+contact_dataset + contact_history PNG sessions
+                    ↓
+experiments.analysis.compact_export
+                    ↓
+contact_dataset.h5 + contact_history.h5
+```
+
+The compact artifacts retain every observation, all source JSON/CSV metadata,
+typed force and experiment coordinates, a 128-bin full-strip Green profile,
+and an absolute 128 x 64 canonical RGB8 map. Each unloaded capture remains an
+independent calibration. The HDF5 export is not the authoritative raw camera
+archive: it omits full-resolution pixels and scene content outside the optical
+strip, so the original PNG sessions remain necessary for full-frame perception
+or image-based mechanics work.
+
 Each layer must be usable and validated before downstream layers depend on it.
 
 ## Package ownership
@@ -1147,8 +1165,11 @@ by actual measured force without extrapolation. Primary summaries exclude runs
 with contact-loss warnings or acquisition incompleteness. The three compared
 sessions must share one material and provide baseline, flat-opt, and angled-opt
 morphologies. It reports the direct loading--unloading optical gap,
-signal-normalized history dependence, and within-one-contact cycle variation;
-it does not label any of them as a specific material mechanism.
+signal-normalized history dependence, and within-one-contact cycle variation.
+History scalars are first reduced across eligible measurement cycles within
+each independent contact run; morphology medians and quartiles are then formed
+only from those run-level values. It does not label any result as a specific
+material mechanism.
 `scripts/analyze_contact_history.py` is its command-line entry point.
 
 `experiments/localization/` owns shared pure NumPy/OpenCV algorithms for the
@@ -1292,6 +1313,16 @@ deterministic manual-review ranking from measured-force longitudinal profiles
 and coverage metadata; it never repairs, relabels, or deletes experimental
 data.
 
+`compact_export.py` owns the separate upload representation for both physical
+acquisition schemas. It discovers only immediate session directories, rejects
+invalid discrete-contact coverage and incomplete history runs, calibrates each
+unloaded capture independently, and assigns loaded frames the temporally
+nearest same-session calibration for geometry. It retains absolute RGB camera
+DN without reference subtraction, stores the 128-bin profile before map
+downsampling, embeds all source JSON/CSV text, and atomically writes two HDF5
+files. This is a transport artifact, not a new metric or replacement for the
+full-resolution PNG archive.
+
 `scripts/analyze_morphologies.py` accepts any positive number of format-v3
 session directories. Morphology, material, specimen, camera, force, indenter,
 hole, and repetition identity comes exclusively from stored dataset metadata.
@@ -1366,57 +1397,126 @@ It does not divide by force, interpret Unloaded as 0 N, alter Figure 5, or defin
 a production or paper metric.
 
 `figures/fig5/` owns the self-contained physical-hardware Figure 5. Its
-configuration names the six measured fabricated specimens and maps the six
+configuration names the six canonical raw datasets directly under
+`output/contact_dataset/`: Solaris and Dragon Skin `baseline`, `flat_opt`, and
+`angled_opt`. `lumo.visualization.style` maps those internal IDs to the shared
+paper labels Baseline, Opt-Flat, and Opt-Curved and to the fixed gray,
+teal-blue, and orange morphology palette documented in `figures/README.md`.
+The morphology palette remains separate from the carrier, pad, LED, and force
+semantic colors. Earlier dated sessions remain unchanged under
+`output/contact_dataset/archive/`. The Dragon Skin `baseline` and `angled_opt`
+canonical datasets retain the selected 10 mm runs and replace only the 30 mm
+runs with their latest repeat acquisitions; their provenance manifests record
+the exact archived sources and all unloaded captures remain separate. The
+configuration maps the six
 distal-to-proximal acquisition stops to physical contact coordinates at 10 mm
 spacing. This measured fixture spacing is separate from the fingertip's 11 mm
-LED pitch. Panels (a) and (b) share one morphology-row height, gap, and material
-separator contract so their six row centers coincide in the composed figure.
-The atlas receives slightly more horizontal space so its cropped photographs
-nearly fill each row with minimal within-material gaps; the paired response-map
-axes use square plot boxes on those same row centers. Morphology names are
-printed once beside panel (a); panel (b) continues the aligned rows without
-duplicating those labels.
-`fig5a.py` selects auditable raw 10 mm-sphere, repetition-1, 15 N
-frames and one temporally nearest real unloaded frame per specimen. Every cell
-uses the same fixed camera-coordinate crop. Solaris retains the stored RGB
-values, while every measured Dragon Skin cell receives the same fixed +0.25 EV
-display exposure for print readability. The renderer performs no per-cell
+LED pitch. Panels (a), (b), and (c) share three morphology rows: Baseline,
+Opt-Flat, and Opt-Curved. Panel (a) alone defines those row labels. Materials
+and physical test conditions run across columns, so each morphology can be
+followed horizontally through image, optical response, and decoding result.
+Panels (b) and (c) each use the same four columns: Solaris 10 mm, Solaris
+30 mm, Dragon Skin 10 mm, and Dragon Skin 30 mm. A vertical separator at twice
+the internal cell-border weight distinguishes the two material groups. The
+outer 0.40/0.30/0.30 width allocation keeps the image atlas dominant while
+giving the two quantitative panels equal weight. Single outer axis labels
+preserve space for square data cells.
+`fig5a.py`, `fig5b.py`, and `fig5c.py` are import-only panel plotting tools:
+they accept a caller-owned Matplotlib figure and subplot specification and do
+not select a backend, create standalone figures, or write panel-level images.
+`fig5a.py` selects auditable raw 10 mm-sphere, repetition-1, 15 N frames at the
+representative 0, 20, and 40 mm contact positions and one temporally nearest
+real unloaded frame per specimen. The three morphology rows each place a
+four-image Solaris strip beside the matching four-image Dragon Skin strip.
+Every cell
+uses the same fixed camera-coordinate crop. Every Solaris cell receives the
+same fixed +0.275 EV display exposure, while every Dragon Skin cell receives
+the same fixed +0.525 EV display exposure for print readability. The renderer
+performs no per-cell
 normalization or adaptive enhancement, and the fixed material-level display
 exposure is recorded in the selection manifest.
 `fig5b.py` reads the compact Solaris and Dragon Skin hold profiles from
 `longitudinal_profiles.npz`; it does not consume fitted load-response slopes.
-The separately repeated Dragon Skin baseline 30 mm acquisition is analyzed
-with its own unloaded reference and overrides only that condition; its 10 mm
-result remains sourced from the earlier complete session.
+The separately repeated Dragon Skin baseline and angled-opt 30 mm acquisitions
+are each analyzed with their own unloaded references and override only their
+matching conditions in panels (b) and (c). Panel (a) reads the same final
+selection from the composite canonical raw directories, and both 10 mm results
+remain sourced from their earlier complete sessions.
 Within each independent repetition it subtracts the 2 N profile from the 15 N
 profile, partitions the normalized distal-to-proximal span into six fixed
 regions, and computes one RMS change magnitude per region before taking the
-median across five repetitions. It follows the raw atlas's six morphology rows
-and places the 10 and 30 mm sphere maps in two columns. All ten measured 6-by-6
+median across five repetitions. Its three morphology rows cross the four
+material-and-indenter columns shared with panel (c). All 12 measured 6-by-6
 matrices share a zero-based Viridis scale in camera DN. One outlined white `x`
 per contact row marks its largest regional change without connecting the
 markers or adding a fitted trend. The paired per-repetition values and plotted
 medians are exported to `fig5b_region_response.csv`. The two Dragon Skin
 angled-opt indenter conditions are populated from the completed physical
 dataset.
-`fig5c.py` reads the existing morphology-level slope-profile metrics directly
-from each material's `results/morphology_metrics.csv`. Grouped-bar heights are
-the stored dimensionless `D_neighbor_over_W`: neighboring-contact separation
-in measured optical load-response profiles divided by same-location variation
-across independent repeated contacts. Each stored ratio is checked against
-`D_neighbor_median_DN_per_N / W_median_DN_per_N`; both components and their
-stored IQRs remain visible in `fig5c_metrics.csv`. The four
-material/indenter groups share one absolute ratio axis, while optimized-bar
-annotations report signed improvement relative to the matching baseline
-without normalizing baseline bars to one. No ratio error bars are inferred
-from the component IQRs; all six specimens are measured, so the final panel has
-no pending entries.
+`experiments.analysis.fig5c_decoder` owns the shared Figure 5(c)/Figure 6
+analysis contract. It reads existing 128-bin compact profiles and represents
+each independent contact by the signed 5 N-minus-2 N mean change in six fixed
+longitudinal regions. A nearest-template observer predicts one of the corrected
+0, 10, 20, 30, 40, and 50 mm fixture positions. Evaluation leaves out the
+entire repetition index being tested, so no held-out run contributes to any
+class template. The same split also evaluates a scalar-only `||delta z||_2`
+observer. Figure 5(c) consumes the spatial decoder's per-sample output directly
+and builds one row-normalized 6-by-6 confusion matrix for every
+material/indenter/morphology condition. Figure 5(c) uses the same three
+morphology rows and four material-and-indenter columns as panel (b), so all 12
+matrices align with the corresponding measured specimens across the composite
+figure. The matrices share one 0--100% sequential color
+scale and annotate every nonzero cell with its equivalent row-normalized value
+on [0, 1], formatted to one decimal place. Dark text is used on light cells and
+white text on the darkest cells. Zero cells, scalar accuracy subtitles, and the
+redundant colorbar remain omitted to keep the small matrices legible; the
+caption states that cell values are row-normalized decoding frequencies. A
+dedicated label column
+owns the single shared true-location axis title, true-location ticks appear
+only on the left matrix column, and predicted-location ticks appear only on the
+bottom matrix row.
+The shared decoder output retains every per-sample prediction and the raw
+condition confusion tables for audit and appendix use.
+Neighboring-location accuracy, confusion counts, margins, every original
+per-sample prediction, and baseline-relative changes remain available in the
+shared compact analysis outputs. The separate spatial-distinguishability ratio
+remains in Figure 6(b).
+`experiments.analysis.plot_fig5c` and its convenience entry point
+`figures/fig5c_confusion_exploration.py` render the same aligned confusion
+table independently as `fig5c_confusion_2x2.pdf` and `.png`. They reuse the
+existing held-out prediction table and do not rerun or alter the decoder unless
+the caller explicitly requests recomputation.
 `fig5.py` composes these panels with nested
-Matplotlib GridSpecs at the exact 7.16-inch double-column width. The final PDF
+Matplotlib GridSpecs at the exact 7.16-inch double-column width and a 2.55-inch
+height. The final PDF
 embeds raw atlas images as raster content while retaining all axes, heatmaps,
 labels, and annotations as native Matplotlib artists; it never stitches
-rendered panel screenshots. The normal Figure 5 command writes only the final
-`fig5.pdf` and `fig5.png`; it does not export redundant panel-level images.
+rendered panel screenshots. It writes `fig5_final.pdf` and `fig5_final.png`.
+
+`figures.fig6.fig6` owns and builds the four-panel perception-workload
+follow-up from the same compact analysis tables. Panel (a) plots the eight
+optimized-versus-matched-baseline changes in median 2-to-5 N optical magnitude
+and exact decoder accuracy; baseline points are omitted because their relative
+change is the origin. Panel (b) reads the established
+slope-profile `D_neighbor` and independent re-contact variability from each
+`morphology_metrics.csv`, validates the stored ratio, and plots
+`Q_sep = D_neighbor / W_contact`. It explicitly does not substitute cyclic
+within-contact `W_cycle`. Panel (c) compares the scalar-only and six-region
+observers under the identical leave-one-repetition-out split. Panel (d) uses
+deterministic calibration-repetition subsets to measure accuracy with one to
+four contacts per location. `paper_figures.yaml` owns data roots, condition
+overrides, indenter labels, feature forces, contact-position mapping, and the
+resampling seed; paper-facing material/morphology labels and morphology colors
+come from `lumo.visualization.style`. Figure 6 writes
+`fig6_final.pdf` and `fig6_final.png`.
+
+The shared analysis writes machine-readable condition summaries, per-sample
+predictions, confusion matrices, magnitude/accuracy data, spatial
+distinguishability data, scalar-versus-spatial accuracy, calibration curves,
+and one consolidated `fig56_summary_bundle.csv` below
+`output/analysis/paper_figures/`. Figure modules consume these tables rather
+than reopening raw images. Missing conditions are represented explicitly as
+unavailable rows and reported on stderr instead of being silently imputed.
 
 `optical_features.py` owns pure feature extraction. `DenseProfileConfig`
 selects brightest-10% red, mean red, absolute high-pass red, red gradient, or

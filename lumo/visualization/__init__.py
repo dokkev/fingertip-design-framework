@@ -25,6 +25,11 @@ from .panels import (
 )
 from .style import (
     DEFAULT_STYLE,
+    EDGE_COLOR,
+    MATERIAL_LABELS,
+    PAPER_COLORS,
+    PAPER_LABELS,
+    SEMANTIC_COLORS,
     STATUS_MARKERS,
     PublicationStyle,
     SemanticColors,
@@ -34,6 +39,11 @@ from .style import (
 
 __all__ = [
     "DEFAULT_STYLE",
+    "EDGE_COLOR",
+    "MATERIAL_LABELS",
+    "PAPER_COLORS",
+    "PAPER_LABELS",
+    "SEMANTIC_COLORS",
     "STATUS_MARKERS",
     "PublicationStyle",
     "SemanticColors",

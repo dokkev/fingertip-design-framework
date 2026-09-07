@@ -13,14 +13,42 @@ import matplotlib as mpl
 FigureWidth = Literal["single", "double"]
 
 
+PAPER_COLORS = {
+    "baseline": "#BFC3C7",
+    "flat_opt": "#2C758E",
+    "angled_opt": "#D97707",
+}
+
+PAPER_LABELS = {
+    "baseline": "Baseline",
+    "flat_opt": "Opt-Flat",
+    "angled_opt": "Opt-Curved",
+}
+
+MATERIAL_LABELS = {
+    "solaris": "Solaris",
+    "dragon_skin": "Dragon Skin",
+    "dragonskin": "Dragon Skin",
+}
+
+EDGE_COLOR = "#4C5055"
+
+SEMANTIC_COLORS = {
+    "rigid": "#59616B",
+    "pad": "#E0D797",
+    "led": "#009E73",
+    "force": "#D62728",
+}
+
+
 @dataclass(frozen=True)
 class SemanticColors:
     """Colors with stable meanings across LUMO publication figures."""
 
-    silicone: str = "#F2F1ED"
-    carrier: str = "#555A60"
-    optical: str = "#009E73"
-    mechanical: str = "#D97706"
+    silicone: str = SEMANTIC_COLORS["pad"]
+    carrier: str = SEMANTIC_COLORS["rigid"]
+    optical: str = SEMANTIC_COLORS["led"]
+    mechanical: str = SEMANTIC_COLORS["force"]
     optimization: str = "#D62728"
     neutral: str = "#777777"
     dragon_skin: str = "#8A4F9E"

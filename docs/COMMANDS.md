@@ -5,7 +5,7 @@ Run repository commands in the `lit` Conda environment.
 ## Install
 
 ```bash
-conda run -n lit python -m pip install -e ".[mesh,physics,ax,visualization,test]"
+conda run -n lit python -m pip install -e ".[mesh,physics,ax,visualization,data,test]"
 ```
 
 OptiX and CUDA are system dependencies. The ray tracer also needs the
@@ -214,6 +214,40 @@ conda run --no-capture-output -n lit \
 Mock sessions are written only under `output/contact_history/mock/` and are
 marked as non-physical data in both the GUI and `session.json`.
 
+## Compact physical-data export
+
+Create the two upload artifacts from the six canonical discrete-contact
+sessions and the six final contact-history sessions:
+
+```bash
+conda run --no-capture-output -n lit \
+  python -u scripts/export_compact_physical_data.py
+```
+
+The command writes `output/upload/contact_dataset.h5`,
+`output/upload/contact_history.h5`, and a format README. It retains every
+observation separately as an absolute 128 x 64 RGB8 canonical map, the exact
+128-bin Green profile evaluated on the full 256 x 128 strip, typed force/time/
+run metadata, and a compressed copy of every source JSON/CSV file. Unloaded
+captures remain separate. Loaded maps use the temporally nearest unloaded
+capture from the same session for geometry only; no unloaded intensity is
+subtracted and no response is normalized.
+
+The HDF5 files deliberately omit full 1920 x 1080 pixels and scene content
+outside the calibrated fingertip strip. The original PNG sessions remain the
+authoritative archive for full-frame perception or mechanical image tracking.
+The exporter refuses to overwrite an existing artifact and writes through a
+`.partial` file before atomically publishing each completed HDF5 file.
+
+Verify existing artifacts without reopening the PNG datasets:
+
+```bash
+conda run --no-capture-output -n lit \
+  python -u scripts/export_compact_physical_data.py --verify \
+    output/upload/contact_dataset.h5 \
+    output/upload/contact_history.h5
+```
+
 Analyze three same-material history sessions using actual-force branch matching
 (Dragon Skin example):
 
@@ -233,9 +267,12 @@ three sessions and excludes contact-loss or incomplete runs from primary
 metrics. Loading and unloading profiles are interpolated only inside their
 measured actual-force overlap on a 3--14 N grid; no extrapolation is performed.
 The report records the common force interval with at least 50% measurement-cycle
-coverage in every morphology. Independent-contact `W_repeat` and same-contact
-`W_cycle` have different physical units, so their comparison is made only after
-normalizing each metric to its own material-specific baseline.
+coverage in every morphology. Scalar `H`, `S_span`, and `H_rel` values are
+reduced across eligible cycles within each run before morphology medians and
+quartiles are computed, so independent contact runs remain the experimental
+units. Independent-contact `W_repeat` and same-contact `W_cycle` have different
+physical units, so their comparison is made only after normalizing each metric
+to its own material-specific baseline.
 
 ## Live D435 contact localization
 
@@ -311,8 +348,8 @@ results plus the compact, image-free `raw_data_summary`:
 ```bash
 conda run --no-capture-output -n lit \
   python -u scripts/analyze_morphologies.py \
-  output/contact_dataset/2026-09-04_solaris_baseline \
-  output/contact_dataset/2026-09-04_solaris_flat_opt \
+  output/contact_dataset/Solaris-baseline \
+  output/contact_dataset/Solaris-flat-opt \
   --output output/analysis/solaris_compare
 ```
 
@@ -399,29 +436,95 @@ outputs beneath `output/validation/hardware_unloaded_optical_activation/`.
 The reported RMS activation has camera-DN units and is not force-normalized.
 This validation neither modifies Figure 5 nor registers a production metric.
 
+Run the shared contact-location decoder and perception-workload analysis from
+the existing compact profile artifacts:
+
+```bash
+conda run --no-capture-output -n lit \
+  python -m experiments.analysis.fig5c_decoder \
+  --config experiments/analysis/configs/paper_figures.yaml
+```
+
+This writes `fig5c_accuracy_summary.csv`, per-sample predictions, condition
+confusion matrices, the four Figure 6 support tables, and
+`fig56_summary_bundle.csv` under `output/analysis/paper_figures/`. The primary
+decoder uses signed 5 N-minus-2 N changes in six longitudinal regions and
+leave-one-repetition-out nearest templates. The Figure 6(b) table uses
+independent re-contact `W_contact`, never cyclic `W_cycle`.
+`fig6a_magnitude_vs_accuracy.csv` contains only the eight optimized morphology
+comparisons and reports baseline-relative magnitude change [%] and accuracy
+change [percentage points].
+
 Render the final IEEE double-column Figure 5 PDF/PNG from the current physical
-datasets and compact analysis summaries:
+datasets and decoder summary:
 
 ```bash
 conda run --no-capture-output -n lit \
   python -m figures.fig5.fig5
 ```
 
-Outputs are written beside the scripts under `figures/fig5/`:
-`fig5.pdf`, `fig5.png`, `fig5a_selection_manifest.csv`,
-`fig5b_region_response.csv`, and `fig5c_metrics.csv`. Panel-level PNG/PDF files
-are not exported. The raw atlas uses
+Outputs are written under `figures/fig5/` as `fig5_final.pdf` and
+`fig5_final.png`; the auditable panel-A and panel-B tables remain
+`fig5a_selection_manifest.csv` and `fig5b_region_response.csv`. The raw atlas uses
 the 10 mm sphere, repetition 1, and the frame closest to 15 N at five physical
-10 mm-spaced fixture positions (the separate LED pitch remains 11 mm). Solaris
-uses stored RGB values directly; all
-measured Dragon Skin atlas cells use one documented +0.25 EV display exposure.
-No per-cell normalization is applied. Dragon Skin angled-opt is loaded from its
-completed 2026-09-06 physical dataset. The separately repeated 2026-09-06
-Dragon Skin baseline session supplies only the 30 mm condition through an
-explicit analysis override. Figure 5(c) plots the absolute stored dimensionless
-`D_neighbor_over_W` ratio; optimized-bar labels show percentage improvement
-relative to the corresponding material/indenter baseline without normalizing
-the baseline bar height.
+10 mm-spaced fixture positions (the separate LED pitch remains 11 mm). All
+Solaris atlas cells use one documented +0.275 EV display exposure, and all
+Dragon Skin atlas cells use one documented +0.525 EV display exposure.
+No per-cell normalization is applied. The six raw-image sources use the
+canonical morphology directories directly under `output/contact_dataset/`.
+The Dragon Skin baseline and angled-opt canonical directories combine the
+selected 10 mm acquisition with the latest 30 mm repeat acquisition while
+preserving every unloaded capture independently. Existing compact analysis
+overrides retain the matching 30 mm repeat-session calibration. Figure 5(c)
+groups 12 row-normalized 6-by-6 confusion matrices into the same six
+morphology rows and 10/30 mm sphere columns as panel (b). The shared row-height
+grammar aligns every matrix with its corresponding specimen and optical-change
+map. All matrices share one 0--100% color scale. The command reuses the
+decoder's existing per-sample predictions and preserves its original raw
+confusion tables.
+`D_neighbor / W_contact` remains exclusive to Figure 6(b).
+
+Render the same Figure 5(c) panel independently for detailed inspection:
+
+```bash
+conda run --no-capture-output -n lit \
+  python -m experiments.analysis.plot_fig5c
+```
+
+This writes `fig5c_confusion_2x2.pdf` and `fig5c_confusion_2x2.png` under
+`figures/fig5/` without modifying panels (a) or (b).
+
+Render the standalone Figure 5(c) panel, the Figure 6 explanation, or both final
+figures:
+
+```bash
+conda run --no-capture-output -n lit \
+  python -m experiments.analysis.plot_fig5c \
+  --config experiments/analysis/configs/paper_figures.yaml
+conda run --no-capture-output -n lit \
+  python -m figures.fig6.fig6 \
+  --config experiments/analysis/configs/paper_figures.yaml
+conda run --no-capture-output -n lit \
+  python -m experiments.analysis.build_fig5_fig6 \
+  --config experiments/analysis/configs/paper_figures.yaml
+```
+
+The standalone panel writes `fig5c_confusion_2x2.pdf/png`; Figure 6 writes
+`fig6_final.pdf/png`. Add `--recompute` to any plotting/build command to
+regenerate the compact analysis tables first.
+
+The convenience exploration entry point renders the same aligned Figure 5(c)
+table without changing the full Figure 5 output:
+
+```bash
+conda run --no-capture-output -n lit \
+  python figures/fig5c_confusion_exploration.py
+```
+
+The command reuses `fig5c_per_sample_predictions.csv` from the unchanged
+leave-one-repetition-out six-region decoder and writes the same
+`fig5c_confusion_2x2.pdf/png` outputs under `figures/fig5/`. Add `--recompute`
+only when the shared decoder tables themselves need to be regenerated.
 
 Replay the smooth emissive segmentation on the checked-in 13-image reference
 set, report fixed-extrinsic stability/runtime, and regenerate its overlays:

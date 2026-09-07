@@ -1,23 +1,18 @@
-"""Figure 5(b): measured hardware response-field heatmaps."""
+"""Panel-rendering tools for the Figure 5(b) response-field heatmaps."""
 
 from __future__ import annotations
 
 import csv
 
-import matplotlib
+import matplotlib.patheffects as path_effects
+import numpy as np
+from matplotlib.colors import Normalize
+from matplotlib.figure import Figure
+from matplotlib.gridspec import SubplotSpec
 
-matplotlib.use("Agg")
+from lumo.visualization import DEFAULT_STYLE, MATERIAL_LABELS, PAPER_LABELS
 
-import matplotlib.pyplot as plt  # noqa: E402
-import matplotlib.patheffects as path_effects  # noqa: E402
-import numpy as np  # noqa: E402
-from matplotlib.colors import Normalize  # noqa: E402
-from matplotlib.figure import Figure  # noqa: E402
-from matplotlib.gridspec import SubplotSpec  # noqa: E402
-
-from lumo.visualization import DEFAULT_STYLE, publication_context, save_figure  # noqa: E402
-
-from .config import (  # noqa: E402
+from .config import (
     ALL_HOLES,
     ANALYSIS_CONDITION_OVERRIDES,
     ANALYSIS_ROOTS,
@@ -25,7 +20,8 @@ from .config import (  # noqa: E402
     COMPARISON_MORPHOLOGIES,
     FIGURE_DIRECTORY,
     HOLE_TO_CONTACT_X_MM,
-    MORPHOLOGY_CONDITIONS,
+    MATERIAL_SEPARATOR_COLOR,
+    MATERIAL_SEPARATOR_LINEWIDTH_PT,
     MORPHOLOGY_TABLE_HEIGHT_RATIOS,
     MORPHOLOGY_TABLE_HSPACE,
     MORPHOLOGY_TABLE_ROW_SLOTS,
@@ -37,6 +33,7 @@ INDENTER_COLUMNS = (
     ("sphere_10mm", "10 mm sphere"),
     ("sphere_30mm", "30 mm sphere"),
 )
+PLOT_COLUMNS = (2, 3, 5, 6)
 N_LONGITUDINAL_REGIONS = 6
 FORCE_LOW_N = 2.0
 FORCE_HIGH_N = 15.0
@@ -112,9 +109,7 @@ def load_optical_change_maps() -> tuple[
                     indenter = np.asarray(data["indenter"]).astype(str)
                     holes = np.asarray(data["hole_index"], dtype=np.int64)
                     repetition = np.asarray(data["repetition_index"], dtype=np.int64)
-                    target_force = np.asarray(
-                        data["target_force_n"], dtype=np.float64
-                    )
+                    target_force = np.asarray(data["target_force_n"], dtype=np.float64)
                     actual_force = np.asarray(data["actual_force_n"], dtype=np.float64)
                     status = np.asarray(data["run_status"]).astype(str)
 
@@ -258,7 +253,11 @@ def write_region_response_csv(
         "is_peak_region",
     )
     with path.open("w", newline="", encoding="utf-8") as stream:
-        writer = csv.DictWriter(stream, fieldnames=fields)
+        writer = csv.DictWriter(
+            stream,
+            fieldnames=fields,
+            lineterminator="\n",
+        )
         writer.writeheader()
         writer.writerows(rows)
 
@@ -268,6 +267,7 @@ def render_panel(
     subplot_spec: SubplotSpec,
     *,
     panel_label: str = "(b)",
+    show_row_labels: bool = True,
     data: tuple[
         np.ndarray,
         np.ndarray,
@@ -288,13 +288,14 @@ def render_panel(
         raise ValueError("coarse response magnitudes must have a finite positive range")
     normalization = Normalize(vmin=0.0, vmax=maximum)
 
+    row_label_width = 0.13 if show_row_labels else 0.012
     grid = subplot_spec.subgridspec(
-        9,
-        5,
+        6,
+        8,
         height_ratios=MORPHOLOGY_TABLE_HEIGHT_RATIOS,
-        width_ratios=(0.10, 1.0, 1.0, 0.055, 0.13),
+        width_ratios=(0.10, row_label_width, 1, 1, 0.04, 1, 1, 0.045),
         hspace=MORPHOLOGY_TABLE_HSPACE,
-        wspace=0.045,
+        wspace=0.02,
     )
     title_axis = figure.add_subplot(grid[0, :])
     title_axis.axis("off")
@@ -307,7 +308,7 @@ def render_panel(
         va="center",
     )
     title_axis.text(
-        0.080,
+        0.140,
         0.55,
         "Measured optical change from 2 to 15 N",
         fontsize=6.2,
@@ -315,41 +316,84 @@ def render_panel(
         va="center",
     )
 
-    for column, (_, column_title) in enumerate(INDENTER_COLUMNS, start=1):
-        column_axis = figure.add_subplot(grid[1, column])
-        column_axis.axis("off")
-        column_axis.text(
+    for material, column_slice in (
+        ("solaris", slice(2, 4)),
+        ("dragon_skin", slice(5, 7)),
+    ):
+        material_axis = figure.add_subplot(grid[1, column_slice])
+        material_axis.axis("off")
+        material_axis.text(
             0.5,
-            0.52,
-            column_title,
-            fontsize=5.2,
+            0.55,
+            MATERIAL_LABELS[material],
+            fontsize=4.8,
+            fontweight="bold",
             ha="center",
             va="center",
         )
 
-    shared_y_axis = figure.add_subplot(grid[2:, 0])
-    shared_y_axis.axis("off")
-    shared_y_axis.text(
-        0.42,
-        0.5,
-        r"$X_{\mathrm{contact}}$ [mm]",
-        rotation=90,
-        fontsize=5.1,
-        ha="center",
-        va="center",
-    )
+    indenter_titles = dict(INDENTER_COLUMNS)
+    for column, (_, candidate_indenter, _) in zip(
+        PLOT_COLUMNS, COMPARISON_CONDITIONS, strict=True
+    ):
+        column_axis = figure.add_subplot(grid[2, column])
+        column_axis.axis("off")
+        column_axis.text(
+            0.5,
+            0.52,
+            indenter_titles[candidate_indenter],
+            fontsize=4.5,
+            ha="center",
+            va="center",
+        )
 
     image = None
     axes = []
     physical_locations = np.asarray(
         [HOLE_TO_CONTACT_X_MM[hole] for hole in ALL_HOLES], dtype=np.float64
     )
-    for row_index, (condition, row_slot) in enumerate(
-        zip(MORPHOLOGY_CONDITIONS, MORPHOLOGY_TABLE_ROW_SLOTS, strict=True)
+    shared_y_axis = figure.add_subplot(grid[3:, 0])
+    shared_y_axis.axis("off")
+    shared_y_axis.text(
+        -0.70,
+        0.5,
+        r"$X_{\mathrm{contact}}$ [mm]",
+        fontsize=3.9,
+        rotation=90,
+        ha="center",
+        va="center",
+    )
+
+    separator_axis = figure.add_subplot(grid[1:, 4])
+    separator_axis.axis("off")
+    separator_axis.plot(
+        (0.5, 0.5),
+        (0.0, 1.0),
+        color=MATERIAL_SEPARATOR_COLOR,
+        linewidth=MATERIAL_SEPARATOR_LINEWIDTH_PT,
+        transform=separator_axis.transAxes,
+        clip_on=False,
+    )
+
+    for row_index, (morphology, row_slot) in enumerate(
+        zip(COMPARISON_MORPHOLOGIES, MORPHOLOGY_TABLE_ROW_SLOTS, strict=True)
     ):
-        for column, (candidate_indenter, _) in enumerate(INDENTER_COLUMNS, start=1):
+        if show_row_labels:
+            row_label_axis = figure.add_subplot(grid[row_slot, 1])
+            row_label_axis.axis("off")
+            row_label_axis.text(
+                0.05,
+                0.5,
+                PAPER_LABELS[morphology],
+                fontsize=3.7,
+                ha="left",
+                va="center",
+            )
+        for plot_index, ((material, candidate_indenter, _), column) in enumerate(
+            zip(COMPARISON_CONDITIONS, PLOT_COLUMNS, strict=True)
+        ):
             axis = figure.add_subplot(grid[row_slot, column])
-            key = (condition.material, candidate_indenter, condition.morphology)
+            key = (material, candidate_indenter, morphology)
             values = responses[key]
             if values is None:
                 axis.set_facecolor("#EFEFEF")
@@ -390,38 +434,33 @@ def render_panel(
                         path_effects.Normal(),
                     ]
                 )
-            if column == 1 and row_index in (0, 3):
+            if plot_index == 0:
                 axis.set_yticks(physical_locations)
             else:
                 axis.set_yticks([])
-            if row_index == len(MORPHOLOGY_CONDITIONS) - 1:
+            if (
+                row_index == len(COMPARISON_MORPHOLOGIES) - 1
+                and plot_index in (0, 2)
+            ):
                 axis.set_xticks(
                     np.arange(N_LONGITUDINAL_REGIONS),
-                    tuple(f"R{region}" for region in range(1, N_LONGITUDINAL_REGIONS + 1)),
+                    tuple(
+                        f"R{region}" for region in range(1, N_LONGITUDINAL_REGIONS + 1)
+                    ),
                 )
-                if column == 1:
+                if plot_index == 0:
                     axis.text(
                         0.0,
-                        -0.25,
+                        -0.15,
                         "Distal",
                         transform=axis.transAxes,
                         fontsize=4.4,
                         ha="left",
                         va="top",
                     )
-                else:
-                    axis.text(
-                        1.0,
-                        -0.25,
-                        "Proximal",
-                        transform=axis.transAxes,
-                        fontsize=4.4,
-                        ha="right",
-                        va="top",
-                    )
             else:
                 axis.set_xticks([])
-            axis.tick_params(labelsize=4.6, length=1.5, pad=0.8)
+            axis.tick_params(labelsize=3.8, length=1.3, pad=0.6)
             axis.set_box_aspect(1.0)
             for spine in axis.spines.values():
                 spine.set_linewidth(0.45)
@@ -429,11 +468,26 @@ def render_panel(
             axes.append(axis)
 
     assert image is not None
-    colorbar_axis = figure.add_subplot(grid[2:, 3])
+    colorbar_axis = figure.add_subplot(grid[3:, 7])
     colorbar = figure.colorbar(image, cax=colorbar_axis)
-    colorbar.ax.set_title("2–15 N optical\nchange [DN]", fontsize=3.9, pad=1.5)
+    colorbar.ax.set_title(
+        "$\\Delta$ signal\n[DN]",
+        fontsize=3.1,
+        pad=1.0,
+        x=1.0,
+        ha="right",
+    )
     colorbar.ax.tick_params(labelsize=4.5, length=1.5, pad=0.8)
     colorbar.outline.set_linewidth(0.45)
+    body_position = grid[3:, 2:7].get_position(figure)
+    figure.text(
+        body_position.x1,
+        body_position.y0 - 0.014,
+        "Proximal",
+        fontsize=4.4,
+        ha="right",
+        va="top",
+    )
     return {
         "axes": tuple(axes),
         "coordinate": coordinate,
@@ -442,24 +496,3 @@ def render_panel(
         "audit_rows": audit_rows,
         "color_limits": (0.0, maximum),
     }
-
-
-def main() -> None:
-    """Export a standalone debug render of Figure 5(b)."""
-
-    with publication_context(DEFAULT_STYLE):
-        figure = plt.figure(figsize=(7.16, 4.25))
-        grid = figure.add_gridspec(1, 1, left=0.02, right=0.985, bottom=0.075, top=0.99)
-        render_panel(figure, grid[0, 0])
-        save_figure(
-            figure,
-            FIGURE_DIRECTORY / "fig5b",
-            formats=("png",),
-            bbox_inches=None,
-            pad_inches=0.0,
-        )
-        plt.close(figure)
-
-
-if __name__ == "__main__":
-    main()

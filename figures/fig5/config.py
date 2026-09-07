@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from lumo.visualization import MATERIAL_LABELS, PAPER_LABELS
+
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 FIGURE_DIRECTORY = Path(__file__).resolve().parent
@@ -31,36 +33,43 @@ class MorphologyCondition:
         return self.session_directory is None
 
 
+def _paper_name(material: str, morphology: str) -> str:
+    return f"{MATERIAL_LABELS[material]} {PAPER_LABELS[morphology]}"
+
+
 MORPHOLOGY_CONDITIONS = (
     MorphologyCondition(
-        "solaris", "baseline", "Solaris Baseline", "2026-09-04_solaris_baseline_01"
+        "solaris", "baseline", _paper_name("solaris", "baseline"), "Solaris-baseline"
     ),
     MorphologyCondition(
-        "solaris", "flat_opt", "Solaris Flat-opt", "2026-09-04_solaris_flat_opt_01"
+        "solaris",
+        "flat_opt",
+        _paper_name("solaris", "flat_opt"),
+        "Solaris-flat-opt",
     ),
     MorphologyCondition(
         "solaris",
         "angled_opt",
-        "Solaris Angled-opt",
-        "2026-09-04_solaris_angled_opt_01",
+        _paper_name("solaris", "angled_opt"),
+        "Solaris-angled-opt",
     ),
     MorphologyCondition(
         "dragon_skin",
         "baseline",
-        "Dragon Skin Baseline",
-        "2026-09-04_dragon_skin_baseline",
+        _paper_name("dragon_skin", "baseline"),
+        "DragonSkin-baseline",
     ),
     MorphologyCondition(
         "dragon_skin",
         "flat_opt",
-        "Dragon Skin Flat-opt",
-        "2026-09-04_dragon_skin_flat_opt",
+        _paper_name("dragon_skin", "flat_opt"),
+        "DragonSkin-flat-opt",
     ),
     MorphologyCondition(
         "dragon_skin",
         "angled_opt",
-        "Dragon Skin Angled-opt",
-        "2026-09-06_dragon_skin_angled_opt",
+        _paper_name("dragon_skin", "angled_opt"),
+        "DragonSkin-angled-opt",
     ),
 )
 
@@ -75,17 +84,20 @@ ANALYSIS_ROOTS = {
     / "dragon_skin_morphology_comparison",
 }
 
-# This repeated baseline acquisition contains only the 30 mm indenter and has
-# its own unloaded reference. It replaces only that Figure 5 condition.
+# These repeated acquisitions contain only the 30 mm indenter and retain their
+# own unloaded references. They replace only the matching Figure 5 conditions.
 ANALYSIS_CONDITION_OVERRIDES = {
     ("dragon_skin", "baseline", "sphere_30mm"): REPOSITORY_ROOT
     / "output"
     / "analysis"
     / "dragon_skin_baseline_30mm_rerun",
+    ("dragon_skin", "angled_opt", "sphere_30mm"): REPOSITORY_ROOT
+    / "output"
+    / "analysis"
+    / "dragon_skin_angled_opt_30mm_02",
 }
 
 COMPARISON_MORPHOLOGIES = ("baseline", "flat_opt", "angled_opt")
-COMPARISON_TITLES = ("Baseline", "Flat-opt", "Angled-opt")
 COMPARISON_CONDITIONS = (
     ("solaris", "sphere_10mm", "Solaris · 10 mm sphere"),
     ("solaris", "sphere_30mm", "Solaris · 30 mm sphere"),
@@ -93,12 +105,21 @@ COMPARISON_CONDITIONS = (
     ("dragon_skin", "sphere_30mm", "Dragon Skin · 30 mm sphere"),
 )
 
-# Panels (a) and (b) use this exact vertical grammar so matching morphology
-# rows align across the final composed figure.  The narrow empty row separates
-# the two materials without adding a decorative rule.
-MORPHOLOGY_TABLE_HEIGHT_RATIOS = (0.24, 0.20, 1.0, 1.0, 1.0, 0.10, 1.0, 1.0, 1.0)
-MORPHOLOGY_TABLE_ROW_SLOTS = (2, 3, 4, 6, 7, 8)
-MORPHOLOGY_TABLE_HSPACE = 0.006
+# Panels (a), (b), and (c) use three shared morphology rows. Materials and
+# indenter conditions run across columns, so every morphology can be followed
+# horizontally without repeating six specimen rows.
+MORPHOLOGY_TABLE_HEIGHT_RATIOS = (
+    0.16,
+    0.10,
+    0.15,
+    0.55,
+    0.55,
+    0.55,
+)
+MORPHOLOGY_TABLE_ROW_SLOTS = (3, 4, 5)
+MORPHOLOGY_TABLE_HSPACE = 0.035
+MATERIAL_SEPARATOR_COLOR = "#D4D4D4"
+MATERIAL_SEPARATOR_LINEWIDTH_PT = 0.70
 
 # The fixture has six measured stops at 10 mm spacing. Hole 1 is the distal
 # stop and hole 6 is proximal. Coordinates are measured from the distal stop;
@@ -112,17 +133,17 @@ HOLE_TO_CONTACT_X_MM = {
     6: 50.0,
 }
 
-# Five consecutive locations keep the raw-image atlas legible. The response
-# fields and transfer metric continue to use all six acquired locations.
-ATLAS_HOLES = (1, 2, 3, 4, 5)
+# Three representative locations keep the raw-image atlas compact. The response
+# fields and decoder continue to use all six acquired locations.
+ATLAS_HOLES = (1, 3, 5)
 ALL_HOLES = tuple(HOLE_TO_CONTACT_X_MM)
 
 ATLAS_INDENTER = "sphere_10mm"
 ATLAS_REPETITION = 1
 ATLAS_TARGET_FORCE_N = 15.0
 ATLAS_DISPLAY_EXPOSURE_EV_BY_MATERIAL = {
-    "solaris": 0.0,
-    "dragon_skin": 0.25,
+    "solaris": 0.2750,
+    "dragon_skin": 0.5250,
 }
 
 # One camera-coordinate ROI is reused without recentering or photometric
@@ -156,6 +177,7 @@ def require_available_inputs() -> None:
                 f"missing required Figure 5 override for {condition}: {root}"
             )
 
+
 __all__ = [
     "ALL_HOLES",
     "ANALYSIS_CONDITION_OVERRIDES",
@@ -168,9 +190,10 @@ __all__ = [
     "ATLAS_TARGET_FORCE_N",
     "COMPARISON_CONDITIONS",
     "COMPARISON_MORPHOLOGIES",
-    "COMPARISON_TITLES",
     "FIGURE_DIRECTORY",
     "HOLE_TO_CONTACT_X_MM",
+    "MATERIAL_SEPARATOR_COLOR",
+    "MATERIAL_SEPARATOR_LINEWIDTH_PT",
     "MORPHOLOGY_CONDITIONS",
     "MORPHOLOGY_TABLE_HEIGHT_RATIOS",
     "MORPHOLOGY_TABLE_HSPACE",
