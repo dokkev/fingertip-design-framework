@@ -505,9 +505,23 @@ conda run --no-capture-output -n lit \
   python -m figures.fig6.fig6 \
   --config experiments/analysis/configs/paper_figures.yaml
 conda run --no-capture-output -n lit \
+  python -m figures.fig6.fig6_singlecol_alt \
+  --config experiments/analysis/configs/paper_figures.yaml
+conda run --no-capture-output -n lit \
   python -m experiments.analysis.build_fig5_fig6 \
   --config experiments/analysis/configs/paper_figures.yaml
 ```
+
+The alternate command writes a separate 3.5-inch-wide
+`fig6_singlecol_alt.pdf/png` without overwriting `fig6_final.*`. Its panel (a)
+compares baseline-relative changes in maintained-contact `W_cycle` and
+independent re-contact `W_recontact` for the 10 mm sphere. `W_cycle` is read
+only from the separately generated Solaris and Dragon Skin contact-history
+summaries; `W_recontact` and panels (b)--(d) continue to use the frozen
+production Figure 6 support tables. The companion
+`fig6_singlecol_alt_panel_a_variability.csv` records the absolute source values,
+baseline-relative changes, and source paths. The two metrics have different
+absolute units and are not pooled.
 
 The standalone panel writes `fig5c_confusion_2x2.pdf/png`; Figure 6 writes
 `fig6_final.pdf/png`. Add `--recompute` to any plotting/build command to

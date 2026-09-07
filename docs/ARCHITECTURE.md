@@ -1499,21 +1499,37 @@ labels, and annotations as native Matplotlib artists; it never stitches
 rendered panel screenshots. It writes `fig5_final.pdf` and `fig5_final.png`.
 
 `figures.fig6.fig6` owns and builds the four-panel perception-workload
-follow-up from the same compact analysis tables. Panel (a) plots the eight
-optimized-versus-matched-baseline changes in median 2-to-5 N optical magnitude
-and exact decoder accuracy; baseline points are omitted because their relative
-change is the origin. Panel (b) reads the established
-slope-profile `D_neighbor` and independent re-contact variability from each
-`morphology_metrics.csv`, validates the stored ratio, and plots
-`Q_sep = D_neighbor / W_contact`. It explicitly does not substitute cyclic
-within-contact `W_cycle`. Panel (c) compares the scalar-only and six-region
+follow-up from the same compact analysis tables. Panel (a) plots the independent
+same-location re-contact variation stored internally as `W_contact` and labels
+that quantity paper-facing as `W_recontact`. Panel (b) reads the established
+slope-profile `D_neighbor`, validates the stored ratio, and labels
+`D_neighbor / W_contact` paper-facing as `Q_recontact`. This naming distinguishes
+independently re-established contacts from cyclic within-contact `W_cycle`,
+which is not substituted into either panel. Panel (c) compares the scalar-only and six-region
 observers under the identical leave-one-repetition-out split. Panel (d) uses
 deterministic calibration-repetition subsets to measure accuracy with one to
-four contacts per location. `paper_figures.yaml` owns data roots, condition
+four contacts per location. Figure 6 uses short quantity-based panel titles and
+axis labels; panels (b) and (c) group the repeated 10 and 30 mm conditions
+under one material label, while panel (d) uses material row labels and indenter
+column headers instead of four repeated condition titles. `paper_figures.yaml` owns data roots, condition
 overrides, indenter labels, feature forces, contact-position mapping, and the
 resampling seed; paper-facing material/morphology labels and morphology colors
 come from `lumo.visualization.style`. Figure 6 writes
 `fig6_final.pdf` and `fig6_final.png`.
+
+`figures.fig6.fig6_singlecol_alt` is a separate 3.5-inch-wide candidate path;
+it does not overwrite or change the production Figure 6 renderer. Panels
+(b)--(d) reuse the frozen production support tables and plotting definitions.
+Panel (a) is a baseline-relative comparison of two deliberately separate
+variability measures for the 10 mm sphere: maintained-contact `W_cycle` from
+the Solaris and Dragon Skin contact-history summaries, and independently
+re-established-contact `W_recontact` from the frozen production
+distinguishability table. Only percent changes from each material's matched
+baseline share the visual axis; the raw values are not pooled because
+`W_cycle` is measured in DN whereas `W_recontact` is measured in DN/N. A
+panel-specific audit CSV retains both absolute values, both relative changes,
+and the exact source paths. This exploratory join does not alter either source
+analysis or the production Figure 6 renderer.
 
 The shared analysis writes machine-readable condition summaries, per-sample
 predictions, confusion matrices, magnitude/accuracy data, spatial

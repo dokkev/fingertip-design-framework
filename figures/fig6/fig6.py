@@ -40,11 +40,10 @@ def _measured(rows: list[dict[str, str]]) -> list[dict[str, str]]:
     return [row for row in rows if row["status"] == "measured"]
 
 
-def _condition_labels(config: PaperFigureConfig) -> list[str]:
+def _condition_tick_labels(config: PaperFigureConfig) -> list[str]:
     return [
-        f"{config.material_labels[material]}\n"
-        f"{config.indenter_labels[indenter].replace(' sphere', '')}"
-        for material in config.materials
+        config.indenter_labels[indenter].replace(" sphere", "")
+        for _material in config.materials
         for indenter in config.indenters
     ]
 
@@ -74,79 +73,36 @@ def _panel_title(axis: plt.Axes, label: str, title: str) -> None:
     )
 
 
-def _plot_baseline_relative_changes(
+def _group_condition_ticks(axis: plt.Axes, config: PaperFigureConfig) -> None:
+    """Label repeated indenter columns once per material group."""
+
+    centers = np.arange(len(config.materials) * len(config.indenters), dtype=float)
+    axis.set_xticks(centers, _condition_tick_labels(config))
+    for material_index, material in enumerate(config.materials):
+        first = material_index * len(config.indenters)
+        center = first + 0.5 * (len(config.indenters) - 1)
+        axis.text(
+            center,
+            -0.145,
+            config.material_labels[material],
+            transform=axis.get_xaxis_transform(),
+            fontsize=5.7,
+            fontweight="bold",
+            ha="center",
+            va="top",
+            clip_on=False,
+        )
+
+
+def _plot_condition_bars(
     axis: plt.Axes,
     rows: list[dict[str, str]],
     config: PaperFigureConfig,
-) -> None:
-    values = _measured(rows)
-    annotation_offsets = {
-        ("solaris", "sphere_10mm", "flat_opt"): (6, 5),
-        ("solaris", "sphere_10mm", "angled_opt"): (6, -8),
-        ("solaris", "sphere_30mm", "flat_opt"): (-7, 6),
-        ("solaris", "sphere_30mm", "angled_opt"): (-6, 0),
-        ("dragon_skin", "sphere_10mm", "flat_opt"): (-6, -7),
-        ("dragon_skin", "sphere_10mm", "angled_opt"): (6, 6),
-        ("dragon_skin", "sphere_30mm", "flat_opt"): (6, 5),
-        ("dragon_skin", "sphere_30mm", "angled_opt"): (6, -8),
-    }
-    for row in values:
-        morphology = row["morphology"]
-        x_value = float(row["magnitude_change_percent"])
-        y_value = float(row["accuracy_change_pp"])
-        material_code = config.material_labels[row["material"]][0].upper()
-        indenter_code = config.indenter_labels[row["indenter"]].split()[0]
-        offset = annotation_offsets.get(
-            (row["material"], row["indenter"], morphology),
-            (6, 5) if morphology == "flat_opt" else (6, -8),
-        )
-        axis.scatter(
-            x_value,
-            y_value,
-            s=25,
-            color=config.morphology_colors[morphology],
-            edgecolor=EDGE_COLOR,
-            linewidth=0.45,
-            zorder=3,
-        )
-        axis.annotate(
-            f"{material_code}{indenter_code}",
-            (x_value, y_value),
-            xytext=offset,
-            textcoords="offset points",
-            fontsize=5.3,
-            color="#3F3F3F",
-            ha="right" if offset[0] < 0 else "left",
-            va="center",
-        )
-    axis.axvline(0.0, color="#777777", linewidth=0.7, linestyle="--", zorder=1)
-    axis.axhline(0.0, color="#777777", linewidth=0.7, linestyle="--", zorder=1)
-    if values:
-        x_values = [float(row["magnitude_change_percent"]) for row in values]
-        y_values = [float(row["accuracy_change_pp"]) for row in values]
-        x_span = max(x_values + [0.0]) - min(x_values + [0.0])
-        y_span = max(y_values + [0.0]) - min(y_values + [0.0])
-        x_pad = max(1.0, 0.09 * x_span)
-        y_pad = max(1.0, 0.10 * y_span)
-        axis.set_xlim(min(x_values + [0.0]) - x_pad, max(x_values + [0.0]) + x_pad)
-        axis.set_ylim(min(y_values + [0.0]) - y_pad, max(y_values + [0.0]) + y_pad)
-    else:
-        axis.set_xlim(-1.0, 1.0)
-        axis.set_ylim(-1.0, 1.0)
-    axis.set_xlabel("Change in optical magnitude vs. baseline [%]")
-    axis.set_ylabel("Change in decoding accuracy vs. baseline [pp]")
-    _panel_title(
-        axis,
-        "(a)",
-        "Decoding improves without increased signal magnitude",
-    )
-    _style_axis(axis)
-
-
-def _plot_distinguishability(
-    axis: plt.Axes,
-    rows: list[dict[str, str]],
-    config: PaperFigureConfig,
+    *,
+    value_key: str,
+    panel_label: str,
+    title: str,
+    y_label: str,
 ) -> None:
     lookup = _lookup(rows)
     centers = np.arange(len(config.materials) * len(config.indenters), dtype=float)
@@ -169,7 +125,7 @@ def _plot_distinguishability(
                         fontsize=5.0,
                     )
                     continue
-                value = float(row["Q_sep"])
+                value = float(row[value_key])
                 measured_values.append(value)
                 axis.bar(
                     x,
@@ -182,11 +138,43 @@ def _plot_distinguishability(
                 )
             condition_index += 1
     axis.set_ylim(0.0, 1.12 * max(measured_values))
-    axis.set_xticks(centers, _condition_labels(config))
-    axis.set_ylabel(r"$Q_{\mathrm{sep}}=D_{\mathrm{neighbor}}/W_{\mathrm{contact}}$")
-    _panel_title(axis, "(b)", "Separation exceeds re-contact variation")
+    _group_condition_ticks(axis, config)
+    axis.set_ylabel(y_label)
+    _panel_title(axis, panel_label, title)
     _style_axis(axis)
     axis.tick_params(axis="x", length=0.0)
+
+
+def _plot_recontact_consistency(
+    axis: plt.Axes,
+    rows: list[dict[str, str]],
+    config: PaperFigureConfig,
+) -> None:
+    _plot_condition_bars(
+        axis,
+        rows,
+        config,
+        value_key="W_contact_DN_per_N",
+        panel_label="(a)",
+        title="Re-contact consistency",
+        y_label=r"$W_{\mathrm{recontact}}$ [DN N$^{-1}$]",
+    )
+
+
+def _plot_distinguishability(
+    axis: plt.Axes,
+    rows: list[dict[str, str]],
+    config: PaperFigureConfig,
+) -> None:
+    _plot_condition_bars(
+        axis,
+        rows,
+        config,
+        value_key="Q_sep",
+        panel_label="(b)",
+        title="Re-contact distinguishability",
+        y_label=r"$Q_{\mathrm{recontact}}$",
+    )
 
 
 def _plot_scalar_spatial(
@@ -233,9 +221,9 @@ def _plot_scalar_spatial(
                 )
             condition_index += 1
     axis.set_ylim(max(0.0, 5.0 * np.floor((min(all_values) - 5.0) / 5.0)), 102.0)
-    axis.set_xticks(centers, _condition_labels(config))
-    axis.set_ylabel("Exact location accuracy [%]")
-    _panel_title(axis, "(c)", "Spatial structure enables decoding")
+    _group_condition_ticks(axis, config)
+    axis.set_ylabel("Localization accuracy [%]")
+    _panel_title(axis, "(c)", "Spatial decoding")
     _style_axis(axis)
     axis.tick_params(axis="x", length=0.0)
     axis.legend(
@@ -274,11 +262,12 @@ def _plot_calibration(
     config: PaperFigureConfig,
 ) -> tuple[plt.Axes, ...]:
     grid = subplot_spec.subgridspec(
-        3,
-        2,
-        height_ratios=(0.17, 1.0, 1.0),
-        hspace=0.36,
-        wspace=0.30,
+        4,
+        4,
+        height_ratios=(0.17, 0.10, 1.0, 1.0),
+        width_ratios=(0.08, 0.12, 1.0, 1.0),
+        hspace=0.18,
+        wspace=0.24,
     )
     title_axis = figure.add_subplot(grid[0, :])
     title_axis.axis("off")
@@ -290,6 +279,41 @@ def _plot_calibration(
         fontweight="bold",
         va="center",
     )
+    for column, indenter in enumerate(config.indenters, start=2):
+        header_axis = figure.add_subplot(grid[1, column])
+        header_axis.axis("off")
+        header_axis.text(
+            0.5,
+            0.5,
+            config.indenter_labels[indenter].replace(" sphere", ""),
+            fontsize=6.0,
+            ha="center",
+            va="center",
+        )
+    y_label_axis = figure.add_subplot(grid[2:, 0])
+    y_label_axis.axis("off")
+    y_label_axis.text(
+        0.5,
+        0.5,
+        "Accuracy [%]",
+        rotation=90,
+        fontsize=5.8,
+        ha="center",
+        va="center",
+    )
+    for row_index, material in enumerate(config.materials, start=2):
+        label_axis = figure.add_subplot(grid[row_index, 1])
+        label_axis.axis("off")
+        label_axis.text(
+            0.5,
+            0.5,
+            config.material_labels[material],
+            rotation=90,
+            fontsize=5.8,
+            fontweight="bold",
+            ha="center",
+            va="center",
+        )
     measured = _measured(rows)
     global_min = min(float(row["test_accuracy_q25"]) for row in measured)
     y_min = max(0.0, 5.0 * np.floor((global_min - 7.0) / 5.0))
@@ -304,7 +328,9 @@ def _plot_calibration(
             )
         )
     ):
-        axis = figure.add_subplot(grid[1 + condition_index // 2, condition_index % 2])
+        axis = figure.add_subplot(
+            grid[2 + condition_index // 2, 2 + condition_index % 2]
+        )
         for morphology in config.morphologies:
             selected = sorted(
                 (
@@ -327,18 +353,17 @@ def _plot_calibration(
             color = config.morphology_colors[morphology]
             axis.fill_between(x, q25, q75, color=color, alpha=0.12, linewidth=0.0)
             axis.plot(x, mean, marker="o", markersize=2.8, color=color, linewidth=0.9)
-        axis.set_title(
-            config.condition_label(material, indenter), fontsize=6.0, pad=2.0
-        )
         axis.set_xlim(0.85, config.maximum_calibration_contacts + 0.15)
         axis.set_ylim(y_min, 102.0)
         axis.set_xticks(range(1, config.maximum_calibration_contacts + 1))
         if condition_index // 2 == 1:
-            axis.set_xlabel("Calibration contacts / location", fontsize=5.8)
-        if condition_index % 2 == 0:
-            axis.set_ylabel("Accuracy [%]", fontsize=5.8)
+            axis.set_xlabel("Contacts / location", fontsize=5.8)
         _style_axis(axis)
         axis.tick_params(labelsize=5.2)
+        if condition_index // 2 == 0:
+            axis.tick_params(axis="x", labelbottom=False)
+        if condition_index % 2 == 1:
+            axis.tick_params(axis="y", labelleft=False)
         axes.append(axis)
     return tuple(axes)
 
@@ -347,7 +372,6 @@ def build_figure(config: PaperFigureConfig) -> plt.Figure:
     """Build Figure 6 from the compact machine-readable summaries."""
 
     output = config.analysis_output_directory
-    magnitude = read_csv(output / "fig6a_magnitude_vs_accuracy.csv")
     distinguishability = read_csv(output / "fig6b_spatial_distinguishability.csv")
     scalar_spatial = read_csv(output / "fig6c_scalar_vs_spatial.csv")
     calibration = read_csv(output / "fig6d_calibration_burden.csv")
@@ -363,7 +387,9 @@ def build_figure(config: PaperFigureConfig) -> plt.Figure:
         hspace=0.34,
         wspace=0.26,
     )
-    _plot_baseline_relative_changes(figure.add_subplot(grid[0, 0]), magnitude, config)
+    _plot_recontact_consistency(
+        figure.add_subplot(grid[0, 0]), distinguishability, config
+    )
     _plot_distinguishability(figure.add_subplot(grid[0, 1]), distinguishability, config)
     _plot_scalar_spatial(figure.add_subplot(grid[1, 0]), scalar_spatial, config)
     _plot_calibration(figure, grid[1, 1], calibration, config)
@@ -394,7 +420,6 @@ def save_final(
     """Write the final Figure 6 PDF and PNG."""
 
     required = (
-        "fig6a_magnitude_vs_accuracy.csv",
         "fig6b_spatial_distinguishability.csv",
         "fig6c_scalar_vs_spatial.csv",
         "fig6d_calibration_burden.csv",
