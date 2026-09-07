@@ -32,32 +32,39 @@ redefining them locally.
 
 ### Font family
 
-Use a regular-weight Helvetica-style sans serif throughout the paper figures.
+Use **Helvetica Light** as the default paper-figure typeface for prose, axis
+labels, ticks, legends, and ordinary annotations. The light weight is an
+intentional part of the LUMO visual style; structural elements such as panel
+labels may still use bold weight as specified below.
 
 Preferred fallback order:
 
-1. `Helvetica`
-2. `Arial`
-3. `Liberation Sans`
-4. `DejaVu Sans`
+1. `Helvetica Light`
+2. `Helvetica`
+3. `Arial`
+4. `Liberation Sans`
+5. `DejaVu Sans`
 
-**Do not use Helvetica Light or other light/thin weights in final paper
-figures.** Thin fonts lose legibility after IEEE-scale reduction and PDF/raster
-conversion.
+- Keep ordinary figure text visually light and consistent across all panels.
+- Do not mix Helvetica Light with unrelated display fonts inside a figure.
+- If Helvetica Light is unavailable, use the fallback chain above rather than
+  changing the figure's typography locally.
+- Always inspect the final-size PDF: if a dense annotation becomes illegible,
+  increase its size before changing the global font family or weight.
 
 ### Font sizes at final figure size
 
 | Element | Size | Weight/style |
 | --- | ---: | --- |
 | Panel label `(a)`, `(b)`, ... | **9 pt** | **bold**, upright |
-| Panel title | **8 pt** | regular, upright |
-| Axis label | **8 pt** | regular, upright |
-| Base plot text | **8 pt** | regular, upright |
-| Tick labels | **7 pt** | regular, upright |
-| Legend text | **7 pt** | regular, upright |
+| Panel title | **8 pt** | Helvetica Light, upright |
+| Axis label | **8 pt** | Helvetica Light, upright |
+| Base plot text | **8 pt** | Helvetica Light, upright |
+| Tick labels | **7 pt** | Helvetica Light, upright |
+| Legend text | **7 pt** | Helvetica Light, upright |
 | Material/group header | **7 pt** | bold only when it defines a major group |
-| Secondary condition header | **7 pt** | regular |
-| Annotation / in-panel note | **6.5 pt** | regular |
+| Secondary condition header | **7 pt** | Helvetica Light, upright |
+| Annotation / in-panel note | **6.5 pt** | Helvetica Light, upright |
 | Absolute minimum paper-facing text | **6 pt** | use only when unavoidable |
 
 These sizes refer to the **final exported figure**, not an enlarged working
@@ -82,6 +89,10 @@ Do **not** bold:
 - data annotations;
 - conclusions or keywords inside a plot.
 
+Ordinary prose remains Helvetica Light. When a bold structural element is
+needed, use the corresponding Helvetica/Arial bold face rather than trying to
+make the light face carry visual emphasis.
+
 ### Italic
 
 - Do not italicize prose labels, titles, legends, or annotations.
@@ -104,7 +115,7 @@ Examples:
 Rules:
 
 - Panel labels are lowercase letters in parentheses: `(a)`, `(b)`, ...
-- Panel labels are **bold**; title text is **regular**.
+- Panel labels are **bold**; title text is **Helvetica Light**.
 - Panel titles are **left aligned** to the left edge of the panel.
 - Align titles to a common vertical baseline within each figure row.
 - Use sentence case.
@@ -116,8 +127,8 @@ Rules:
   column/group headers such as `10 mm`, `30 mm`, `Solaris`, or `Dragon Skin`.
 
 When Matplotlib cannot style the panel label and title independently with
-`Axes.set_title`, place the bold panel label and regular title as separate text
-artists rather than making the entire title bold.
+`Axes.set_title`, place the bold panel label and light-weight title as separate
+text artists rather than making the entire title bold.
 
 ## 4. Axis labels and ticks
 
@@ -137,7 +148,7 @@ Rules:
 - Do not write sentence-like axis labels (`Change in ... compared with ...`).
 - Put metric definitions and experimental qualifiers in the caption when the
   symbol itself is sufficient on the axis.
-- Keep x/y labels regular-weight and upright.
+- Keep x/y labels light-weight and upright.
 - Use shared axis labels for repeated small multiples when possible.
 - Suppress repeated tick labels inside a grid if the row/column structure makes
   them redundant.
@@ -155,7 +166,7 @@ Preferred hierarchy for material/indenter grids:
 ```
 
 - Major material group headers may be bold.
-- Condition headers (`10 mm`, `30 mm`) are regular.
+- Condition headers (`10 mm`, `30 mm`) use Helvetica Light.
 - Avoid repeated labels such as `Solaris · 10 mm sphere` on every subplot.
 - If `10 mm` and `30 mm` are indenter diameters, define that once in the caption
   or use the diameter symbol when ambiguity is possible.
@@ -233,7 +244,7 @@ Default quantitative-plot styling:
 
 ## 9. Legends
 
-- Legends use **7 pt regular** text and no frame by default.
+- Legends use **7 pt Helvetica Light** text and no frame by default.
 - Prefer a single shared legend when the same encoding is reused across panels.
 - Do not include a legend if row/column headers already identify the condition.
 - Place legends in unused data space when possible; avoid adding an entire row
@@ -245,7 +256,7 @@ Default quantitative-plot styling:
 
 - Use one shared color scale when panels are quantitatively comparable.
 - Use a single shared colorbar per panel group rather than repeating colorbars.
-- Cell annotations are regular weight, normally **6.5--7 pt** at final size.
+- Cell annotations use Helvetica Light, normally **6.5--7 pt** at final size.
 - Hide zero annotations when this improves readability without hiding relevant
   errors.
 - If cell values are fractions (`0.8`, `1.0`), do not label the colorbar as
@@ -304,7 +315,8 @@ Before accepting a figure:
 2. Open the PDF at approximately manuscript display size, not only zoomed in.
 3. Verify that 7 pt ticks and 6.5 pt annotations remain legible.
 4. Check that panel labels are the only routinely bold text.
-5. Check that prose titles/labels are upright and regular weight.
+5. Check that prose titles/labels use Helvetica Light, are upright, and are not
+   accidentally rendered bold.
 6. Confirm that morphology colors and paper-facing names match this file.
 7. Remove repeated labels, unnecessary legends, redundant colorbars, and dead
    whitespace.
