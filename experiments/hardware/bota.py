@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import math
 import struct
 import threading
-from time import perf_counter, sleep
+from time import monotonic_ns, perf_counter, sleep
 from typing import Any
 
 import numpy as np
@@ -205,7 +205,7 @@ class BotaSerialSensor:
         self._reader_thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         self._condition = threading.Condition()
-        self._history: deque[BotaSample] = deque(maxlen=history_size)
+        self._history: deque[tuple[int, BotaSample]] = deque(maxlen=history_size)
         self._raw_history: deque[tuple[int, _RawBotaFrame]] = deque(
             maxlen=max(history_size, 512)
         )
@@ -342,12 +342,17 @@ class BotaSerialSensor:
                 payload = self._read_payload()
                 if payload is None:
                     break
-                frame = _raw_frame(payload, perf_counter())
+                frame = _raw_frame(payload, monotonic_ns() / 1.0e9)
                 with self._condition:
                     self._sample_sequence += 1
                     self._latest_raw = frame
                     self._raw_history.append((self._sample_sequence, frame))
-                    self._history.append(_sample_from_raw(frame, self._offsets))
+                    self._history.append(
+                        (
+                            self._sample_sequence,
+                            _sample_from_raw(frame, self._offsets),
+                        )
+                    )
                     self._condition.notify_all()
         except BaseException as error:
             if not self._stop_event.is_set():
@@ -361,6 +366,12 @@ class BotaSerialSensor:
 
     def latest_sample(self) -> BotaSample | None:
         """Return the newest complete sample, or ``None`` before first data."""
+
+        sequenced = self.latest_sequenced_sample()
+        return None if sequenced is None else sequenced[1]
+
+    def latest_sequenced_sample(self) -> tuple[int, BotaSample] | None:
+        """Return the newest sample with its reader sequence cursor."""
 
         with self._condition:
             self._raise_reader_error_locked()
@@ -376,8 +387,46 @@ class BotaSerialSensor:
             if not self._history:
                 return None
             return min(
-                self._history,
+                (sample for _, sample in self._history),
                 key=lambda sample: abs(sample.host_time_s - host_time_s),
+            )
+
+    def wait_for_samples(
+        self,
+        after_sequence: int,
+        *,
+        timeout_s: float = 0.2,
+    ) -> tuple[tuple[int, BotaSample], ...]:
+        """Wait for and return every buffered sample newer than one sequence."""
+
+        if (
+            not isinstance(after_sequence, int)
+            or isinstance(after_sequence, bool)
+            or after_sequence < 0
+        ):
+            raise ValueError("after_sequence must be a nonnegative integer")
+        if not np.isfinite(timeout_s) or timeout_s <= 0.0:
+            raise ValueError("timeout_s must be finite and positive")
+        deadline = perf_counter() + float(timeout_s)
+        with self._condition:
+            while not self._history or self._history[-1][0] <= after_sequence:
+                self._raise_reader_error_locked()
+                if not self.is_running:
+                    return ()
+                remaining = deadline - perf_counter()
+                if remaining <= 0.0:
+                    return ()
+                self._condition.wait(timeout=remaining)
+            oldest_sequence = self._history[0][0]
+            if after_sequence + 1 < oldest_sequence:
+                raise BotaSerialError(
+                    "Bota sample history overrun: requested sequence "
+                    f"{after_sequence + 1}, oldest available is {oldest_sequence}"
+                )
+            return tuple(
+                (sequence, sample)
+                for sequence, sample in self._history
+                if sequence > after_sequence
             )
 
     def tare(
@@ -431,7 +480,12 @@ class BotaSerialSensor:
             self._offsets = BotaTareOffsets(*[float(value) for value in means])
             self._history.clear()
             if self._latest_raw is not None:
-                self._history.append(_sample_from_raw(self._latest_raw, self._offsets))
+                self._history.append(
+                    (
+                        self._sample_sequence,
+                        _sample_from_raw(self._latest_raw, self._offsets),
+                    )
+                )
             return self._offsets
 
     def stop(self) -> None:

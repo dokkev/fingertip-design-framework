@@ -42,18 +42,119 @@ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 conda run --no-capture-output -n lit \
 
 ## CubeMars AK40-10 feedback probe
 
-Probe one or more explicitly supplied standard CAN IDs. Decimal `13` means
-`0x0D`; write `0x13` when hexadecimal `0x13` is intended:
+Probe the current actuator at its configured decimal ID `13` (`0x0D`):
 
 ```bash
 conda run --no-capture-output -n lit \
-  python -u scripts/test_ak40_10.py --motor-id 0x13 13
+  python -u scripts/test_ak40_10.py --motor-id 13
 ```
 
 For each ID, the command sends only the MIT enable frame, waits up to one second
 while printing all observed CAN traffic, and sends the MIT disable frame. It
 does not send a position, torque, or zero command. The Linux SocketCAN channel
 and 1 Mbps bus configuration must already exist outside Python.
+
+Launch the NiceGUI torque/state dashboard in zero-torque monitor-only mode:
+
+```bash
+conda run --no-capture-output -n lit \
+  python -u scripts/ak40_10_torque_gui.py \
+    --channel can0 \
+    --motor-id 13 \
+    --max-abs-torque-nm 0.0
+```
+
+The dashboard opens at `http://127.0.0.1:8080`. Its clock hand follows measured
+shaft position while the headless session sends zero-torque MIT commands and
+reads feedback. To test nonzero torque, rerun with a positive
+`--max-abs-torque-nm` value that has been approved for the mounted mechanism;
+the program does not choose a nonzero safety limit. Closing or reconnecting the
+browser, pressing `STOP / DISABLE`, losing feedback, receiving a drive error,
+or shutting down the server invokes zero torque followed by disable.
+
+Headless callers import the same session without NiceGUI:
+
+```python
+from experiments.actuation import AK40TorqueSession
+
+session = AK40TorqueSession(
+    motor,
+    max_abs_torque_nm=operator_approved_limit_nm,
+)
+session.start()
+try:
+    session.set_target_torque(target_torque_nm)
+    snapshot = session.snapshot()
+finally:
+    session.stop()
+```
+
+## Proprioceptive force experiment
+
+Launch the integrated NiceGUI experiment console with the current AK40-10 at
+decimal ID `13`, D435 RGB stream, and Bota Rokubi:
+
+```bash
+conda run --no-capture-output -n lit \
+  python -u scripts/collect_proprioceptive_force.py \
+    --channel can0 \
+    --motor-id 13 \
+    --bota-port /dev/ttyUSB0 \
+    --normal-axis fz \
+    --normal-sign 1
+```
+
+Use `--normal-axis` and `--normal-sign` only after checking the physical Rokubi
+mount. Omitting `--normal-axis` preserves all six raw axes but deliberately
+shows normal force as unavailable. The default Kp and Kd are both zero; set and
+apply experimentally approved gains in the page before enabling the actuator.
+The motor worker runs at 100 Hz by default and sends only
+`q=0 rad`, `dq=0 rad/s`, the selected Kp/Kd, and `tau_ff=0 N m` after the
+operator presses `Enable`. Launching the process never enables or zeros the
+motor. Browser disconnect and application shutdown request motor disable.
+
+The camera reuses the live five-LED contact pipeline. Wait for geometry
+calibration, then press `Acquire unloaded baseline` with no contact before
+recording. The browser receives a compressed preview only. Motor, F/T, and
+optical rows are recorded continuously during a run; original camera RGB frames
+are saved as lossless PNG only while the latest Rokubi contact force is at least
+0.5 N. Override that threshold with `--camera-contact-threshold-n`. When a
+normal axis is configured, the gate uses its absolute value; otherwise it uses
+the raw three-axis force-vector magnitude. `camera_timestamps.csv` stores the
+force value and F/T timestamp used by each saved frame.
+
+Runs are stored by default under:
+
+```text
+output/experiments/proprioceptive_force/
+└── run_001/
+    ├── metadata.json
+    ├── motor.csv
+    ├── ft.csv
+    ├── optical.csv
+    ├── camera_timestamps.csv
+    └── camera/
+        ├── frame_000000.png
+        └── ...
+```
+
+All four streams carry host monotonic nanosecond timestamps and are saved
+independently at their acquisition rates. Camera images are lossless PNGs.
+`metadata.json` records the fixed impedance command, Kp/Kd, optional trial
+contact-location ground truth, device information, normal-axis convention, and
+sample counts. It contains no morphology, material, or Git metadata.
+
+Minimal first run:
+
+1. Configure SocketCAN and connect the D435 and Rokubi externally.
+2. Launch the console and verify the motor, camera, and F/T status.
+3. Put the finger in its nominal pose and press `Set Motor Zero Position`
+   explicitly.
+4. Apply approved Kp/Kd, then press `Enable`.
+5. Acquire an unloaded optical baseline.
+6. Enter the trial metadata and press `Start Recording`.
+7. Apply load manually with the F/T-equipped indenter.
+8. Press `Stop Recording`, verify the saved path/counts, then press `Disable`.
 
 ## Physical contact dataset collection
 

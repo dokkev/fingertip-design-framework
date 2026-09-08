@@ -40,7 +40,7 @@ class MotorState:
 
 
 def float_to_uint(x: float, x_min: float, x_max: float, bits: int) -> int:
-    """Clamp and map a floating-point value to an unsigned protocol field."""
+    """Clamp and encode a float using the CubeMars MIT command mapping."""
 
     if not all(math.isfinite(value) for value in (x, x_min, x_max)):
         raise ValueError("conversion values must be finite")
@@ -50,7 +50,8 @@ def float_to_uint(x: float, x_min: float, x_max: float, bits: int) -> int:
         raise ValueError("bits must be a positive integer")
     clamped = min(max(x, x_min), x_max)
     maximum_integer = (1 << bits) - 1
-    return int((clamped - x_min) * maximum_integer / (x_max - x_min))
+    value = int((clamped - x_min) * (1 << bits) / (x_max - x_min))
+    return min(value, maximum_integer)
 
 
 def uint_to_float(x_int: int, x_min: float, x_max: float, bits: int) -> float:
@@ -73,7 +74,7 @@ def uint_to_float(x_int: int, x_min: float, x_max: float, bits: int) -> float:
 class AK40_10:
     """Drive one CubeMars AK40-10 in MIT mode over a shared CAN bus."""
 
-    def __init__(self, can_io: CanIO, motor_id: int = 0x13) -> None:
+    def __init__(self, can_io: CanIO, motor_id: int = 13) -> None:
         if (
             not isinstance(motor_id, int)
             or isinstance(motor_id, bool)
@@ -84,12 +85,12 @@ class AK40_10:
         self.motor_id = motor_id
 
     def enable(self) -> None:
-        """Request entry into MIT control mode."""
+        """Enable motor control while the driver is in MIT mode."""
 
         self._send(_ENTER_CONTROL_MODE)
 
     def disable(self) -> None:
-        """Request exit from MIT control mode."""
+        """Exit motor control mode."""
 
         self._send(_EXIT_CONTROL_MODE)
 

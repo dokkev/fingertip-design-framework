@@ -48,6 +48,7 @@ from .fixed_finger_calibration import (
 )
 from .fingertip_segmentation import FingertipSegmentation, segment_fingertip
 from .led_localization_common import LedLocalizationResult
+from .live_led_contact import LiveLedContactResult, LiveLedContactTracker
 from .optical_features import (
     DenseProfileConfig,
     extract_dense_profile,
@@ -75,6 +76,8 @@ __all__ = [
     "FixedFingerCalibration",
     "LedArrayGeometry",
     "LedLocalizationResult",
+    "LiveLedContactResult",
+    "LiveLedContactTracker",
     "brightest_red_features",
     "build_canonical_finger_map",
     "build_dense_template_model",

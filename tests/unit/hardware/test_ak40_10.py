@@ -111,6 +111,9 @@ def test_mit_conversion_endpoints_and_midpoint() -> None:
     assert float_to_uint(P_MAX, P_MIN, P_MAX, 16) == 0xFFFF
     assert float_to_uint(P_MIN - 1.0, P_MIN, P_MAX, 16) == 0
     assert float_to_uint(P_MAX + 1.0, P_MIN, P_MAX, 16) == 0xFFFF
+    assert float_to_uint(0.0, P_MIN, P_MAX, 16) == 0x8000
+    assert float_to_uint(0.0, V_MIN, V_MAX, 12) == 0x800
+    assert float_to_uint(0.0, T_MIN, T_MAX, 12) == 0x800
     assert uint_to_float(0, V_MIN, V_MAX, 12) == V_MIN
     assert uint_to_float(0xFFF, V_MIN, V_MAX, 12) == V_MAX
     assert uint_to_float(0x800, T_MIN, T_MAX, 12) == pytest.approx(0.0012210012)
@@ -118,19 +121,20 @@ def test_mit_conversion_endpoints_and_midpoint() -> None:
 
 def test_construction_is_passive_and_commands_use_standard_motor_id() -> None:
     can_io = _FakeCanIO()
-    motor = AK40_10(can_io, motor_id=0x13)
+    motor = AK40_10(can_io)
 
     assert can_io.sent == []
+    assert motor.motor_id == 13
     motor.enable()
     motor.set_zero()
     motor.set_torque(0.0)
     motor.disable()
 
     assert can_io.sent == [
-        (0x13, b"\xff\xff\xff\xff\xff\xff\xff\xfc", False),
-        (0x13, b"\xff\xff\xff\xff\xff\xff\xff\xfe", False),
-        (0x13, b"\x7f\xff\x7f\xf0\x00\x00\x07\xff", False),
-        (0x13, b"\xff\xff\xff\xff\xff\xff\xff\xfd", False),
+        (13, b"\xff\xff\xff\xff\xff\xff\xff\xfc", False),
+        (13, b"\xff\xff\xff\xff\xff\xff\xff\xfe", False),
+        (13, b"\x80\x00\x80\x00\x00\x00\x08\x00", False),
+        (13, b"\xff\xff\xff\xff\xff\xff\xff\xfd", False),
     ]
 
 

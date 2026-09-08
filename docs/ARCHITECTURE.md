@@ -935,12 +935,73 @@ shutdown. Linux configures the CAN interface and bitrate outside Python.
 bus. It owns only the CubeMars AK40-10 MIT-mode ranges, packet conversion,
 explicit enable/disable/zero commands, and feedback decoding. Construction is
 passive: it neither enables, zeros, nor commands the actuator, and the actuator
-driver never closes the shared bus.
+driver never closes the shared bus. Its default drive ID is decimal `13`
+(`0x0D`), matching the current actuator configuration.
 
 `scripts/test_ak40_10.py` is the explicit, bounded hardware probe for this
 driver. It enters MIT mode for each operator-supplied CAN ID, reports every CAN
 frame observed during the finite feedback wait, and always exits MIT mode after
 a successful enable transmission. It sends no position, torque, or zero command.
+
+`experiments/actuation/` owns the headless AK40-10 torque-feedback session used
+by interactive or procedural experiments. `AK40TorqueSession` owns one bounded
+worker thread because CAN feedback reads must not block a UI event loop. It
+starts only after an explicit call, verifies feedback from an initial zero-torque
+command, accepts only finite torque targets within an operator-supplied absolute
+limit, and publishes immutable command/feedback snapshots. A feedback timeout,
+non-finite state, or nonzero drive error terminates the loop; termination sends
+zero torque and exits motor control mode. The caller retains ownership of the
+injected `AK40_10` and `CanIO` objects.
+
+`scripts/ak40_10_torque_gui.py` is a NiceGUI-only frontend over that headless
+session. It renders measured shaft position as a clock hand and exposes start,
+zero-torque, stop, and bounded torque-target controls. The browser UI never
+performs CAN I/O. Browser disconnect/reconnect and server shutdown invoke the
+same headless stop path. The default zero torque limit is monitor-only; nonzero
+torque requires an explicit operator-approved CLI limit.
+
+`experiments/data_collection/proprioceptive_force.py` owns the separate
+headless runtime for manual proprioceptive force experiments. Its motor worker
+is passive until an explicit operator action, then periodically sends the one
+fixed MIT impedance command (`q=0`, `dq=0`, `tau_ff=0`) with bounded Kp/Kd and
+records each returned `MotorState`. A Rokubi worker drains the concrete Bota
+driver's timestamped native sample history without tying acquisition to the UI
+rate. A camera worker records every original RGB frame and applies
+`LiveLedContactTracker`, a stateful integration of the existing fingertip
+boundary, five-LED detector, rigid LK tracking, unloaded baseline, and contact
+observer. Each worker timestamps or preserves acquisition time on the host
+monotonic clock.
+
+The runtime publishes one small locked latest-state snapshot to
+`scripts/collect_proprioceptive_force.py`. That NiceGUI page only displays
+snapshots and queues explicit Set Zero, Enable, Disable, tare, calibration, and
+recording actions; it never performs a device read or runs the motor loop. A
+fixed browser MJPEG endpoint streams the latest preview JPEG without repeatedly
+replacing an image element's source, avoiding UI blanking between frames.
+`ForceEstimator` is deliberately uncalibrated and returns no estimate. It is
+the narrow future boundary for comparing torque-only against torque plus
+optical-location force estimates after measured calibration exists.
+
+`ProprioceptiveRecorder` owns one producer/consumer writer thread and a separate
+native-rate stream for motor, Rokubi, optical inference, and camera data. Motor,
+Rokubi, and optical rows are always recorded. To bound data volume, original
+lossless camera PNGs are admitted only while the latest Rokubi contact force is
+at or above the configured threshold (0.5 N by default); the optical detector
+never gates its own evidence. The camera timestamp row stores the exact force
+and F/T timestamp used for each admission decision. A run contains `motor.csv`,
+`ft.csv`, `optical.csv`, `camera_timestamps.csv`, selected lossless PNG frames,
+and minimal `metadata.json`. Recording locks Kp/Kd and does not store material,
+morphology, or Git identity. Stopping admission precedes a complete queue flush,
+so samples cannot cross run boundaries. GUI preview JPEG encoding is
+visualization-only and never becomes a recorded camera source.
+
+`BotaSerialSensor.wait_for_samples()` is the concrete sequential-consumer API
+used by that runtime. The driver retains a bounded `(sequence, sample)` history,
+reports history overrun instead of silently dropping native samples, and wakes
+the worker when new samples arrive. Tare intentionally replaces that history;
+the F/T worker therefore resumes from the atomic latest sequence/sample pair
+instead of treating the tare samples as consumer loss. Existing
+`latest_sample()` and `nearest_sample()` behavior is unchanged.
 
 `experiments/hardware/` does not select localization algorithms, render a GUI,
 write experimental files, or hide reconnect/retry policy. A later camera

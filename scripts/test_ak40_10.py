@@ -73,7 +73,7 @@ def _wait_for_feedback(
 
 def _probe(can_io: CanIO, motor_id: int, timeout_s: float) -> bool:
     motor = AK40_10(can_io, motor_id=motor_id)
-    print(f"Probing decimal={motor_id}, hex=0x{motor_id:X}", flush=True)
+    print(f"Probing decimal={motor_id}, hex=0x{motor_id:02X}", flush=True)
 
     enabled = False
     try:
