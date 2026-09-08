@@ -76,7 +76,9 @@ def test_recorder_writes_independent_streams_and_lossless_rgb(tmp_path: Path) ->
     )
     image = np.zeros((4, 6, 3), dtype=np.uint8)
     image[..., 0] = 73
-    recorder.submit_camera(CameraAcquisition(13, 1.5, 9, 1.2, 12, image))
+    recorder.submit_camera(
+        CameraAcquisition(13, 1.5, 9, 1.2, 12, image, "unloaded_reference")
+    )
     recorder.stop()
 
     assert sorted(path.name for path in run_path.iterdir()) == [
@@ -93,6 +95,11 @@ def test_recorder_writes_independent_streams_and_lossless_rgb(tmp_path: Path) ->
     with (run_path / "motor.csv").open(newline="", encoding="utf-8") as stream:
         motor_rows = list(csv.DictReader(stream))
     assert motor_rows[0]["torque_Nm"] == "0.3"
+    with (run_path / "camera_timestamps.csv").open(
+        newline="", encoding="utf-8"
+    ) as stream:
+        camera_rows = list(csv.DictReader(stream))
+    assert camera_rows[0]["capture_kind"] == "unloaded_reference"
     metadata = json.loads((run_path / "metadata.json").read_text(encoding="utf-8"))
     assert metadata["run_id"] == "run_001"
     assert metadata["status"] == "complete"
@@ -105,6 +112,93 @@ def test_recorder_writes_independent_streams_and_lossless_rgb(tmp_path: Path) ->
     assert "git_commit" not in metadata
     assert "morphology" not in metadata
     assert "material" not in metadata
+
+
+class _FailingTracker:
+    def process(self, rgb: np.ndarray):
+        del rgb
+        raise RuntimeError("synthetic detector failure")
+
+    def request_recalibration(self) -> None:
+        pass
+
+    def request_unloaded_baseline(self) -> None:
+        pass
+
+
+def test_online_detector_failure_does_not_become_camera_failure(tmp_path: Path) -> None:
+    recorder = ProprioceptiveRecorder(tmp_path)
+    worker = CameraContactWorker(
+        object(),  # type: ignore[arg-type]
+        _FailingTracker(),  # type: ignore[arg-type]
+        _LatestState(recorder),
+        recorder,
+    )
+    result = worker._process_online(np.zeros((3, 4, 3), dtype=np.uint8))
+    assert result.contact_detected is None
+    assert "acquisition continues" in result.status
+
+
+def test_offline_mode_skips_online_detector(tmp_path: Path) -> None:
+    recorder = ProprioceptiveRecorder(tmp_path)
+    worker = CameraContactWorker(
+        object(),  # type: ignore[arg-type]
+        _FailingTracker(),  # type: ignore[arg-type]
+        _LatestState(recorder),
+        recorder,
+        contact_processing_mode="offline",
+    )
+    result = worker._process_online(np.zeros((3, 4, 3), dtype=np.uint8))
+    assert result.contact_detected is None
+    assert result.status == "online contact disabled; offline processing pending"
+
+
+def test_offline_ready_recording_copies_reference_and_rate_limits_contact(
+    tmp_path: Path,
+) -> None:
+    recorder = ProprioceptiveRecorder(tmp_path)
+    worker = CameraContactWorker(
+        object(),  # type: ignore[arg-type]
+        _FailingTracker(),  # type: ignore[arg-type]
+        _LatestState(recorder),
+        recorder,
+        contact_processing_mode="both",
+        contact_record_rate_hz=5.0,
+        offline_reference_frame_count=2,
+    )
+    image = np.zeros((3, 4, 3), dtype=np.uint8)
+    with worker._reference_lock:
+        worker._reference_frames.extend(
+            [
+            CameraAcquisition(1, 1.0, 1, 0.0, 1, image, "unloaded_reference"),
+            CameraAcquisition(2, 2.0, 2, 0.0, 2, image, "unloaded_reference"),
+            ]
+        )
+    run_path = recorder.start({"experiment": {"trial": 1}})
+    for timestamp_ns in (1_000_000_000, 1_100_000_000, 1_250_000_000):
+        worker._record_camera_frame(
+            CameraAcquisition(
+                timestamp_ns,
+                3.0,
+                3,
+                2.0,
+                timestamp_ns,
+                image,
+                "contact",
+            )
+        )
+    recorder.stop()
+
+    with (run_path / "camera_timestamps.csv").open(
+        newline="", encoding="utf-8"
+    ) as stream:
+        rows = list(csv.DictReader(stream))
+    assert [row["capture_kind"] for row in rows] == [
+        "unloaded_reference",
+        "unloaded_reference",
+        "contact",
+        "contact",
+    ]
 
 
 class _FakeMotor:

@@ -61,7 +61,8 @@ class ExperimentConsole:
             )
             ui.label(
                 "Fixed MIT impedance hold with independent motor, Rokubi, camera, "
-                "and optical acquisition. Motor control never starts automatically."
+                "and optical acquisition. Motor control never starts automatically. "
+                f"Contact processing: {self._runtime.camera.contact_processing_mode}."
             ).classes("text-sm text-gray-600")
             self._build_status()
             with ui.row().classes("w-full items-start gap-3 no-wrap"):
@@ -114,7 +115,7 @@ class ExperimentConsole:
                 "text-sm text-gray-600"
             )
             with ui.row().classes("gap-2"):
-                ui.button(
+                recalibrate_button = ui.button(
                     "Recalibrate geometry",
                     icon="center_focus_strong",
                     on_click=lambda: self._action(
@@ -122,7 +123,7 @@ class ExperimentConsole:
                         "Geometry recalibration requested",
                     ),
                 ).props("outline")
-                ui.button(
+                baseline_button = ui.button(
                     "Acquire unloaded baseline",
                     icon="exposure_zero",
                     on_click=lambda: self._action(
@@ -130,6 +131,9 @@ class ExperimentConsole:
                         "Keep the fingertip unloaded for 30 frames",
                     ),
                 )
+                if not self._runtime.camera.online_contact_enabled:
+                    recalibrate_button.props("disable")
+                    baseline_button.props("disable")
 
     def _build_motor(self) -> None:
         with ui.card().classes("w-full"):
@@ -241,9 +245,16 @@ class ExperimentConsole:
                 )
             self._record_label = ui.label("Recorder idle").classes("font-mono text-sm")
             ui.label(
-                "Lossless PNG frames are saved only while the latest Rokubi "
-                f"contact force is at least "
-                f"{self._runtime.camera.contact_frame_threshold_n:g} N."
+                f"Contact PNG: {self._runtime.camera.contact_record_rate_hz:g} Hz "
+                "while Rokubi force is at least "
+                f"{self._runtime.camera.contact_frame_threshold_n:g} N. "
+                + (
+                    f"Each run also stores the preceding "
+                    f"{self._runtime.camera.offline_reference_frame_count} unloaded "
+                    "frames for offline processing."
+                    if self._runtime.camera.offline_contact_enabled
+                    else "No unloaded reference is stored in online-only mode."
+                )
             ).classes("text-xs text-gray-600")
 
     def _build_plots(self) -> None:
@@ -414,7 +425,13 @@ class ExperimentConsole:
             f"{recorder.status} | {recorder.run_id or '--'} | {duration_s:.1f} s | "
             f"motor {recorder.motor_samples} | F/T {recorder.ft_samples} | "
             f"camera {recorder.camera_frames} | optical {recorder.optical_samples} | "
-            f"{recorder.run_path or '--'}"
+            + (
+                f"reference {self._runtime.camera.offline_reference_count}/"
+                f"{self._runtime.camera.offline_reference_frame_count} | "
+                if self._runtime.camera.offline_contact_enabled
+                else ""
+            )
+            + f"{recorder.run_path or '--'}"
         )
         self._update_chart(self._torque_chart, self._torque_points)
         self._update_chart(self._force_chart, self._force_points)
@@ -460,6 +477,27 @@ def _parse_args() -> argparse.Namespace:
         help="save lossless camera frames only above this Rokubi force (default: 0.5 N)",
     )
     parser.add_argument(
+        "--contact-processing",
+        choices=("online", "offline", "both"),
+        default="both",
+        help=(
+            "contact processing path: live only, deferred offline only, or both "
+            "(default: both)"
+        ),
+    )
+    parser.add_argument(
+        "--camera-record-rate-hz",
+        type=float,
+        default=5.0,
+        help="lossless contact-frame rate (default: 5 Hz)",
+    )
+    parser.add_argument(
+        "--offline-reference-frames",
+        type=int,
+        default=30,
+        help="rolling unloaded frames copied into each offline-ready run (default: 30)",
+    )
+    parser.add_argument(
         "--output-root",
         type=Path,
         default=Path("output/experiments/proprioceptive_force"),
@@ -479,6 +517,13 @@ def _parse_args() -> argparse.Namespace:
         or args.camera_contact_threshold_n < 0.0
     ):
         parser.error("--camera-contact-threshold-n must be finite and nonnegative")
+    if (
+        not math.isfinite(args.camera_record_rate_hz)
+        or args.camera_record_rate_hz <= 0.0
+    ):
+        parser.error("--camera-record-rate-hz must be finite and positive")
+    if args.offline_reference_frames < 1:
+        parser.error("--offline-reference-frames must be positive")
     if not 1 <= args.port <= 65535:
         parser.error("--port must be between 1 and 65535")
     return args
@@ -505,6 +550,9 @@ def main() -> None:
         motor_rate_hz=args.motor_rate_hz,
         motor_feedback_timeout_s=args.motor_feedback_timeout_s,
         camera_contact_threshold_n=args.camera_contact_threshold_n,
+        contact_processing_mode=args.contact_processing,
+        camera_record_rate_hz=args.camera_record_rate_hz,
+        offline_reference_frame_count=args.offline_reference_frames,
     )
     runtime.start()
 

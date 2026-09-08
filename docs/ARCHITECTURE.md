@@ -966,11 +966,13 @@ is passive until an explicit operator action, then periodically sends the one
 fixed MIT impedance command (`q=0`, `dq=0`, `tau_ff=0`) with bounded Kp/Kd and
 records each returned `MotorState`. A Rokubi worker drains the concrete Bota
 driver's timestamped native sample history without tying acquisition to the UI
-rate. A camera worker records every original RGB frame and applies
+rate. A camera worker acquires and previews RGB independently of contact
+inference. Its `online`, `offline`, and `both` modes optionally apply
 `LiveLedContactTracker`, a stateful integration of the existing fingertip
 boundary, five-LED detector, rigid LK tracking, unloaded baseline, and contact
-observer. Each worker timestamps or preserves acquisition time on the host
-monotonic clock.
+observer. An online detector exception is represented as an unavailable optical
+sample and does not stop camera or F/T acquisition. Each worker timestamps or
+preserves acquisition time on the host monotonic clock.
 
 The runtime publishes one small locked latest-state snapshot to
 `scripts/collect_proprioceptive_force.py`. That NiceGUI page only displays
@@ -985,15 +987,32 @@ optical-location force estimates after measured calibration exists.
 `ProprioceptiveRecorder` owns one producer/consumer writer thread and a separate
 native-rate stream for motor, Rokubi, optical inference, and camera data. Motor,
 Rokubi, and optical rows are always recorded. To bound data volume, original
-lossless camera PNGs are admitted only while the latest Rokubi contact force is
-at or above the configured threshold (0.5 N by default); the optical detector
-never gates its own evidence. The camera timestamp row stores the exact force
-and F/T timestamp used for each admission decision. A run contains `motor.csv`,
-`ft.csv`, `optical.csv`, `camera_timestamps.csv`, selected lossless PNG frames,
-and minimal `metadata.json`. Recording locks Kp/Kd and does not store material,
-morphology, or Git identity. Stopping admission precedes a complete queue flush,
-so samples cannot cross run boundaries. GUI preview JPEG encoding is
-visualization-only and never becomes a recorded camera source.
+lossless contact PNGs are admitted at 5 Hz by default while the latest Rokubi
+contact force is at or above the configured threshold (0.5 N by default); the
+optical detector never gates its own evidence. Offline-ready modes also copy the
+30 most recent below-threshold frames into each run as an independent
+`unloaded_reference` set. `camera_timestamps.csv` distinguishes reference and
+contact frames and stores the exact force and F/T timestamp used for each
+admission decision. A run contains `motor.csv`, `ft.csv`, `optical.csv`,
+`camera_timestamps.csv`, selected lossless PNG frames, and minimal
+`metadata.json`. `scripts/process_proprioceptive_contact_offline.py` replays
+those images, or their compact HDF5 representation, through the same
+`LiveLedContactTracker` and writes the derived `optical_offline.csv` without
+changing raw acquisition files. Recording locks Kp/Kd and does not store
+material, morphology, or Git identity. Stopping admission precedes a complete
+queue flush, so samples cannot cross run boundaries. GUI preview JPEG encoding
+is visualization-only and never becomes a recorded camera source.
+
+`experiments/analysis/proprioceptive_h5.py` owns the transport copy of one
+proprioceptive run. It concatenates independently encoded full-resolution JPEG
+frames with explicit byte offsets, stores typed camera/F-T synchronization
+fields, and embeds byte-exact source JSON/CSV payloads. It performs no crop,
+resize, baseline subtraction, or normalization. The chosen JPEG quality is an
+explicit artifact attribute, and the original lossless PNG run remains the
+scientific archive. Export is atomic and refuses to publish a file at or above
+the configured 500 MB upload limit. The same HDF5 frame stream is readable by
+the offline contact processor, so uploaded data need not be expanded back into
+individual image files before analysis.
 
 `BotaSerialSensor.wait_for_samples()` is the concrete sequential-consumer API
 used by that runtime. The driver retains a bounded `(sequence, sample)` history,

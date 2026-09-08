@@ -101,7 +101,8 @@ conda run --no-capture-output -n lit \
     --motor-id 13 \
     --bota-port /dev/ttyUSB0 \
     --normal-axis fz \
-    --normal-sign 1
+    --normal-sign 1 \
+    --contact-processing both
 ```
 
 Use `--normal-axis` and `--normal-sign` only after checking the physical Rokubi
@@ -113,15 +114,65 @@ The motor worker runs at 100 Hz by default and sends only
 operator presses `Enable`. Launching the process never enables or zeros the
 motor. Browser disconnect and application shutdown request motor disable.
 
-The camera reuses the live five-LED contact pipeline. Wait for geometry
-calibration, then press `Acquire unloaded baseline` with no contact before
-recording. The browser receives a compressed preview only. Motor, F/T, and
-optical rows are recorded continuously during a run; original camera RGB frames
-are saved as lossless PNG only while the latest Rokubi contact force is at least
-0.5 N. Override that threshold with `--camera-contact-threshold-n`. When a
-normal axis is configured, the gate uses its absolute value; otherwise it uses
-the raw three-axis force-vector magnitude. `camera_timestamps.csv` stores the
-force value and F/T timestamp used by each saved frame.
+The default `--contact-processing both` runs the live five-LED pipeline while
+also preserving an offline-ready image set. Use `--contact-processing offline`
+when live detection is unreliable: camera, motor, and Rokubi acquisition remain
+active while the GUI reports that online contact is deferred. `online` keeps
+only the live path. An online detector error never terminates camera acquisition.
+
+In `both` or `offline` mode, start recording only after the fingertip has been
+unloaded long enough to fill the rolling reference. Each run receives the latest
+30 below-threshold frames as `unloaded_reference`. Contact RGB is then saved as
+lossless PNG at 5 Hz by default while the latest Rokubi contact force is at least
+0.5 N. Override these settings with `--offline-reference-frames`,
+`--camera-record-rate-hz`, and `--camera-contact-threshold-n`. When a normal axis
+is configured, the gate uses its absolute value; otherwise it uses the raw
+three-axis force-vector magnitude. `camera_timestamps.csv` identifies each row
+as `unloaded_reference` or `contact` and stores the force value and F/T timestamp
+used by the admission decision.
+The Start Recording action is rejected until all configured reference frames are
+available, and the GUI shows the current reference count.
+
+After an offline-ready run, execute the same detector on the stored observations:
+
+```bash
+conda run --no-capture-output -n lit \
+  python -u scripts/process_proprioceptive_contact_offline.py \
+    output/experiments/proprioceptive_force/run_001
+```
+
+This creates `run_001/optical_offline.csv`. It does not alter the raw PNGs,
+timestamps, or online `optical.csv`. Use `--overwrite` only to intentionally
+replace a previous offline result.
+
+Package a completed run into one upload-sized HDF5 artifact:
+
+```bash
+conda run --no-capture-output -n lit \
+  python -u scripts/export_proprioceptive_h5.py \
+    output/experiments/proprioceptive_force/run_001
+```
+
+The default output is the sibling file `run_001.h5`. It preserves every saved
+frame at full resolution as an independently encoded quality-95 JPEG byte
+stream, the typed camera index, and byte-exact copies of the run JSON/CSV files.
+It does not crop, resize, subtract a reference, or normalize intensity. JPEG is
+the only lossy step. The exporter publishes no artifact if the completed file is
+500 decimal MB or larger and never deletes the source PNG directory. Use an
+explicit `--jpeg-quality` or lower acquisition duration/rate if the limit is
+exceeded.
+
+The offline detector accepts either representation directly:
+
+```bash
+conda run --no-capture-output -n lit \
+  python -u scripts/process_proprioceptive_contact_offline.py \
+    output/experiments/proprioceptive_force/run_001.h5
+```
+
+For HDF5 input the default derived output is the sibling
+`run_001_optical_offline.csv`. Verify an artifact without processing contact via
+`scripts/export_proprioceptive_h5.py RUN.h5 --verify`.
 
 Runs are stored by default under:
 
@@ -139,7 +190,7 @@ output/experiments/proprioceptive_force/
 ```
 
 All four streams carry host monotonic nanosecond timestamps and are saved
-independently at their acquisition rates. Camera images are lossless PNGs.
+independently at their configured rates. Source camera images are lossless PNGs.
 `metadata.json` records the fixed impedance command, Kp/Kd, optional trial
 contact-location ground truth, device information, normal-axis convention, and
 sample counts. It contains no morphology, material, or Git metadata.
@@ -151,7 +202,9 @@ Minimal first run:
 3. Put the finger in its nominal pose and press `Set Motor Zero Position`
    explicitly.
 4. Apply approved Kp/Kd, then press `Enable`.
-5. Acquire an unloaded optical baseline.
+5. In `both`/`online` mode, acquire an unloaded online optical baseline. In
+   `offline` mode, leave the fingertip unloaded before starting the run so the
+   rolling reference is populated.
 6. Enter the trial metadata and press `Start Recording`.
 7. Apply load manually with the F/T-equipped indenter.
 8. Press `Stop Recording`, verify the saved path/counts, then press `Disable`.

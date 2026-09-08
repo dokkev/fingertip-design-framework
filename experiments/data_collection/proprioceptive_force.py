@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 import csv
@@ -60,6 +61,7 @@ CAMERA_COLUMNS = (
     "frame_index",
     "timestamp_ns",
     "filename",
+    "capture_kind",
     "camera_device_timestamp_ms",
     "camera_frame_number",
     "ft_contact_force_N",
@@ -125,8 +127,13 @@ class CameraAcquisition:
     ft_contact_force_n: float
     ft_timestamp_ns: int
     rgb: np.ndarray
+    capture_kind: str = "contact"
 
     def __post_init__(self) -> None:
+        if self.capture_kind not in {"unloaded_reference", "contact"}:
+            raise ValueError(
+                "capture_kind must be 'unloaded_reference' or 'contact'"
+            )
         image = np.asarray(self.rgb)
         if image.ndim != 3 or image.shape[2] != 3 or image.dtype != np.uint8:
             raise ValueError("rgb must be an H x W x 3 uint8 image")
@@ -412,6 +419,7 @@ class ProprioceptiveRecorder:
                             "frame_index": frame_index,
                             "timestamp_ns": sample.timestamp_ns,
                             "filename": f"camera/{filename}",
+                            "capture_kind": sample.capture_kind,
                             "camera_device_timestamp_ms": sample.device_timestamp_ms,
                             "camera_frame_number": sample.frame_number,
                             "ft_contact_force_N": sample.ft_contact_force_n,
@@ -795,7 +803,7 @@ class FTSensorWorker:
 
 
 class CameraContactWorker:
-    """Acquire native RGB frames and run the current LED contact tracker."""
+    """Acquire RGB independently of optional online contact processing."""
 
     def __init__(
         self,
@@ -808,6 +816,9 @@ class CameraContactWorker:
         read_timeout_ms: int = 2000,
         preview_width: int = 960,
         contact_frame_threshold_n: float = 0.5,
+        contact_processing_mode: str = "both",
+        contact_record_rate_hz: float = 5.0,
+        offline_reference_frame_count: int = 30,
     ) -> None:
         if warmup_frame_count < 0:
             raise ValueError("warmup_frame_count must be nonnegative")
@@ -816,6 +827,19 @@ class CameraContactWorker:
         contact_frame_threshold_n = float(contact_frame_threshold_n)
         if not math.isfinite(contact_frame_threshold_n) or contact_frame_threshold_n < 0.0:
             raise ValueError("contact_frame_threshold_n must be finite and nonnegative")
+        if contact_processing_mode not in {"online", "offline", "both"}:
+            raise ValueError(
+                "contact_processing_mode must be online, offline, or both"
+            )
+        contact_record_rate_hz = float(contact_record_rate_hz)
+        if not math.isfinite(contact_record_rate_hz) or contact_record_rate_hz <= 0.0:
+            raise ValueError("contact_record_rate_hz must be finite and positive")
+        if (
+            not isinstance(offline_reference_frame_count, int)
+            or isinstance(offline_reference_frame_count, bool)
+            or offline_reference_frame_count < 1
+        ):
+            raise ValueError("offline_reference_frame_count must be a positive integer")
         self._camera = camera
         self._tracker = tracker
         self._state = state
@@ -824,8 +848,30 @@ class CameraContactWorker:
         self.read_timeout_ms = read_timeout_ms
         self.preview_width = preview_width
         self.contact_frame_threshold_n = contact_frame_threshold_n
+        self.contact_processing_mode = contact_processing_mode
+        self.contact_record_rate_hz = contact_record_rate_hz
+        self.offline_reference_frame_count = offline_reference_frame_count
+        self._reference_frames: deque[CameraAcquisition] = deque(
+            maxlen=offline_reference_frame_count
+        )
+        self._reference_lock = threading.Lock()
+        self._recording_run_id: str | None = None
+        self._last_contact_record_ns: int | None = None
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+
+    @property
+    def online_contact_enabled(self) -> bool:
+        return self.contact_processing_mode in {"online", "both"}
+
+    @property
+    def offline_contact_enabled(self) -> bool:
+        return self.contact_processing_mode in {"offline", "both"}
+
+    @property
+    def offline_reference_count(self) -> int:
+        with self._reference_lock:
+            return len(self._reference_frames)
 
     def start(self) -> None:
         if self._thread is not None:
@@ -838,9 +884,13 @@ class CameraContactWorker:
         self._thread.start()
 
     def request_recalibration(self) -> None:
+        if not self.online_contact_enabled:
+            raise RuntimeError("online contact processing is disabled")
         self._tracker.request_recalibration()
 
     def request_unloaded_baseline(self) -> None:
+        if not self.online_contact_enabled:
+            raise RuntimeError("online contact processing is disabled")
         self._tracker.request_unloaded_baseline()
 
     def stop(self) -> None:
@@ -868,18 +918,27 @@ class CameraContactWorker:
                 ft_sample = self._state.latest_ft()
                 if ft_sample is not None:
                     contact_force_n = self._contact_force(ft_sample)
-                    if contact_force_n >= self.contact_frame_threshold_n:
-                        self._recorder.submit_camera(
-                            CameraAcquisition(
-                                timestamp_ns=timestamp_ns,
-                                device_timestamp_ms=source.timestamp_ms,
-                                frame_number=source.frame_number,
-                                ft_contact_force_n=contact_force_n,
-                                ft_timestamp_ns=ft_sample.timestamp_ns,
-                                rgb=source.rgb,
-                            )
-                        )
-                result = self._tracker.process(source.rgb)
+                    camera_sample = CameraAcquisition(
+                        timestamp_ns=timestamp_ns,
+                        device_timestamp_ms=source.timestamp_ms,
+                        frame_number=source.frame_number,
+                        ft_contact_force_n=contact_force_n,
+                        ft_timestamp_ns=ft_sample.timestamp_ns,
+                        rgb=source.rgb,
+                        capture_kind=(
+                            "contact"
+                            if contact_force_n >= self.contact_frame_threshold_n
+                            else "unloaded_reference"
+                        ),
+                    )
+                    if (
+                        self.offline_contact_enabled
+                        and contact_force_n < self.contact_frame_threshold_n
+                    ):
+                        with self._reference_lock:
+                            self._reference_frames.append(camera_sample)
+                    self._record_camera_frame(camera_sample)
+                result = self._process_online(source.rgb)
                 optical = OpticalAcquisition(
                     timestamp_ns=timestamp_ns,
                     detector_status=result.status,
@@ -891,9 +950,8 @@ class CameraContactWorker:
                 )
                 self._recorder.submit_optical(optical)
                 self._state.update(
-                    camera_status=(
-                        "connected" if result.baseline_ready else result.status
-                    ),
+                    camera_status="connected",
+                    camera_error=None,
                     optical=optical,
                     camera_jpeg=self._preview(source.rgb, result),
                 )
@@ -907,6 +965,55 @@ class CameraContactWorker:
             self._camera.stop()
             if self._state.snapshot().camera_status != "error":
                 self._state.update(camera_status="disconnected")
+
+    def _process_online(self, rgb: np.ndarray) -> LiveLedContactResult:
+        if not self.online_contact_enabled:
+            return self._empty_result(
+                "online contact disabled; offline processing pending"
+            )
+        try:
+            return self._tracker.process(rgb)
+        except Exception as error:
+            return self._empty_result(
+                "online detector error; acquisition continues: "
+                f"{type(error).__name__}: {error}"
+            )
+
+    @staticmethod
+    def _empty_result(status: str) -> LiveLedContactResult:
+        return LiveLedContactResult(
+            status=status,
+            geometry_ready=False,
+            baseline_ready=False,
+            contact_detected=None,
+            contact_location_mm=None,
+            contact_score_z=None,
+            top_two_margin_dn=None,
+            optical_response_dn=None,
+            landmarks_xy_px=None,
+            contact_point_xy_px=None,
+        )
+
+    def _record_camera_frame(self, sample: CameraAcquisition) -> None:
+        recorder = self._recorder.snapshot()
+        run_id = recorder.run_id if recorder.status == "recording" else None
+        if run_id != self._recording_run_id:
+            self._recording_run_id = run_id
+            self._last_contact_record_ns = None
+            if run_id is not None and self.offline_contact_enabled:
+                with self._reference_lock:
+                    references = tuple(self._reference_frames)
+                for reference in references:
+                    self._recorder.submit_camera(reference)
+        if run_id is None or sample.capture_kind != "contact":
+            return
+        period_ns = round(1.0e9 / self.contact_record_rate_hz)
+        if (
+            self._last_contact_record_ns is None
+            or sample.timestamp_ns - self._last_contact_record_ns >= period_ns
+        ):
+            self._recorder.submit_camera(sample)
+            self._last_contact_record_ns = sample.timestamp_ns
 
     @staticmethod
     def _contact_force(sample: FTAcquisition) -> float:
@@ -983,6 +1090,9 @@ class ProprioceptiveExperimentRuntime:
         motor_rate_hz: float = 100.0,
         motor_feedback_timeout_s: float = 0.05,
         camera_contact_threshold_n: float = 0.5,
+        contact_processing_mode: str = "both",
+        camera_record_rate_hz: float = 5.0,
+        offline_reference_frame_count: int = 30,
     ) -> None:
         self.can_io = can_io
         self.motor_device = motor
@@ -1012,6 +1122,9 @@ class ProprioceptiveExperimentRuntime:
             self._state,
             self.recorder,
             contact_frame_threshold_n=camera_contact_threshold_n,
+            contact_processing_mode=contact_processing_mode,
+            contact_record_rate_hz=camera_record_rate_hz,
+            offline_reference_frame_count=offline_reference_frame_count,
         )
         self.estimator = ForceEstimator()
         self._shutdown_lock = threading.Lock()
@@ -1070,6 +1183,17 @@ class ProprioceptiveExperimentRuntime:
             raise RuntimeError("F/T sensor is not providing data")
         if snapshot.camera_jpeg is None or snapshot.camera_status == "error":
             raise RuntimeError("camera is not providing data")
+        if (
+            self.camera.offline_contact_enabled
+            and self.camera.offline_reference_count
+            < self.camera.offline_reference_frame_count
+        ):
+            raise RuntimeError(
+                "offline unloaded reference is not ready: "
+                f"{self.camera.offline_reference_count}/"
+                f"{self.camera.offline_reference_frame_count} frames; keep the "
+                "fingertip below the contact threshold before recording"
+            )
         if not isinstance(trial, int) or isinstance(trial, bool) or trial < 1:
             raise ValueError("trial must be a positive integer")
         if contact_location_gt_mm is not None and not math.isfinite(
@@ -1104,8 +1228,18 @@ class ProprioceptiveExperimentRuntime:
                     "exposure_us": self.camera_device.exposure_us,
                     "gain": self.camera_device.gain,
                     "white_balance_k": self.camera_device.white_balance_k,
-                    "frame_recording_policy": "ft_contact_only",
+                    "frame_recording_policy": (
+                        "rolling_unloaded_reference_and_ft_contact"
+                        if self.camera.offline_contact_enabled
+                        else "ft_contact_only"
+                    ),
                     "contact_threshold_n": self.camera.contact_frame_threshold_n,
+                    "contact_record_rate_hz": self.camera.contact_record_rate_hz,
+                    "unloaded_reference_frame_count": (
+                        self.camera.offline_reference_frame_count
+                        if self.camera.offline_contact_enabled
+                        else 0
+                    ),
                     "contact_force_signal": (
                         f"abs({self.ft.normal_axis})"
                         if self.ft.normal_axis is not None
@@ -1119,7 +1253,11 @@ class ProprioceptiveExperimentRuntime:
                     "normal_sign": self.ft.normal_sign,
                     "tare_offsets": asdict(self.ft_sensor.tare_offsets),
                 },
-                "optical_detector": "five-LED top-10% red response",
+                "optical_detector": {
+                    "method": "five-LED top-10% red response",
+                    "processing_mode": self.camera.contact_processing_mode,
+                    "online_failure_policy": "record acquisition and report unavailable",
+                },
             },
         }
         return self.recorder.start(metadata)
