@@ -53,6 +53,7 @@ from .optical_features import (
     DenseProfileConfig,
     extract_dense_profile,
     extract_dense_response_profile,
+    extract_positive_response_profile,
     mean_center_l2,
     robust_zscore,
 )
@@ -91,6 +92,7 @@ __all__ = [
     "estimate_dense_template_position",
     "extract_dense_profile",
     "extract_dense_response_profile",
+    "extract_positive_response_profile",
     "fit_affine_position_from_centroid",
     "load_dense_template_model",
     "load_fixed_finger_calibration",

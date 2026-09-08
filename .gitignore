@@ -3,5 +3,13 @@ __pycache__/
 *.egg-info/
 .pytest_cache/
 output/
+!output/
+output/*
+!output/ak40_10_torque_gui.py
+!output/analyze_contact_history.py
+!output/analyze_morphologies.py
+!output/compress/
+output/compress/*
+!output/compress/*.py
 lumo-references-legay/output/
 INSTRUCTION.md

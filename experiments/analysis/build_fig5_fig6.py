@@ -16,7 +16,6 @@ from experiments.analysis.fig5c_decoder import (  # noqa: E402
     load_config,
     run_analysis,
 )
-from experiments.analysis.plot_fig5c import save_panel  # noqa: E402
 from figures.fig5.fig5 import save_final as save_figure5  # noqa: E402
 from figures.fig6.fig6 import save_final as save_figure6  # noqa: E402
 
@@ -31,8 +30,6 @@ def main() -> None:
     if arguments.recompute or not summary.is_file():
         for path in run_analysis(config).values():
             print(path)
-    for path in save_panel(config):
-        print(path)
     for path in save_figure5(config):
         print(path)
     for path in save_figure6(config):

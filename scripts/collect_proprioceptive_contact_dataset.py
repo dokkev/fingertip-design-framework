@@ -1,4 +1,4 @@
-"""Run the NiceGUI proprioceptive force-sensing experiment console."""
+"""Collect force-checkpoint RGB, Rokubi, and AK40-10 torque observations."""
 
 from __future__ import annotations
 
@@ -18,7 +18,14 @@ _REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 if str(_REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPOSITORY_ROOT))
 
-from experiments.data_collection import ProprioceptiveExperimentRuntime  # noqa: E402
+from experiments.data_collection import (  # noqa: E402
+    ProprioceptiveContactDatasetController,
+    ProprioceptiveExperimentRuntime,
+)
+from experiments.force_estimation import (  # noqa: E402
+    LocationConditionedForceCalibration,
+    OnlineForceEstimator,
+)
 from experiments.hardware import BotaSerialSensor, RealSenseColorCamera  # noqa: E402
 from experiments.hardware.ak40_10 import AK40_10, KD_MAX, KP_MAX  # noqa: E402
 from experiments.hardware.can_io import CanIO  # noqa: E402
@@ -40,11 +47,16 @@ def _motor_id(value: str) -> int:
     return parsed
 
 
-class ExperimentConsole:
-    """Read runtime snapshots and issue only explicit high-level actions."""
+class ContactDatasetConsole:
+    """Display the force-checkpoint experiment and issue operator actions."""
 
-    def __init__(self, runtime: ProprioceptiveExperimentRuntime) -> None:
+    def __init__(
+        self,
+        runtime: ProprioceptiveExperimentRuntime,
+        contact_dataset: ProprioceptiveContactDatasetController,
+    ) -> None:
         self._runtime = runtime
+        self._contact_dataset = contact_dataset
         self._last_motor_timestamp_ns: int | None = None
         self._last_ft_timestamp_ns: int | None = None
         self._last_optical_timestamp_ns: int | None = None
@@ -54,11 +66,10 @@ class ExperimentConsole:
         self._location_points: deque[list[float]] = deque()
 
         ui.colors(primary="#2C758E", positive="#009E73", negative="#D62728")
-        ui.page_title("LUMO proprioceptive force experiment")
+        page_title = "LUMO proprioceptive contact dataset"
+        ui.page_title(page_title)
         with ui.column().classes("w-full max-w-[1500px] mx-auto gap-3 p-4"):
-            ui.label("LUMO proprioceptive force experiment").classes(
-                "text-2xl font-medium"
-            )
+            ui.label(page_title).classes("text-2xl font-medium")
             ui.label(
                 "Fixed MIT impedance hold with independent motor, Rokubi, camera, "
                 "and optical acquisition. Motor control never starts automatically. "
@@ -131,7 +142,10 @@ class ExperimentConsole:
                         "Keep the fingertip unloaded for 30 frames",
                     ),
                 )
-                if not self._runtime.camera.online_contact_enabled:
+                if (
+                    not self._runtime.camera.online_contact_enabled
+                    and self._runtime.estimator is None
+                ):
                     recalibrate_button.props("disable")
                     baseline_button.props("disable")
 
@@ -219,42 +233,67 @@ class ExperimentConsole:
     def _build_estimator(self) -> None:
         with ui.card().classes("w-full"):
             ui.label("Force estimation").classes("text-lg font-medium")
-            self._estimated_force = ui.label("Estimated force: not calibrated")
+            self._estimated_force = ui.label(
+                "Estimated force: estimator not configured"
+                if self._runtime.estimator is None
+                else "Estimated force: initialize geometry and baseline"
+            )
             self._ground_truth = ui.label("Ground truth: unavailable")
             self._estimation_error = ui.label("Estimation error: unavailable")
+            bias_button = ui.button(
+                "Set unloaded torque bias",
+                icon="exposure_zero",
+                on_click=lambda: self._action(
+                    self._runtime.set_force_torque_bias,
+                    "Torque bias set from latest motor feedback",
+                ),
+            ).props("outline")
+            if self._runtime.estimator is None:
+                bias_button.props("disable")
 
     def _build_recording(self) -> None:
         with ui.card().classes("w-full"):
-            ui.label("Data collection").classes("text-lg font-medium")
-            with ui.row().classes("w-full gap-3 items-end"):
-                self._trial_input = ui.number(
-                    "Trial", value=1, min=1, step=1, format="%.0f"
-                ).classes("w-28")
-                self._gt_location_input = ui.input(
-                    "GT contact location [mm] (optional)"
-                ).classes("w-64")
+            ui.label("Force-checkpoint data collection").classes(
+                "text-lg font-medium"
+            )
+            with ui.row().classes("w-full gap-4 items-end"):
+                self._indenter_input = ui.toggle(
+                    {
+                        "sphere_10mm": "10 mm sphere",
+                        "sphere_30mm": "30 mm sphere",
+                    },
+                    value="sphere_10mm",
+                )
+                self._hole_input = ui.toggle(
+                    {str(index): f"Hole {index}" for index in range(1, 7)},
+                    value="1",
+                )
                 self._notes_input = ui.input("Notes (optional)").classes("grow")
                 self._record_button = ui.button(
-                    "Start Recording",
+                    "Start Run",
                     icon="fiber_manual_record",
-                    on_click=self._start_recording,
+                    on_click=self._start_run,
                     color="negative",
                 )
                 self._stop_record_button = ui.button(
-                    "Stop Recording", icon="stop", on_click=self._stop_recording
-                )
-            self._record_label = ui.label("Recorder idle").classes("font-mono text-sm")
+                    "Abort Run",
+                    icon="cancel",
+                    on_click=self._abort_run,
+                ).props("outline")
+            self._sequence_label = ui.label(
+                "Targets: 2 -> 5 -> 10 -> 15 -> 20 N"
+            ).classes("text-lg font-medium")
+            self._record_label = ui.label("Recorder idle").classes(
+                "font-mono text-sm"
+            )
             ui.label(
-                f"Contact PNG: {self._runtime.camera.contact_record_rate_hz:g} Hz "
-                "while Rokubi force is at least "
-                f"{self._runtime.camera.contact_frame_threshold_n:g} N. "
-                + (
-                    f"Each run also stores the preceding "
-                    f"{self._runtime.camera.offline_reference_frame_count} unloaded "
-                    "frames for offline processing."
-                    if self._runtime.camera.offline_contact_enabled
-                    else "No unloaded reference is stored in online-only mode."
-                )
+                "Hole 1 is aligned with distal LED1. Coordinates increase "
+                "proximally: LED1 is 103.6 mm from the motor rotation axis, "
+                "LED pitch is 11 mm, and hole pitch is 10 mm. AK40-10 feedback "
+                "torque and Rokubi force are recorded continuously. Lossless RGB "
+                "is saved only during each stable target-force recording band. "
+                "The run finishes automatically after the 20 N checkpoint; Abort "
+                "deletes the incomplete run."
             ).classes("text-xs text-gray-600")
 
     def _build_plots(self) -> None:
@@ -292,13 +331,11 @@ class ExperimentConsole:
             "Kp/Kd updated",
         )
 
-    def _start_recording(self) -> None:
-        raw_location = str(self._gt_location_input.value or "").strip()
+    def _start_run(self) -> None:
         try:
-            location = None if not raw_location else float(raw_location)
-            path = self._runtime.start_recording(
-                trial=int(self._trial_input.value),
-                contact_location_gt_mm=location,
+            path = self._contact_dataset.start_run(
+                indenter=str(self._indenter_input.value),
+                hole_index=int(self._hole_input.value),
                 notes=str(self._notes_input.value or ""),
             )
         except Exception as error:
@@ -306,13 +343,16 @@ class ExperimentConsole:
             return
         ui.notify(f"Recording {path}", type="positive")
 
-    async def _stop_recording(self) -> None:
+    async def _abort_run(self) -> None:
         try:
-            path = await run.io_bound(self._runtime.stop_recording)
+            aborted = await run.io_bound(self._contact_dataset.abort)
         except Exception as error:
             ui.notify(str(error), type="negative", close_button=True)
             return
-        ui.notify(f"Saved {path}", type="positive")
+        if aborted:
+            ui.notify("Incomplete run aborted and deleted", type="warning")
+        else:
+            ui.notify("No active run", type="info")
 
     @staticmethod
     def _display_status(label: object, text: str) -> None:
@@ -348,6 +388,7 @@ class ExperimentConsole:
                 snapshot.motor_error,
                 snapshot.camera_error,
                 snapshot.ft_error,
+                snapshot.force_estimator_error,
                 snapshot.recorder.error,
             )
             if value
@@ -417,14 +458,59 @@ class ExperimentConsole:
                 )
             self._last_optical_timestamp_ns = optical.timestamp_ns
 
+        estimate = snapshot.force_estimate
+        if estimate is not None:
+            if estimate.valid and estimate.estimated_force_n is not None:
+                self._estimated_force.set_text(
+                    f"Estimated force: {estimate.estimated_force_n:+.3f} N "
+                    f"({estimate.status})"
+                )
+                if snapshot.ft is not None and snapshot.ft.force_normal_n is not None:
+                    error_n = estimate.estimated_force_n - snapshot.ft.force_normal_n
+                    self._estimation_error.set_text(
+                        f"Estimation error: {error_n:+.3f} N"
+                    )
+            else:
+                self._estimated_force.set_text(
+                    f"Estimated force: unavailable ({estimate.status})"
+                )
+                self._estimation_error.set_text("Estimation error: unavailable")
+
         recorder = snapshot.recorder
         duration_s = 0.0
         if recorder.started_ns is not None and recorder.status in {"recording", "saving"}:
             duration_s = (monotonic_ns() - recorder.started_ns) / 1.0e9
+        sequence = self._contact_dataset.snapshot()
+        target = (
+            "complete"
+            if sequence.current_target_n is None
+            else f"{sequence.current_target_n:g} N"
+        )
+        actual = (
+            "--"
+            if sequence.actual_force_n is None
+            else f"{sequence.actual_force_n:.3f} N"
+        )
+        torque = (
+            "--"
+            if sequence.motor_torque_nm is None
+            else f"{sequence.motor_torque_nm:+.4f} N m"
+        )
+        completed = ", ".join(
+            f"{value:g}" for value in sequence.completed_targets_n
+        ) or "none"
+        self._sequence_label.set_text(
+            f"Target {target} | actual {actual} | torque {torque} | "
+            f"state {sequence.sequence_state.name.lower()} | "
+            f"completed [{completed}] N"
+        )
+        if sequence.error:
+            self._fault_label.set_text(" | ".join(errors + [sequence.error]))
         self._record_label.set_text(
             f"{recorder.status} | {recorder.run_id or '--'} | {duration_s:.1f} s | "
             f"motor {recorder.motor_samples} | F/T {recorder.ft_samples} | "
             f"camera {recorder.camera_frames} | optical {recorder.optical_samples} | "
+            f"force {recorder.force_estimates} | "
             + (
                 f"reference {self._runtime.camera.offline_reference_count}/"
                 f"{self._runtime.camera.offline_reference_frame_count} | "
@@ -457,7 +543,7 @@ class ExperimentConsole:
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--channel", default="can0")
+    parser.add_argument("--channel", default="can1")
     parser.add_argument("--motor-id", type=_motor_id, default=13)
     parser.add_argument("--motor-rate-hz", type=float, default=100.0)
     parser.add_argument("--motor-feedback-timeout-s", type=float, default=0.05)
@@ -471,6 +557,27 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--camera-fps", type=int, default=30)
     parser.add_argument("--camera-serial")
     parser.add_argument(
+        "--force-calibration",
+        type=Path,
+        help=(
+            "JSON with region_locations_mm, slopes_n_per_nm, and intercepts_n; "
+            "omitting it disables online force estimation"
+        ),
+    )
+    parser.add_argument("--force-contact-enter-threshold-nm", type=float)
+    parser.add_argument("--force-contact-exit-threshold-nm", type=float)
+    parser.add_argument(
+        "--force-optical-offset-ms",
+        type=float,
+        default=0.0,
+        help="optical timestamp alignment added before motor matching (default: 0)",
+    )
+    parser.add_argument(
+        "--force-maximum-optical-age-ms",
+        type=float,
+        default=100.0,
+    )
+    parser.add_argument(
         "--camera-contact-threshold-n",
         type=float,
         default=0.5,
@@ -479,10 +586,10 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--contact-processing",
         choices=("online", "offline", "both"),
-        default="both",
+        default="offline",
         help=(
             "contact processing path: live only, deferred offline only, or both "
-            "(default: both)"
+            "(default: offline)"
         ),
     )
     parser.add_argument(
@@ -494,13 +601,13 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--offline-reference-frames",
         type=int,
-        default=30,
-        help="rolling unloaded frames copied into each offline-ready run (default: 30)",
+        default=0,
+        help="rolling unloaded frames copied into each run (default: 0)",
     )
     parser.add_argument(
         "--output-root",
         type=Path,
-        default=Path("output/experiments/proprioceptive_force"),
+        default=Path("output/experiments/proprioceptive_contact_dataset"),
     )
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8080)
@@ -522,8 +629,25 @@ def _parse_args() -> argparse.Namespace:
         or args.camera_record_rate_hz <= 0.0
     ):
         parser.error("--camera-record-rate-hz must be finite and positive")
-    if args.offline_reference_frames < 1:
-        parser.error("--offline-reference-frames must be positive")
+    if args.offline_reference_frames < 0:
+        parser.error("--offline-reference-frames must be nonnegative")
+    thresholds = (
+        args.force_contact_enter_threshold_nm,
+        args.force_contact_exit_threshold_nm,
+    )
+    if args.force_calibration is not None and any(value is None for value in thresholds):
+        parser.error(
+            "--force-calibration requires both force contact threshold arguments"
+        )
+    if args.force_calibration is None and any(value is not None for value in thresholds):
+        parser.error("force contact thresholds require --force-calibration")
+    if not math.isfinite(args.force_optical_offset_ms):
+        parser.error("--force-optical-offset-ms must be finite")
+    if (
+        not math.isfinite(args.force_maximum_optical_age_ms)
+        or args.force_maximum_optical_age_ms < 0.0
+    ):
+        parser.error("--force-maximum-optical-age-ms must be finite and nonnegative")
     if not 1 <= args.port <= 65535:
         parser.error("--port must be between 1 and 65535")
     return args
@@ -531,6 +655,15 @@ def _parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = _parse_args()
+    force_estimator = None
+    if args.force_calibration is not None:
+        force_estimator = OnlineForceEstimator(
+            LocationConditionedForceCalibration.from_json(args.force_calibration),
+            contact_enter_threshold_nm=args.force_contact_enter_threshold_nm,
+            contact_exit_threshold_nm=args.force_contact_exit_threshold_nm,
+            optical_to_motor_offset_ns=round(args.force_optical_offset_ms * 1.0e6),
+            maximum_optical_age_ms=args.force_maximum_optical_age_ms,
+        )
     can_io = CanIO(args.channel)
     runtime = ProprioceptiveExperimentRuntime(
         can_io=can_io,
@@ -553,8 +686,10 @@ def main() -> None:
         contact_processing_mode=args.contact_processing,
         camera_record_rate_hz=args.camera_record_rate_hz,
         offline_reference_frame_count=args.offline_reference_frames,
+        force_estimator=force_estimator,
     )
     runtime.start()
+    contact_dataset = ProprioceptiveContactDatasetController(runtime)
 
     @app.get("/proprioceptive-camera.mjpeg")
     async def camera_stream() -> StreamingResponse:
@@ -589,21 +724,30 @@ def main() -> None:
         )
 
     def build_page() -> None:
-        ExperimentConsole(runtime)
+        ContactDatasetConsole(runtime, contact_dataset)
 
-    app.on_disconnect(runtime.disable_motor)
-    app.on_shutdown(runtime.shutdown)
+    def disconnect() -> None:
+        contact_dataset.abort()
+        runtime.disable_motor()
+
+    app.on_disconnect(disconnect)
+
+    def shutdown() -> None:
+        contact_dataset.shutdown()
+        runtime.shutdown()
+
+    app.on_shutdown(shutdown)
     try:
         ui.run(
             root=build_page,
             host=args.host,
             port=args.port,
-            title="LUMO proprioceptive force experiment",
+            title="LUMO proprioceptive contact dataset",
             show=not args.no_browser,
             reload=False,
         )
     finally:
-        runtime.shutdown()
+        shutdown()
 
 
 if __name__ in {"__main__", "__mp_main__"}:

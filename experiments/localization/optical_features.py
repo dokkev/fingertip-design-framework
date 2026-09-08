@@ -185,6 +185,38 @@ def extract_dense_response_profile(
     )
 
 
+def extract_positive_response_profile(
+    canonical_rgb: np.ndarray,
+    unloaded_canonical_rgb: np.ndarray,
+    config: DenseProfileConfig,
+) -> np.ndarray:
+    """Return the positive unloaded-relative red response along the finger.
+
+    This keeps the signed physical convention needed by online force estimation:
+    only pixels brighter than the explicitly acquired unloaded reference
+    contribute.  The transverse reduction and optional longitudinal smoothing
+    use the same deterministic implementation as the other dense profiles.
+    """
+
+    image = _canonical_rgb(canonical_rgb)
+    unloaded = _canonical_rgb(unloaded_canonical_rgb)
+    if unloaded.shape != image.shape:
+        raise ValueError("canonical_rgb and unloaded_canonical_rgb must match")
+    if config.mode != "top10_red":
+        raise ValueError("positive response extraction requires mode='top10_red'")
+    columns = _transverse_slice(image.shape[1], config)
+    response = np.maximum(
+        image[:, columns, 0].astype(np.float32)
+        - unloaded[:, columns, 0].astype(np.float32),
+        0.0,
+    )
+    profile = _reduce_transverse(response, config)
+    return _smooth_longitudinal(
+        profile,
+        config.longitudinal_smoothing_sigma_px,
+    )
+
+
 def mean_center_l2(profile: np.ndarray) -> np.ndarray:
     """Mean-center and normalize one profile to unit Euclidean norm."""
 
@@ -215,6 +247,7 @@ __all__ = [
     "DenseProfileConfig",
     "extract_dense_profile",
     "extract_dense_response_profile",
+    "extract_positive_response_profile",
     "mean_center_l2",
     "robust_zscore",
 ]

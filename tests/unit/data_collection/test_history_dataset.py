@@ -150,7 +150,7 @@ def test_session_metadata_persists_history_format_and_trajectory(
         "preload_settle_s": 0.5,
         "preload_tolerance_n": 1.0,
         "ramp_rate_n_per_s": 2.0,
-        "release_max_force_n": 1.0,
+        "release_max_force_n": 2.0,
         "release_settle_s": 0.5,
     }
 

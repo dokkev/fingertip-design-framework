@@ -8,11 +8,11 @@ import time
 import cv2
 import numpy as np
 
+from experiments.force_estimation import OnlineForceEstimate
 from experiments.data_collection.proprioceptive_force import (
     CameraAcquisition,
     CameraContactWorker,
     FTAcquisition,
-    ForceEstimator,
     FTSensorWorker,
     MotorAcquisition,
     MotorImpedanceWorker,
@@ -30,10 +30,6 @@ def _wait_until(predicate, timeout_s: float = 1.0) -> None:
         if time.monotonic() >= deadline:
             raise AssertionError("timed out waiting for worker state")
         time.sleep(0.002)
-
-
-def test_uncalibrated_force_estimator_returns_none() -> None:
-    assert ForceEstimator().predict(0.2, 15.0) is None
 
 
 def test_camera_contact_gate_uses_normal_force_or_ft_vector_magnitude() -> None:
@@ -74,6 +70,22 @@ def test_recorder_writes_independent_streams_and_lossless_rgb(tmp_path: Path) ->
             (1.0, 2.0, 3.0, 2.0, 1.0),
         )
     )
+    recorder.submit_force_estimate(
+        OnlineForceEstimate(
+            timestamp_ns=12,
+            valid=True,
+            contact=True,
+            estimated_force_n=2.5,
+            torque_nm=0.3,
+            torque_bias_nm=0.1,
+            contact_location_mm=20.0,
+            optical_weights=(0.0, 0.0, 1.0, 0.0, 0.0),
+            optical_timestamp_ns=11,
+            optical_age_ms=1.0e-6,
+            status="force estimate ready",
+            processing_time_ms=0.01,
+        )
+    )
     image = np.zeros((4, 6, 3), dtype=np.uint8)
     image[..., 0] = 73
     recorder.submit_camera(
@@ -84,6 +96,7 @@ def test_recorder_writes_independent_streams_and_lossless_rgb(tmp_path: Path) ->
     assert sorted(path.name for path in run_path.iterdir()) == [
         "camera",
         "camera_timestamps.csv",
+        "force_estimate.csv",
         "ft.csv",
         "metadata.json",
         "motor.csv",
@@ -105,6 +118,7 @@ def test_recorder_writes_independent_streams_and_lossless_rgb(tmp_path: Path) ->
     assert metadata["status"] == "complete"
     assert metadata["sample_counts"] == {
         "camera": 1,
+        "force_estimate": 1,
         "ft": 1,
         "motor": 1,
         "optical": 1,
@@ -112,6 +126,12 @@ def test_recorder_writes_independent_streams_and_lossless_rgb(tmp_path: Path) ->
     assert "git_commit" not in metadata
     assert "morphology" not in metadata
     assert "material" not in metadata
+    with (run_path / "force_estimate.csv").open(
+        newline="", encoding="utf-8"
+    ) as stream:
+        force_rows = list(csv.DictReader(stream))
+    assert force_rows[0]["estimated_force_N"] == "2.5"
+    assert force_rows[0]["optical_timestamp_ns"] == "11"
 
 
 class _FailingTracker:

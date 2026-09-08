@@ -99,6 +99,8 @@ Final physical observations have a separate read-only upload path:
 ```text
 contact_dataset + contact_history PNG sessions
                     ↓
+output/compress/export_compact_physical_data.py
+                    ↓
 experiments.analysis.compact_export
                     ↓
 contact_dataset.h5 + contact_history.h5
@@ -953,16 +955,43 @@ non-finite state, or nonzero drive error terminates the loop; termination sends
 zero torque and exits motor control mode. The caller retains ownership of the
 injected `AK40_10` and `CanIO` objects.
 
-`scripts/ak40_10_torque_gui.py` is a NiceGUI-only frontend over that headless
+`output/ak40_10_torque_gui.py` is a NiceGUI-only frontend over that headless
 session. It renders measured shaft position as a clock hand and exposes start,
 zero-torque, stop, and bounded torque-target controls. The browser UI never
 performs CAN I/O. Browser disconnect/reconnect and server shutdown invoke the
 same headless stop path. The default zero torque limit is monitor-only; nonzero
 torque requires an explicit operator-approved CLI limit.
 
-`experiments/data_collection/proprioceptive_force.py` owns the separate
-headless runtime for manual proprioceptive force experiments. Its motor worker
-is passive until an explicit operator action, then periodically sends the one
+`experiments/force_estimation/` owns the headless online force estimator. Its
+constructor only validates supplied immutable location-conditioned affine
+torque-to-force models. Explicit geometry initialization takes the median of
+unloaded RGB frames and reuses `detect_fingertip_boundary()`, the standard
+256-by-128 full-silhouette canonical map with 4% transverse inset, and
+`warp_to_canonical()`. Explicit baseline acquisition freezes a canonical
+unloaded reference and robust per-region noise thresholds. Live frames produce
+positive unloaded-relative red response, a transverse brightest-10% profile, a
+three-frame causal median, and five triangular finger-relative spatial weights.
+No label-trained localization is involved. No photometric normalization is
+currently applied; fixed camera settings and the explicit unloaded subtraction
+remain the acquisition contract.
+
+`OnlineForceEstimator` retains a bounded history of immutable optical states.
+For a motor timestamp it selects the newest optical state whose aligned
+timestamp is not in the future, rejects it after the configured maximum age,
+removes the explicitly supplied unloaded torque bias, evaluates every fixed
+affine force model, and blends those predictions by the optical weights. A
+motor-torque hysteresis gate owns loaded/unloaded state; a valid unloaded result
+is exactly 0 N. The estimator performs no hardware I/O, GUI calls, recording,
+or online fitting. Image work occurs outside its short publication lock, so the
+motor-side fusion remains nonblocking. Canonical geometry is currently frozen
+between explicit reinitialization requests; automatic lightweight tracking and
+confidence-triggered re-registration remain future hardware validation work.
+Explicit reinitialization preserves an existing canonical unloaded reference
+and never changes force calibration.
+
+`experiments/data_collection/proprioceptive_force.py` owns the headless
+acquisition runtime used by the force-checkpoint contact dataset. Its motor
+worker is passive until an explicit operator action, then periodically sends the one
 fixed MIT impedance command (`q=0`, `dq=0`, `tau_ff=0`) with bounded Kp/Kd and
 records each returned `MotorState`. A Rokubi worker drains the concrete Bota
 driver's timestamped native sample history without tying acquisition to the UI
@@ -970,38 +999,74 @@ rate. A camera worker acquires and previews RGB independently of contact
 inference. Its `online`, `offline`, and `both` modes optionally apply
 `LiveLedContactTracker`, a stateful integration of the existing fingertip
 boundary, five-LED detector, rigid LK tracking, unloaded baseline, and contact
-observer. An online detector exception is represented as an unavailable optical
-sample and does not stop camera or F/T acquisition. Each worker timestamps or
+observer. When an `OnlineForceEstimator` is supplied, the camera worker also
+feeds it timestamped RGB and the motor worker feeds it native-rate torque. An
+estimator or online detector exception is represented as unavailable state and
+does not stop raw camera, motor, or F/T acquisition. Each worker timestamps or
 preserves acquisition time on the host monotonic clock.
 
 The runtime publishes one small locked latest-state snapshot to
-`scripts/collect_proprioceptive_force.py`. That NiceGUI page only displays
+`scripts/collect_proprioceptive_contact_dataset.py`. That NiceGUI page only displays
 snapshots and queues explicit Set Zero, Enable, Disable, tare, calibration, and
 recording actions; it never performs a device read or runs the motor loop. A
 fixed browser MJPEG endpoint streams the latest preview JPEG without repeatedly
-replacing an image element's source, avoiding UI blanking between frames.
-`ForceEstimator` is deliberately uncalibrated and returns no estimate. It is
-the narrow future boundary for comparing torque-only against torque plus
-optical-location force estimates after measured calibration exists.
+replacing an image element's source, avoiding UI blanking between frames. The
+console can optionally load measured force-calibration JSON, displays immutable
+force-estimator snapshots, and exposes explicit geometry, unloaded-baseline,
+and motor-torque-bias actions. Estimation logic remains independent of NiceGUI.
 
 `ProprioceptiveRecorder` owns one producer/consumer writer thread and a separate
 native-rate stream for motor, Rokubi, optical inference, and camera data. Motor,
 Rokubi, and optical rows are always recorded. To bound data volume, original
 lossless contact PNGs are admitted at 5 Hz by default while the latest Rokubi
 contact force is at or above the configured threshold (0.5 N by default); the
-optical detector never gates its own evidence. Offline-ready modes also copy the
-30 most recent below-threshold frames into each run as an independent
-`unloaded_reference` set. `camera_timestamps.csv` distinguishes reference and
+optical detector never gates its own evidence. When configured with a positive
+reference count, offline-ready acquisition also copies the latest
+below-threshold frames into each run as an independent `unloaded_reference` set;
+the contact-dataset entry point defaults this count to zero.
+`camera_timestamps.csv` distinguishes reference and
 contact frames and stores the exact force and F/T timestamp used for each
 admission decision. A run contains `motor.csv`, `ft.csv`, `optical.csv`,
-`camera_timestamps.csv`, selected lossless PNG frames, and minimal
-`metadata.json`. `scripts/process_proprioceptive_contact_offline.py` replays
+`force_estimate.csv`, `camera_timestamps.csv`, selected lossless PNG frames,
+and minimal `metadata.json`. `force_estimate.csv` records estimator validity,
+contact state, force, optical timestamp/age, weights, and status at the motor
+sample rate when an estimator is configured; otherwise it contains only its
+header. `scripts/process_proprioceptive_contact_offline.py` replays
 those images, or their compact HDF5 representation, through the same
 `LiveLedContactTracker` and writes the derived `optical_offline.csv` without
 changing raw acquisition files. Recording locks Kp/Kd and does not store
 material, morphology, or Git identity. Stopping admission precedes a complete
 queue flush, so samples cannot cross run boundaries. GUI preview JPEG encoding
 is visualization-only and never becomes a recorded camera source.
+
+`experiments/data_collection/proprioceptive_contact_dataset.py` adds the
+headless force-checkpoint experiment without duplicating any hardware worker.
+One run preselects `sphere_10mm` or `sphere_30mm` and Hole 1--6, then advances
+through measured-force checkpoints at 2, 5, 10, 15, and 20 N using the shared
+`ForceSequenceController`. The Rokubi signal drives the state machine; online
+LED/contact inference never gates acquisition. Lossless RGB frames are admitted
+only while the controller is in the stable `RECORDING` phase and the image's
+paired Rokubi force remains inside the current target band. The configured
+camera rate still bounds those admitted frames, and this dataset path copies no
+unloaded-reference frames by default. `motor.csv` retains every native
+AK40-10 MIT feedback sample, including `torque_Nm`, while `ft.csv` and
+`camera_timestamps.csv` retain their host monotonic timestamps and the latter
+also retains RealSense device time and frame number. `force_sequence.csv`
+records every state-machine camera/F-T observation with camera and paired F/T
+timestamps, actual force, target band, events, and the latest timestamped motor
+torque for convenient offline joins.
+The full independent native streams remain the measurement authority.
+
+The same module owns the fixed fixture geometry recorded in every run. Distance
+is measured from the motor rotation axis and increases proximally. LED1 is the
+distal LED at 103.6 mm, LEDs 1--5 have 11 mm pitch, and LED5 is most proximal.
+Hole1 is aligned with LED1 and Holes 1--6 have 10 mm pitch, corresponding to
+contact coordinates 0--50 mm relative to Hole1. This is immutable experimental
+metadata, not an image-derived calibration. The dedicated NiceGUI entry point is
+`scripts/collect_proprioceptive_contact_dataset.py`; it starts passive, requires
+the same explicit motor zero/enable actions, automatically stops after 20 N,
+and deletes the current incomplete run on Abort. There is no continuous/manual
+recording mode in this entry point.
 
 `experiments/analysis/proprioceptive_h5.py` owns the transport copy of one
 proprioceptive run. It concatenates independently encoded full-resolution JPEG
@@ -1268,7 +1333,7 @@ History scalars are first reduced across eligible measurement cycles within
 each independent contact run; morphology medians and quartiles are then formed
 only from those run-level values. It does not label any result as a specific
 material mechanism.
-`scripts/analyze_contact_history.py` is its command-line entry point.
+`output/analyze_contact_history.py` is its command-line entry point.
 
 `experiments/localization/` owns shared pure NumPy/OpenCV algorithms for the
 physical fingertip. Offline characterization and online execution import these
@@ -1421,7 +1486,12 @@ downsampling, embeds all source JSON/CSV text, and atomically writes two HDF5
 files. This is a transport artifact, not a new metric or replacement for the
 full-resolution PNG archive.
 
-`scripts/analyze_morphologies.py` accepts any positive number of format-v3
+The user-facing compression entry points live together under
+`output/compress/`. They contain only CLI argument handling and delegate
+the artifact implementation to `experiments.analysis`; generated artifacts
+continue to live under the repository-level `output/` tree.
+
+`output/analyze_morphologies.py` accepts any positive number of format-v3
 session directories. Morphology, material, specimen, camera, force, indenter,
 hole, and repetition identity comes exclusively from stored dataset metadata.
 Camera-setting differences and acquisition coverage errors are reported rather
@@ -1494,6 +1564,21 @@ Its fixture coordinates are the corrected 0, 10, 20, 30, 40, and 50 mm stops.
 It does not divide by force, interpret Unloaded as 0 N, alter Figure 5, or define
 a production or paper metric.
 
+`validation/optomech/segmentation_free_contact_localization.py` is an isolated,
+read-only contact-location feasibility study for completed proprioceptive-force
+runs. It deliberately avoids fingertip segmentation, per-location templates,
+and a separately acquired calibration recording. It compares direct horizontal
+contactor-edge geometry, a visible contactor marker, frame-only and in-run
+unloaded-relative green response, and previous-frame image change. A four-circle
+lattice detected from the scene supplies only an automatic image-relative
+longitudinal scale. The frame-only edge-pair method is the primary
+zero-calibration candidate when the contactor is visible. Frame-only optical
+cues and in-run unloaded-reference methods remain ablations for occluded-
+contactor use. Because the
+current `run_001` metadata contains no location ground truth, the study reports
+coverage and rank agreement against a synchronized motor-torque/F/T moment-arm
+proxy and must not report absolute millimetre localization accuracy.
+
 `figures/fig5/` owns the self-contained physical-hardware Figure 5. Its
 configuration names the six canonical raw datasets directly under
 `output/contact_dataset/`: Solaris and Dragon Skin `baseline`, `flat_opt`, and
@@ -1509,35 +1594,49 @@ the exact archived sources and all unloaded captures remain separate. The
 configuration maps the six
 distal-to-proximal acquisition stops to physical contact coordinates at 10 mm
 spacing. This measured fixture spacing is separate from the fingertip's 11 mm
-LED pitch. Panels (a), (b), and (c) share three morphology rows: Baseline,
-Opt-Flat, and Opt-Curved. Panel (a) alone defines those row labels. Materials
-and physical test conditions run across columns, so each morphology can be
-followed horizontally through image, optical response, and decoding result.
-Panels (b) and (c) each use the same four columns: Solaris 10 mm, Solaris
-30 mm, Dragon Skin 10 mm, and Dragon Skin 30 mm. Panel (b) reserves a left
-axis-title gutter so its shared contact-coordinate title remains separate from
-the first heatmap's numeric ticks. A vertical separator at twice the internal
-cell-border weight distinguishes the two material groups. The
-outer 0.42/0.29/0.29 width allocation keeps the image atlas dominant while
-giving the two quantitative panels equal weight. Narrow inter-panel gutters and
-a compact row-label column enlarge the atlas images without changing their
-fixed crop. Single outer axis labels preserve space for square data cells.
+LED pitch. All three panels use one shared row grammar: Solaris occupies the
+upper Baseline/Opt-Flat/Opt-Curved block and Dragon Skin occupies the lower
+block. Panel (a) alone owns the
+figure-wide row header: a narrow rotated material label spans each three-row
+block, while regular-weight morphology labels and short gray/teal/orange
+identity bars occupy the next semantic column after a narrow whitespace
+spacer. Panels (b) and (c) omit repeated row labels
+and inherit their identity through exact row alignment with panel (a).
+`figures/fig5/table_layout.py` owns these common row slots and
+the small set of structural label helpers. Panel (a) uses four columns (zero
+load and the same three representative contact positions); panels (b) and (c)
+use only the 10 and 30 mm sphere columns. Each panel shows its condition headers
+once above both material blocks. The final double-column composition uses one
+horizontal row: the raw-image atlas in panel (a), the spatial signal maps in
+panel (b), and the confusion matrices in panel (c). Single outer axis labels
+preserve data-cell area, use the shared paper axis-label size, and sit against
+their owning data block rather than floating in an inter-panel gap. The panel
+(b) and (c) y-axis titles occupy dedicated merged table columns: those cells
+keep each title visibly attached to its own panel without clipping the text.
+Panel (c) labels the true coordinate as contact-location ground truth and places
+that title toward the confusion matrices rather than the inter-panel gutter.
+Each panel's header, data, and shared x-axis-title area has one thin neutral
+bounding box in place of table row rules. The three boxes share aligned top and
+bottom edges. Panel (a)'s shared material and morphology labels remain outside
+its box, so the labels continue to act as the figure-wide row header.
 `fig5a.py`, `fig5b.py`, and `fig5c.py` are import-only panel plotting tools:
 they accept a caller-owned Matplotlib figure and subplot specification and do
 not select a backend, create standalone figures, or write panel-level images.
 `fig5a.py` selects auditable raw 10 mm-sphere, repetition-1, 15 N frames at the
 representative 0, 20, and 40 mm contact positions and one temporally nearest
-real unloaded frame per specimen. The three morphology rows each place a
-four-image Solaris strip beside the matching four-image Dragon Skin strip.
-Every cell
-uses the same fixed camera-coordinate crop. Every Solaris cell receives the
+real unloaded frame per specimen. Its six table rows place the three Solaris
+morphologies above the matching three Dragon Skin morphologies.
+Every cell uses the same fixed, context-preserving camera-coordinate crop and
+rotates it 90 degrees counterclockwise so the fingertip runs horizontally. The
+crop aspect fills the shared row height while retaining the fingertip, indenter
+shaft, and nearby fixture. Every Solaris cell receives the
 same fixed +0.275 EV display exposure, while every Dragon Skin cell receives
 the same fixed +0.525 EV display exposure for print readability. The renderer
 performs no per-cell
 normalization or adaptive enhancement, and the fixed material-level display
 exposure is recorded in the selection manifest. Each loaded atlas cell overlays
 the same thin mechanics-red arrow on the physical indenter shaft to expose its
-right-to-left loading direction; unloaded cells remain unannotated.
+top-to-bottom loading direction; unloaded cells remain unannotated.
 `fig5b.py` reads the compact Solaris and Dragon Skin hold profiles from
 `longitudinal_profiles.npz`; it does not consume fitted load-response slopes.
 The separately repeated Dragon Skin baseline and angled-opt 30 mm acquisitions
@@ -1548,12 +1647,18 @@ remain sourced from their earlier complete sessions.
 Within each independent repetition it subtracts the 2 N profile from the 15 N
 profile, partitions the normalized distal-to-proximal span into six fixed
 regions, and computes one RMS change magnitude per region before taking the
-median across five repetitions. Its three morphology rows cross the four
-material-and-indenter columns shared with panel (c). All 12 measured 6-by-6
-matrices share a zero-based Viridis scale in camera DN. One outlined white `x`
-per contact row marks its largest regional change without connecting the
-markers or adding a fitted trend. The paired per-repetition values and plotted
-medians are exported to `fig5b_region_response.csv`. The two Dragon Skin
+median across five repetitions. Its six material/morphology rows cross the two
+indenter columns shared with panel (c). The analysis and audit
+retain all six contact positions. The renderer displays every complete
+6-contact by 6-region response as a rectangular Viridis signal map without
+cell annotations or a ridge overlay. All 12 subplots share one zero-based
+camera-DN color scale and one panel-wide horizontal colorbar. Contact-location
+coordinates run horizontally to match panel (a), with only 0, 20, and 40 mm
+shown on the bottom row. Longitudinal regions run vertically, with only R1, R3,
+and R6 shown on the left column. A compact panel subtitle states that every
+displayed median uses `n=5` independent re-contacts per location. The paired
+per-repetition values and all six location medians remain exported to
+`fig5b_region_response.csv`. The two Dragon Skin
 angled-opt indenter conditions are populated from the completed physical
 dataset.
 `experiments.analysis.fig5c_decoder` owns the shared Figure 5(c)/Figure 6
@@ -1565,8 +1670,8 @@ entire repetition index being tested, so no held-out run contributes to any
 class template. The same split also evaluates a scalar-only `||delta z||_2`
 observer. Figure 5(c) consumes the spatial decoder's per-sample output directly
 and builds one row-normalized 6-by-6 confusion matrix for every
-material/indenter/morphology condition. Figure 5(c) uses the same three
-morphology rows and four material-and-indenter columns as panel (b), so all 12
+material/indenter/morphology condition. Figure 5(c) uses the same six unlabeled
+data rows and two indenter columns as panel (b), so all 12
 matrices align with the corresponding measured specimens across the composite
 figure. The matrices share one 0--100% sequential color
 scale and annotate every nonzero cell with its equivalent row-normalized value
@@ -1575,26 +1680,30 @@ white text on the darkest cells. Zero cells, scalar accuracy subtitles, and the
 redundant colorbar remain omitted to keep the small matrices legible; the
 caption states that cell values are row-normalized decoding frequencies. A
 dedicated left-side label column owns the single shared true-location axis
-title without competing with panel (b)'s colorbar label. True-location ticks
-appear only on the left matrix column, and
-predicted-location ticks appear only on the bottom matrix row.
+title without competing with panel (b)'s axis label. True-location ticks appear
+only on the left indenter column, and predicted-location ticks appear only on
+the final morphology row; both show only 0, 20, and 40 mm labels while the
+underlying confusion matrices retain all six contact classes. The wider cells
+support 6 pt nonzero annotations
+without a dedicated colorbar.
+The panel subtitle reports `n=30` held-out predictions per matrix, comprising
+five independent re-contact samples at each of six true locations; construction
+fails if any condition does not match that sample count.
 The shared decoder output retains every per-sample prediction and the raw
 condition confusion tables for audit and appendix use.
 Neighboring-location accuracy, confusion counts, margins, every original
 per-sample prediction, and baseline-relative changes remain available in the
 shared compact analysis outputs. The separate spatial-distinguishability ratio
 remains in Figure 6(b).
-`experiments.analysis.plot_fig5c` and its convenience entry point
-`figures/fig5/fig5c_confusion_exploration.py` render the same aligned confusion
-table independently below `figures/fig5/exploration/`. They reuse the
-existing held-out prediction table and do not rerun or alter the decoder unless
-the caller explicitly requests recomputation.
-`fig5.py` composes these panels with nested
-Matplotlib GridSpecs at the exact 7.16-inch double-column width and a 2.18-inch
-height. The final PDF
+`fig5.py` composes these panels with nested Matplotlib GridSpecs at the exact
+7.16-inch double-column width and a 4.35-inch height. Panels (a), (b), and (c)
+form a single horizontal row with approximate width shares of 38%, 29%, and
+33%. The `--candidate` option writes the table-layout preview without replacing
+the canonical manuscript outputs. The final PDF
 embeds raw atlas images as raster content while retaining all axes, heatmaps,
-labels, and annotations as native Matplotlib artists; it never stitches
-rendered panel screenshots. It writes `fig5_final.pdf` and `fig5_final.png`.
+confusion matrices, labels, and annotations as native Matplotlib artists; it never stitches
+rendered panel screenshots. It writes the sole manuscript outputs `fig.pdf` and
+`fig.png`; obsolete standalone panel and exploration renders are not retained.
 
 `figures.fig6.fig6` is the sole Figure 6 renderer. It composes the current
 analyses at the exact 7.16-inch IEEE double-column width in a 2-by-3 grid.
@@ -1645,7 +1754,7 @@ Dense template inference is a position estimate conditional on contact being
 established by an external force or proprioceptive signal; it is not an
 optical contact/no-contact classifier.
 
-`scripts/live_fingertip_boundary.py` displays the RGB frame, paired-LSD prior,
+`scripts/live_contact_localization.py --view boundary` displays the RGB frame,
 raw selected GrabCut component, final emissive mask, smooth closed contour, and
 the existing red-detector LED centers and response ROIs. It also reports pad
 width, mask area, geometry scale, and segmentation runtime. It writes no files.
@@ -1714,7 +1823,7 @@ ablation. It segments the unloaded reference once, then compares the historical
 the production 256 x 128 full-silhouette map with one fixed descriptor. It does
 not tune the production canonical implementation.
 
-`scripts/live_contact_localization.py` is the concrete online assembly. It
+`scripts/live_contact_localization.py --view contact` is the concrete online assembly. It
 discards 30 warmup frames without changing the D435's default automatic
 photometric controls, then collects 30 fixed-camera frames for global
 segmentation, canonical-map construction, and LED geometry. This expensive

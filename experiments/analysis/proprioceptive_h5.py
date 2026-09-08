@@ -20,6 +20,8 @@ _SOURCE_FILENAMES = (
     "motor.csv",
     "ft.csv",
     "optical.csv",
+    "force_estimate.csv",
+    "force_sequence.csv",
     "optical_offline.csv",
     "camera_timestamps.csv",
 )

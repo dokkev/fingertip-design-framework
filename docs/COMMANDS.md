@@ -58,7 +58,7 @@ Launch the NiceGUI torque/state dashboard in zero-torque monitor-only mode:
 
 ```bash
 conda run --no-capture-output -n lit \
-  python -u scripts/ak40_10_torque_gui.py \
+  python -u output/ak40_10_torque_gui.py \
     --channel can0 \
     --motor-id 13 \
     --max-abs-torque-nm 0.0
@@ -89,56 +89,82 @@ finally:
     session.stop()
 ```
 
-## Proprioceptive force experiment
+## Proprioceptive contact-dataset experiment
 
-Launch the integrated NiceGUI experiment console with the current AK40-10 at
-decimal ID `13`, D435 RGB stream, and Bota Rokubi:
+Launch the force-checkpoint NiceGUI collector. Its hardware defaults use
+`can1`, decimal motor ID `13`, a 1920 x 1080 D435 stream, offline contact
+processing, and output below
+`output/experiments/proprioceptive_contact_dataset/`:
 
 ```bash
 conda run --no-capture-output -n lit \
-  python -u scripts/collect_proprioceptive_force.py \
-    --channel can0 \
-    --motor-id 13 \
+  python -u scripts/collect_proprioceptive_contact_dataset.py \
     --bota-port /dev/ttyUSB0 \
     --normal-axis fz \
-    --normal-sign 1 \
-    --contact-processing both
+    --normal-sign 1
 ```
 
-Use `--normal-axis` and `--normal-sign` only after checking the physical Rokubi
-mount. Omitting `--normal-axis` preserves all six raw axes but deliberately
-shows normal force as unavailable. The default Kp and Kd are both zero; set and
-apply experimentally approved gains in the page before enabling the actuator.
-The motor worker runs at 100 Hz by default and sends only
-`q=0 rad`, `dq=0 rad/s`, the selected Kp/Kd, and `tau_ff=0 N m` after the
-operator presses `Enable`. Launching the process never enables or zeros the
-motor. Browser disconnect and application shutdown request motor disable.
+Confirm the physical Rokubi axis/sign before using those two options. In the
+page, explicitly set motor zero, apply approved Kp/Kd, and enable the motor.
+Then click the 10 or 30 mm sphere and Hole 1--6 before `Start Run`. The page
+guides measured force through 2, 5, 10, 15, and 20 N and finishes the run
+automatically. `Abort Run` discards the current incomplete run. Online contact
+localization is disabled by default for this entry point and is not an
+acquisition gate. Original RGB frames are written only during the stable
+recording interval of each target-force band; this path does not copy rolling
+unloaded-reference frames by default. Motor feedback and Rokubi samples remain
+continuous from `Start Run` through automatic completion regardless of whether
+an image is admitted.
 
-The default `--contact-processing both` runs the live five-LED pipeline while
-also preserving an offline-ready image set. Use `--contact-processing offline`
-when live detection is unreliable: camera, motor, and Rokubi acquisition remain
-active while the GUI reports that online contact is deferred. `online` keeps
-only the live path. An online detector error never terminates camera acquisition.
+Each completed run contains the ordinary `motor.csv`, `ft.csv`,
+`camera_timestamps.csv`, camera frames, and metadata plus
+`force_sequence.csv`. `motor.csv.timestamp_ns` and `torque_Nm` are the native
+motor feedback record. `ft.csv.timestamp_ns` is the host monotonic force time.
+`camera_timestamps.csv` stores host monotonic time, RealSense device time, frame
+number, and the F/T timestamp paired to the image. `force_sequence.csv` carries
+the same monotonic time basis together with target force, actual force, state,
+and the latest motor timestamp/torque. Metadata records the fixture prior:
+LED1 at 103.6 mm from the rotation axis, 11 mm LED pitch, Hole1 aligned with
+LED1, 10 mm hole pitch, and distal LED1 through proximal LED5 ordering.
 
-In `both` or `offline` mode, start recording only after the fingertip has been
-unloaded long enough to fill the rolling reference. Each run receives the latest
-30 below-threshold frames as `unloaded_reference`. Contact RGB is then saved as
-lossless PNG at 5 Hz by default while the latest Rokubi contact force is at least
-0.5 N. Override these settings with `--offline-reference-frames`,
-`--camera-record-rate-hz`, and `--camera-contact-threshold-n`. When a normal axis
-is configured, the gate uses its absolute value; otherwise it uses the raw
-three-axis force-vector magnitude. `camera_timestamps.csv` identifies each row
-as `unloaded_reference` or `contact` and stores the force value and F/T timestamp
-used by the admission decision.
-The Start Recording action is rejected until all configured reference frames are
-available, and the GUI shows the current reference count.
+Online optical-conditioned force estimation is opt-in because its measured
+calibration and contact thresholds are experiment-specific. Supply JSON with
+fixed coefficients in this shape:
+
+```json
+{
+  "region_locations_mm": [0, 10, 20, 30, 40],
+  "slopes_n_per_nm": [0, 0, 0, 0, 0],
+  "intercepts_n": [0, 0, 0, 0, 0]
+}
+```
+
+The zero coefficients illustrate the file shape only; replace them with the
+measured one-time calibration. Launch with explicitly selected motor-torque
+hysteresis thresholds:
+
+```bash
+conda run --no-capture-output -n lit \
+  python -u scripts/collect_proprioceptive_contact_dataset.py \
+    --force-calibration path/to/measured_force_calibration.json \
+    --force-contact-enter-threshold-nm ENTER_NM \
+    --force-contact-exit-threshold-nm EXIT_NM
+```
+
+Thresholds must satisfy `ENTER_NM > EXIT_NM >= 0`. The optical-to-motor offset
+defaults to zero and maximum optical age defaults to 100 ms; configure them with
+`--force-optical-offset-ms` and `--force-maximum-optical-age-ms` only from
+measured timing evidence. After launch, keep the finger unloaded and press
+`Recalibrate geometry`, then `Acquire unloaded baseline`, and finally `Set
+unloaded torque bias`. None runs automatically. Geometry and baseline each use
+30 frames; live optical response uses a causal three-frame median.
 
 After an offline-ready run, execute the same detector on the stored observations:
 
 ```bash
 conda run --no-capture-output -n lit \
   python -u scripts/process_proprioceptive_contact_offline.py \
-    output/experiments/proprioceptive_force/run_001
+    output/experiments/proprioceptive_contact_dataset/run_001
 ```
 
 This creates `run_001/optical_offline.csv`. It does not alter the raw PNGs,
@@ -149,8 +175,8 @@ Package a completed run into one upload-sized HDF5 artifact:
 
 ```bash
 conda run --no-capture-output -n lit \
-  python -u scripts/export_proprioceptive_h5.py \
-    output/experiments/proprioceptive_force/run_001
+  python -u output/compress/export_proprioceptive_h5.py \
+    output/experiments/proprioceptive_contact_dataset/run_001
 ```
 
 The default output is the sibling file `run_001.h5`. It preserves every saved
@@ -167,12 +193,31 @@ The offline detector accepts either representation directly:
 ```bash
 conda run --no-capture-output -n lit \
   python -u scripts/process_proprioceptive_contact_offline.py \
-    output/experiments/proprioceptive_force/run_001.h5
+    output/experiments/proprioceptive_contact_dataset/run_001.h5
 ```
 
 For HDF5 input the default derived output is the sibling
 `run_001_optical_offline.csv`. Verify an artifact without processing contact via
-`scripts/export_proprioceptive_h5.py RUN.h5 --verify`.
+`output/compress/export_proprioceptive_h5.py RUN.h5 --verify`.
+
+Compare segmentation-free contact-location cues on a completed proprioceptive
+run without training contact-location templates or acquiring a separate
+calibration recording:
+
+```bash
+conda run --no-capture-output -n lit \
+  python -u validation/optomech/segmentation_free_contact_localization.py \
+    --run output/experiments/proprioceptive_contact_dataset/run_001
+```
+
+This read-only ablation compares direct contactor edges, a visible marker,
+green optical change, and temporal image change. The `auto_reference` variants
+use unloaded observations already contained in the same run; the frame-only
+variants require no unloaded reference. `run_001` has no contact-location ground
+truth, so its reported rank agreement uses the synchronized motor-torque/F/T
+moment-arm estimate only as an evaluation proxy, not as millimetre ground truth.
+CSV and PNG/PDF diagnostics are written beneath
+`output/validation/segmentation_free_contact_localization/run_001/`.
 
 Runs are stored by default under:
 
@@ -183,13 +228,14 @@ output/experiments/proprioceptive_force/
     ├── motor.csv
     ├── ft.csv
     ├── optical.csv
+    ├── force_estimate.csv
     ├── camera_timestamps.csv
     └── camera/
         ├── frame_000000.png
         └── ...
 ```
 
-All four streams carry host monotonic nanosecond timestamps and are saved
+All streams carry host monotonic nanosecond timestamps and are saved
 independently at their configured rates. Source camera images are lossless PNGs.
 `metadata.json` records the fixed impedance command, Kp/Kd, optional trial
 contact-location ground truth, device information, normal-axis convention, and
@@ -390,7 +436,7 @@ sessions and the six final contact-history sessions:
 
 ```bash
 conda run --no-capture-output -n lit \
-  python -u scripts/export_compact_physical_data.py
+  python -u output/compress/export_compact_physical_data.py
 ```
 
 The command writes `output/upload/contact_dataset.h5`,
@@ -412,7 +458,7 @@ Verify existing artifacts without reopening the PNG datasets:
 
 ```bash
 conda run --no-capture-output -n lit \
-  python -u scripts/export_compact_physical_data.py --verify \
+  python -u output/compress/export_compact_physical_data.py --verify \
     output/upload/contact_dataset.h5 \
     output/upload/contact_history.h5
 ```
@@ -422,7 +468,7 @@ Analyze three same-material history sessions using actual-force branch matching
 
 ```bash
 conda run --no-capture-output -n lit \
-  python -u scripts/analyze_contact_history.py \
+  python -u output/analyze_contact_history.py \
     output/contact_history/2026-09-06_dragon_skin_baseline \
     output/contact_history/2026-09-06_dragon_skin_flat_opt \
     output/contact_history/2026-09-06_dragon_skin_angled_opt \
@@ -516,7 +562,7 @@ results plus the compact, image-free `raw_data_summary`:
 
 ```bash
 conda run --no-capture-output -n lit \
-  python -u scripts/analyze_morphologies.py \
+  python -u output/analyze_morphologies.py \
   output/contact_dataset/Solaris-baseline \
   output/contact_dataset/Solaris-flat-opt \
   --output output/analysis/solaris_compare
@@ -632,11 +678,38 @@ conda run --no-capture-output -n lit \
   python -m figures.fig5.fig5
 ```
 
-Outputs are written under `figures/fig5/` as `fig5_final.pdf` and
-`fig5_final.png`; the auditable panel-A and panel-B tables remain
+Render the shared six-row table-layout candidate without replacing `fig.*`:
+
+```bash
+conda run --no-capture-output -n lit \
+  python -m figures.fig5.fig5 --candidate
+```
+
+This writes `fig5_tablelayout_candidate.pdf/png` beside the final outputs.
+
+Outputs are written under `figures/fig5/` as `fig.pdf` and `fig.png`; the
+auditable panel-A and panel-B tables remain
 `fig5a_selection_manifest.csv` and `fig5b_region_response.csv`. The raw atlas uses
-the 10 mm sphere, repetition 1, and the frame closest to 15 N at five physical
-10 mm-spaced fixture positions (the separate LED pitch remains 11 mm). All
+the 10 mm sphere, repetition 1, and the frame closest to 15 N at three
+representative physical positions: 0, 20, and 40 mm (the separate LED pitch
+remains 11 mm). The 7.16 x 4.35 inch composition places panels (a), (b), and
+(c) in one horizontal row. All three panels use the same six experimental rows:
+Solaris Baseline/Opt-Flat/Opt-Curved above Dragon Skin
+Baseline/Opt-Flat/Opt-Curved. Each panel's header, data, and shared x-axis-title
+area uses one thin neutral bounding box without internal table rules. Panel (a)
+alone owns the figure-wide rotated material labels, morphology labels, their
+paper-color identity bars, and the small separating spacer; these labels remain
+outside panel (a)'s box. Panels (b) and (c)
+inherit these row identities
+through the shared row geometry and do not repeat them. Panel (a) shows its
+four image-column headers once and uses one wider context-preserving
+crop whose rotated aspect fills the shared data-row height. Panel (b) displays
+all six contact positions by six longitudinal regions as rectangular median
+RMS optical-change heatmaps. Its two columns are the 10 and 30 mm spheres; all
+12 maps share one global Viridis scale and one panel-wide horizontal colorbar.
+The maps place contact location on the x-axis and longitudinal region on the
+y-axis, showing only 0/20/40 mm and R1/R3/R6 tick labels. They omit cell
+annotations and peak overlays. All
 Solaris atlas cells use one documented +0.275 EV display exposure, and all
 Dragon Skin atlas cells use one documented +0.525 EV display exposure.
 No per-cell normalization is applied. The six raw-image sources use the
@@ -646,30 +719,16 @@ selected 10 mm acquisition with the latest 30 mm repeat acquisition while
 preserving every unloaded capture independently. Existing compact analysis
 overrides retain the matching 30 mm repeat-session calibration. Figure 5(c)
 groups 12 row-normalized 6-by-6 confusion matrices into the same six
-morphology rows and 10/30 mm sphere columns as panel (b). The shared row-height
+material/morphology rows and 10/30 mm sphere columns as panel (b). The shared row-height
 grammar aligns every matrix with its corresponding specimen and optical-change
-map. All matrices share one 0--100% color scale. The command reuses the
+profile. All matrices share one 0--100% color scale. The command reuses the
 decoder's existing per-sample predictions and preserves its original raw
 confusion tables.
 `D_neighbor / W_contact` remains exclusive to Figure 6(b).
 
-Render the same Figure 5(c) panel independently for detailed inspection:
+Render Figure 6 or both final figures:
 
 ```bash
-conda run --no-capture-output -n lit \
-  python -m experiments.analysis.plot_fig5c
-```
-
-This writes `fig5c_confusion_2x2.pdf` and `fig5c_confusion_2x2.png` under
-`figures/fig5/` without modifying panels (a) or (b).
-
-Render the standalone Figure 5(c) panel, the Figure 6 explanation, or both final
-figures:
-
-```bash
-conda run --no-capture-output -n lit \
-  python -m experiments.analysis.plot_fig5c \
-  --config experiments/analysis/configs/paper_figures.yaml
 conda run --no-capture-output -n lit \
   python -m figures.fig6.fig6 \
   --config experiments/analysis/configs/paper_figures.yaml
@@ -684,22 +743,8 @@ distinguishability, spatial-versus-scalar decoding, and calibration-set-size
 analyses in a 2-by-3 grid. Panels (e) and (f) are explicitly non-data
 placeholders for sensing robustness and cyclic stability.
 
-The standalone panel writes `fig5c_confusion_2x2.pdf/png`; Figure 6 writes
-`fig6.pdf/png`. Add `--recompute` to any plotting/build command to
-regenerate the compact analysis tables first.
-
-The convenience exploration entry point renders the same aligned Figure 5(c)
-table without changing the full Figure 5 output:
-
-```bash
-conda run --no-capture-output -n lit \
-  python -m figures.fig5.fig5c_confusion_exploration
-```
-
-The command reuses `fig5c_per_sample_predictions.csv` from the unchanged
-leave-one-repetition-out six-region decoder and writes standalone
-`fig5c_confusion_2x2.pdf/png` outputs under `figures/fig5/exploration/`. Add `--recompute`
-only when the shared decoder tables themselves need to be regenerated.
+Figure 6 writes `fig6.pdf/png`. Add `--recompute` to a plotting/build command
+to regenerate the compact analysis tables first.
 
 Replay the smooth emissive segmentation on the checked-in 13-image reference
 set, report fixed-extrinsic stability/runtime, and regenerate its overlays:
@@ -741,10 +786,10 @@ running contact localization:
 
 ```bash
 conda run --no-capture-output -n lit \
-  python -u scripts/live_fingertip_boundary.py
+  python -u scripts/live_contact_localization.py --view boundary
 ```
 
-The geometry viewer shows RGB, the coarse paired-LSD prior, raw selected
+The boundary view shows RGB, the coarse paired-LSD prior, raw selected
 GrabCut component, final emissive fingertip mask, smooth contour, and the
 existing red-detector LED centers/response ROIs. It reports pad width, mask
 area, geometry scale, and segmentation runtime. Lab-a, grayscale, HSV, and the
@@ -758,7 +803,7 @@ color-image pipeline directly from the checkout:
 conda run --no-capture-output -n lit \
   python -m pip install -e ".[camera]"
 conda run --no-capture-output -n lit \
-  python -u scripts/live_contact_localization.py
+  python -u scripts/live_contact_localization.py --view contact
 ```
 
 Select one shared dense observer and optionally load an offline-generated

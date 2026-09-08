@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Analyze cyclic contact-history sessions for one material."""
+"""Run cyclic contact-history analysis for one material."""
 
 from __future__ import annotations
 

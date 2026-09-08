@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Analyze one or more LUMO physical morphology sessions."""
+"""Run analysis for one or more LUMO physical morphology sessions."""
 
 from __future__ import annotations
 

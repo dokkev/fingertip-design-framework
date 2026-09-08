@@ -249,6 +249,10 @@ Default quantitative-plot styling:
   estimate.
 - Avoid excessive marker outlines; use `EDGE_COLOR` only where separation from
   the background is needed.
+- In Figure 5's shared table grammar, panel (a) owns the single figure-wide row
+  header. Retain a narrow whitespace column between its rotated material label
+  and per-row morphology label, and omit those repeated labels from panels (b)
+  and (c). All three panels must retain identical row geometry.
 
 ## 9. Legends
 
@@ -348,9 +352,8 @@ figures/
     fig3.png
   fig5/
     fig5.py
-    fig5_final.pdf
-    fig5_final.png
-    exploration/
+    fig5.pdf
+    fig5.png
   fig6/
     fig6.py
     fig6.pdf
@@ -366,5 +369,5 @@ figures/
   manuscript output.
 - Python bytecode and render-review files are temporary. Keep them out of the
   figure tree and remove them before handoff.
-- Stable historical output stems such as `fig5_final` may be
-  retained when changing them would break manuscript or documentation links.
+- Final Figure 5 uses the canonical `fig5.pdf` and `fig5.png` stems; obsolete
+  standalone panel renders do not remain beside the manuscript output.

@@ -1,4 +1,4 @@
-"""Run live five-LED contact localization from a RealSense D435 color stream."""
+"""Inspect fingertip geometry or run live contact localization from a D435."""
 
 from __future__ import annotations
 
@@ -42,6 +42,9 @@ from experiments.localization import (  # noqa: E402
     unloaded_baseline_statistics,
     warp_to_canonical,
 )
+from experiments.localization.fingertip_segmentation import (  # noqa: E402
+    segment_fingertip,
+)
 from lumo.fingertip import LED_CENTERS_Y_MM  # noqa: E402
 
 
@@ -62,6 +65,8 @@ CAMERA_RECONNECT_DELAY_S = 1.0
 # displayed camera image. Reverse this tuple if the camera is mounted opposite.
 LED_POSITIONS_IN_IMAGE_ORDER_MM = np.asarray(LED_CENTERS_Y_MM, dtype=np.float64)
 WINDOW_NAME = "LUMO live contact localization"
+BOUNDARY_WINDOW_NAME = "LUMO fingertip boundary"
+VIEW_CHOICES = ("contact", "boundary")
 OBSERVER_CHOICES = (
     "led-top10",
     "dense-top10",
@@ -73,6 +78,12 @@ TIMING_WINDOW_FRAME_COUNT = 60
 
 def _arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--view",
+        choices=VIEW_CHOICES,
+        default="contact",
+        help="contact localization or boundary diagnostics (default: contact)",
+    )
     parser.add_argument(
         "--observer",
         choices=OBSERVER_CHOICES,
@@ -169,6 +180,180 @@ def _read_with_reconnect(
         "RealSense reconnect budget exhausted after "
         f"{CAMERA_RECONNECT_ATTEMPTS} attempts: {last_error}"
     ) from last_error
+
+
+def _boundary_panel(image: np.ndarray, title: str) -> np.ndarray:
+    panel = cv2.resize(image, (384, 216), interpolation=cv2.INTER_AREA)
+    cv2.putText(
+        panel,
+        title,
+        (18, 34),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.72,
+        (20, 20, 20),
+        3,
+        cv2.LINE_AA,
+    )
+    cv2.putText(
+        panel,
+        title,
+        (18, 34),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.72,
+        (245, 245, 245),
+        1,
+        cv2.LINE_AA,
+    )
+    return panel
+
+
+def _mask_overlay(
+    bgr: np.ndarray,
+    mask: np.ndarray,
+    color: tuple[int, int, int],
+) -> np.ndarray:
+    overlay = bgr.copy()
+    overlay[mask] = color
+    return cv2.addWeighted(bgr, 0.72, overlay, 0.28, 0.0)
+
+
+def _run_boundary_viewer() -> None:
+    camera = RealSenseColorCamera(
+        width=CAMERA_WIDTH,
+        height=CAMERA_HEIGHT,
+        fps=CAMERA_FPS,
+        serial_number=CAMERA_SERIAL_NUMBER,
+    )
+    cv2.namedWindow(BOUNDARY_WINDOW_NAME, cv2.WINDOW_NORMAL)
+    try:
+        with camera:
+            print(
+                f"camera: {camera.device_name}, serial={camera.serial_number}, "
+                f"{CAMERA_WIDTH}x{CAMERA_HEIGHT}@{CAMERA_FPS}"
+            )
+            _warm_up_camera(camera)
+            print("boundary-only viewer; q/esc=quit")
+            while True:
+                frame, _ = _read_with_reconnect(camera)
+                rgb = frame.rgb
+                bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+                try:
+                    diagnostics = segment_fingertip(rgb)
+                except RuntimeError as error:
+                    coarse_view = np.zeros_like(bgr)
+                    raw_view = np.zeros_like(bgr)
+                    final_view = np.zeros_like(bgr)
+                    boundary_view = bgr.copy()
+                    cv2.putText(
+                        boundary_view,
+                        str(error),
+                        (30, max(150, round(0.14 * boundary_view.shape[0]))),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.8,
+                        (0, 0, 255),
+                        2,
+                        cv2.LINE_AA,
+                    )
+                else:
+                    boundary = diagnostics.region
+                    coarse_view = _mask_overlay(
+                        bgr,
+                        diagnostics.coarse_prior_mask,
+                        (255, 150, 40),
+                    )
+                    raw_view = _mask_overlay(
+                        bgr,
+                        diagnostics.raw_component_mask,
+                        (40, 170, 255),
+                    )
+                    final_view = _mask_overlay(
+                        bgr,
+                        diagnostics.final_mask,
+                        (70, 190, 70),
+                    )
+                    boundary_view = bgr.copy()
+                    cv2.polylines(
+                        boundary_view,
+                        [np.rint(diagnostics.contour_xy_px).astype(np.int32)],
+                        True,
+                        (0, 255, 255),
+                        3,
+                        cv2.LINE_AA,
+                    )
+                    cv2.putText(
+                        boundary_view,
+                        (
+                            f"pad width={boundary.estimated_pad_width_px:.1f} px  "
+                            f"area={np.count_nonzero(diagnostics.final_mask)} px  "
+                            f"scale={diagnostics.geometry_scale:.3f}  "
+                            f"runtime={diagnostics.runtime_ms:.0f} ms"
+                        ),
+                        (30, 55),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.65,
+                        (255, 255, 255),
+                        2,
+                        cv2.LINE_AA,
+                    )
+                    try:
+                        geometry = detect_led_array(
+                            rgb,
+                            search_mask=boundary.search_mask,
+                        )
+                    except RuntimeError as error:
+                        cv2.putText(
+                            boundary_view,
+                            f"LED detection: {error}",
+                            (30, 95),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            0.65,
+                            (0, 0, 255),
+                            2,
+                            cv2.LINE_AA,
+                        )
+                    else:
+                        for polygon in geometry.roi_polygons_xy_px:
+                            cv2.polylines(
+                                boundary_view,
+                                [np.rint(polygon).astype(np.int32)],
+                                True,
+                                (0, 170, 255),
+                                2,
+                                cv2.LINE_AA,
+                            )
+                        for landmark in geometry.landmarks_xy_px:
+                            cv2.circle(
+                                boundary_view,
+                                tuple(np.rint(landmark).astype(int)),
+                                4,
+                                (0, 255, 0),
+                                -1,
+                                cv2.LINE_AA,
+                            )
+
+                display = np.hstack(
+                    (
+                        _boundary_panel(bgr, "RGB"),
+                        _boundary_panel(coarse_view, "coarse paired-LSD prior"),
+                        _boundary_panel(raw_view, "raw GrabCut component"),
+                        _boundary_panel(final_view, "emissive fingertip mask"),
+                        _boundary_panel(boundary_view, "smooth contour / LED ROIs"),
+                    )
+                )
+                cv2.imshow(BOUNDARY_WINDOW_NAME, display)
+                key = cv2.waitKey(1) & 0xFF
+                try:
+                    window_visible = cv2.getWindowProperty(
+                        BOUNDARY_WINDOW_NAME,
+                        cv2.WND_PROP_VISIBLE,
+                    )
+                except cv2.error:
+                    window_visible = 0.0
+                if key in (ord("q"), 27) or window_visible < 1.0:
+                    break
+    finally:
+        camera.stop()
+        cv2.destroyAllWindows()
 
 
 def _draw_geometry(image: np.ndarray, geometry: LedArrayGeometry) -> None:
@@ -402,6 +587,9 @@ def _draw_dense_panel(
 
 def main() -> None:
     arguments = _arguments()
+    if arguments.view == "boundary":
+        _run_boundary_viewer()
+        return
     dense_config = _dense_config(arguments.observer)
     dense_config, dense_model = _load_observer_model(
         arguments.template_model,

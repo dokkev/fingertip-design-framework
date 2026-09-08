@@ -1,4 +1,4 @@
-"""NiceGUI dashboard for bounded AK40-10 torque commands and shaft feedback."""
+"""Run the NiceGUI dashboard for bounded AK40-10 torque and feedback."""
 
 from __future__ import annotations
 

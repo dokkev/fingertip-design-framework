@@ -17,7 +17,6 @@ from experiments.analysis.optical import load_rgb
 from lumo.visualization import (
     DEFAULT_STYLE,
     SEMANTIC_COLORS,
-    STRUCTURAL_FONT_FAMILY,
 )
 
 from .config import (
@@ -30,14 +29,18 @@ from .config import (
     COMPARISON_MORPHOLOGIES,
     FIGURE_DIRECTORY,
     HOLE_TO_CONTACT_X_MM,
-    MATERIAL_SEPARATOR_COLOR,
-    MATERIAL_SEPARATOR_LINEWIDTH_PT,
     MORPHOLOGY_CONDITIONS,
-    MORPHOLOGY_TABLE_HEIGHT_RATIOS,
-    MORPHOLOGY_TABLE_HSPACE,
-    MORPHOLOGY_TABLE_ROW_SLOTS,
     REPOSITORY_ROOT,
     require_available_inputs,
+)
+from .table_layout import (
+    HEADER_ROW,
+    MATERIAL_BLOCKS,
+    TABLE_HEIGHT_RATIOS,
+    TABLE_HSPACE,
+    add_material_labels,
+    add_morphology_labels,
+    add_panel_title,
 )
 
 
@@ -214,22 +217,24 @@ def write_selection_manifest(
 
 
 def _crop(rgb: np.ndarray) -> np.ndarray:
+    """Return the fixed atlas crop with the fingertip laid distal-to-proximal."""
+
     x0, y0, x1, y1 = ATLAS_CROP_XYXY
     if rgb.shape[1] < x1 or rgb.shape[0] < y1:
         raise ValueError(
             f"atlas ROI {ATLAS_CROP_XYXY} exceeds image shape {rgb.shape[:2]}"
         )
-    return rgb[y0:y1, x0:x1]
+    return np.rot90(rgb[y0:y1, x0:x1], k=1).copy()
 
 
 def _draw_indenter_loading_arrow(axis: object, contact_position_mm: float) -> None:
-    """Overlay the fixed right-to-left indenter approach on one loaded crop."""
+    """Overlay the top-to-bottom indenter approach on one rotated crop."""
 
-    shaft_center_y_px = 140.0 + 5.05 * contact_position_mm
+    shaft_center_x_px = 140.0 + 5.05 * contact_position_mm
     axis.annotate(
         "",
-        xy=(218.0, shaft_center_y_px),
-        xytext=(326.0, shaft_center_y_px),
+        xy=(shaft_center_x_px, 196.0),
+        xytext=(shaft_center_x_px, 88.0),
         arrowprops={
             "arrowstyle": "-|>",
             "color": SEMANTIC_COLORS["force"],
@@ -256,111 +261,72 @@ def render_panel(
     write_selection_manifest(selections)
 
     grid = subplot_spec.subgridspec(
-        6,
-        10,
-        height_ratios=MORPHOLOGY_TABLE_HEIGHT_RATIOS,
-        width_ratios=(1.25, 1, 1, 1, 1, 0.06, 1, 1, 1, 1),
-        hspace=MORPHOLOGY_TABLE_HSPACE,
-        wspace=0.003,
+        len(TABLE_HEIGHT_RATIOS),
+        7,
+        height_ratios=TABLE_HEIGHT_RATIOS,
+        width_ratios=(0.18, 0.08, 0.64, 1, 1, 1, 1),
+        hspace=TABLE_HSPACE,
+        wspace=0.0,
     )
-    title_axis = figure.add_subplot(grid[0, :])
-    title_axis.axis("off")
-    title_axis.text(
-        0.0,
-        0.55,
-        panel_label,
-        fontsize=DEFAULT_STYLE.panel_label_font_size_pt,
-        fontweight="normal",
-        va="center",
-    )
-    title_axis.text(
-        0.080,
-        0.55,
-        "Optical signatures across contact locations",
-        fontsize=DEFAULT_STYLE.panel_title_font_size_pt,
-        fontweight="normal",
-        va="center",
+    add_panel_title(
+        figure,
+        grid,
+        panel_label=panel_label,
+        title="Optical signatures across contact locations",
     )
 
     headers = ["Zero\nload"] + [
         f"$X_{{\\mathrm{{contact}}}}$\n{HOLE_TO_CONTACT_X_MM[hole]:g} mm"
         for hole in ATLAS_HOLES
     ]
-    material_columns = (("solaris", 1), ("dragon_skin", 6))
-    for material, first_column in material_columns:
-        material_axis = figure.add_subplot(grid[1, first_column : first_column + 4])
-        material_axis.axis("off")
-        material_axis.text(
+    for offset, header in enumerate(headers):
+        axis = figure.add_subplot(grid[HEADER_ROW, 3 + offset])
+        axis.axis("off")
+        axis.text(
             0.5,
-            0.55,
-            config.material_labels[material],
-            fontsize=DEFAULT_STYLE.group_header_font_size_pt,
-            fontweight="bold",
-            fontfamily=STRUCTURAL_FONT_FAMILY,
+            0.60,
+            header,
+            fontsize=DEFAULT_STYLE.condition_header_font_size_pt,
             ha="center",
             va="center",
         )
-        for offset, header in enumerate(headers):
-            axis = figure.add_subplot(grid[2, first_column + offset])
-            axis.axis("off")
-            axis.text(
-                0.5,
-                0.52,
-                header,
-                fontsize=DEFAULT_STYLE.minimum_font_size_pt,
-                ha="center",
-                va="center",
-            )
 
-    separator_axis = figure.add_subplot(grid[1:, 5])
-    separator_axis.axis("off")
-    separator_axis.plot(
-        (0.5, 0.5),
-        (0.0, 1.0),
-        color=MATERIAL_SEPARATOR_COLOR,
-        linewidth=MATERIAL_SEPARATOR_LINEWIDTH_PT,
-        transform=separator_axis.transAxes,
-        clip_on=False,
+    add_material_labels(
+        figure,
+        grid,
+        column=0,
+        labels=config.material_labels,
     )
-
+    add_morphology_labels(
+        figure,
+        grid,
+        column=2,
+        labels=config.morphology_labels,
+        colors=config.morphology_colors,
+    )
     condition_lookup = {
         (condition.material, condition.morphology): condition
         for condition in MORPHOLOGY_CONDITIONS
     }
-    for morphology, row_slot in zip(
-        COMPARISON_MORPHOLOGIES, MORPHOLOGY_TABLE_ROW_SLOTS, strict=True
-    ):
-        label_axis = figure.add_subplot(grid[row_slot, 0])
-        label_axis.axis("off")
-        row_label = config.morphology_labels[morphology]
-        if row_label.startswith("Opt-"):
-            row_label = row_label.replace("-", "-\n", 1)
-        label_axis.text(
-            0.0,
-            0.5,
-            row_label,
-            fontsize=DEFAULT_STYLE.group_header_font_size_pt,
-            ha="left",
-            va="center",
-            linespacing=0.9,
-            clip_on=False,
-        )
-        for material, first_column in material_columns:
+    for material, morphology_rows in MATERIAL_BLOCKS:
+        for morphology, row_slot in zip(
+            COMPARISON_MORPHOLOGIES, morphology_rows, strict=True
+        ):
             condition = condition_lookup[(material, morphology)]
             row = selections[condition.display_name]
             for offset in range(4):
-                axis = figure.add_subplot(grid[row_slot, first_column + offset])
+                axis = figure.add_subplot(grid[row_slot, 3 + offset])
+                axis.set_facecolor("black")
                 axis.set_xticks([])
                 axis.set_yticks([])
                 for spine in axis.spines.values():
-                    spine.set_color("#D2D2D2")
-                    spine.set_linewidth(0.32)
+                    spine.set_visible(False)
                 if row is None:
                     x0, y0, x1, y1 = ATLAS_CROP_XYXY
                     placeholder = np.full(
                         (y1 - y0, x1 - x0, 3), 241, dtype=np.uint8
                     )
-                    axis.imshow(placeholder)
+                    axis.imshow(np.rot90(placeholder, k=1))
                     axis.text(
                         0.5,
                         0.5,

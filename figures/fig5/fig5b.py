@@ -1,21 +1,15 @@
-"""Panel-rendering tools for the Figure 5(b) response-field heatmaps."""
+"""Panel-rendering tools for Figure 5(b) spatial optical signal maps."""
 
 from __future__ import annotations
 
 import csv
 
-import matplotlib.patheffects as path_effects
 import numpy as np
 from matplotlib.colors import Normalize
 from matplotlib.figure import Figure
 from matplotlib.gridspec import SubplotSpec
 
-from lumo.visualization import (
-    DEFAULT_STYLE,
-    MATERIAL_LABELS,
-    PAPER_LABELS,
-    STRUCTURAL_FONT_FAMILY,
-)
+from lumo.visualization import DEFAULT_STYLE
 
 from .config import (
     ALL_HOLES,
@@ -25,12 +19,14 @@ from .config import (
     COMPARISON_MORPHOLOGIES,
     FIGURE_DIRECTORY,
     HOLE_TO_CONTACT_X_MM,
-    MATERIAL_SEPARATOR_COLOR,
-    MATERIAL_SEPARATOR_LINEWIDTH_PT,
-    MORPHOLOGY_TABLE_HEIGHT_RATIOS,
-    MORPHOLOGY_TABLE_HSPACE,
-    MORPHOLOGY_TABLE_ROW_SLOTS,
     require_available_inputs,
+)
+from .table_layout import (
+    HEADER_ROW,
+    MATERIAL_BLOCKS,
+    TABLE_HEIGHT_RATIOS,
+    TABLE_HSPACE,
+    add_panel_title,
 )
 
 
@@ -38,7 +34,7 @@ INDENTER_COLUMNS = (
     ("sphere_10mm", "Ø10 mm\nsphere"),
     ("sphere_30mm", "Ø30 mm\nsphere"),
 )
-PLOT_COLUMNS = (2, 3, 5, 6)
+PLOT_COLUMNS = (2, 3)
 N_LONGITUDINAL_REGIONS = 6
 FORCE_LOW_N = 2.0
 FORCE_HIGH_N = 15.0
@@ -272,7 +268,6 @@ def render_panel(
     subplot_spec: SubplotSpec,
     *,
     panel_label: str = "(b)",
-    show_row_labels: bool = True,
     data: tuple[
         np.ndarray,
         np.ndarray,
@@ -281,7 +276,7 @@ def render_panel(
     ]
     | None = None,
 ) -> dict[str, object]:
-    """Render shared-scale regional 2-to-15 N optical changes."""
+    """Render shared-scale spatial optical signal maps."""
 
     coordinate, region_edges, responses, audit_rows = (
         load_optical_change_maps() if data is None else data
@@ -290,215 +285,153 @@ def render_panel(
     measured = [values for values in responses.values() if values is not None]
     maximum = max(float(np.max(values)) for values in measured)
     if not np.isfinite(maximum) or maximum <= 0.0:
-        raise ValueError("coarse response magnitudes must have a finite positive range")
+        raise ValueError("response magnitudes must have a finite positive range")
     normalization = Normalize(vmin=0.0, vmax=maximum)
 
-    row_label_width = 0.13 if show_row_labels else 0.012
     grid = subplot_spec.subgridspec(
-        6,
-        9,
-        height_ratios=MORPHOLOGY_TABLE_HEIGHT_RATIOS,
-        width_ratios=(0.23, row_label_width, 1, 1, 0.04, 1, 1, 0.045, 0.10),
-        hspace=MORPHOLOGY_TABLE_HSPACE,
-        wspace=0.02,
+        len(TABLE_HEIGHT_RATIOS),
+        4,
+        height_ratios=TABLE_HEIGHT_RATIOS,
+        width_ratios=(0.20, 0.20, 1, 1),
+        hspace=TABLE_HSPACE,
+        wspace=0.07,
     )
-    title_axis = figure.add_subplot(grid[0, :])
-    title_axis.axis("off")
-    title_axis.text(
-        0.0,
-        0.55,
-        panel_label,
-        fontsize=DEFAULT_STYLE.panel_label_font_size_pt,
-        fontweight="normal",
-        va="center",
+    add_panel_title(
+        figure,
+        grid,
+        panel_label=panel_label,
+        title="Spatial optical response, 2–15 N",
+        sample_note="Median of n = 5 re-contacts / location",
     )
-    title_axis.text(
-        0.140,
-        0.55,
-        "Optical signal change, 2-15 N",
-        fontsize=DEFAULT_STYLE.panel_title_font_size_pt,
-        fontweight="normal",
-        va="center",
-    )
-
-    for material, column_slice in (
-        ("solaris", slice(2, 4)),
-        ("dragon_skin", slice(5, 7)),
-    ):
-        material_axis = figure.add_subplot(grid[1, column_slice])
-        material_axis.axis("off")
-        material_axis.text(
-            0.5,
-            0.55,
-            MATERIAL_LABELS[material],
-            fontsize=DEFAULT_STYLE.group_header_font_size_pt,
-            fontweight="bold",
-            fontfamily=STRUCTURAL_FONT_FAMILY,
-            ha="center",
-            va="center",
-        )
 
     indenter_titles = dict(INDENTER_COLUMNS)
-    for column, (_, candidate_indenter, _) in zip(
-        PLOT_COLUMNS, COMPARISON_CONDITIONS, strict=True
+    for column, (candidate_indenter, _) in zip(
+        PLOT_COLUMNS, INDENTER_COLUMNS, strict=True
     ):
-        column_axis = figure.add_subplot(grid[2, column])
+        column_axis = figure.add_subplot(grid[HEADER_ROW, column])
         column_axis.axis("off")
         column_axis.text(
             0.5,
-            0.52,
+            0.76,
             indenter_titles[candidate_indenter],
-            fontsize=DEFAULT_STYLE.minimum_font_size_pt,
-            linespacing=0.92,
+            fontsize=DEFAULT_STYLE.condition_header_font_size_pt,
+            linespacing=0.90,
             ha="center",
             va="center",
         )
 
-    image = None
     axes = []
-    physical_locations = np.asarray(
-        [HOLE_TO_CONTACT_X_MM[hole] for hole in ALL_HOLES], dtype=np.float64
-    )
-    shared_y_axis = figure.add_subplot(grid[3:, 0])
+    shared_y_axis = figure.add_subplot(grid[2:, 0])
     shared_y_axis.axis("off")
     shared_y_axis.text(
-        0.0,
         0.5,
-        r"$X_{\mathrm{contact}}$ [mm]",
-        fontsize=DEFAULT_STYLE.minimum_font_size_pt,
+        0.5,
+        "Longitudinal region",
+        fontsize=DEFAULT_STYLE.axis_label_font_size_pt,
         rotation=90,
         ha="center",
         va="center",
-    )
-
-    separator_axis = figure.add_subplot(grid[1:, 4])
-    separator_axis.axis("off")
-    separator_axis.plot(
-        (0.5, 0.5),
-        (0.0, 1.0),
-        color=MATERIAL_SEPARATOR_COLOR,
-        linewidth=MATERIAL_SEPARATOR_LINEWIDTH_PT,
-        transform=separator_axis.transAxes,
+        transform=shared_y_axis.transAxes,
         clip_on=False,
+        zorder=2,
     )
 
-    for row_index, (morphology, row_slot) in enumerate(
-        zip(COMPARISON_MORPHOLOGIES, MORPHOLOGY_TABLE_ROW_SLOTS, strict=True)
-    ):
-        if show_row_labels:
-            row_label_axis = figure.add_subplot(grid[row_slot, 1])
-            row_label_axis.axis("off")
-            row_label_axis.text(
-                0.05,
-                0.5,
-                PAPER_LABELS[morphology],
-                fontsize=DEFAULT_STYLE.minimum_font_size_pt,
-                ha="left",
-                va="center",
-            )
-        for plot_index, ((material, candidate_indenter, _), column) in enumerate(
-            zip(COMPARISON_CONDITIONS, PLOT_COLUMNS, strict=True)
+    image = None
+    for material, morphology_rows in MATERIAL_BLOCKS:
+        for morphology_index, (morphology, row_slot) in enumerate(
+            zip(COMPARISON_MORPHOLOGIES, morphology_rows, strict=True)
         ):
-            axis = figure.add_subplot(grid[row_slot, column])
-            key = (material, candidate_indenter, morphology)
-            values = responses[key]
-            if values is None:
-                axis.set_facecolor("#EFEFEF")
-                axis.set_xlim(-0.5, N_LONGITUDINAL_REGIONS - 0.5)
-                axis.set_ylim(60.5, -5.5)
-                axis.text(
-                    0.5,
-                    0.5,
-                    "pending",
-                    transform=axis.transAxes,
-                    fontsize=DEFAULT_STYLE.annotation_font_size_pt,
-                    color="#888888",
-                    ha="center",
-                    va="center",
-                )
-            else:
-                image = axis.imshow(
-                    values,
-                    aspect="auto",
-                    interpolation="nearest",
-                    cmap="viridis",
-                    norm=normalization,
-                    extent=(-0.5, N_LONGITUDINAL_REGIONS - 0.5, 60.5, -5.5),
-                )
-                peak_regions = np.argmax(values, axis=1)
-                markers = axis.scatter(
-                    peak_regions,
-                    physical_locations,
-                    marker="x",
-                    s=8.0,
-                    linewidths=0.70,
-                    color="white",
-                    zorder=3,
-                )
-                markers.set_path_effects(
-                    [
-                        path_effects.Stroke(linewidth=1.25, foreground="#333333"),
-                        path_effects.Normal(),
-                    ]
-                )
-            if plot_index == 0:
-                axis.set_yticks(physical_locations)
-            else:
-                axis.set_yticks([])
-            if (
-                row_index == len(COMPARISON_MORPHOLOGIES) - 1
-                and plot_index in (0, 2)
+            for plot_index, ((candidate_indenter, _), column) in enumerate(
+                zip(INDENTER_COLUMNS, PLOT_COLUMNS, strict=True)
             ):
-                axis.set_xticks(
-                    np.arange(N_LONGITUDINAL_REGIONS),
-                    tuple(
-                        f"R{region}" for region in range(1, N_LONGITUDINAL_REGIONS + 1)
-                    ),
-                )
-                if plot_index == 0:
+                axis = figure.add_subplot(grid[row_slot, column])
+                key = (material, candidate_indenter, morphology)
+                values = responses[key]
+                if values is None:
+                    axis.set_facecolor("#EFEFEF")
+                    axis.set_xlim(-0.5, N_LONGITUDINAL_REGIONS - 0.5)
+                    axis.set_ylim(N_LONGITUDINAL_REGIONS - 0.5, -0.5)
                     axis.text(
-                        0.0,
-                        -0.15,
-                        "Distal",
+                        0.5,
+                        0.5,
+                        "pending",
                         transform=axis.transAxes,
-                        fontsize=DEFAULT_STYLE.minimum_font_size_pt,
-                        ha="left",
-                        va="top",
+                        fontsize=DEFAULT_STYLE.annotation_font_size_pt,
+                        color="#888888",
+                        ha="center",
+                        va="center",
                     )
-            else:
-                axis.set_xticks([])
-            # Six region labels share a sub-half-inch matrix. This is the one
-            # dense-panel exception to the 6 pt minimum in figures/README.md.
-            axis.tick_params(labelsize=5.2, length=1.3, pad=0.6)
-            axis.set_box_aspect(1.0)
-            for spine in axis.spines.values():
-                spine.set_linewidth(0.45)
-                spine.set_color("#777777")
-            axes.append(axis)
+                else:
+                    image = axis.imshow(
+                        values.T,
+                        aspect="auto",
+                        interpolation="nearest",
+                        cmap="viridis",
+                        norm=normalization,
+                        origin="upper",
+                    )
+                axis.set_xlim(-0.5, N_LONGITUDINAL_REGIONS - 0.5)
+                axis.set_ylim(N_LONGITUDINAL_REGIONS - 0.5, -0.5)
+                axis.set_yticks((0, 2, 5))
+                axis.set_yticklabels(
+                    ("R1", "R3", "R6") if plot_index == 0 else ()
+                )
+                if (
+                    material == "dragon_skin"
+                    and morphology_index == len(COMPARISON_MORPHOLOGIES) - 1
+                ):
+                    axis.set_xticks(
+                        (0, 2, 4),
+                        ("0", "20", "40"),
+                    )
+                else:
+                    axis.set_xticks([])
+                axis.tick_params(
+                    labelsize=DEFAULT_STYLE.minimum_font_size_pt,
+                    width=DEFAULT_STYLE.tick_width_pt,
+                    length=DEFAULT_STYLE.tick_length_pt,
+                    pad=0.8,
+                    left=(plot_index == 0),
+                    labelleft=(plot_index == 0),
+                )
+                for spine in axis.spines.values():
+                    spine.set_linewidth(DEFAULT_STYLE.spine_width_pt)
+                    spine.set_color(DEFAULT_STYLE.colors.neutral)
+                axes.append(axis)
 
-    assert image is not None
-    colorbar_axis = figure.add_subplot(grid[3:, 7])
-    colorbar = figure.colorbar(image, cax=colorbar_axis)
-    colorbar.ax.set_ylabel(
+    if image is None:
+        raise ValueError("no Figure 5(b) response heatmaps were rendered")
+
+    colorbar_container = figure.add_subplot(grid[HEADER_ROW, 0:4])
+    colorbar_container.axis("off")
+    colorbar_container.text(
+        0.50,
+        0.50,
         "Optical change [DN]",
-        fontsize=DEFAULT_STYLE.minimum_font_size_pt,
-        rotation=90,
-        labelpad=2.0,
+        fontsize=DEFAULT_STYLE.axis_label_font_size_pt,
+        ha="center",
         va="center",
     )
+    colorbar_axis = colorbar_container.inset_axes((0.28, 0.24, 0.44, 0.06))
+    colorbar = figure.colorbar(image, cax=colorbar_axis, orientation="horizontal")
+    colorbar.set_ticks((0.0, maximum))
+    colorbar.ax.set_xticklabels(("0", f"{maximum:.1f}"))
+    colorbar.ax.xaxis.set_ticks_position("bottom")
     colorbar.ax.tick_params(
         labelsize=DEFAULT_STYLE.minimum_font_size_pt,
-        length=1.5,
-        pad=0.8,
+        width=DEFAULT_STYLE.tick_width_pt,
+        length=DEFAULT_STYLE.tick_length_pt,
+        pad=0.35,
     )
-    colorbar.outline.set_linewidth(0.45)
-    body_position = grid[3:, 2:7].get_position(figure)
+    colorbar.outline.set_linewidth(DEFAULT_STYLE.spine_width_pt)
+
+    body_position = grid[2:, 2:4].get_position(figure)
     figure.text(
-        body_position.x1,
-        body_position.y0 - 0.014,
-        "Proximal",
-        fontsize=DEFAULT_STYLE.minimum_font_size_pt,
-        ha="right",
+        0.5 * (body_position.x0 + body_position.x1),
+        body_position.y0 - 0.045,
+        "Contact location [mm]",
+        fontsize=DEFAULT_STYLE.annotation_font_size_pt,
+        ha="center",
         va="top",
     )
     return {

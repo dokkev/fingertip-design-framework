@@ -105,19 +105,6 @@ COMPARISON_CONDITIONS = (
     ("dragon_skin", "sphere_30mm", "Dragon Skin · 30 mm sphere"),
 )
 
-# Panels (a), (b), and (c) use three shared morphology rows. Materials and
-# indenter conditions run across columns, so every morphology can be followed
-# horizontally without repeating six specimen rows.
-MORPHOLOGY_TABLE_HEIGHT_RATIOS = (
-    0.16,
-    0.10,
-    0.15,
-    0.55,
-    0.55,
-    0.55,
-)
-MORPHOLOGY_TABLE_ROW_SLOTS = (3, 4, 5)
-MORPHOLOGY_TABLE_HSPACE = 0.035
 MATERIAL_SEPARATOR_COLOR = "#D4D4D4"
 MATERIAL_SEPARATOR_LINEWIDTH_PT = 0.70
 
@@ -146,10 +133,11 @@ ATLAS_DISPLAY_EXPOSURE_EV_BY_MATERIAL = {
     "dragon_skin": 0.5250,
 }
 
-# One camera-coordinate ROI is reused without recentering or photometric
-# manipulation for every atlas frame. All Figure 5 sessions used the same
-# 1920 x 1080 fixed-camera acquisition contract.
-ATLAS_CROP_XYXY = (820, 170, 1170, 660)
+# One context-preserving camera-coordinate ROI is reused without recentering
+# for every atlas frame. Its rotated aspect fills the shared table row while
+# retaining the fingertip, indenter shaft, and nearby fixture. All Figure 5
+# sessions used the same 1920 x 1080 fixed-camera acquisition contract.
+ATLAS_CROP_XYXY = (835, 170, 1235, 660)
 
 
 def require_available_inputs() -> None:
@@ -195,9 +183,6 @@ __all__ = [
     "MATERIAL_SEPARATOR_COLOR",
     "MATERIAL_SEPARATOR_LINEWIDTH_PT",
     "MORPHOLOGY_CONDITIONS",
-    "MORPHOLOGY_TABLE_HEIGHT_RATIOS",
-    "MORPHOLOGY_TABLE_HSPACE",
-    "MORPHOLOGY_TABLE_ROW_SLOTS",
     "MorphologyCondition",
     "REPOSITORY_ROOT",
     "require_available_inputs",

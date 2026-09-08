@@ -12,11 +12,12 @@ from pathlib import Path
 import queue
 import threading
 from time import monotonic, monotonic_ns
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 import cv2
 import numpy as np
 
+from experiments.force_estimation import OnlineForceEstimate, OnlineForceEstimator
 from experiments.hardware import BotaSample, BotaSerialSensor, RealSenseColorCamera
 from experiments.hardware.ak40_10 import AK40_10, KD_MAX, KD_MIN, KP_MAX, KP_MIN
 from experiments.hardware.can_io import CanIO
@@ -67,6 +68,20 @@ CAMERA_COLUMNS = (
     "ft_contact_force_N",
     "ft_timestamp_ns",
     "camera_ft_time_delta_ms",
+)
+FORCE_ESTIMATE_COLUMNS = (
+    "timestamp_ns",
+    "valid",
+    "contact",
+    "estimated_force_N",
+    "torque_Nm",
+    "torque_bias_Nm",
+    "estimated_contact_location_mm",
+    "optical_weights_json",
+    "optical_timestamp_ns",
+    "optical_age_ms",
+    "status",
+    "processing_time_ms",
 )
 
 
@@ -152,6 +167,7 @@ class RecorderSnapshot:
     motor_samples: int
     ft_samples: int
     optical_samples: int
+    force_estimates: int
     camera_frames: int
     error: str | None
 
@@ -165,25 +181,16 @@ class RuntimeSnapshot:
     motor_error: str | None
     camera_error: str | None
     ft_error: str | None
+    force_estimator_error: str | None
     motor: MotorAcquisition | None
     ft: FTAcquisition | None
     optical: OpticalAcquisition | None
+    force_estimate: OnlineForceEstimate | None
     camera_jpeg: bytes | None
     recorder: RecorderSnapshot
 
 
-class ForceEstimator:
-    """Uncalibrated interface reserved for a later measured force model."""
-
-    def predict(
-        self,
-        torque_nm: float,
-        contact_location_mm: float,
-    ) -> float | None:
-        """Return no estimate until measured calibration is supplied."""
-
-        del torque_nm, contact_location_mm
-        return None
+ForceEstimator = OnlineForceEstimator
 
 
 @dataclass(frozen=True)
@@ -214,7 +221,13 @@ class ProprioceptiveRecorder:
         self._run_path: Path | None = None
         self._started_ns: int | None = None
         self._metadata: dict[str, Any] | None = None
-        self._counts = {"motor": 0, "ft": 0, "optical": 0, "camera": 0}
+        self._counts = {
+            "motor": 0,
+            "ft": 0,
+            "optical": 0,
+            "force_estimate": 0,
+            "camera": 0,
+        }
         self._error: str | None = None
 
     def start(self, metadata: Mapping[str, Any]) -> Path:
@@ -242,7 +255,13 @@ class ProprioceptiveRecorder:
             self._run_path = run_path
             self._started_ns = started_ns
             self._metadata = stored
-            self._counts = {"motor": 0, "ft": 0, "optical": 0, "camera": 0}
+            self._counts = {
+                "motor": 0,
+                "ft": 0,
+                "optical": 0,
+                "force_estimate": 0,
+                "camera": 0,
+            }
             self._error = None
             _atomic_json(run_path / "metadata.json", stored)
             thread = threading.Thread(
@@ -262,6 +281,9 @@ class ProprioceptiveRecorder:
 
     def submit_optical(self, sample: OpticalAcquisition) -> None:
         self._submit("optical", sample)
+
+    def submit_force_estimate(self, sample: OnlineForceEstimate) -> None:
+        self._submit("force_estimate", sample)
 
     def submit_camera(self, sample: CameraAcquisition) -> None:
         self._submit("camera", sample)
@@ -312,6 +334,7 @@ class ProprioceptiveRecorder:
                 motor_samples=self._counts["motor"],
                 ft_samples=self._counts["ft"],
                 optical_samples=self._counts["optical"],
+                force_estimates=self._counts["force_estimate"],
                 camera_frames=self._counts["camera"],
                 error=self._error,
             )
@@ -329,6 +352,10 @@ class ProprioceptiveRecorder:
                 "motor": ("motor.csv", MOTOR_COLUMNS),
                 "ft": ("ft.csv", FT_COLUMNS),
                 "optical": ("optical.csv", OPTICAL_COLUMNS),
+                "force_estimate": (
+                    "force_estimate.csv",
+                    FORCE_ESTIMATE_COLUMNS,
+                ),
                 "camera": ("camera_timestamps.csv", CAMERA_COLUMNS),
             }
             for key, (filename, columns) in specifications.items():
@@ -402,6 +429,37 @@ class ProprioceptiveRecorder:
                             response[index] if index < len(response) else ""
                         )
                     writers["optical"].writerow(row)
+                elif item.stream == "force_estimate":
+                    sample = item.sample
+                    assert isinstance(sample, OnlineForceEstimate)
+                    writers["force_estimate"].writerow(
+                        {
+                            "timestamp_ns": sample.timestamp_ns,
+                            "valid": int(sample.valid),
+                            "contact": int(sample.contact),
+                            "estimated_force_N": ""
+                            if sample.estimated_force_n is None
+                            else sample.estimated_force_n,
+                            "torque_Nm": sample.torque_nm,
+                            "torque_bias_Nm": ""
+                            if sample.torque_bias_nm is None
+                            else sample.torque_bias_nm,
+                            "estimated_contact_location_mm": ""
+                            if sample.contact_location_mm is None
+                            else sample.contact_location_mm,
+                            "optical_weights_json": ""
+                            if sample.optical_weights is None
+                            else json.dumps(sample.optical_weights),
+                            "optical_timestamp_ns": ""
+                            if sample.optical_timestamp_ns is None
+                            else sample.optical_timestamp_ns,
+                            "optical_age_ms": ""
+                            if sample.optical_age_ms is None
+                            else sample.optical_age_ms,
+                            "status": sample.status,
+                            "processing_time_ms": sample.processing_time_ms,
+                        }
+                    )
                 elif item.stream == "camera":
                     sample = item.sample
                     assert isinstance(sample, CameraAcquisition)
@@ -465,9 +523,11 @@ class _LatestState:
         self.motor_error: str | None = None
         self.camera_error: str | None = None
         self.ft_error: str | None = None
+        self.force_estimator_error: str | None = None
         self.motor: MotorAcquisition | None = None
         self.ft: FTAcquisition | None = None
         self.optical: OpticalAcquisition | None = None
+        self.force_estimate: OnlineForceEstimate | None = None
         self.camera_jpeg: bytes | None = None
         self.recorder = recorder
 
@@ -486,9 +546,11 @@ class _LatestState:
                 motor_error=self.motor_error,
                 camera_error=self.camera_error,
                 ft_error=self.ft_error,
+                force_estimator_error=self.force_estimator_error,
                 motor=self.motor,
                 ft=self.ft,
                 optical=self.optical,
+                force_estimate=self.force_estimate,
                 camera_jpeg=self.camera_jpeg,
                 recorder=self.recorder.snapshot(),
             )
@@ -511,10 +573,12 @@ class MotorImpedanceWorker:
         kd: float = 0.0,
         command_rate_hz: float = 100.0,
         feedback_timeout_s: float = 0.05,
+        force_estimator: OnlineForceEstimator | None = None,
     ) -> None:
         self._motor = motor
         self._state = state
         self._recorder = recorder
+        self._force_estimator = force_estimator
         self.command_rate_hz = float(command_rate_hz)
         self.feedback_timeout_s = float(feedback_timeout_s)
         if not math.isfinite(self.command_rate_hz) or self.command_rate_hz <= 0.0:
@@ -666,8 +730,23 @@ class MotorImpedanceWorker:
                     temperature_c=motor_state.temperature,
                     error=motor_state.error,
                 )
-                self._state.update(motor=sample)
+                force_estimate = None
+                if self._force_estimator is not None:
+                    try:
+                        force_estimate = self._force_estimator.update_torque(
+                            sample.timestamp_ns,
+                            sample.torque_nm,
+                        )
+                    except Exception as error:
+                        self._state.update(
+                            force_estimator_error=(
+                                f"{type(error).__name__}: {error}"
+                            )
+                        )
+                self._state.update(motor=sample, force_estimate=force_estimate)
                 self._recorder.submit_motor(sample)
+                if force_estimate is not None:
+                    self._recorder.submit_force_estimate(force_estimate)
 
                 next_command_s += period_s
                 delay_s = next_command_s - monotonic()
@@ -819,6 +898,7 @@ class CameraContactWorker:
         contact_processing_mode: str = "both",
         contact_record_rate_hz: float = 5.0,
         offline_reference_frame_count: int = 30,
+        force_estimator: OnlineForceEstimator | None = None,
     ) -> None:
         if warmup_frame_count < 0:
             raise ValueError("warmup_frame_count must be nonnegative")
@@ -837,11 +917,14 @@ class CameraContactWorker:
         if (
             not isinstance(offline_reference_frame_count, int)
             or isinstance(offline_reference_frame_count, bool)
-            or offline_reference_frame_count < 1
+            or offline_reference_frame_count < 0
         ):
-            raise ValueError("offline_reference_frame_count must be a positive integer")
+            raise ValueError(
+                "offline_reference_frame_count must be a nonnegative integer"
+            )
         self._camera = camera
         self._tracker = tracker
+        self._force_estimator = force_estimator
         self._state = state
         self._recorder = recorder
         self.warmup_frame_count = warmup_frame_count
@@ -855,6 +938,8 @@ class CameraContactWorker:
             maxlen=offline_reference_frame_count
         )
         self._reference_lock = threading.Lock()
+        self._contact_frame_gate: Callable[[CameraAcquisition], bool] | None = None
+        self._contact_frame_gate_lock = threading.Lock()
         self._recording_run_id: str | None = None
         self._last_contact_record_ns: int | None = None
         self._stop = threading.Event()
@@ -884,14 +969,29 @@ class CameraContactWorker:
         self._thread.start()
 
     def request_recalibration(self) -> None:
-        if not self.online_contact_enabled:
+        if not self.online_contact_enabled and self._force_estimator is None:
             raise RuntimeError("online contact processing is disabled")
-        self._tracker.request_recalibration()
+        if self.online_contact_enabled:
+            self._tracker.request_recalibration()
+        if self._force_estimator is not None:
+            self._force_estimator.begin_geometry_initialization()
 
     def request_unloaded_baseline(self) -> None:
-        if not self.online_contact_enabled:
+        if not self.online_contact_enabled and self._force_estimator is None:
             raise RuntimeError("online contact processing is disabled")
-        self._tracker.request_unloaded_baseline()
+        if self._force_estimator is not None:
+            self._force_estimator.begin_unloaded_baseline()
+        if self.online_contact_enabled:
+            self._tracker.request_unloaded_baseline()
+
+    def set_contact_frame_gate(
+        self,
+        gate: Callable[[CameraAcquisition], bool] | None,
+    ) -> None:
+        """Optionally restrict recorded contact frames without gating raw sensors."""
+
+        with self._contact_frame_gate_lock:
+            self._contact_frame_gate = gate
 
     def stop(self) -> None:
         self._stop.set()
@@ -915,6 +1015,16 @@ class CameraContactWorker:
             while not self._stop.is_set():
                 source = self._camera.read(timeout_ms=self.read_timeout_ms)
                 timestamp_ns = monotonic_ns()
+                if self._force_estimator is not None:
+                    try:
+                        self._force_estimator.update_optical(timestamp_ns, source.rgb)
+                        self._state.update(force_estimator_error=None)
+                    except Exception as error:
+                        self._state.update(
+                            force_estimator_error=(
+                                f"{type(error).__name__}: {error}"
+                            )
+                        )
                 ft_sample = self._state.latest_ft()
                 if ft_sample is not None:
                     contact_force_n = self._contact_force(ft_sample)
@@ -1005,7 +1115,15 @@ class CameraContactWorker:
                     references = tuple(self._reference_frames)
                 for reference in references:
                     self._recorder.submit_camera(reference)
-        if run_id is None or sample.capture_kind != "contact":
+        if run_id is None:
+            return
+        with self._contact_frame_gate_lock:
+            gate = self._contact_frame_gate
+        if sample.capture_kind != "contact" or (
+            gate is not None and not gate(sample)
+        ):
+            if gate is not None:
+                self._last_contact_record_ns = None
             return
         period_ns = round(1.0e9 / self.contact_record_rate_hz)
         if (
@@ -1093,6 +1211,7 @@ class ProprioceptiveExperimentRuntime:
         contact_processing_mode: str = "both",
         camera_record_rate_hz: float = 5.0,
         offline_reference_frame_count: int = 30,
+        force_estimator: OnlineForceEstimator | None = None,
     ) -> None:
         self.can_io = can_io
         self.motor_device = motor
@@ -1108,6 +1227,7 @@ class ProprioceptiveExperimentRuntime:
             kd=kd,
             command_rate_hz=motor_rate_hz,
             feedback_timeout_s=motor_feedback_timeout_s,
+            force_estimator=force_estimator,
         )
         self.ft = FTSensorWorker(
             ft_sensor,
@@ -1125,8 +1245,9 @@ class ProprioceptiveExperimentRuntime:
             contact_processing_mode=contact_processing_mode,
             contact_record_rate_hz=camera_record_rate_hz,
             offline_reference_frame_count=offline_reference_frame_count,
+            force_estimator=force_estimator,
         )
-        self.estimator = ForceEstimator()
+        self.estimator = force_estimator
         self._shutdown_lock = threading.Lock()
         self._shutdown = False
 
@@ -1169,12 +1290,25 @@ class ProprioceptiveExperimentRuntime:
             raise RuntimeError("unloaded baseline is disabled while recording")
         self.camera.request_unloaded_baseline()
 
+    def set_force_torque_bias(self, torque_nm: float | None = None) -> None:
+        """Set force-estimator bias explicitly, optionally from latest feedback."""
+
+        if self.estimator is None:
+            raise RuntimeError("no force estimator is configured")
+        if torque_nm is None:
+            motor = self.snapshot().motor
+            if motor is None:
+                raise RuntimeError("motor feedback is unavailable")
+            torque_nm = motor.torque_nm
+        self.estimator.set_torque_bias(torque_nm)
+
     def start_recording(
         self,
         *,
         trial: int,
         contact_location_gt_mm: float | None,
         notes: str | None,
+        experiment_context: Mapping[str, Any] | None = None,
     ) -> Path:
         snapshot = self.snapshot()
         if not self.motor.enabled or snapshot.motor is None:
@@ -1201,6 +1335,24 @@ class ProprioceptiveExperimentRuntime:
         ):
             raise ValueError("contact_location_gt_mm must be finite when supplied")
         kp, kd = self.motor.gains
+        experiment_metadata: dict[str, Any] = {
+            "trial": trial,
+            "contact_location_gt_mm": contact_location_gt_mm,
+            "notes": None if notes is None or not notes.strip() else notes.strip(),
+        }
+        if experiment_context is not None:
+            context = dict(experiment_context)
+            collisions = sorted(set(experiment_metadata).intersection(context))
+            if collisions:
+                raise ValueError(
+                    "experiment_context contains reserved keys: "
+                    + ", ".join(collisions)
+                )
+            try:
+                json.dumps(context)
+            except (TypeError, ValueError) as error:
+                raise ValueError("experiment_context must be JSON serializable") from error
+            experiment_metadata.update(context)
         metadata = {
             "motor": {
                 "model": "AK40-10",
@@ -1212,11 +1364,7 @@ class ProprioceptiveExperimentRuntime:
                 "feedforward_torque_Nm": 0.0,
                 "command_rate_hz": self.motor.command_rate_hz,
             },
-            "experiment": {
-                "trial": trial,
-                "contact_location_gt_mm": contact_location_gt_mm,
-                "notes": None if notes is None or not notes.strip() else notes.strip(),
-            },
+            "experiment": experiment_metadata,
             "acquisition": {
                 "clock": "time.monotonic_ns",
                 "camera": {
@@ -1258,6 +1406,22 @@ class ProprioceptiveExperimentRuntime:
                     "processing_mode": self.camera.contact_processing_mode,
                     "online_failure_policy": "record acquisition and report unavailable",
                 },
+                "force_estimator": None
+                if self.estimator is None
+                else {
+                    "method": "optical-weighted affine torque-to-force models",
+                    "calibration": self.estimator.calibration.to_mapping(),
+                    "contact_enter_threshold_Nm": (
+                        self.estimator.contact_enter_threshold_nm
+                    ),
+                    "contact_exit_threshold_Nm": (
+                        self.estimator.contact_exit_threshold_nm
+                    ),
+                    "optical_to_motor_offset_ns": (
+                        self.estimator.optical_to_motor_offset_ns
+                    ),
+                    "torque_bias_Nm": self.estimator.torque_bias_nm,
+                },
             },
         }
         return self.recorder.start(metadata)
@@ -1292,6 +1456,8 @@ __all__ = [
     "CameraAcquisition",
     "FTAcquisition",
     "ForceEstimator",
+    "OnlineForceEstimate",
+    "OnlineForceEstimator",
     "MotorAcquisition",
     "ProprioceptiveExperimentRuntime",
     "ProprioceptiveRecorder",
