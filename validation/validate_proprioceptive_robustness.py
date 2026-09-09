@@ -9,6 +9,7 @@ from pathlib import Path
 import sys
 
 import cv2
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
@@ -21,6 +22,7 @@ from algorithm import (  # noqa: E402
     ContactLocalizationConfig,
     build_canonical_map,
     build_unloaded_reference,
+    canonical_position_to_mm,
     causal_median_response,
     compute_longitudinal_response,
     detect_leds,
@@ -221,6 +223,27 @@ def _replay_run(
             saturation_fraction_ge_250=saturation_ge_250,
             saturation_fraction_eq_255=saturation_eq_255,
         )
+        evidence_total = float(np.sum(result.evidence_profile))
+        raw_centroid = (
+            float(
+                np.sum(
+                    np.linspace(0.0, 1.0, len(result.evidence_profile))
+                    * result.evidence_profile
+                )
+                / evidence_total
+            )
+            if evidence_total > 0.0
+            else np.nan
+        )
+        raw_geometry_position_mm = (
+            canonical_position_to_mm(
+                raw_centroid,
+                led_coordinates,
+                maximum_extrapolation_mm=1.0e6,
+            )
+            if np.isfinite(raw_centroid)
+            else np.nan
+        )
         rows.append(
             {
                 "run_id": run["run_id"],
@@ -243,6 +266,8 @@ def _replay_run(
                     if result.valid and result.contact_detected
                     else np.nan
                 ),
+                "raw_response_centroid": raw_centroid,
+                "raw_geometry_position_mm": raw_geometry_position_mm,
                 "optical_status": result.status,
                 "total_evidence_dn": result.total_evidence_dn,
                 "peak_snr": result.peak_snr,
@@ -398,6 +423,212 @@ def _summarize(table: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def _fit_location_affine(
+    raw_position_mm: np.ndarray,
+    ground_truth_mm: np.ndarray,
+) -> tuple[float, float, str]:
+    design = np.column_stack((raw_position_mm, np.ones(len(raw_position_mm))))
+    slope, intercept = np.linalg.lstsq(design, ground_truth_mm, rcond=None)[0]
+    if not np.isfinite(slope) or not np.isfinite(intercept):
+        return np.nan, np.nan, "invalid: nonfinite affine fit"
+    if slope <= 0.0:
+        return float(slope), float(intercept), "invalid: nonmonotonic response"
+    return float(slope), float(intercept), "valid"
+
+
+def _condition_location_calibration(
+    table: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Compare per-condition affine calibration with a held-out-run audit."""
+
+    loaded = table[
+        (table["ground_truth_force_n"] >= LOADED_FORCE_THRESHOLD_N)
+        & np.isfinite(table["raw_geometry_position_mm"])
+    ].copy()
+    predictions: list[pd.DataFrame] = []
+    summaries: list[dict[str, object]] = []
+    for condition, condition_table in loaded.groupby(
+        "observation_condition",
+        sort=False,
+    ):
+        run_calibration = (
+            condition_table.groupby(
+                ["run_id", "contact_location_gt_mm"],
+                as_index=False,
+                sort=True,
+            )["raw_geometry_position_mm"]
+            .median()
+            .sort_values("contact_location_gt_mm")
+        )
+        if len(run_calibration) != len(CONTACT_LOCATIONS_MM):
+            raise RuntimeError(
+                f"{condition} does not contain all three calibration locations"
+            )
+
+        protocols: list[tuple[str, str | None, pd.DataFrame]] = [
+            ("three_run_affine_in_sample", None, run_calibration)
+        ]
+        protocols.extend(
+            (
+                "leave_one_run_out",
+                held_out_run_id,
+                run_calibration[run_calibration["run_id"] != held_out_run_id],
+            )
+            for held_out_run_id in run_calibration["run_id"]
+        )
+        for protocol, held_out_run_id, calibration_rows in protocols:
+            slope, intercept, status = _fit_location_affine(
+                calibration_rows["raw_geometry_position_mm"].to_numpy(
+                    dtype=np.float64
+                ),
+                calibration_rows["contact_location_gt_mm"].to_numpy(
+                    dtype=np.float64
+                ),
+            )
+            evaluation = (
+                condition_table
+                if held_out_run_id is None
+                else condition_table[condition_table["run_id"] == held_out_run_id]
+            ).copy()
+            evaluation["calibration_protocol"] = protocol
+            evaluation["held_out_run_id"] = held_out_run_id or ""
+            evaluation["calibration_run_ids"] = ",".join(
+                calibration_rows["run_id"].astype(str)
+            )
+            evaluation["location_calibration_slope"] = slope
+            evaluation["location_calibration_intercept_mm"] = intercept
+            evaluation["location_calibration_status"] = status
+            evaluation["condition_calibrated_location_mm"] = (
+                slope * evaluation["raw_geometry_position_mm"] + intercept
+                if status == "valid"
+                else np.nan
+            )
+            evaluation["condition_calibrated_error_mm"] = (
+                evaluation["condition_calibrated_location_mm"]
+                - evaluation["contact_location_gt_mm"]
+            )
+            predictions.append(evaluation)
+
+            finite = np.isfinite(evaluation["condition_calibrated_location_mm"])
+            absolute_error = np.abs(
+                evaluation.loc[finite, "condition_calibrated_error_mm"].to_numpy(
+                    dtype=np.float64
+                )
+            )
+            summaries.append(
+                {
+                    "observation_condition": condition,
+                    "calibration_protocol": protocol,
+                    "held_out_run_id": held_out_run_id or "",
+                    "calibration_run_ids": ",".join(
+                        calibration_rows["run_id"].astype(str)
+                    ),
+                    "location_calibration_slope": slope,
+                    "location_calibration_intercept_mm": intercept,
+                    "location_calibration_status": status,
+                    "evaluation_sample_count": len(evaluation),
+                    "finite_prediction_count": int(np.count_nonzero(finite)),
+                    "location_mae_mm": (
+                        float(np.mean(absolute_error))
+                        if absolute_error.size
+                        else np.nan
+                    ),
+                    "location_median_absolute_error_mm": (
+                        float(np.median(absolute_error))
+                        if absolute_error.size
+                        else np.nan
+                    ),
+                    "within_one_led_pitch_fraction": (
+                        float(np.mean(absolute_error <= 11.0))
+                        if absolute_error.size
+                        else np.nan
+                    ),
+                }
+            )
+    return pd.concat(predictions, ignore_index=True), pd.DataFrame(summaries)
+
+
+def _plot_condition_location_calibration(
+    predictions: pd.DataFrame,
+    output_stem: Path,
+) -> None:
+    figure, axes = plt.subplots(1, 2, figsize=(7.16, 3.1), sharex=True)
+    protocols = (
+        ("three_run_affine_in_sample", "Three-run condition fit"),
+        ("leave_one_run_out", "Leave-one-run/location-out"),
+    )
+    colors = plt.get_cmap("tab10").colors
+    for axis, (protocol, title) in zip(axes, protocols, strict=True):
+        selected = predictions[predictions["calibration_protocol"] == protocol]
+        for color, (condition, condition_table) in zip(
+            colors,
+            selected.groupby("observation_condition", sort=False),
+            strict=False,
+        ):
+            run_medians = (
+                condition_table.groupby("contact_location_gt_mm", as_index=False)[
+                    "condition_calibrated_location_mm"
+                ]
+                .median()
+                .sort_values("contact_location_gt_mm")
+            )
+            axis.plot(
+                run_medians["contact_location_gt_mm"],
+                run_medians["condition_calibrated_location_mm"],
+                marker="o",
+                linewidth=1.0,
+                markersize=4.5,
+                color=color,
+                label=condition,
+            )
+        axis.plot([-5, 45], [-5, 45], "--", color="0.55", linewidth=0.8)
+        axis.set_title(title)
+        axis.set_xlim(-5, 45)
+        axis.set_xticks(CONTACT_LOCATIONS_MM)
+        axis.margins(y=0.08)
+        axis.grid(axis="both", color="0.9", linewidth=0.6)
+    axes[0].set_ylabel("Estimated contact location [mm]")
+    figure.supxlabel("Ground-truth contact location [mm]")
+    axes[1].legend(frameon=False, fontsize=7, ncol=2, loc="upper left")
+    figure.tight_layout()
+    figure.savefig(output_stem.with_suffix(".png"), dpi=240)
+    figure.savefig(output_stem.with_suffix(".pdf"))
+    plt.close(figure)
+
+
+def _summarize_condition_calibration(
+    predictions: pd.DataFrame,
+) -> pd.DataFrame:
+    rows = []
+    for (condition, protocol), group in predictions.groupby(
+        ["observation_condition", "calibration_protocol"],
+        sort=False,
+    ):
+        absolute_error = np.abs(
+            group["condition_calibrated_error_mm"].to_numpy(dtype=np.float64)
+        )
+        finite = np.isfinite(absolute_error)
+        rows.append(
+            {
+                "observation_condition": condition,
+                "calibration_protocol": protocol,
+                "evaluation_sample_count": len(group),
+                "finite_prediction_count": int(np.count_nonzero(finite)),
+                "location_mae_mm": (
+                    float(np.mean(absolute_error[finite]))
+                    if np.any(finite)
+                    else np.nan
+                ),
+                "within_one_led_pitch_fraction": (
+                    float(np.mean(absolute_error[finite] <= 11.0))
+                    if np.any(finite)
+                    else np.nan
+                ),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dataset-root", type=Path, default=DATASET_ROOT)
@@ -481,6 +712,12 @@ def main() -> None:
     estimates["f_hat_n"] = estimates["estimated_force_n"]
     estimates["tau_act_nm"] = estimates["motor_torque_nm"]
     summary = _summarize(estimates)
+    calibrated_predictions, calibrated_summary = _condition_location_calibration(
+        estimates
+    )
+    calibrated_condition_summary = _summarize_condition_calibration(
+        calibrated_predictions
+    )
 
     camera_results.to_csv(args.output_dir / "camera_localization.csv", index=False)
     pd.DataFrame(geometry_rows).to_csv(
@@ -489,6 +726,22 @@ def main() -> None:
     )
     estimates.to_csv(args.output_dir / "per_sample_estimates.csv", index=False)
     summary.to_csv(args.output_dir / "run_summary.csv", index=False)
+    calibrated_predictions.to_csv(
+        args.output_dir / "condition_calibrated_localization.csv",
+        index=False,
+    )
+    calibrated_summary.to_csv(
+        args.output_dir / "condition_calibrated_localization_summary.csv",
+        index=False,
+    )
+    calibrated_condition_summary.to_csv(
+        args.output_dir / "condition_calibrated_localization_by_condition.csv",
+        index=False,
+    )
+    _plot_condition_location_calibration(
+        calibrated_predictions,
+        args.output_dir / "condition_calibrated_localization",
+    )
     cv2.imwrite(
         str(args.output_dir / "geometry_registration.png"),
         np.vstack(overlay_rows),
@@ -504,6 +757,23 @@ def main() -> None:
     calibration_location_ready = bool(
         np.all(nominal_summary["localization_coverage"] >= 0.80)
         and np.all(nominal_summary["contact_location_mae_mm"] <= 11.0)
+    )
+    condition_in_sample = calibrated_summary[
+        calibrated_summary["calibration_protocol"]
+        == "three_run_affine_in_sample"
+    ]
+    condition_leave_one_out = calibrated_summary[
+        calibrated_summary["calibration_protocol"] == "leave_one_run_out"
+    ]
+    condition_in_sample_ready = bool(
+        np.all(condition_in_sample["location_calibration_status"] == "valid")
+        and np.all(condition_in_sample["within_one_led_pitch_fraction"] >= 0.80)
+    )
+    condition_leave_one_out_ready = bool(
+        np.all(condition_leave_one_out["location_calibration_status"] == "valid")
+        and np.all(
+            condition_leave_one_out["within_one_led_pitch_fraction"] >= 0.80
+        )
     )
     report = {
         "analysis_version": 1,
@@ -533,6 +803,13 @@ def main() -> None:
             else "diagnostic_only_due_to_nominal_localization_failure"
         ),
         "per_run_torque_zeroing": False,
+        "condition_location_calibration": {
+            "unit": "one camera-extrinsic/lighting condition containing three runs",
+            "contact_locations_mm": list(CONTACT_LOCATIONS_MM),
+            "model": "positive-slope affine map from raw geometry position to contact location",
+            "three_run_in_sample_qc_passed": condition_in_sample_ready,
+            "leave_one_run_location_out_qc_passed": condition_leave_one_out_ready,
+        },
         "fig6e_ready": localization_ready,
         "fig6e_blocker": (
             None

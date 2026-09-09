@@ -1006,6 +1006,14 @@ per-camera-sample `x_hat/F_GT/F_hat`, and run-QC artifacts, and records an
 explicit `fig6e_ready` false state when localization coverage or one-LED-pitch
 location error fails. Figure 6(e) must not consume a failed artifact.
 
+The same validator also keeps condition-level calibration distinct from
+per-run calibration. Each camera-extrinsic/lighting condition is one triplet at
+0, 20, and 40 mm. A diagnostic positive-slope affine location map is fitted
+once per triplet. It reports both the optimistic three-run in-sample result and
+a leave-one-run/location-out result; only the latter tests transfer to an
+unseen run/location. These labelled-contact diagnostics do not replace or
+silently modify the calibration-free production estimator.
+
 ### `experiments/`
 
 Owns physical experiment hardware and image-processing algorithms outside the
@@ -1686,7 +1694,7 @@ proxy and must not report absolute millimetre localization accuracy.
 configuration names the six canonical raw datasets directly under
 `output/contact_dataset/`: Solaris and Dragon Skin `baseline`, `flat_opt`, and
 `angled_opt`. `lumo.visualization.style` maps those internal IDs to the shared
-paper labels Baseline, Opt-Flat, and Opt-Curved and to the fixed gray,
+paper labels Baseline, Flat-Opt, and Curved-Opt and to the fixed gray,
 teal-blue, and orange morphology palette documented in `figures/README.md`.
 The morphology palette remains separate from the carrier, pad, LED, and force
 semantic colors. Earlier dated sessions remain unchanged under
@@ -1698,8 +1706,9 @@ configuration maps the six
 distal-to-proximal acquisition stops to physical contact coordinates at 10 mm
 spacing. This measured fixture spacing is separate from the fingertip's 11 mm
 LED pitch. All three panels use one shared row grammar: Solaris occupies the
-upper Baseline/Opt-Flat/Opt-Curved block and Dragon Skin occupies the lower
-block. Panel (a) alone owns the
+upper Baseline/Flat-Opt/Curved-Opt block and Dragon Skin occupies the lower
+block. Figure 5 deliberately retains the full material names in its shared row
+header; other paper figures use `Sol.` and `DS.`. Panel (a) alone owns the
 figure-wide row header: a narrow rotated material label spans each three-row
 block, while regular-weight morphology labels and short gray/teal/orange
 identity bars occupy the next semantic column after a narrow whitespace
@@ -1766,8 +1775,9 @@ per-repetition values and all six location medians remain exported to
 `fig5b_region_response.csv`. The two Dragon Skin
 angled-opt indenter conditions are populated from the completed physical
 dataset.
-`experiments.analysis.fig5c_decoder` owns the shared Figure 5(c)/Figure 6
-analysis contract. It reads existing 128-bin compact profiles and represents
+`experiments.analysis.fig5c_decoder` owns Figure 5(c)'s established decoder and
+the shared paper-figure configuration. It reads existing 128-bin compact
+profiles and represents
 each independent contact by the signed 5 N-minus-2 N mean change in six fixed
 longitudinal regions. A nearest-template observer predicts one of the corrected
 0, 10, 20, 30, 40, and 50 mm fixture positions. Evaluation leaves out the
@@ -1810,23 +1820,67 @@ confusion matrices, labels, and annotations as native Matplotlib artists; it nev
 rendered panel screenshots. It writes the sole manuscript outputs `fig.pdf` and
 `fig.png`; obsolete standalone panel and exploration renders are not retained.
 
-`figures.fig6.fig6` is the sole Figure 6 renderer. It composes the current
-analyses at the exact 7.16-inch IEEE double-column width in a 2-by-3 grid.
-Panel (a) compares baseline-relative maintained-contact `W_cycle` and
-independently re-established-contact `W_recontact` variability for the 10 mm
-sphere without pooling their absolute units. Panel (b) reads the established
-slope-profile `D_neighbor`, validates the stored ratio, and labels
-`D_neighbor / W_contact` paper-facing as `Q_recontact`. Panel (c) is the
-10 mm-sphere optional-calibration curve. Its `k=0` operating point uses an
-unloaded compact RGB reference, the known five-LED geometry, and no labelled
-contact-location calibration. Its `k=1..4` operating points retain the existing
-six-region nearest-template protocol with deterministic calibration-repetition
-subsets and held-out repetitions. The two regimes are stored explicitly rather
-than being treated as one estimator, and the renderer separates them at
-`k=0.5`. Panel (d) occupies the centered lower-row column at the same width as
-each upper-row panel and is a representative time series built from
+`experiments.analysis.fig6abc` owns the versioned, corrected Figure 6(a--c)
+analysis. It is separate from Figure 5's established 2-to-5 N six-region
+decoder and from the Figure 6(d/e) force and robustness paths. Panel (a) joins
+run-first maintained-contact `W_cycle [DN]` to the matching independently
+re-established-contact slope-profile `W_recontact [DN/N]`. The available
+maintained-contact sessions contain only a 10 mm sphere, so the panel contains
+one point per material/morphology and records rather than duplicates the
+missing 30 mm support. Panel (b) reads the established aggregate
+`D_neighbor_median_DN_per_N` and `W_median_DN_per_N` fields, verifies their
+stored ratio, and reports the dimensionless `Q_recontact = D_neighbor /
+W_recontact`; a missing or nonpositive denominator remains unavailable.
+
+Panel (c) extracts one observation per independent 5 N target hold for the
+10 mm sphere. Each observation uses the associated unloaded capture, one fixed
+image remap for loaded and reference pixels, only observed support, positive
+Green change, the brightest 10% transverse reduction, and longitudinal
+smoothing with sigma 2 rows. Five anchors are detected from the original
+unloaded imagery and
+mapped distal-to-proximal to `[0, 11, 22, 33, 44] mm`; contact labels never
+enter registration. Every valid condition is regridded to its common observed
+physical support without clipping valid support past LED5. The serialized
+128-bin pre-threshold response profile is the common optical observation.
+Contact validity still uses thresholded evidence from the unloaded noise model.
+`k=0` retains the thresholded-evidence geometry centroid with no labelled
+contact examples, while `k=1..4` applies nearest mean templates directly to the
+pre-threshold registered response. Geometry-localization failure therefore does
+not invalidate an otherwise contact-valid calibrated template prediction. One
+complete repetition across all six fixture locations is held out; every
+k-subset of the remaining four repetitions is evaluated without replacing
+failed calibration examples.
+Subset metrics are averaged within an outer held-out repetition, then the five
+outer repetitions are summarized. MAE is conditional on a valid estimate and
+coverage is stored and displayed separately.
+
+`figures.fig6.fig6abc` is the independent a--c build and review entry point. It
+does not import, reconstruct, or render panels (d) or (e). It consumes the
+versioned corrected artifacts for panels (a) and (b) and writes
+`fig6abc_review.pdf/png` at the final double-column width. It also owns the
+panel-(c) plotting contract, whose values come from the checked-in
+`figures/fig6/fig6c_uncalibrated_location_mae.csv` rather than from
+`fig6c_summary.csv`. That table reports MAE at contact locations absent from
+calibration: calibration repetitions {1, 2} and evaluation repetitions {3, 4,
+5} split once, calibration effort `K` counts distinct contact locations set up
+on the rig, all `C(6, K)` subsets are averaged, and each subset is scored only
+on the locations it left out. `K = 6` is undefined, `K = 1` cannot support the
+affine coordinate-to-millimetre fit, and `K = 0` is the LED geometry prior
+alone, which resolves only for Solaris; each of those states is recorded as an
+explicit `unavailable` row with a reason rather than an absent row. The panel
+splits by material into shared-axis `Sol.` and `DS.` subplots and draws a
+dashed reference at the best prior-only result. The `fig6c_summary.csv`
+calibrated regime is retained for audit but is not a figure input, because it
+holds every contact location fixed and so cannot separate the morphologies.
+
+`figures.fig6.fig6` remains the sole full Figure 6 renderer
+and consumes the same corrected a--b tables and the same panel-(c) table. The
+composition is a 2-by-2 grid: (a) and (b) on the upper row, (c) and (d) on the
+lower row. Panel (d) draws into axes narrower than its grid cell so its
+secondary right torque axis has room, and its label and title follow the drawn
+axes rather than the cell. It is a representative time series built from
 `output/proprioceptive_contact_dataset/run_005` through
-`run_010`, acquired with the Solaris Opt-Flat morphology and ordered at 0, 10,
+`run_010`, acquired with the `Sol. Flat-Opt` morphology and ordered at 0, 10,
 20, 30, 40, and 50 mm. Each run uses its initial
 below-1-N samples for an independent canonical unloaded reference and
 native-rate motor-torque bias. One fixed image-to-canonical geometry is
@@ -1840,23 +1894,35 @@ A single origin-constrained force scale is fitted on run-005 contact samples
 and frozen for every later location; no per-run or per-location force model is
 fitted. Ground truth is the camera-synchronized Rokubi force-vector magnitude
 because these recordings do not identify a calibrated contact-normal axis.
-The complete below-contact intervals are retained, and the panel draws only
-ground-truth and estimated force. Configuration,
+The complete below-contact intervals are retained. The panel draws ground-truth
+and estimated force on the primary axis and the synchronized raw motor torque
+on a muted secondary right axis. The torque trace is contextual recorded input;
+it is not transformed into a second force estimate and does not change the
+calibration or error metric. Configuration,
 paper-facing labels, and morphology colors remain owned by
 `paper_figures.yaml` and `lumo.visualization.style`. The renderer writes the
-canonical `fig6.pdf` and `fig6.png` plus the standalone panel audit render
-`fig6c_optional_calibration_10mm_combined.pdf/png` and the panel-(d) PDF, PNG,
-and plotted-sample CSV under `figures/fig6/`.
+canonical `fig6.pdf` and `fig6.png` plus the standalone single-column panel
+audit render `fig6c_uncalibrated_location_mae.pdf/png` and the panel-(d) PDF,
+PNG, and plotted-sample CSV under `figures/fig6/`. The panel-(c) table is
+hand-entered rather than generated, so
+`tests/unit/visualization/test_fig6c_panel.py` stands in for the provenance
+the generated artifacts carry: it holds the specimen/`K` grid complete, every
+cell either measured with a value or unavailable with a reason, and the
+reference-line specimen present.
 
-The shared analysis writes machine-readable condition summaries, per-sample
-predictions, confusion matrices, magnitude/accuracy data, spatial
-distinguishability data, scalar-versus-spatial accuracy, calibration curves,
-the combined zero-through-four-contact MAE table
-`fig6c_optional_calibration_10mm_combined.csv`, and one consolidated
-`fig56_summary_bundle.csv` below
-`output/analysis/paper_figures/`. Figure modules consume these tables rather
-than reopening raw images. Missing conditions are represented explicitly as
-unavailable rows and reported on stderr instead of being silently imputed.
+The corrected a--c analysis writes the source-valued panel tables, common
+observation NPZ, unloaded-image anchor table and overlays, deterministic split
+manifest, per-contact predictions, conditional-MAE/coverage summary, analysis
+notes, and a fingerprinted provenance manifest below
+`output/analysis/paper_figures/fig6c_corrected_5n_led_registered_response_v2/`.
+The exact measured points rendered in panel (a) are separately reduced to
+`fig6a_contact_state_variability.csv`; no baseline-relative percentage fields
+are present in that figure-data table.
+Existing output files are accepted only when the configuration, compact HDF5,
+all used raw images and source analysis tables, and relevant analysis sources
+retain the recorded hashes. Missing or invalid conditions remain explicit;
+they are never imputed from a different indenter, morphology, or calibration
+budget.
 
 `optical_features.py` owns pure feature extraction. `DenseProfileConfig`
 selects brightest-10% red, mean red, absolute high-pass red, red gradient, or
@@ -2019,7 +2085,7 @@ typography, line and marker dimensions, morphology labels and colors, semantic
 colors, and design-status markers. Ordinary text uses the installed Helvetica
 Light face; only major group headers use an Arial-compatible bold fallback.
 Panel labels remain light and are distinguished by their 9 pt size. Baseline,
-Opt-Flat, and Opt-Curved use the
+Flat-Opt, and Curved-Opt use the
 shared gray, teal-blue, and orange morphology palette. That identity palette is
 kept separate from the rigid-carrier, deformable-pad, optical-source, and force
 semantic colors. The shared deformable-pad color is the original translucent

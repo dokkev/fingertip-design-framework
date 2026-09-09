@@ -35,6 +35,8 @@ from experiments.localization.fixed_finger_calibration import (  # noqa: E402
 )
 from lumo.visualization import (  # noqa: E402
     DEFAULT_STYLE,
+    MATERIAL_LABELS,
+    PAPER_LABELS,
     publication_context,
     save_figure,
 )
@@ -51,7 +53,8 @@ UNLOADED_FORCE_THRESHOLD_N = 1.0
 ROTATION_AXIS_TO_LED1_MM = 103.6
 MINIMUM_MOMENT_ARM_MM = 1.0
 ANALYSIS_VERSION = 1
-EXPERIMENT_LABEL = "Solaris · Opt-Flat"
+EXPERIMENT_LABEL = f"{MATERIAL_LABELS['solaris']} {PAPER_LABELS['flat_opt']}"
+TORQUE_TRACE_COLOR = "#A9ADB2"
 
 
 def _nearest_indices(query: np.ndarray, reference: np.ndarray) -> np.ndarray:
@@ -401,7 +404,34 @@ def plot_force_timeseries(
     show_title: bool = False,
     compact: bool = False,
 ) -> None:
-    """Draw the two-trace representative force panel on a caller-owned axis."""
+    """Draw force and synchronized raw motor torque on a caller-owned axis."""
+
+    torque_axis = axis.twinx()
+    torque_axis.plot(
+        table["display_time_s"],
+        table["motor_torque_nm"],
+        color=TORQUE_TRACE_COLOR,
+        linewidth=0.75,
+        alpha=0.72,
+        zorder=1,
+    )
+    torque_axis.set_ylabel(
+        "Motor torque [N m]",
+        color=TORQUE_TRACE_COLOR,
+        labelpad=2.0,
+    )
+    torque_axis.tick_params(
+        axis="y",
+        colors=TORQUE_TRACE_COLOR,
+        labelsize=DEFAULT_STYLE.tick_font_size_pt,
+        length=DEFAULT_STYLE.tick_length_pt,
+        width=DEFAULT_STYLE.tick_width_pt,
+        pad=1.5,
+    )
+    torque_axis.spines["top"].set_visible(False)
+    torque_axis.spines["left"].set_visible(False)
+    torque_axis.spines["right"].set_color(TORQUE_TRACE_COLOR)
+    torque_axis.grid(False)
 
     axis.plot(
         table["display_time_s"],
@@ -529,7 +559,7 @@ def save_force_timeseries_panel(
     """Write the standalone audit render for Figure 6(d)."""
 
     figure, axis = plt.subplots(figsize=(DEFAULT_STYLE.double_column_width_in, 2.20))
-    figure.subplots_adjust(left=0.085, right=0.992, bottom=0.20, top=0.84)
+    figure.subplots_adjust(left=0.085, right=0.925, bottom=0.20, top=0.84)
     plot_force_timeseries(axis, table, summary, show_title=True)
     outputs = save_figure(
         figure,

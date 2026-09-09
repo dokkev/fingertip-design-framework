@@ -37,7 +37,7 @@ conda run -n lit ruff check algorithm experiments lumo scripts validation tests
 
 ```bash
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 conda run --no-capture-output -n lit \
-  python -m pytest -q tests/unit
+  python -m pytest -q --import-mode=importlib tests/unit
 ```
 
 Run only the calibration-free online-localizer tests:
@@ -85,7 +85,10 @@ Outputs are written below
 `x_hat_mm`, `f_gt_n`, `f_hat_n`, and raw actuator torque. The JSON report marks
 whether the result is eligible for Figure 6(e); a failed localization QC is a
 negative validation result and must not be bypassed by plotting supplied
-locations or by fitting per-run torque zeros.
+locations or by fitting per-run torque zeros. The same command writes a
+condition-calibrated localization ablation. One condition is exactly one
+0/20/40-mm triplet sharing camera extrinsics and illumination; the outputs
+separate the three-run in-sample fit from leave-one-run/location-out evaluation.
 
 Launch the NiceGUI torque/state dashboard in zero-torque monitor-only mode:
 
@@ -691,7 +694,7 @@ conda run --no-capture-output -n lit \
 ```
 
 This writes `fig5c_accuracy_summary.csv`, per-sample predictions, condition
-confusion matrices, the four Figure 6 support tables, and
+confusion matrices, legacy exploratory Figure 6 support tables, and
 `fig56_summary_bundle.csv` under `output/analysis/paper_figures/`. The primary
 decoder uses signed 5 N-minus-2 N changes in six longitudinal regions and
 leave-one-repetition-out nearest templates. The Figure 6(b) table uses
@@ -702,6 +705,8 @@ change [percentage points].
 `fig6c_optional_calibration_10mm_combined.csv` contains only the 10 mm sphere:
 `k=0` is the geometry-prior estimator with no labelled contact calibration,
 while `k=1..4` retain the calibrated six-region held-out-repetition protocol.
+Those two legacy Figure 6 tables are not inputs to the corrected Figure 6(a)
+or (c); use the dedicated corrected a--c command below.
 
 Render the final IEEE double-column Figure 5 PDF/PNG from the current physical
 datasets and decoder summary:
@@ -727,8 +732,10 @@ the 10 mm sphere, repetition 1, and the frame closest to 15 N at three
 representative physical positions: 0, 20, and 40 mm (the separate LED pitch
 remains 11 mm). The 7.16 x 4.35 inch composition places panels (a), (b), and
 (c) in one horizontal row. All three panels use the same six experimental rows:
-Solaris Baseline/Opt-Flat/Opt-Curved above Dragon Skin
-Baseline/Opt-Flat/Opt-Curved. Each panel's header, data, and shared x-axis-title
+Solaris Baseline/Flat-Opt/Curved-Opt above Dragon Skin
+Baseline/Flat-Opt/Curved-Opt. Figure 5 retains these full material names while
+the other manuscript figures abbreviate them as `Sol.` and `DS.`. Each panel's
+header, data, and shared x-axis-title
 area uses one thin neutral bounding box without internal table rules. Panel (a)
 alone owns the figure-wide rotated material labels, morphology labels, their
 paper-color identity bars, and the small separating spacer; these labels remain
@@ -761,7 +768,46 @@ decoder's existing per-sample predictions and preserves its original raw
 confusion tables.
 `D_neighbor / W_contact` remains exclusive to Figure 6(b).
 
-Render Figure 6 or both final figures:
+Recompute and render only the corrected Figure 6(a--c) analysis without
+loading, rebuilding, or rendering panels (d) and (e):
+
+```bash
+conda run --no-capture-output -n lit \
+  python figures/fig6/fig6abc.py \
+  --config experiments/analysis/configs/paper_figures.yaml \
+  --recompute
+```
+
+The versioned machine-readable artifacts are written below
+`output/analysis/paper_figures/fig6c_corrected_5n_led_registered_response_v2/`; the
+manuscript-scale review is `figures/fig6/fig6abc_review.pdf/png`. Panel (a) is
+explicitly 10 mm-only because the maintained-contact sessions contain no 30 mm
+observations. Its exact absolute plotted values are written to
+`fig6a_contact_state_variability.csv`. Panel (b) retains the aggregate slope-profile
+`Q_recontact = D_neighbor / W_recontact`. The directory retains the common observation NPZ, anchor table and overlays,
+split manifest, per-contact predictions, `fig6c_summary.csv`,
+`fig6c_provenance.json`, and `fig6c_analysis_notes.md`.
+
+Panel (c) no longer reads `fig6c_summary.csv`, whose calibrated regime holds
+every contact location fixed and therefore cannot separate the morphologies.
+It plots the checked-in table
+`figures/fig6/fig6c_uncalibrated_location_mae.csv`, which reports MAE at
+contact locations absent from calibration. Repetitions split once into
+calibration repetitions {1, 2} and evaluation repetitions {3, 4, 5}.
+Calibration effort `K` is the number of distinct contact locations set up on
+the rig; all `C(6, K)` location subsets are enumerated and averaged, and each
+subset is evaluated only on the locations it left out. `K = 6` is therefore
+undefined, and `K = 1` cannot support the affine coordinate-to-millimetre fit,
+so both remain `unavailable`. `K = 0` is the LED geometry prior alone and
+resolves only for Solaris. Every specimen and `K` cell carries an explicit
+`status` and `failure_reason`; the empty `mae_q25_mm`/`mae_q75_mm` columns
+suppress the interquartile bands until subset quartiles are supplied. Because
+this table is entered by hand rather than emitted by
+`experiments.analysis.fig6abc`, `tests/unit/visualization/test_fig6c_panel.py`
+stands in for the provenance the generated artifacts carry.
+
+Render the full Figure 6, including its existing panel (d), or both final
+figures:
 
 ```bash
 conda run --no-capture-output -n lit \
@@ -772,23 +818,30 @@ conda run --no-capture-output -n lit \
   --config experiments/analysis/configs/paper_figures.yaml
 ```
 
-The Figure 6 command writes the canonical exact-7.16-inch double-column
-`fig6.pdf/png` and the standalone
-`fig6c_optional_calibration_10mm_combined.pdf/png`. It also writes
+The full Figure 6 command writes the canonical exact-7.16-inch double-column
+`fig6.pdf/png` and the standalone single-column
+`fig6c_uncalibrated_location_mae.pdf/png`. It also writes
 `fig6d_force_timeseries_multilocation.pdf/png/csv` from proprioceptive dataset
-runs 005--010. The upper row contains contact-state variability, re-contact
-distinguishability, and optional calibration; the six-location force time
-series occupies the centered lower-row column at the same width as each upper
-panel. Figure 6(c) contains six
-10 mm-sphere localization-MAE series. A dotted `k=0` to `k=1` transition and a
-vertical separator distinguish the geometry-prior, no-labelled-contact regime
-from the calibrated `k=1..4` regime. Figure 6(d) uses the camera-synchronized
+runs 005--010. The composition is a 2-by-2 grid: contact-state variability and
+re-contact distinguishability on the upper row, transfer to uncalibrated
+locations and the six-location force time series on the lower row. Figure 6(c)
+splits into `Sol.` and `DS.` subplots that share one MAE axis, marks the
+`K = 0` geometry prior with an X, separates that regime from the calibrated
+one with a vertical rule at `K = 1`, and draws a dashed horizontal reference at
+the best prior-only result, `Sol. Curved-Opt` at 1.91 mm. Dragon Skin carries
+no `K = 0` mark and is annotated `No prior available`. Figure 6(d)
+uses the camera-synchronized
 Rokubi force-vector magnitude, per-run unloaded torque zeroing, the prescribed
 `r(x)=(103.6-x)/1000` m geometry, and one global scale fitted only on run 005.
-The panel labels the represented specimen condition as Solaris Opt-Flat.
+The panel labels the represented specimen condition as `Sol. Flat-Opt`. A
+muted secondary right axis shows the synchronized raw motor torque in N m for
+context; it is not a separate fitted force result. Because that secondary
+spine needs horizontal room, panel (d) draws into axes narrower than its grid
+cell and centers its own label and title on the drawn axes.
 
-Figure 6 writes `fig6.pdf/png`. Add `--recompute` to a plotting/build command
-to regenerate the compact analysis tables first.
+Figure 6 writes `fig6.pdf/png`. Use the dedicated a--c command when panel (d)
+must remain untouched. Add `--recompute` to the full plotting/build command
+only when rebuilding the complete composition is intended.
 
 Replay the smooth emissive segmentation on the checked-in 13-image reference
 set, report fixed-extrinsic stability/runtime, and regenerate its overlays:

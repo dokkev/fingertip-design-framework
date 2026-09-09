@@ -76,7 +76,7 @@ Bold is a structural cue, not an emphasis style.
 
 Use bold only for major row/column group headers when needed to distinguish
 hierarchy, e.g.
-  **Solaris** and **Dragon Skin**.
+  **Sol.** and **DS.**.
 
 Do **not** bold:
 
@@ -131,8 +131,8 @@ Rules:
 - Do not end panel titles with a period.
 - Avoid sentence-like claims such as `Decoding improves without increased
   signal magnitude`; move interpretation to the caption or manuscript text.
-- Shared column/group headers such as `10 mm`, `30 mm`, `Solaris`, or
-  `Dragon Skin` remain independently centered over the groups they describe.
+- Shared column/group headers such as `10 mm`, `30 mm`, `Sol.`, or `DS.`
+  remain independently centered over the groups they describe.
 
 When Matplotlib cannot style the panel label and title independently with
 `Axes.set_title`, place the larger panel label and light-weight title as separate
@@ -169,13 +169,13 @@ Use layout to encode experimental structure instead of repeating long labels.
 Preferred hierarchy for material/indenter grids:
 
 ```text
-                 Solaris              Dragon Skin
+                  Sol.                    DS.
               10 mm   30 mm         10 mm   30 mm
 ```
 
 - Major material group headers may be bold.
 - Condition headers (`10 mm`, `30 mm`) use Helvetica Light.
-- Avoid repeated labels such as `Solaris · 10 mm sphere` on every subplot.
+- Avoid repeated labels such as `Sol. · 10 mm sphere` on every subplot.
 - If `10 mm` and `30 mm` are indenter diameters, define that once in the caption
   or use the diameter symbol when ambiguity is possible.
 
@@ -187,20 +187,26 @@ older internal identifiers.
 | Internal key | Paper-facing label | Color |
 | --- | --- | --- |
 | `baseline` | Baseline | `#BFC3C7` |
-| `flat_opt` | Opt-Flat | `#2C758E` |
-| `angled_opt` | Opt-Curved | `#D97707` |
+| `flat_opt` | Flat-Opt | `#2C758E` |
+| `angled_opt` | Curved-Opt | `#D97707` |
 
 Material labels are:
 
-- `Solaris`
-- `Dragon Skin`
+- `Sol.` for Solaris
+- `DS.` for Dragon Skin
+
+Combined paper-facing labels use a space, for example `Sol. Baseline`,
+`Sol. Flat-Opt`, and `DS. Curved-Opt`. Figure 5 is the deliberate exception:
+its shared row header retains the full material names `Solaris` and
+`Dragon Skin`, while its morphology labels still use `Baseline`, `Flat-Opt`,
+and `Curved-Opt`.
 
 Morphology marks use `#4C5055` for a neutral edge or border when one is needed.
 
 ### Morphology color policy
 
-- Morphology comparisons always use **Baseline = gray**, **Opt-Flat =
-  teal-blue**, and **Opt-Curved = orange**.
+- Morphology comparisons always use **Baseline = gray**, **Flat-Opt =
+  teal-blue**, and **Curved-Opt = orange**.
 - Figure 5, Figure 6, and appendix figures use these same labels and colors.
 - Do not redefine the morphology palette inside individual figure scripts.
 - Internal data keys may remain unchanged; all paper-facing labels use the

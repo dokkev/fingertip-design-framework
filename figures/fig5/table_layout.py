@@ -105,7 +105,7 @@ def add_morphology_labels(
     for _, rows in MATERIAL_BLOCKS:
         for morphology, row in zip(COMPARISON_MORPHOLOGIES, rows, strict=True):
             label = labels[morphology]
-            if label.startswith("Opt-"):
+            if label.endswith("-Opt"):
                 label = label.replace("-", "-\n", 1)
             axis = figure.add_subplot(grid[row, column])
             axis.axis("off")

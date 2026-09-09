@@ -21,14 +21,14 @@ PAPER_COLORS = {
 
 PAPER_LABELS = {
     "baseline": "Baseline",
-    "flat_opt": "Opt-Flat",
-    "angled_opt": "Opt-Curved",
+    "flat_opt": "Flat-Opt",
+    "angled_opt": "Curved-Opt",
 }
 
 MATERIAL_LABELS = {
-    "solaris": "Solaris",
-    "dragon_skin": "Dragon Skin",
-    "dragonskin": "Dragon Skin",
+    "solaris": "Sol.",
+    "dragon_skin": "DS.",
+    "dragonskin": "DS.",
 }
 
 EDGE_COLOR = "#4C5055"

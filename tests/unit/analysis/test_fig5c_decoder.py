@@ -11,7 +11,7 @@ from experiments.analysis.fig5c_decoder import (
     decode_leave_one_repetition_out,
     regionize_profile_change,
 )
-from figures.fig6.fig6 import _plot_baseline_relative_changes
+from figures.fig6.fig6abc import _plot_panel_b
 
 
 def _config(tmp_path: Path) -> PaperFigureConfig:
@@ -88,7 +88,7 @@ def test_calibration_burden_uses_only_unselected_repetitions(tmp_path: Path) -> 
     assert all(row["test_accuracy_mean"] == 100.0 for row in rows)
 
 
-def test_relative_change_panel_skips_one_unavailable_morphology(
+def test_current_distinguishability_panel_marks_unavailable_morphology(
     tmp_path: Path,
 ) -> None:
     config = replace(
@@ -109,20 +109,20 @@ def test_relative_change_panel_skips_one_unavailable_morphology(
         {
             "material": "material",
             "indenter": "sphere",
-            "morphology": morphology,
-            "magnitude_change_percent": value,
-            "accuracy_change_pp": accuracy,
+            "morphology_id": morphology,
+            "Q_recontact": value,
             "status": status,
         }
-        for morphology, value, accuracy, status in (
-            ("flat_opt", "-10.0", "15.0", "measured"),
-            ("angled_opt", "", "", "unavailable"),
+        for morphology, value, status in (
+            ("baseline", "2.0", "measured"),
+            ("flat_opt", "3.0", "measured"),
+            ("angled_opt", "", "unavailable"),
         )
     ]
     figure = Figure()
     axis = figure.subplots()
 
-    _plot_baseline_relative_changes(axis, rows, config)
+    _plot_panel_b(axis, rows, config)
 
-    assert len(axis.collections) == 1
-    assert len(axis.lines) == 2
+    assert len(axis.patches) == 2
+    assert [text.get_text() for text in axis.texts].count("n/a") == 1

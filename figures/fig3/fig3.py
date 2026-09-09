@@ -17,6 +17,7 @@ from matplotlib.lines import Line2D  # noqa: E402
 
 from lumo.visualization import (  # noqa: E402
     DEFAULT_STYLE,
+    MATERIAL_LABELS,
     plot_carrier_identity_comparison,
     plot_pareto_small_multiple,
     plot_structural_ablation_schematic,
@@ -49,17 +50,20 @@ _VOID_CMAP = LinearSegmentedColormap.from_list(
     plt.get_cmap("viridis")(np.linspace(0.05, 0.90, 256)),
 )
 _CAMPAIGNS = (
-    ("DragonSkin - Flat", "mobo_fingertip_contact_1_2_5_10_05mm"),
     (
-        "DragonSkin - Curved",
+        f"{MATERIAL_LABELS['dragon_skin']} Flat",
+        "mobo_fingertip_contact_1_2_5_10_05mm",
+    ),
+    (
+        f"{MATERIAL_LABELS['dragon_skin']} Curved",
         "mobo_fingertip_orientation_robust_1_2_5_10_05mm",
     ),
     (
-        "Solaris - Flat",
+        f"{MATERIAL_LABELS['solaris']} Flat",
         "mobo_fingertip_contact_1_2_5_10_05mm_solaris_nominal",
     ),
     (
-        "Solaris - Curved",
+        f"{MATERIAL_LABELS['solaris']} Curved",
         "mobo_fingertip_orientation_robust_1_2_5_10_05mm_solaris_nominal",
     ),
 )

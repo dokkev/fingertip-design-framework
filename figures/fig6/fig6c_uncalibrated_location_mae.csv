@@ -1,0 +1,37 @@
+material,morphology_id,calibration_locations,inference_regime,mae_mm_uncalibrated,mae_q25_mm,mae_q75_mm,status,failure_reason
+solaris,baseline,0,LED geometry prior,4.98,,,measured,
+solaris,baseline,1,affine fit on calibrated locations,,,,unavailable,affine fit undefined below two calibration locations
+solaris,baseline,2,affine fit on calibrated locations,9.25,,,measured,
+solaris,baseline,3,affine fit on calibrated locations,7.55,,,measured,
+solaris,baseline,4,affine fit on calibrated locations,7.17,,,measured,
+solaris,baseline,5,affine fit on calibrated locations,7.07,,,measured,
+solaris,flat_opt,0,LED geometry prior,2.77,,,measured,
+solaris,flat_opt,1,affine fit on calibrated locations,,,,unavailable,affine fit undefined below two calibration locations
+solaris,flat_opt,2,affine fit on calibrated locations,12.42,,,measured,
+solaris,flat_opt,3,affine fit on calibrated locations,5.17,,,measured,
+solaris,flat_opt,4,affine fit on calibrated locations,4.74,,,measured,
+solaris,flat_opt,5,affine fit on calibrated locations,4.51,,,measured,
+solaris,angled_opt,0,LED geometry prior,1.91,,,measured,
+solaris,angled_opt,1,affine fit on calibrated locations,,,,unavailable,affine fit undefined below two calibration locations
+solaris,angled_opt,2,affine fit on calibrated locations,5.12,,,measured,
+solaris,angled_opt,3,affine fit on calibrated locations,2.89,,,measured,
+solaris,angled_opt,4,affine fit on calibrated locations,2.82,,,measured,
+solaris,angled_opt,5,affine fit on calibrated locations,2.63,,,measured,
+dragon_skin,baseline,0,LED geometry prior,,,,unavailable,no LED geometry prior available
+dragon_skin,baseline,1,affine fit on calibrated locations,,,,unavailable,affine fit undefined below two calibration locations
+dragon_skin,baseline,2,affine fit on calibrated locations,6.67,,,measured,
+dragon_skin,baseline,3,affine fit on calibrated locations,4.90,,,measured,
+dragon_skin,baseline,4,affine fit on calibrated locations,4.13,,,measured,
+dragon_skin,baseline,5,affine fit on calibrated locations,3.79,,,measured,
+dragon_skin,flat_opt,0,LED geometry prior,,,,unavailable,no LED geometry prior available
+dragon_skin,flat_opt,1,affine fit on calibrated locations,,,,unavailable,affine fit undefined below two calibration locations
+dragon_skin,flat_opt,2,affine fit on calibrated locations,4.36,,,measured,
+dragon_skin,flat_opt,3,affine fit on calibrated locations,3.60,,,measured,
+dragon_skin,flat_opt,4,affine fit on calibrated locations,3.47,,,measured,
+dragon_skin,flat_opt,5,affine fit on calibrated locations,3.46,,,measured,
+dragon_skin,angled_opt,0,LED geometry prior,,,,unavailable,no LED geometry prior available
+dragon_skin,angled_opt,1,affine fit on calibrated locations,,,,unavailable,affine fit undefined below two calibration locations
+dragon_skin,angled_opt,2,affine fit on calibrated locations,4.47,,,measured,
+dragon_skin,angled_opt,3,affine fit on calibrated locations,2.96,,,measured,
+dragon_skin,angled_opt,4,affine fit on calibrated locations,2.56,,,measured,
+dragon_skin,angled_opt,5,affine fit on calibrated locations,2.33,,,measured,

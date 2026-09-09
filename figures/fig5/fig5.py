@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 from pathlib import Path
 
 import matplotlib
@@ -24,6 +25,7 @@ from .fig5a import render_panel as render_panel_a  # noqa: E402
 from .fig5b import render_panel as render_panel_b  # noqa: E402
 from .fig5c import build_confusion_matrices  # noqa: E402
 from .fig5c import render_panel as render_panel_c  # noqa: E402
+from .config import FIG5_MATERIAL_LABELS  # noqa: E402
 
 
 FIGURE_SIZE_IN = (DEFAULT_STYLE.double_column_width_in, 4.35)
@@ -78,9 +80,10 @@ def _save_composition(
     decoder_predictions = read_csv(predictions_path)
     confusion_matrices = build_confusion_matrices(config, decoder_predictions)
     config.figure5_output_directory.mkdir(parents=True, exist_ok=True)
+    figure_config = replace(config, material_labels=FIG5_MATERIAL_LABELS)
 
     with publication_context(DEFAULT_STYLE):
-        figure = build_figure(config, confusion_matrices)
+        figure = build_figure(figure_config, confusion_matrices)
         outputs = save_figure(
             figure,
             config.figure5_output_directory / output_stem,

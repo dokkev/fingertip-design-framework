@@ -18,6 +18,7 @@ matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt  # noqa: E402
 from matplotlib.lines import Line2D  # noqa: E402
+from matplotlib.transforms import Bbox  # noqa: E402
 import numpy as np  # noqa: E402
 
 from experiments.analysis.fig5c_decoder import (  # noqa: E402
@@ -25,7 +26,19 @@ from experiments.analysis.fig5c_decoder import (  # noqa: E402
     PaperFigureConfig,
     load_config,
     read_csv,
-    run_analysis,
+)
+from experiments.analysis.fig6abc import (  # noqa: E402
+    OUTPUT_SUBDIRECTORY as FIG6ABC_OUTPUT_SUBDIRECTORY,
+    cached_artifacts_current as fig6abc_artifacts_current,
+    run_analysis as run_fig6abc_analysis,
+)
+from figures.fig6.fig6abc import (  # noqa: E402
+    PANEL_C_TABLE,
+    _legend_handles as _morphology_legend_handles,
+    _plot_panel_a as _plot_corrected_panel_a,
+    _plot_panel_b as _plot_corrected_panel_b,
+    _plot_panel_c as _plot_corrected_panel_c,
+    load_panel_c,
 )
 from figures.fig6.fig6d_force_timeseries import (  # noqa: E402
     DEFAULT_DATASET_ROOT as DEFAULT_FORCE_DATASET_ROOT,
@@ -47,10 +60,13 @@ from lumo.visualization import (  # noqa: E402
 
 FIGURE_DIRECTORY = Path(__file__).resolve().parent
 DEFAULT_OUTPUT_STEM = FIGURE_DIRECTORY / "fig6"
-OPTIONAL_CALIBRATION_OUTPUT_STEM = (
-    FIGURE_DIRECTORY / "fig6c_optional_calibration_10mm_combined"
-)
-FIGURE_SIZE_IN = (DEFAULT_STYLE.double_column_width_in, 4.15)
+PANEL_C_OUTPUT_STEM = FIGURE_DIRECTORY / "fig6c_uncalibrated_location_mae"
+FIGURE_SIZE_IN = (DEFAULT_STYLE.double_column_width_in, 4.70)
+PANEL_D_RIGHT_MARGIN = 0.055
+# Panel (d) stacks in-axes location labels under its specimen label, so the
+# bottom-row titles clear both.
+PANEL_D_LABEL_OFFSET_IN = 0.16
+BOTTOM_ROW_TITLE_OFFSET = 0.052
 PANEL_A_MORPHOLOGIES = ("flat_opt", "angled_opt")
 DEFAULT_CYCLE_SUMMARIES = {
     "solaris": REPOSITORY_ROOT
@@ -180,10 +196,16 @@ def _draw_panel_title(
     *,
     y_offset: float = 0.012,
     label_x_offset: float = 0.0,
+    bounds: Any = None,
 ) -> None:
-    """Place aligned panel labels and titles in figure coordinates."""
+    """Place aligned panel labels and titles in figure coordinates.
 
-    bounds = subplot_spec.get_position(figure)
+    ``bounds`` overrides the subplot-spec cell when a panel owns axes narrower
+    than its cell, so the title stays centered on the drawn panel.
+    """
+
+    if bounds is None:
+        bounds = subplot_spec.get_position(figure)
     y = bounds.y1 + y_offset
     figure.text(
         bounds.x0 + label_x_offset,
@@ -284,7 +306,10 @@ def _plot_variability_compact(
         axis.axhline(0.0, color="#777777", linewidth=0.65, linestyle="--", zorder=1)
         axis.set_xlim(-0.34, len(config.materials) - 0.66)
         axis.set_ylim(-limit, limit)
-        axis.set_xticks(centers, ("Solaris", "Dragon\nSkin"))
+        axis.set_xticks(
+            centers,
+            tuple(config.material_labels[material] for material in config.materials),
+        )
         _style_axis(axis)
         axis.tick_params(labelsize=DEFAULT_STYLE.minimum_font_size_pt, pad=1.0)
         if column == 0:
@@ -570,7 +595,7 @@ def _optional_calibration_legend_handles(
             linewidth=1.0,
             markersize=3.5,
             label=(
-                f"{config.material_labels[material]} · "
+                f"{config.material_labels[material]} "
                 f"{config.morphology_labels[morphology]}"
             ),
         )
@@ -830,76 +855,75 @@ def _load_inputs(
     config: PaperFigureConfig,
     *,
     recompute: bool,
+    config_path: Path = DEFAULT_CONFIG_PATH,
 ) -> tuple[
-    list[dict[str, object]],
+    list[dict[str, str]],
     list[dict[str, str]],
     list[dict[str, str]],
 ]:
-    """Load the fixed Figure 6 summaries without changing their metrics."""
+    """Load the versioned Figure 6(a--b) artifacts and the checked-in (c) table."""
 
-    output = config.analysis_output_directory
+    output = config.analysis_output_directory / FIG6ABC_OUTPUT_SUBDIRECTORY
     required = (
-        "fig6b_spatial_distinguishability.csv",
-        "fig6c_optional_calibration_10mm_combined.csv",
+        "fig6a_contact_state_variability.csv",
+        "fig6b_distinguishability_values.csv",
     )
-    if recompute or any(not (output / name).is_file() for name in required):
-        run_analysis(config)
-
-    distinguishability = read_csv(output / required[0])
-    optional_calibration = read_csv(output / required[1])
-    variability = _load_panel_a_variability(config, distinguishability)
-    return variability, distinguishability, optional_calibration
+    if (
+        recompute
+        or any(not (output / name).is_file() for name in required)
+        or not fig6abc_artifacts_current(config, config_path)
+    ):
+        run_fig6abc_analysis(config, config_path)
+    return (
+        read_csv(output / required[0]),
+        read_csv(output / required[1]),
+        load_panel_c(),
+    )
 
 
 def build_figure(
     config: PaperFigureConfig,
-    variability: list[dict[str, object]],
+    variability: list[dict[str, str]],
     distinguishability: list[dict[str, str]],
-    optional_calibration: list[dict[str, str]],
+    uncalibrated_location: list[dict[str, str]],
     force_timeseries: Any,
     force_summary: dict[str, object],
 ) -> plt.Figure:
-    """Build the canonical 2-by-3 Figure 6 at IEEE double-column width."""
+    """Build the canonical 2-by-2 Figure 6 at IEEE double-column width."""
 
     figure = plt.figure(figsize=FIGURE_SIZE_IN)
     grid = figure.add_gridspec(
         2,
-        3,
+        2,
         left=0.072,
-        right=0.992,
-        bottom=0.075,
-        top=0.855,
-        height_ratios=(0.72, 1.08),
-        hspace=0.58,
-        wspace=0.32,
+        right=0.988,
+        bottom=0.085,
+        top=0.885,
+        hspace=0.62,
+        wspace=0.24,
     )
 
-    _plot_variability_compact(figure, grid[0, 0], variability, config)
-    _plot_distinguishability(
-        figure.add_subplot(grid[0, 1]),
-        distinguishability,
-        config,
-        show_title=False,
-    )
-    _plot_optional_calibration(
-        figure.add_subplot(grid[0, 2]),
-        optional_calibration,
-        config,
-        show_title=False,
-        show_legend=False,
-    )
+    _plot_corrected_panel_a(figure, grid[0, 0], variability, config)
+    _plot_corrected_panel_b(figure.add_subplot(grid[0, 1]), distinguishability, config)
+    _plot_corrected_panel_c(figure, grid[1, 0], uncalibrated_location, config)
+
+    # Panel (d) owns a secondary right axis, so it gives back the width its
+    # torque ticks and label need instead of overflowing the figure margin.
     panel_d_spec = grid[1, 1]
+    cell = panel_d_spec.get_position(figure)
+    panel_d_bounds = Bbox.from_bounds(
+        cell.x0, cell.y0, cell.width - PANEL_D_RIGHT_MARGIN, cell.height
+    )
     plot_force_timeseries(
-        figure.add_subplot(panel_d_spec),
+        figure.add_axes(panel_d_bounds.bounds),
         force_timeseries,
         force_summary,
         show_title=False,
         compact=True,
     )
-    panel_d_bounds = panel_d_spec.get_position(figure)
     figure.text(
         0.5 * (panel_d_bounds.x0 + panel_d_bounds.x1),
-        panel_d_bounds.y1 + 0.021,
+        panel_d_bounds.y1 + PANEL_D_LABEL_OFFSET_IN / FIGURE_SIZE_IN[1],
         FORCE_EXPERIMENT_LABEL,
         fontsize=DEFAULT_STYLE.minimum_font_size_pt,
         color="#555555",
@@ -908,57 +932,83 @@ def build_figure(
     )
 
     panel_titles = (
-        (grid[0, 0], "(a)", "Contact-state variability", 0.012),
-        (grid[0, 1], "(b)", "Re-contact distinguishability", 0.012),
-        (grid[0, 2], "(c)", "Optional calibration", 0.012),
+        (grid[0, 0], "(a)", "Contact-state variability", 0.012, None),
+        (grid[0, 1], "(b)", "Re-contact distinguishability", 0.012, None),
+        (
+            grid[1, 0],
+            "(c)",
+            "Transfer to uncalibrated locations",
+            BOTTOM_ROW_TITLE_OFFSET,
+            None,
+        ),
         (
             panel_d_spec,
             "(d)",
             "Location-aware force estimation",
-            0.040,
+            BOTTOM_ROW_TITLE_OFFSET,
+            panel_d_bounds,
         ),
     )
-    for subplot_spec, panel_label, title, y_offset in panel_titles:
+    for subplot_spec, panel_label, title, y_offset, bounds in panel_titles:
         _draw_panel_title(
             figure,
             subplot_spec,
             panel_label,
             title,
             y_offset=y_offset,
-            label_x_offset=-0.015 if panel_label == "(d)" else 0.0,
+            bounds=bounds,
         )
 
     figure.legend(
-        handles=_optional_calibration_legend_handles(config),
+        handles=_morphology_legend_handles(config),
         loc="upper center",
         bbox_to_anchor=(0.5, 0.995),
-        ncol=3,
+        ncol=4,
         frameon=False,
-        fontsize=DEFAULT_STYLE.minimum_font_size_pt,
-        columnspacing=0.9,
+        fontsize=DEFAULT_STYLE.legend_font_size_pt,
+        columnspacing=1.2,
         handletextpad=0.35,
     )
     return figure
 
 
-def save_optional_calibration_panel(
+def save_panel_c_standalone(
     config: PaperFigureConfig,
     rows: list[dict[str, str]],
 ) -> tuple[Path, ...]:
-    """Write the standalone Figure 6(c) PNG and PDF."""
+    """Write the standalone Figure 6(c) PDF and PNG at single-column width."""
 
-    figure, axis = plt.subplots(figsize=(4.8, 3.15))
-    figure.subplots_adjust(left=0.13, right=0.985, bottom=0.20, top=0.73)
-    _plot_optional_calibration(
-        axis,
-        rows,
-        config,
-        show_title=True,
-        show_legend=True,
+    figure = plt.figure(figsize=(DEFAULT_STYLE.single_column_width_in, 3.05))
+    grid = figure.add_gridspec(
+        1,
+        1,
+        left=0.175,
+        right=0.985,
+        bottom=0.315,
+        top=0.855,
+    )
+    _plot_corrected_panel_c(figure, grid[0, 0], rows, config)
+    _draw_panel_title(
+        figure,
+        grid[0, 0],
+        "(c)",
+        "Transfer to uncalibrated locations",
+        y_offset=0.028,
+    )
+    figure.legend(
+        handles=_morphology_legend_handles(config),
+        loc="lower center",
+        bbox_to_anchor=(0.58, 0.005),
+        ncol=2,
+        frameon=False,
+        fontsize=DEFAULT_STYLE.legend_font_size_pt,
+        columnspacing=1.2,
+        handletextpad=0.35,
+        labelspacing=0.3,
     )
     outputs = save_figure(
         figure,
-        OPTIONAL_CALIBRATION_OUTPUT_STEM,
+        PANEL_C_OUTPUT_STEM,
         formats=("pdf", "png"),
         bbox_inches=None,
         pad_inches=0.0,
@@ -968,14 +1018,17 @@ def save_optional_calibration_panel(
 
 
 def save_final(
-    config: PaperFigureConfig, *, recompute: bool = False
+    config: PaperFigureConfig,
+    *,
+    recompute: bool = False,
+    config_path: Path = DEFAULT_CONFIG_PATH,
 ) -> tuple[Path, ...]:
     """Write the standalone panel and canonical Figure 6 PDF/PNG outputs."""
 
-    inputs = _load_inputs(config, recompute=recompute)
+    inputs = _load_inputs(config, recompute=recompute, config_path=config_path)
     DEFAULT_OUTPUT_STEM.parent.mkdir(parents=True, exist_ok=True)
     with publication_context(DEFAULT_STYLE):
-        panel_outputs = save_optional_calibration_panel(config, inputs[2])
+        panel_outputs = save_panel_c_standalone(config, inputs[2])
         force_timeseries, force_summary = build_force_timeseries(
             DEFAULT_FORCE_DATASET_ROOT
         )
@@ -1005,7 +1058,9 @@ def main() -> None:
     parser.add_argument("--recompute", action="store_true")
     arguments = parser.parse_args()
     for path in save_final(
-        load_config(arguments.config), recompute=arguments.recompute
+        load_config(arguments.config),
+        recompute=arguments.recompute,
+        config_path=arguments.config.resolve(),
     ):
         print(path)
 

@@ -5,12 +5,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from lumo.visualization import MATERIAL_LABELS, PAPER_LABELS
+from lumo.visualization import PAPER_LABELS
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 FIGURE_DIRECTORY = Path(__file__).resolve().parent
 DATASET_ROOT = REPOSITORY_ROOT / "output" / "contact_dataset"
+FIG5_MATERIAL_LABELS = {
+    "solaris": "Solaris",
+    "dragon_skin": "Dragon Skin",
+}
 
 
 @dataclass(frozen=True)
@@ -34,7 +38,7 @@ class MorphologyCondition:
 
 
 def _paper_name(material: str, morphology: str) -> str:
-    return f"{MATERIAL_LABELS[material]} {PAPER_LABELS[morphology]}"
+    return f"{FIG5_MATERIAL_LABELS[material]} {PAPER_LABELS[morphology]}"
 
 
 MORPHOLOGY_CONDITIONS = (
