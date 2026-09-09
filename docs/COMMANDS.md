@@ -24,13 +24,13 @@ environment value takes precedence.
 Compile repository Python without launching a simulation:
 
 ```bash
-conda run -n lit python -m compileall -q experiments lumo scripts validation tests
+conda run -n lit python -m compileall -q algorithm experiments lumo scripts validation tests
 ```
 
 Run Ruff:
 
 ```bash
-conda run -n lit ruff check experiments lumo scripts validation tests
+conda run -n lit ruff check algorithm experiments lumo scripts validation tests
 ```
 
 ## Focused unit tests
@@ -40,19 +40,52 @@ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 conda run --no-capture-output -n lit \
   python -m pytest -q tests/unit
 ```
 
-## CubeMars AK40-10 feedback probe
+Run only the calibration-free online-localizer tests:
 
-Probe the current actuator at its configured decimal ID `13` (`0x0D`):
+```bash
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 conda run --no-capture-output -n lit \
+  python -m pytest -q tests/unit/algorithm
+```
+
+## Calibration-free online contact localizer
+
+The headless estimator under `algorithm/` does not own a camera or UI. Feed it
+owned RGB8 frames from an acquisition layer:
+
+```python
+from algorithm import OnlineContactLocalizer
+
+localizer = OnlineContactLocalizer()
+localizer.initialize_geometry(first_unloaded_rgb)
+localizer.acquire_unloaded_baseline(thirty_registered_unloaded_rgb_frames)
+
+result = localizer.process(current_rgb)
+if result.valid and result.contact_detected:
+    print(result.position_mm)
+else:
+    print(result.status)
+```
+
+Before geometry initialization and throughout a run, disable automatic
+exposure and automatic white balance and hold exposure, gain, and white balance
+fixed. `position_mm` comes from the response centroid mapped through the five
+detected physical LED anchors at 11 mm pitch; the estimator uses no hole labels
+or position-labelled calibration data.
+
+Replay the six LED-on observation conditions and audit the nominal-only global
+actuator-torque calibration with:
 
 ```bash
 conda run --no-capture-output -n lit \
-  python -u scripts/test_ak40_10.py --motor-id 13
+  python validation/validate_proprioceptive_robustness.py
 ```
 
-For each ID, the command sends only the MIT enable frame, waits up to one second
-while printing all observed CAN traffic, and sends the MIT disable frame. It
-does not send a position, torque, or zero command. The Linux SocketCAN channel
-and 1 Mbps bus configuration must already exist outside Python.
+Outputs are written below
+`output/validation/proprioceptive_robustness/`. The per-sample table preserves
+`x_hat_mm`, `f_gt_n`, `f_hat_n`, and raw actuator torque. The JSON report marks
+whether the result is eligible for Figure 6(e); a failed localization QC is a
+negative validation result and must not be bypassed by plotting supplied
+locations or by fitting per-run torque zeros.
 
 Launch the NiceGUI torque/state dashboard in zero-torque monitor-only mode:
 
@@ -93,8 +126,7 @@ finally:
 
 Launch the force-checkpoint NiceGUI collector. Its hardware defaults use
 `can1`, decimal motor ID `13`, a 1920 x 1080 D435 stream, offline contact
-processing, and output below
-`output/experiments/proprioceptive_contact_dataset/`:
+processing, and output below `output/proprioceptive_contact_dataset/`:
 
 ```bash
 conda run --no-capture-output -n lit \
@@ -107,12 +139,18 @@ conda run --no-capture-output -n lit \
 Confirm the physical Rokubi axis/sign before using those two options. In the
 page, explicitly set motor zero, apply approved Kp/Kd, and enable the motor.
 Then click the 10 or 30 mm sphere and Hole 1--6 before `Start Run`. The page
-guides measured force through 2, 5, 10, 15, and 20 N and finishes the run
-automatically. `Abort Run` discards the current incomplete run. Online contact
-localization is disabled by default for this entry point and is not an
-acquisition gate. Original RGB frames are written only during the stable
-recording interval of each target-force band; this path does not copy rolling
-unloaded-reference frames by default. Motor feedback and Rokubi samples remain
+guides measured force through 2, 5, 10, 15, and 20 N. After the 20 N checkpoint,
+release the indenter: native motor, F/T, and optical streams continue until the
+camera-synchronized force magnitude falls below 2 N, and then the run finishes
+automatically. Lossless RGB is recorded at the configured 5 Hz default from
+`Start Run` through this final release observation, not only inside checkpoint
+bands. A large card beside the live camera shows the latest Rokubi force
+magnitude as a vertical bar against the current target line and shaded
+acceptance band, then switches to the below-2-N release threshold; the AK40-10 parameters are placed below that camera/tracker
+row. The gauge is display-only. `Abort Run` discards the current incomplete run.
+Online contact localization is disabled by default for this entry point and is not an
+acquisition gate. This path does not copy rolling unloaded-reference frames by
+default. Motor feedback and Rokubi samples remain
 continuous from `Start Run` through automatic completion regardless of whether
 an image is admitted.
 
@@ -159,24 +197,12 @@ measured timing evidence. After launch, keep the finger unloaded and press
 unloaded torque bias`. None runs automatically. Geometry and baseline each use
 30 frames; live optical response uses a causal three-frame median.
 
-After an offline-ready run, execute the same detector on the stored observations:
-
-```bash
-conda run --no-capture-output -n lit \
-  python -u scripts/process_proprioceptive_contact_offline.py \
-    output/experiments/proprioceptive_contact_dataset/run_001
-```
-
-This creates `run_001/optical_offline.csv`. It does not alter the raw PNGs,
-timestamps, or online `optical.csv`. Use `--overwrite` only to intentionally
-replace a previous offline result.
-
 Package a completed run into one upload-sized HDF5 artifact:
 
 ```bash
 conda run --no-capture-output -n lit \
   python -u output/compress/export_proprioceptive_h5.py \
-    output/experiments/proprioceptive_contact_dataset/run_001
+    output/proprioceptive_contact_dataset/run_001
 ```
 
 The default output is the sibling file `run_001.h5`. It preserves every saved
@@ -188,17 +214,21 @@ the only lossy step. The exporter publishes no artifact if the completed file is
 explicit `--jpeg-quality` or lower acquisition duration/rate if the limit is
 exceeded.
 
-The offline detector accepts either representation directly:
+Verify an existing artifact with
+`output/compress/export_proprioceptive_h5.py RUN.h5 --verify`.
+
+Package every run in a proprioceptive robustness dataset into one HDF5 file:
 
 ```bash
 conda run --no-capture-output -n lit \
-  python -u scripts/process_proprioceptive_contact_offline.py \
-    output/experiments/proprioceptive_contact_dataset/run_001.h5
+  python -u output/compress/export_proprioceptive_h5.py \
+    output/proprioceptive_robust_dataset \
+    --dataset \
+    --output output/upload/proprioceptive_robust_dataset.h5
 ```
 
-For HDF5 input the default derived output is the sibling
-`run_001_optical_offline.csv`. Verify an artifact without processing contact via
-`output/compress/export_proprioceptive_h5.py RUN.h5 --verify`.
+Dataset mode retains the same full-resolution quality-95 JPEG representation
+and exact per-run JSON/CSV payloads, but groups all source runs under `runs/`.
 
 Compare segmentation-free contact-location cues on a completed proprioceptive
 run without training contact-location templates or acquiring a separate
@@ -207,7 +237,7 @@ calibration recording:
 ```bash
 conda run --no-capture-output -n lit \
   python -u validation/optomech/segmentation_free_contact_localization.py \
-    --run output/experiments/proprioceptive_contact_dataset/run_001
+    --run output/proprioceptive_contact_dataset/run_001
 ```
 
 This read-only ablation compares direct contactor edges, a visible marker,
@@ -669,6 +699,9 @@ independent re-contact `W_contact`, never cyclic `W_cycle`.
 `fig6a_magnitude_vs_accuracy.csv` contains only the eight optimized morphology
 comparisons and reports baseline-relative magnitude change [%] and accuracy
 change [percentage points].
+`fig6c_optional_calibration_10mm_combined.csv` contains only the 10 mm sphere:
+`k=0` is the geometry-prior estimator with no labelled contact calibration,
+while `k=1..4` retain the calibrated six-region held-out-repetition protocol.
 
 Render the final IEEE double-column Figure 5 PDF/PNG from the current physical
 datasets and decoder summary:
@@ -706,7 +739,9 @@ four image-column headers once and uses one wider context-preserving
 crop whose rotated aspect fills the shared data-row height. Panel (b) displays
 all six contact positions by six longitudinal regions as rectangular median
 RMS optical-change heatmaps. Its two columns are the 10 and 30 mm spheres; all
-12 maps share one global Viridis scale and one panel-wide horizontal colorbar.
+12 maps share one global Viridis scale. The same scale is shown by separate
+vertical colorbars aligned with the Solaris and Dragon Skin row blocks at the
+left of panel (b).
 The maps place contact location on the x-axis and longitudinal region on the
 y-axis, showing only 0/20/40 mm and R1/R3/R6 tick labels. They omit cell
 annotations and peak overlays. All
@@ -738,10 +773,19 @@ conda run --no-capture-output -n lit \
 ```
 
 The Figure 6 command writes the canonical exact-7.16-inch double-column
-`fig6.pdf/png`. It lays out contact-state variability, re-contact
-distinguishability, spatial-versus-scalar decoding, and calibration-set-size
-analyses in a 2-by-3 grid. Panels (e) and (f) are explicitly non-data
-placeholders for sensing robustness and cyclic stability.
+`fig6.pdf/png` and the standalone
+`fig6c_optional_calibration_10mm_combined.pdf/png`. It also writes
+`fig6d_force_timeseries_multilocation.pdf/png/csv` from proprioceptive dataset
+runs 005--010. The upper row contains contact-state variability, re-contact
+distinguishability, and optional calibration; the six-location force time
+series occupies the centered lower-row column at the same width as each upper
+panel. Figure 6(c) contains six
+10 mm-sphere localization-MAE series. A dotted `k=0` to `k=1` transition and a
+vertical separator distinguish the geometry-prior, no-labelled-contact regime
+from the calibrated `k=1..4` regime. Figure 6(d) uses the camera-synchronized
+Rokubi force-vector magnitude, per-run unloaded torque zeroing, the prescribed
+`r(x)=(103.6-x)/1000` m geometry, and one global scale fitted only on run 005.
+The panel labels the represented specimen condition as Solaris Opt-Flat.
 
 Figure 6 writes `fig6.pdf/png`. Add `--recompute` to a plotting/build command
 to regenerate the compact analysis tables first.

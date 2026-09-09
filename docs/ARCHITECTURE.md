@@ -64,6 +64,23 @@ scripts/live_contact_localization.py
         ↓ OpenCV display only
 ```
 
+The new calibration-free estimator is a separate headless package and does
+not replace the existing experimental entry point:
+
+```text
+RGB frame
+    ↓
+algorithm.fingertip_segmentation
+    ↓
+algorithm.led_localization
+    ↓
+algorithm.canonical
+    ↓
+algorithm.contact_localization
+    ↓
+continuous contact position [mm]
+```
+
 Raw physical-contact acquisition is a separate path from localization:
 
 ```text
@@ -78,6 +95,11 @@ BotaSerialSensor ─ timestamped FT sample┘          │
 The collector never imports segmentation, LED detection, or contact observers.
 It preserves raw camera RGB and synchronized force/torque measurements for
 later offline analysis.
+
+The contact-dataset controller owns one displayed elapsed clock per application
+session. It advances from host-monotonic camera observations while a force
+sequence is active, pauses between runs, and resumes from the retained value at
+the next run. Recorder queue flushing does not extend the session clock.
 
 Continuous contact-history acquisition is a second, schema-separated path:
 
@@ -904,6 +926,86 @@ ordered scenario support. Strict resume refuses a changed scientific contract,
 source hash, or dependency version. Neither completed 160-trial pad-normal
 campaign is imported into this fresh Ax campaign.
 
+### `algorithm/`
+
+Owns the new self-contained, learning-free online optical contact localizer.
+It has no camera, GUI, filesystem, force-estimation, or position-labelled
+calibration dependency.
+
+`fingertip_segmentation.py` deterministically identifies the visible cyan
+finger silhouette and returns row-wise dorsal/palmar boundaries plus an
+interior LED-search mask. This color processing is used only for geometry.
+
+`led_localization.py` detects five ordered distal-to-proximal optical anchors
+and exposes their physical coordinates as `[0, 11, 22, 33, 44] mm`. Online
+tracking uses forward/backward LK correspondences only to fit one robust
+similarity transform to the complete rigid array. It requires at least four
+correspondences and rejects implausible scale, residual, spacing, ordering, or
+large absolute re-anchor corrections.
+
+`canonical.py` builds the unloaded 256-by-128 full-silhouette sampling map,
+moves that reference map with the LED-array similarity transform, and performs
+the OpenCV remap. Fingertip segmentation is therefore not rerun on every valid
+tracked frame.
+
+`contact_localization.py` owns the fixed unloaded optical reference and the
+single stateful `OnlineContactLocalizer`. Initialization is explicit:
+
+```text
+UNINITIALIZED
+    ↓ initialize_geometry(unloaded_rgb)
+GEOMETRY_READY
+    ↓ acquire_unloaded_baseline(unloaded_rgb_frames)
+READY
+    ↓ process(rgb)
+READY
+```
+
+The default baseline is a 30-frame registered temporal median. Per-row noise
+uses `max(1.4826 × MAD, 0.75 DN)`, so a zero measured MAD cannot create a zero
+threshold. Live response is positive unloaded-relative Green-channel change,
+reduced by the brightest 10% across the transverse direction, mildly smoothed
+longitudinally, and passed through a causal three-frame median. The estimator
+forms a continuous evidence centroid after the noise threshold, then maps its
+canonical coordinate piecewise-linearly through the five detected LED anchors
+and their known 11 mm pitch. This is the only source of physical millimetres;
+no hole labels, contact templates, regression, or learned position data enter
+the estimate.
+
+Results separate optical contact evidence from localization validity and expose
+peak SNR, peak-to-background ratio, spatial entropy, temporal consistency, and
+selected-pixel saturation fractions. Uniform global brightening can therefore
+be detected without being reported as a confident center contact. Excessive
+clipping invalidates the localization. Tracking loss invalidates the current
+frame; one absolute segmentation/redetection attempt may restore geometry for
+the next frame, but it never fabricates a position.
+
+The acquisition contract is fixed RGB photometry: auto exposure and auto white
+balance must be off, and exposure, gain, and white balance must remain fixed
+after the unloaded reference is acquired. The package deliberately performs no
+adaptive photometric normalization that would hide a violation of this
+contract.
+
+`validation/validate_proprioceptive_robustness.py` is the read-only integration
+check for the LED-on robustness dataset. It registers the exact five-tooth,
+11-mm LED lattice in an oriented fingertip-silhouette coordinate frame, replays
+the same positive-Green continuous-centroid localizer, and joins camera samples
+to native actuator torque by monotonic timestamp. Optical unloaded references
+are acquired per run when five below-1-N frames exist; a run that starts loaded
+uses the below-1-N reference from the same observation condition and is never
+declared unloaded. Force conversion uses one affine torque calibration fitted
+only on nominal runs 001--003 and frozen for all other conditions:
+
+```text
+tau_cal = alpha_tau * tau_act + b_tau
+F_hat = tau_cal / ((103.6 - x_hat) / 1000)
+```
+
+There is no per-run actuator-torque zero. The validator writes geometry,
+per-camera-sample `x_hat/F_GT/F_hat`, and run-QC artifacts, and records an
+explicit `fig6e_ready` false state when localization coverage or one-LED-pitch
+location error fails. Figure 6(e) must not consume a failed artifact.
+
 ### `experiments/`
 
 Owns physical experiment hardware and image-processing algorithms outside the
@@ -939,11 +1041,6 @@ explicit enable/disable/zero commands, and feedback decoding. Construction is
 passive: it neither enables, zeros, nor commands the actuator, and the actuator
 driver never closes the shared bus. Its default drive ID is decimal `13`
 (`0x0D`), matching the current actuator configuration.
-
-`scripts/test_ak40_10.py` is the explicit, bounded hardware probe for this
-driver. It enters MIT mode for each operator-supplied CAN ID, reports every CAN
-frame observed during the finite feedback wait, and always exits MIT mode after
-a successful enable transmission. It sends no position, torque, or zero command.
 
 `experiments/actuation/` owns the headless AK40-10 torque-feedback session used
 by interactive or procedural experiments. `AK40TorqueSession` owns one bounded
@@ -1031,13 +1128,10 @@ admission decision. A run contains `motor.csv`, `ft.csv`, `optical.csv`,
 and minimal `metadata.json`. `force_estimate.csv` records estimator validity,
 contact state, force, optical timestamp/age, weights, and status at the motor
 sample rate when an estimator is configured; otherwise it contains only its
-header. `scripts/process_proprioceptive_contact_offline.py` replays
-those images, or their compact HDF5 representation, through the same
-`LiveLedContactTracker` and writes the derived `optical_offline.csv` without
-changing raw acquisition files. Recording locks Kp/Kd and does not store
-material, morphology, or Git identity. Stopping admission precedes a complete
-queue flush, so samples cannot cross run boundaries. GUI preview JPEG encoding
-is visualization-only and never becomes a recorded camera source.
+header. Recording locks Kp/Kd and does not store material, morphology, or Git
+identity. Stopping admission precedes a complete queue flush, so samples cannot
+cross run boundaries. GUI preview JPEG encoding is visualization-only and never
+becomes a recorded camera source.
 
 `experiments/data_collection/proprioceptive_contact_dataset.py` adds the
 headless force-checkpoint experiment without duplicating any hardware worker.
@@ -1045,9 +1139,9 @@ One run preselects `sphere_10mm` or `sphere_30mm` and Hole 1--6, then advances
 through measured-force checkpoints at 2, 5, 10, 15, and 20 N using the shared
 `ForceSequenceController`. The Rokubi signal drives the state machine; online
 LED/contact inference never gates acquisition. Lossless RGB frames are admitted
-only while the controller is in the stable `RECORDING` phase and the image's
-paired Rokubi force remains inside the current target band. The configured
-camera rate still bounds those admitted frames, and this dataset path copies no
+at the configured camera-record rate throughout the active run, from
+`Start Run` through the below-2-N final release observation. Target-band timing remains
+in `force_sequence.csv` but no longer gates RGB. This dataset path copies no
 unloaded-reference frames by default. `motor.csv` retains every native
 AK40-10 MIT feedback sample, including `torque_Nm`, while `ft.csv` and
 `camera_timestamps.csv` retain their host monotonic timestamps and the latter
@@ -1064,9 +1158,18 @@ Hole1 is aligned with LED1 and Holes 1--6 have 10 mm pitch, corresponding to
 contact coordinates 0--50 mm relative to Hole1. This is immutable experimental
 metadata, not an image-derived calibration. The dedicated NiceGUI entry point is
 `scripts/collect_proprioceptive_contact_dataset.py`; it starts passive, requires
-the same explicit motor zero/enable actions, automatically stops after 20 N,
-and deletes the current incomplete run on Abort. There is no continuous/manual
-recording mode in this entry point.
+the same explicit motor zero/enable actions, and deletes the current incomplete
+run on Abort. After the 20 N checkpoint completes, native motor, F/T, and
+optical recording and rate-limited lossless RGB capture continue until the
+camera-synchronized contact-force magnitude is below 2 N. A large force-tracking
+card beside the live camera displays the
+latest Rokubi normal force as a vertical bar, the active checkpoint as a target
+line, and the exact force-sequence tolerance as a shaded band. During final
+release it instead marks the below-2-N completion region. This display is
+read-only and does not participate in frame admission or checkpoint completion.
+The AK40-10 parameter and control card remains below this camera/tracker row.
+There is no continuous/manual recording mode in this entry point.
+Its default dataset root is `output/proprioceptive_contact_dataset/`.
 
 `experiments/analysis/proprioceptive_h5.py` owns the transport copy of one
 proprioceptive run. It concatenates independently encoded full-resolution JPEG
@@ -1075,9 +1178,9 @@ fields, and embeds byte-exact source JSON/CSV payloads. It performs no crop,
 resize, baseline subtraction, or normalization. The chosen JPEG quality is an
 explicit artifact attribute, and the original lossless PNG run remains the
 scientific archive. Export is atomic and refuses to publish a file at or above
-the configured 500 MB upload limit. The same HDF5 frame stream is readable by
-the offline contact processor, so uploaded data need not be expanded back into
-individual image files before analysis.
+the configured 500 MB upload limit. Its dataset mode applies the same per-run
+schema beneath one `runs/` group, retaining every run in one independently
+verifiable HDF5 artifact without deleting the source directories.
 
 `BotaSerialSensor.wait_for_samples()` is the concrete sequential-consumer API
 used by that runtime. The driver retains a bounded `(sequence, sample)` history,
@@ -1652,7 +1755,9 @@ indenter columns shared with panel (c). The analysis and audit
 retain all six contact positions. The renderer displays every complete
 6-contact by 6-region response as a rectangular Viridis signal map without
 cell annotations or a ridge overlay. All 12 subplots share one zero-based
-camera-DN color scale and one panel-wide horizontal colorbar. Contact-location
+camera-DN color scale. Two identical vertical scale bars sit left of the maps,
+one aligned with the Solaris rows and one with the Dragon Skin rows, so the
+material blocks are visually distinct without changing their common scale. Contact-location
 coordinates run horizontally to match panel (a), with only 0, 20, and 40 mm
 shown on the bottom row. Longitudinal regions run vertically, with only R1, R3,
 and R6 shown on the left column. A compact panel subtitle states that every
@@ -1711,20 +1816,44 @@ Panel (a) compares baseline-relative maintained-contact `W_cycle` and
 independently re-established-contact `W_recontact` variability for the 10 mm
 sphere without pooling their absolute units. Panel (b) reads the established
 slope-profile `D_neighbor`, validates the stored ratio, and labels
-`D_neighbor / W_contact` paper-facing as `Q_recontact`. Panel (c) compares the
-scalar-only and six-region observers under the identical
-leave-one-repetition-out split. Panel (d) uses deterministic
-calibration-repetition subsets to measure accuracy with one to four contacts
-per location. Panels (e) and (f) are visibly labeled, non-data placeholders
-for future sensing-robustness and cyclic-stability results. Configuration,
+`D_neighbor / W_contact` paper-facing as `Q_recontact`. Panel (c) is the
+10 mm-sphere optional-calibration curve. Its `k=0` operating point uses an
+unloaded compact RGB reference, the known five-LED geometry, and no labelled
+contact-location calibration. Its `k=1..4` operating points retain the existing
+six-region nearest-template protocol with deterministic calibration-repetition
+subsets and held-out repetitions. The two regimes are stored explicitly rather
+than being treated as one estimator, and the renderer separates them at
+`k=0.5`. Panel (d) occupies the centered lower-row column at the same width as
+each upper-row panel and is a representative time series built from
+`output/proprioceptive_contact_dataset/run_005` through
+`run_010`, acquired with the Solaris Opt-Flat morphology and ordered at 0, 10,
+20, 30, 40, and 50 mm. Each run uses its initial
+below-1-N samples for an independent canonical unloaded reference and
+native-rate motor-torque bias. One fixed image-to-canonical geometry is
+initialized from the run-005 unloaded median and reused because these runs
+share one fixed camera pose. Contact location is inferred without labelled
+contact examples: the dominant baseline-relative canonical Green response is
+mapped through the detected five-LED lattice and its known 11 mm pitch. Force
+reconstruction always uses `r(x) = (103.6 - x) / 1000` m, deliberately
+overriding the contradictory increasing-distance metadata in these recordings.
+A single origin-constrained force scale is fitted on run-005 contact samples
+and frozen for every later location; no per-run or per-location force model is
+fitted. Ground truth is the camera-synchronized Rokubi force-vector magnitude
+because these recordings do not identify a calibrated contact-normal axis.
+The complete below-contact intervals are retained, and the panel draws only
+ground-truth and estimated force. Configuration,
 paper-facing labels, and morphology colors remain owned by
-`paper_figures.yaml` and `lumo.visualization.style`. The renderer writes only
-`fig6.pdf` and `fig6.png` under `figures/fig6/`.
+`paper_figures.yaml` and `lumo.visualization.style`. The renderer writes the
+canonical `fig6.pdf` and `fig6.png` plus the standalone panel audit render
+`fig6c_optional_calibration_10mm_combined.pdf/png` and the panel-(d) PDF, PNG,
+and plotted-sample CSV under `figures/fig6/`.
 
 The shared analysis writes machine-readable condition summaries, per-sample
 predictions, confusion matrices, magnitude/accuracy data, spatial
 distinguishability data, scalar-versus-spatial accuracy, calibration curves,
-and one consolidated `fig56_summary_bundle.csv` below
+the combined zero-through-four-contact MAE table
+`fig6c_optional_calibration_10mm_combined.csv`, and one consolidated
+`fig56_summary_bundle.csv` below
 `output/analysis/paper_figures/`. Figure modules consume these tables rather
 than reopening raw images. Missing conditions are represented explicitly as
 unavailable rows and reported on stderr instead of being silently imputed.

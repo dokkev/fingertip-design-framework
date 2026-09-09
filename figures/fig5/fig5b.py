@@ -292,7 +292,7 @@ def render_panel(
         len(TABLE_HEIGHT_RATIOS),
         4,
         height_ratios=TABLE_HEIGHT_RATIOS,
-        width_ratios=(0.20, 0.20, 1, 1),
+        width_ratios=(0.18, 0.30, 1, 1),
         hspace=TABLE_HSPACE,
         wspace=0.07,
     )
@@ -305,6 +305,17 @@ def render_panel(
     )
 
     indenter_titles = dict(INDENTER_COLUMNS)
+    scale_label_axis = figure.add_subplot(grid[HEADER_ROW, 0:2])
+    scale_label_axis.axis("off")
+    scale_label_axis.text(
+        0.5,
+        0.56,
+        "Optical\nchange [DN]",
+        fontsize=DEFAULT_STYLE.minimum_font_size_pt,
+        linespacing=0.90,
+        ha="center",
+        va="center",
+    )
     for column, (candidate_indenter, _) in zip(
         PLOT_COLUMNS, INDENTER_COLUMNS, strict=True
     ):
@@ -402,28 +413,27 @@ def render_panel(
     if image is None:
         raise ValueError("no Figure 5(b) response heatmaps were rendered")
 
-    colorbar_container = figure.add_subplot(grid[HEADER_ROW, 0:4])
-    colorbar_container.axis("off")
-    colorbar_container.text(
-        0.50,
-        0.50,
-        "Optical change [DN]",
-        fontsize=DEFAULT_STYLE.axis_label_font_size_pt,
-        ha="center",
-        va="center",
-    )
-    colorbar_axis = colorbar_container.inset_axes((0.28, 0.24, 0.44, 0.06))
-    colorbar = figure.colorbar(image, cax=colorbar_axis, orientation="horizontal")
-    colorbar.set_ticks((0.0, maximum))
-    colorbar.ax.set_xticklabels(("0", f"{maximum:.1f}"))
-    colorbar.ax.xaxis.set_ticks_position("bottom")
-    colorbar.ax.tick_params(
-        labelsize=DEFAULT_STYLE.minimum_font_size_pt,
-        width=DEFAULT_STYLE.tick_width_pt,
-        length=DEFAULT_STYLE.tick_length_pt,
-        pad=0.35,
-    )
-    colorbar.outline.set_linewidth(DEFAULT_STYLE.spine_width_pt)
+    for _, rows in MATERIAL_BLOCKS:
+        colorbar_container = figure.add_subplot(
+            grid[rows[0] : rows[-1] + 1, 1]
+        )
+        colorbar_container.axis("off")
+        colorbar_axis = colorbar_container.inset_axes((0.04, 0.08, 0.18, 0.84))
+        colorbar = figure.colorbar(
+            image,
+            cax=colorbar_axis,
+            orientation="vertical",
+        )
+        colorbar.set_ticks((0.0, maximum))
+        colorbar.ax.set_yticklabels(("0", f"{maximum:.1f}"))
+        colorbar.ax.yaxis.set_ticks_position("right")
+        colorbar.ax.tick_params(
+            labelsize=DEFAULT_STYLE.minimum_font_size_pt,
+            width=DEFAULT_STYLE.tick_width_pt,
+            length=DEFAULT_STYLE.tick_length_pt,
+            pad=0.35,
+        )
+        colorbar.outline.set_linewidth(DEFAULT_STYLE.spine_width_pt)
 
     body_position = grid[2:, 2:4].get_position(figure)
     figure.text(

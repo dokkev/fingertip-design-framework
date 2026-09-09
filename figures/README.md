@@ -111,7 +111,7 @@ Examples:
 
 - `(a) Contact-state variability`
 - `(b) Re-contact distinguishability`
-- `(c) Spatial vs. scalar decoding`
+- `(c) Optional calibration`
 - `(d) Calibration-set size`
 
 Rules:

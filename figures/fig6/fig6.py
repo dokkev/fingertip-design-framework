@@ -18,7 +18,6 @@ matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt  # noqa: E402
 from matplotlib.lines import Line2D  # noqa: E402
-from matplotlib.patches import Patch  # noqa: E402
 import numpy as np  # noqa: E402
 
 from experiments.analysis.fig5c_decoder import (  # noqa: E402
@@ -27,6 +26,15 @@ from experiments.analysis.fig5c_decoder import (  # noqa: E402
     load_config,
     read_csv,
     run_analysis,
+)
+from figures.fig6.fig6d_force_timeseries import (  # noqa: E402
+    DEFAULT_DATASET_ROOT as DEFAULT_FORCE_DATASET_ROOT,
+    DEFAULT_OUTPUT_STEM as FORCE_TIMESERIES_OUTPUT_STEM,
+    EXPERIMENT_LABEL as FORCE_EXPERIMENT_LABEL,
+    build_force_timeseries,
+    plot_force_timeseries,
+    save_force_timeseries_panel,
+    write_force_timeseries_csv,
 )
 from lumo.visualization import (  # noqa: E402
     DEFAULT_STYLE,
@@ -39,6 +47,9 @@ from lumo.visualization import (  # noqa: E402
 
 FIGURE_DIRECTORY = Path(__file__).resolve().parent
 DEFAULT_OUTPUT_STEM = FIGURE_DIRECTORY / "fig6"
+OPTIONAL_CALIBRATION_OUTPUT_STEM = (
+    FIGURE_DIRECTORY / "fig6c_optional_calibration_10mm_combined"
+)
 FIGURE_SIZE_IN = (DEFAULT_STYLE.double_column_width_in, 4.15)
 PANEL_A_MORPHOLOGIES = ("flat_opt", "angled_opt")
 DEFAULT_CYCLE_SUMMARIES = {
@@ -166,13 +177,16 @@ def _draw_panel_title(
     subplot_spec: Any,
     panel_label: str,
     title: str,
+    *,
+    y_offset: float = 0.012,
+    label_x_offset: float = 0.0,
 ) -> None:
     """Place aligned panel labels and titles in figure coordinates."""
 
     bounds = subplot_spec.get_position(figure)
-    y = bounds.y1 + 0.012
+    y = bounds.y1 + y_offset
     figure.text(
-        bounds.x0,
+        bounds.x0 + label_x_offset,
         y,
         panel_label,
         fontsize=DEFAULT_STYLE.panel_label_font_size_pt,
@@ -533,86 +547,159 @@ def _plot_distinguishability(
     )
 
 
-def _plot_scalar_spatial(
+def _material_line_style(material: str) -> str:
+    return "-" if material == "solaris" else "--"
+
+
+def _morphology_marker(morphology: str) -> str:
+    return {"baseline": "o", "flat_opt": "s", "angled_opt": "D"}[morphology]
+
+
+def _optional_calibration_legend_handles(
+    config: PaperFigureConfig,
+) -> list[Line2D]:
+    return [
+        Line2D(
+            [],
+            [],
+            color=config.morphology_colors[morphology],
+            linestyle=_material_line_style(material),
+            marker=_morphology_marker(morphology),
+            markeredgecolor=EDGE_COLOR,
+            markeredgewidth=0.4,
+            linewidth=1.0,
+            markersize=3.5,
+            label=(
+                f"{config.material_labels[material]} · "
+                f"{config.morphology_labels[morphology]}"
+            ),
+        )
+        for material in config.materials
+        for morphology in config.morphologies
+    ]
+
+
+def _plot_optional_calibration(
     axis: plt.Axes,
     rows: list[dict[str, str]],
     config: PaperFigureConfig,
     *,
     show_title: bool = True,
-    legend_location: str = "lower right",
+    show_legend: bool = False,
 ) -> None:
-    lookup = _lookup(rows)
-    centers = np.arange(len(config.materials) * len(config.indenters), dtype=float)
-    offsets = np.linspace(-0.24, 0.24, len(config.morphologies))
-    all_values = []
-    condition_index = 0
+    """Plot geometry-prior k=0 and calibrated k=1..4 MAE regimes."""
+
+    measured = [row for row in rows if row["status"] == "measured"]
+    plotted_values: list[float] = []
     for material in config.materials:
-        for indenter in config.indenters:
-            for morphology_index, morphology in enumerate(config.morphologies):
-                row = lookup[(material, indenter, morphology)]
-                if row["status"] != "measured":
-                    continue
-                x = centers[condition_index] + offsets[morphology_index]
-                scalar = float(row["scalar_only_accuracy_percent"])
-                spatial = float(row["spatial_6_region_accuracy_percent"])
-                all_values.extend((scalar, spatial))
-                color = config.morphology_colors[morphology]
-                axis.plot(
-                    (x, x), (scalar, spatial), color=color, linewidth=1.0, zorder=1
+        for morphology in config.morphologies:
+            selected = sorted(
+                (
+                    row
+                    for row in measured
+                    if row["material"] == material
+                    and row["indenter"] == "sphere_10mm"
+                    and row["morphology_id"] == morphology
+                ),
+                key=lambda row: int(row["calibration_contacts_per_location"]),
+            )
+            if len(selected) != config.maximum_calibration_contacts + 1:
+                raise RuntimeError(
+                    f"optional-calibration series is incomplete for "
+                    f"{material}/{morphology}"
                 )
-                axis.scatter(
-                    x,
-                    scalar,
-                    s=19,
-                    facecolor="white",
-                    edgecolor=color,
-                    linewidth=1.0,
+            x = np.asarray(
+                [int(row["calibration_contacts_per_location"]) for row in selected]
+            )
+            if not np.array_equal(
+                x, np.arange(config.maximum_calibration_contacts + 1)
+            ):
+                raise RuntimeError("optional-calibration x support must be 0 through 4")
+            mean = np.asarray(
+                [float(row["localization_mae_mean_mm"]) for row in selected]
+            )
+            plotted_values.extend(mean.tolist())
+            color = config.morphology_colors[morphology]
+            marker = _morphology_marker(morphology)
+            calibrated = selected[1:]
+            q25 = np.asarray(
+                [float(row["localization_mae_q25_mm"]) for row in calibrated]
+            )
+            q75 = np.asarray(
+                [float(row["localization_mae_q75_mm"]) for row in calibrated]
+            )
+            axis.plot(
+                x[1:],
+                mean[1:],
+                color=color,
+                linestyle=_material_line_style(material),
+                linewidth=1.0,
+                marker=marker,
+                markersize=3.4,
+                markeredgecolor=EDGE_COLOR,
+                markeredgewidth=0.4,
+                zorder=3,
+            )
+            axis.vlines(
+                x[1:],
+                q25,
+                q75,
+                color=color,
+                linewidth=0.55,
+                zorder=2,
+            )
+            for position, lower, upper_bound in zip(x[1:], q25, q75, strict=True):
+                axis.hlines(
+                    (lower, upper_bound),
+                    position - 0.035,
+                    position + 0.035,
+                    color=color,
+                    linewidth=0.55,
                     zorder=2,
                 )
-                axis.scatter(
-                    x,
-                    spatial,
-                    s=19,
-                    facecolor=color,
-                    edgecolor=EDGE_COLOR,
-                    linewidth=0.4,
-                    zorder=3,
-                )
-            condition_index += 1
-    axis.set_ylim(max(0.0, 5.0 * np.floor((min(all_values) - 5.0) / 5.0)), 102.0)
-    _group_condition_ticks(axis, config)
-    axis.set_ylabel("Localization accuracy [%]")
-    if show_title:
-        _panel_title(axis, "(c)", "Spatial vs. scalar decoding")
-    _style_axis(axis)
-    axis.tick_params(axis="x", length=0.0)
-    axis.legend(
-        handles=(
-            Line2D(
-                [],
-                [],
-                marker="o",
-                markerfacecolor="white",
-                markeredgecolor="#555555",
-                linestyle="none",
-                label="Scalar only",
-            ),
-            Line2D(
-                [],
-                [],
-                marker="o",
-                markerfacecolor="#555555",
-                markeredgecolor="#555555",
-                linestyle="none",
-                label="6-region spatial",
-            ),
-        ),
-        loc=legend_location,
-        frameon=False,
-        fontsize=DEFAULT_STYLE.annotation_font_size_pt,
-        handletextpad=0.35,
-        labelspacing=0.25,
+            axis.plot(
+                x[:2],
+                mean[:2],
+                color=color,
+                linestyle=(0, (1.0, 1.6)),
+                linewidth=0.9,
+                zorder=2,
+            )
+            axis.scatter(
+                x[0],
+                mean[0],
+                s=18,
+                marker=marker,
+                color=color,
+                edgecolor=EDGE_COLOR,
+                linewidth=0.4,
+                zorder=4,
+            )
+    axis.axvline(0.5, color="#888888", linewidth=0.65, linestyle=":", zorder=1)
+    upper = max(5.0, 2.0 * np.ceil(1.10 * max(plotted_values) / 2.0))
+    axis.set_xlim(-0.18, config.maximum_calibration_contacts + 0.18)
+    axis.set_ylim(0.0, upper)
+    axis.set_xticks(
+        range(config.maximum_calibration_contacts + 1),
+        ("0\nNo contact\ncalibration", "1", "2", "3", "4"),
     )
+    axis.set_xlabel("Calibration contacts / location", labelpad=1.5)
+    axis.set_ylabel("Localization MAE [mm]", labelpad=1.5)
+    if show_title:
+        _panel_title(axis, "(c)", "Optional calibration")
+    _style_axis(axis)
+    axis.tick_params(axis="x", length=0.0, pad=1.0)
+    if show_legend:
+        axis.legend(
+            handles=_optional_calibration_legend_handles(config),
+            loc="lower center",
+            bbox_to_anchor=(0.5, 1.04),
+            ncol=3,
+            frameon=False,
+            fontsize=DEFAULT_STYLE.minimum_font_size_pt,
+            columnspacing=0.8,
+            handletextpad=0.35,
+        )
 
 
 def _plot_calibration(
@@ -747,32 +834,30 @@ def _load_inputs(
     list[dict[str, object]],
     list[dict[str, str]],
     list[dict[str, str]],
-    list[dict[str, str]],
 ]:
     """Load the fixed Figure 6 summaries without changing their metrics."""
 
     output = config.analysis_output_directory
     required = (
         "fig6b_spatial_distinguishability.csv",
-        "fig6c_scalar_vs_spatial.csv",
-        "fig6d_calibration_burden.csv",
+        "fig6c_optional_calibration_10mm_combined.csv",
     )
     if recompute or any(not (output / name).is_file() for name in required):
         run_analysis(config)
 
     distinguishability = read_csv(output / required[0])
-    scalar_spatial = read_csv(output / required[1])
-    calibration = read_csv(output / required[2])
+    optional_calibration = read_csv(output / required[1])
     variability = _load_panel_a_variability(config, distinguishability)
-    return variability, distinguishability, scalar_spatial, calibration
+    return variability, distinguishability, optional_calibration
 
 
 def build_figure(
     config: PaperFigureConfig,
     variability: list[dict[str, object]],
     distinguishability: list[dict[str, str]],
-    scalar_spatial: list[dict[str, str]],
-    calibration: list[dict[str, str]],
+    optional_calibration: list[dict[str, str]],
+    force_timeseries: Any,
+    force_summary: dict[str, object],
 ) -> plt.Figure:
     """Build the canonical 2-by-3 Figure 6 at IEEE double-column width."""
 
@@ -783,9 +868,9 @@ def build_figure(
         left=0.072,
         right=0.992,
         bottom=0.075,
-        top=0.895,
+        top=0.855,
         height_ratios=(0.72, 1.08),
-        hspace=0.33,
+        hspace=0.58,
         wspace=0.32,
     )
 
@@ -796,65 +881,114 @@ def build_figure(
         config,
         show_title=False,
     )
-    _plot_scalar_spatial(
+    _plot_optional_calibration(
         figure.add_subplot(grid[0, 2]),
-        scalar_spatial,
+        optional_calibration,
         config,
         show_title=False,
-        legend_location="lower left",
+        show_legend=False,
     )
-    _plot_calibration_compact(figure, grid[1, 0], calibration, config)
-    _plot_placeholder(
-        figure.add_subplot(grid[1, 1]),
-        description="Camera angle, illumination,\nand force/location sensing",
+    panel_d_spec = grid[1, 1]
+    plot_force_timeseries(
+        figure.add_subplot(panel_d_spec),
+        force_timeseries,
+        force_summary,
+        show_title=False,
+        compact=True,
     )
-    _plot_placeholder(
-        figure.add_subplot(grid[1, 2]),
-        description="Long-horizon cyclic\nloading evaluation",
+    panel_d_bounds = panel_d_spec.get_position(figure)
+    figure.text(
+        0.5 * (panel_d_bounds.x0 + panel_d_bounds.x1),
+        panel_d_bounds.y1 + 0.021,
+        FORCE_EXPERIMENT_LABEL,
+        fontsize=DEFAULT_STYLE.minimum_font_size_pt,
+        color="#555555",
+        ha="center",
+        va="bottom",
     )
 
     panel_titles = (
-        (grid[0, 0], "(a)", "Contact-state variability"),
-        (grid[0, 1], "(b)", "Re-contact distinguishability"),
-        (grid[0, 2], "(c)", "Spatial vs. scalar decoding"),
-        (grid[1, 0], "(d)", "Calibration-set size"),
-        (grid[1, 1], "(e)", "Sensing robustness"),
-        (grid[1, 2], "(f)", "Cyclic stability"),
+        (grid[0, 0], "(a)", "Contact-state variability", 0.012),
+        (grid[0, 1], "(b)", "Re-contact distinguishability", 0.012),
+        (grid[0, 2], "(c)", "Optional calibration", 0.012),
+        (
+            panel_d_spec,
+            "(d)",
+            "Location-aware force estimation",
+            0.040,
+        ),
     )
-    for subplot_spec, panel_label, title in panel_titles:
-        _draw_panel_title(figure, subplot_spec, panel_label, title)
+    for subplot_spec, panel_label, title, y_offset in panel_titles:
+        _draw_panel_title(
+            figure,
+            subplot_spec,
+            panel_label,
+            title,
+            y_offset=y_offset,
+            label_x_offset=-0.015 if panel_label == "(d)" else 0.0,
+        )
 
     figure.legend(
-        handles=[
-            Patch(
-                facecolor=config.morphology_colors[morphology],
-                edgecolor=EDGE_COLOR,
-                linewidth=0.4,
-                label=config.morphology_labels[morphology],
-            )
-            for morphology in config.morphologies
-        ],
+        handles=_optional_calibration_legend_handles(config),
         loc="upper center",
         bbox_to_anchor=(0.5, 0.995),
-        ncol=len(config.morphologies),
+        ncol=3,
         frameon=False,
-        fontsize=DEFAULT_STYLE.legend_font_size_pt,
-        columnspacing=1.0,
-        handletextpad=0.4,
+        fontsize=DEFAULT_STYLE.minimum_font_size_pt,
+        columnspacing=0.9,
+        handletextpad=0.35,
     )
     return figure
+
+
+def save_optional_calibration_panel(
+    config: PaperFigureConfig,
+    rows: list[dict[str, str]],
+) -> tuple[Path, ...]:
+    """Write the standalone Figure 6(c) PNG and PDF."""
+
+    figure, axis = plt.subplots(figsize=(4.8, 3.15))
+    figure.subplots_adjust(left=0.13, right=0.985, bottom=0.20, top=0.73)
+    _plot_optional_calibration(
+        axis,
+        rows,
+        config,
+        show_title=True,
+        show_legend=True,
+    )
+    outputs = save_figure(
+        figure,
+        OPTIONAL_CALIBRATION_OUTPUT_STEM,
+        formats=("pdf", "png"),
+        bbox_inches=None,
+        pad_inches=0.0,
+    )
+    plt.close(figure)
+    return outputs
 
 
 def save_final(
     config: PaperFigureConfig, *, recompute: bool = False
 ) -> tuple[Path, ...]:
-    """Write the one canonical Figure 6 PDF and PNG."""
+    """Write the standalone panel and canonical Figure 6 PDF/PNG outputs."""
 
     inputs = _load_inputs(config, recompute=recompute)
     DEFAULT_OUTPUT_STEM.parent.mkdir(parents=True, exist_ok=True)
     with publication_context(DEFAULT_STYLE):
-        figure = build_figure(config, *inputs)
-        outputs = save_figure(
+        panel_outputs = save_optional_calibration_panel(config, inputs[2])
+        force_timeseries, force_summary = build_force_timeseries(
+            DEFAULT_FORCE_DATASET_ROOT
+        )
+        force_csv = write_force_timeseries_csv(
+            force_timeseries, FORCE_TIMESERIES_OUTPUT_STEM.with_suffix(".csv")
+        )
+        force_outputs = save_force_timeseries_panel(
+            force_timeseries,
+            force_summary,
+            FORCE_TIMESERIES_OUTPUT_STEM,
+        )
+        figure = build_figure(config, *inputs, force_timeseries, force_summary)
+        figure_outputs = save_figure(
             figure,
             DEFAULT_OUTPUT_STEM,
             formats=("pdf", "png"),
@@ -862,7 +996,7 @@ def save_final(
             pad_inches=0.0,
         )
         plt.close(figure)
-    return outputs
+    return (*panel_outputs, force_csv, *force_outputs, *figure_outputs)
 
 
 def main() -> None:

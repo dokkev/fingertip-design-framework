@@ -14,14 +14,18 @@ if str(REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(REPOSITORY_ROOT))
 
 from experiments.analysis.proprioceptive_h5 import (  # noqa: E402
+    export_proprioceptive_dataset_h5,
     export_proprioceptive_run_h5,
+    verify_proprioceptive_dataset_h5,
     verify_proprioceptive_h5,
 )
 
 
 def _arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("run", type=Path, help="source run directory or HDF5 to verify")
+    parser.add_argument(
+        "run", type=Path, help="source run/dataset directory or HDF5 to verify"
+    )
     parser.add_argument(
         "--output",
         type=Path,
@@ -40,6 +44,11 @@ def _arguments() -> argparse.Namespace:
         help="strict decimal-MB output limit (default: 500)",
     )
     parser.add_argument("--verify", action="store_true")
+    parser.add_argument(
+        "--dataset",
+        action="store_true",
+        help="export or verify one HDF5 containing every run below a dataset root",
+    )
     args = parser.parse_args()
     if not 1 <= args.jpeg_quality <= 100:
         parser.error("--jpeg-quality must be in [1, 100]")
@@ -52,16 +61,28 @@ def main() -> None:
     args = _arguments()
     maximum_bytes = round(args.max_size_mb * 1_000_000)
     if args.verify:
-        summary = verify_proprioceptive_h5(args.run, maximum_bytes=maximum_bytes)
+        verify = (
+            verify_proprioceptive_dataset_h5
+            if args.dataset
+            else verify_proprioceptive_h5
+        )
+        summary = verify(args.run, maximum_bytes=maximum_bytes)
     else:
         output = args.output or args.run.resolve().with_suffix(".h5")
-        summary = export_proprioceptive_run_h5(
+        export = (
+            export_proprioceptive_dataset_h5
+            if args.dataset
+            else export_proprioceptive_run_h5
+        )
+        summary = export(
             args.run,
             output,
             jpeg_quality=args.jpeg_quality,
             maximum_bytes=maximum_bytes,
         )
     print(f"Artifact: {summary.path}")
+    if args.dataset:
+        print(f"Runs: {summary.run_count}")
     print(
         f"Frames: {summary.frame_count} "
         f"({summary.unloaded_reference_count} unloaded reference, "

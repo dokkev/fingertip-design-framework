@@ -21,6 +21,7 @@ from .proprioceptive_force import CameraAcquisition, ProprioceptiveExperimentRun
 
 
 TARGET_FORCES_N = (2.0, 5.0, 10.0, 15.0, 20.0)
+RELEASE_FORCE_THRESHOLD_N = 2.0
 LED1_ROTATION_AXIS_DISTANCE_MM = 103.6
 LED_SPACING_MM = 11.0
 HOLE_SPACING_MM = 10.0
@@ -91,6 +92,7 @@ class ContactDatasetSnapshot:
     completed_targets_n: tuple[float, ...]
     actual_force_n: float | None
     motor_torque_nm: float | None
+    session_elapsed_s: float
     error: str | None
 
 
@@ -128,6 +130,9 @@ class ProprioceptiveContactDatasetController:
         self._repetition_index: int | None = None
         self._actual_force_n: float | None = None
         self._motor_torque_nm: float | None = None
+        self._run_started_s: float | None = None
+        self._run_elapsed_offset_s = 0.0
+        self._session_elapsed_s = 0.0
         self._rows: list[dict[str, object]] = []
         self._error: str | None = None
         self.runtime.camera.set_contact_frame_gate(self._admit_camera_frame)
@@ -158,6 +163,8 @@ class ProprioceptiveContactDatasetController:
                     self.config.high_force_relative_tolerance
                 ),
                 "high_force_threshold_N": self.config.high_force_threshold_n,
+                "release_force_threshold_N": RELEASE_FORCE_THRESHOLD_N,
+                "rgb_recording_scope": "entire_run_through_release",
             },
             "geometry_prior": geometry_prior_metadata(hole_index),
             "torque_source": "AK40-10 MIT feedback torque",
@@ -169,7 +176,8 @@ class ProprioceptiveContactDatasetController:
             experiment_context=context,
         )
         sequence = ForceSequenceController(self.config)
-        update = sequence.start(monotonic())
+        started_s = monotonic()
+        update = sequence.start(started_s)
         with self._lock:
             self._sequence = sequence
             self._latest_update = update
@@ -180,6 +188,8 @@ class ProprioceptiveContactDatasetController:
             self._repetition_index = repetition_index
             self._actual_force_n = None
             self._motor_torque_nm = None
+            self._run_started_s = started_s
+            self._run_elapsed_offset_s = self._session_elapsed_s
             self._rows = []
             self._error = None
             self._stop.clear()
@@ -223,6 +233,7 @@ class ProprioceptiveContactDatasetController:
                 completed_targets_n=self._latest_update.completed_targets_n,
                 actual_force_n=self._actual_force_n,
                 motor_torque_nm=self._motor_torque_nm,
+                session_elapsed_s=self._session_elapsed_s,
                 error=self._error,
             )
 
@@ -247,7 +258,13 @@ class ProprioceptiveContactDatasetController:
                     sequence_complete = (
                         self._latest_update.state is ForceSequenceState.RUN_COMPLETE
                     )
-                if sequence_complete:
+                    released = (
+                        self._actual_force_n is not None
+                        and self._actual_force_n < RELEASE_FORCE_THRESHOLD_N
+                    )
+                    if sequence_complete and not released:
+                        self._status = "waiting_for_release"
+                if sequence_complete and released:
                     self._complete_run()
                     return
                 sleep(self._POLL_INTERVAL_S)
@@ -288,6 +305,7 @@ class ProprioceptiveContactDatasetController:
             run_path = self._run_path
             rows = tuple(self._rows)
             completed_targets = self._latest_update.completed_targets_n
+            final_actual_force_n = self._actual_force_n
         if run_path is None or not run_path.is_dir():
             return
         csv_path = run_path / "force_sequence.csv"
@@ -306,6 +324,8 @@ class ProprioceptiveContactDatasetController:
         metadata["force_sequence_result"] = {
             "status": status,
             "completed_targets_N": list(completed_targets),
+            "release_force_threshold_N": RELEASE_FORCE_THRESHOLD_N,
+            "final_actual_force_N": final_actual_force_n,
             "observation_count": len(rows),
             "error": error,
         }
@@ -349,11 +369,11 @@ class ProprioceptiveContactDatasetController:
         return maximum + 1
 
     def _admit_camera_frame(self, sample: CameraAcquisition) -> bool:
-        """Advance from camera/F-T observations and admit scheduled band frames."""
+        """Advance the force sequence and admit RGB throughout the active run."""
 
         motor = self.runtime.snapshot().motor
         with self._lock:
-            if self._status != "running":
+            if self._status not in {"running", "waiting_for_release"}:
                 return False
             target = self._sequence.current_target_n
             update = self._sequence.update(
@@ -363,6 +383,15 @@ class ProprioceptiveContactDatasetController:
             self._latest_update = update
             self._actual_force_n = sample.ft_contact_force_n
             self._motor_torque_nm = None if motor is None else motor.torque_nm
+            if update.state is ForceSequenceState.RUN_COMPLETE:
+                self._status = "waiting_for_release"
+            if self._run_started_s is not None:
+                self._session_elapsed_s = max(
+                    self._session_elapsed_s,
+                    self._run_elapsed_offset_s
+                    + sample.timestamp_ns / 1.0e9
+                    - self._run_started_s,
+                )
             self._rows.append(
                 {
                     "timestamp_ns": sample.timestamp_ns,
@@ -372,7 +401,11 @@ class ProprioceptiveContactDatasetController:
                     "target_tolerance_N": ""
                     if target is None
                     else self.config.tolerance_n(target),
-                    "state": update.state.name.lower(),
+                    "state": (
+                        "release"
+                        if update.state is ForceSequenceState.RUN_COMPLETE
+                        else update.state.name.lower()
+                    ),
                     "band_position": ""
                     if update.band_position is None
                     else update.band_position.name.lower(),
@@ -389,7 +422,7 @@ class ProprioceptiveContactDatasetController:
                     "motor_torque_Nm": "" if motor is None else motor.torque_nm,
                 }
             )
-            return update.should_record_frame
+            return True
 
 
 __all__ = [
@@ -400,6 +433,7 @@ __all__ = [
     "LED_ROTATION_AXIS_DISTANCES_MM",
     "LED_SPACING_MM",
     "ProprioceptiveContactDatasetController",
+    "RELEASE_FORCE_THRESHOLD_N",
     "SEQUENCE_COLUMNS",
     "TARGET_FORCES_N",
     "contact_location_mm",

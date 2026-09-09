@@ -10,14 +10,24 @@ from pathlib import Path
 import sys
 from typing import Any
 
+import h5py
 import numpy as np
 import yaml
 
+from algorithm.contact_localization import (
+    ContactLocalizationConfig,
+    UnloadedOpticalReference,
+    build_unloaded_reference,
+    compute_longitudinal_response,
+    localize_response_profile,
+)
+from lumo.fingertip.layout import LED_CENTERS_Y_MM, TOTAL_Y_BOUNDS_MM
 from lumo.visualization import MATERIAL_LABELS, PAPER_COLORS, PAPER_LABELS
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent / "configs" / "paper_figures.yaml"
+DEFAULT_CONTACT_DATASET_H5 = REPOSITORY_ROOT / "output" / "upload" / "contact_dataset.h5"
 
 
 @dataclass(frozen=True)
@@ -634,6 +644,8 @@ def calibration_burden(
     output: list[dict[str, Any]] = []
     for count in range(1, maximum_count + 1):
         split_accuracy = []
+        split_mae_mm = []
+        test_samples_per_split: int | None = None
         for training_repetitions in _calibration_training_sets(
             repetitions, count, config.maximum_resamples, config.random_seed
         ):
@@ -657,11 +669,26 @@ def calibration_burden(
                 for sample in samples
                 if sample.repetition_index not in training_set
             ]
+            predicted_holes = [
+                _predict(sample.feature, templates)[0] for sample in testing
+            ]
             correct = [
-                _predict(sample.feature, templates)[0] == sample.hole_index
-                for sample in testing
+                prediction == sample.hole_index
+                for prediction, sample in zip(predicted_holes, testing, strict=True)
+            ]
+            errors_mm = [
+                abs(
+                    config.contact_positions_mm[prediction]
+                    - config.contact_positions_mm[sample.hole_index]
+                )
+                for prediction, sample in zip(predicted_holes, testing, strict=True)
             ]
             split_accuracy.append(_percent(correct))
+            split_mae_mm.append(float(np.mean(errors_mm)))
+            if test_samples_per_split is None:
+                test_samples_per_split = len(testing)
+            elif test_samples_per_split != len(testing):
+                raise RuntimeError("calibration splits have unequal test-set sizes")
         output.append(
             {
                 "material": samples[0].material,
@@ -676,11 +703,240 @@ def calibration_burden(
                 "test_accuracy_median": float(np.median(split_accuracy)),
                 "test_accuracy_q25": float(np.percentile(split_accuracy, 25.0)),
                 "test_accuracy_q75": float(np.percentile(split_accuracy, 75.0)),
+                "test_samples_per_split": test_samples_per_split,
+                "test_mae_mean_mm": float(np.mean(split_mae_mm)),
+                "test_mae_median_mm": float(np.median(split_mae_mm)),
+                "test_mae_q25_mm": float(np.percentile(split_mae_mm, 25.0)),
+                "test_mae_q75_mm": float(np.percentile(split_mae_mm, 75.0)),
                 "random_seed": config.random_seed,
                 "status": "measured",
             }
         )
     return output
+
+
+def _decoded_hdf5_strings(values: np.ndarray) -> np.ndarray:
+    return np.asarray(
+        [
+            value.decode("utf-8") if isinstance(value, (bytes, np.bytes_)) else str(value)
+            for value in values
+        ]
+    )
+
+
+def _canonical_led_coordinates() -> np.ndarray:
+    """Return distal-to-proximal LED coordinates over the physical full finger."""
+
+    proximal_mm, distal_mm = TOTAL_Y_BOUNDS_MM
+    distal_to_proximal = np.sort(np.asarray(LED_CENTERS_Y_MM, dtype=np.float64))[::-1]
+    return (distal_mm - distal_to_proximal) / (distal_mm - proximal_mm)
+
+
+def geometry_prior_zero_calibration(
+    config: PaperFigureConfig,
+    artifact_path: str | Path = DEFAULT_CONTACT_DATASET_H5,
+    *,
+    indenter: str = "sphere_10mm",
+) -> list[dict[str, Any]]:
+    """Evaluate the no-labelled-contact geometry-prior estimator at 5 N.
+
+    The estimator uses each capture's unloaded canonical RGB reference and the
+    known five-LED physical lattice. Hole positions enter only after inference
+    to score absolute localization error.
+    """
+
+    artifact = _resolved_path(artifact_path)
+    if not artifact.is_file():
+        raise FileNotFoundError(f"missing compact contact dataset: {artifact}")
+    optical_config = ContactLocalizationConfig(unloaded_frame_count=2)
+    led_coordinates = _canonical_led_coordinates()
+    output: list[dict[str, Any]] = []
+    with h5py.File(artifact, "r") as data:
+        if str(data.attrs.get("dataset_kind", "")) != "contact_dataset":
+            raise ValueError(f"expected contact_dataset HDF5 artifact: {artifact}")
+        session_material = _decoded_hdf5_strings(data["sessions/material"][:])
+        session_morphology = _decoded_hdf5_strings(data["sessions/morphology"][:])
+        frame_session = np.asarray(data["frames/session_index"][:], dtype=np.int64)
+        frame_calibration = np.asarray(
+            data["frames/calibration_index"][:], dtype=np.int64
+        )
+        frame_unloaded = np.asarray(data["frames/unloaded"][:], dtype=bool)
+        frame_indenter = _decoded_hdf5_strings(data["frames/indenter"][:])
+        frame_run = _decoded_hdf5_strings(data["frames/run_id"][:])
+        frame_hole = np.asarray(data["frames/hole_index"][:], dtype=np.int64)
+        frame_repetition = np.asarray(
+            data["frames/repetition_index"][:], dtype=np.int64
+        )
+        frame_target = np.asarray(data["frames/target_force_n"][:], dtype=np.float64)
+
+        reference_cache: dict[int, UnloadedOpticalReference] = {}
+
+        def unloaded_reference(calibration_index: int) -> UnloadedOpticalReference:
+            if calibration_index in reference_cache:
+                return reference_cache[calibration_index]
+            indices = np.flatnonzero(
+                frame_unloaded & (frame_calibration == calibration_index)
+            )
+            if len(indices) != optical_config.unloaded_frame_count:
+                raise RuntimeError(
+                    f"calibration {calibration_index} requires exactly "
+                    f"{optical_config.unloaded_frame_count} compact unloaded frames"
+                )
+            support = np.asarray(
+                data["calibrations/support_mask"][calibration_index], dtype=bool
+            )
+            stored_reference = np.asarray(
+                data["calibrations/reference_rgb"][calibration_index], dtype=np.uint8
+            )
+            frames = np.asarray(data["frames/rgb"][indices], dtype=np.uint8)
+            frames[:, ~support] = stored_reference[~support]
+            reference = build_unloaded_reference(frames, optical_config)
+            reference_cache[calibration_index] = reference
+            return reference
+
+        for material in config.materials:
+            for morphology in config.morphologies:
+                session_indices = np.flatnonzero(
+                    (session_material == material)
+                    & (session_morphology == morphology)
+                )
+                if len(session_indices) != 1:
+                    raise RuntimeError(
+                        f"expected one compact session for {material}/{morphology}, "
+                        f"found {len(session_indices)}"
+                    )
+                selected = np.flatnonzero(
+                    (frame_session == int(session_indices[0]))
+                    & ~frame_unloaded
+                    & (frame_indenter == indenter)
+                    & np.isclose(frame_target, config.high_force_n)
+                )
+                groups: dict[tuple[str, int, int], list[int]] = {}
+                for index in selected:
+                    key = (
+                        str(frame_run[index]),
+                        int(frame_hole[index]),
+                        int(frame_repetition[index]),
+                    )
+                    groups.setdefault(key, []).append(int(index))
+                errors_mm: list[float] = []
+                for (_run_id, hole, _repetition), indices in sorted(groups.items()):
+                    calibration_indices = np.unique(frame_calibration[indices])
+                    if len(calibration_indices) != 1:
+                        raise RuntimeError("one run maps to multiple unloaded captures")
+                    calibration_index = int(calibration_indices[0])
+                    reference = unloaded_reference(calibration_index)
+                    current = np.rint(
+                        np.median(data["frames/rgb"][indices], axis=0)
+                    ).astype(np.uint8)
+                    support = np.asarray(
+                        data["calibrations/support_mask"][calibration_index], dtype=bool
+                    )
+                    current[~support] = reference.canonical_rgb[~support]
+                    response, saturation_250, saturation_255 = (
+                        compute_longitudinal_response(
+                            current,
+                            reference.canonical_rgb,
+                            brightest_fraction=optical_config.brightest_fraction,
+                            smoothing_sigma=optical_config.longitudinal_smoothing_sigma,
+                        )
+                    )
+                    result = localize_response_profile(
+                        response,
+                        reference,
+                        led_coordinates,
+                        optical_config,
+                        saturation_fraction_ge_250=saturation_250,
+                        saturation_fraction_eq_255=saturation_255,
+                    )
+                    if not result.valid or result.position_mm is None:
+                        raise RuntimeError(
+                            f"zero-calibration estimate failed for "
+                            f"{material}/{morphology}/{_run_id}: {result.status}"
+                        )
+                    ground_truth_mm = config.contact_positions_mm[hole]
+                    errors_mm.append(abs(result.position_mm - ground_truth_mm))
+                expected_count = len(config.contact_positions_mm) * 5
+                if len(errors_mm) != expected_count:
+                    raise RuntimeError(
+                        f"expected {expected_count} zero-calibration samples for "
+                        f"{material}/{morphology}/{indenter}, got {len(errors_mm)}"
+                    )
+                output.append(
+                    {
+                        "material": material,
+                        "material_display": config.material_labels[material],
+                        "indenter": indenter,
+                        "indenter_display": config.indenter_labels[indenter],
+                        "morphology_id": morphology,
+                        "morphology_display": config.morphology_labels[morphology],
+                        "calibration_contacts_per_location": 0,
+                        "inference_regime": "geometry prior; no labelled contact calibration",
+                        "sample_count": len(errors_mm),
+                        "split_count": "",
+                        "localization_mae_mean_mm": float(np.mean(errors_mm)),
+                        "localization_mae_median_mm": float(np.median(errors_mm)),
+                        "localization_mae_q25_mm": "",
+                        "localization_mae_q75_mm": "",
+                        "feature_definition": "5 N unloaded-relative Green response centroid",
+                        "source_path": _display_path(artifact),
+                        "status": "measured",
+                    }
+                )
+    return output
+
+
+def optional_calibration_rows(
+    zero_calibration: list[dict[str, Any]],
+    calibrated: list[dict[str, Any]],
+    config: PaperFigureConfig,
+    *,
+    indenter: str = "sphere_10mm",
+) -> list[dict[str, Any]]:
+    """Combine the distinct zero-contact-calibration and calibrated regimes."""
+
+    output = list(zero_calibration)
+    for row in calibrated:
+        if row["indenter"] != indenter:
+            continue
+        output.append(
+            {
+                "material": row["material"],
+                "material_display": row["material_display"],
+                "indenter": row["indenter"],
+                "indenter_display": row["indenter_display"],
+                "morphology_id": row["morphology_id"],
+                "morphology_display": row["morphology_display"],
+                "calibration_contacts_per_location": row[
+                    "calibration_contacts_per_location"
+                ],
+                "inference_regime": "calibrated 6-region nearest-template",
+                "sample_count": row["test_samples_per_split"],
+                "split_count": row["split_count"],
+                "localization_mae_mean_mm": row["test_mae_mean_mm"],
+                "localization_mae_median_mm": row["test_mae_median_mm"],
+                "localization_mae_q25_mm": row["test_mae_q25_mm"],
+                "localization_mae_q75_mm": row["test_mae_q75_mm"],
+                "feature_definition": "6-region signed Green change, 2 to 5 N",
+                "source_path": "generated from configured longitudinal profiles",
+                "status": row["status"],
+            }
+        )
+    expected_rows = len(config.materials) * len(config.morphologies) * (
+        config.maximum_calibration_contacts + 1
+    )
+    if len(output) != expected_rows:
+        raise RuntimeError(
+            f"expected {expected_rows} optional-calibration rows, got {len(output)}"
+        )
+    return sorted(
+        output,
+        key=lambda row: (
+            config.materials.index(str(row["material"])),
+            config.morphologies.index(str(row["morphology_id"])),
+            int(row["calibration_contacts_per_location"]),
+        ),
+    )
 
 
 def load_spatial_distinguishability(
@@ -874,6 +1130,12 @@ def run_analysis(config: PaperFigureConfig) -> dict[str, Path]:
         for row in summaries
     ]
     distinguishability_rows = load_spatial_distinguishability(config)
+    zero_calibration_rows = geometry_prior_zero_calibration(config)
+    optional_rows = optional_calibration_rows(
+        zero_calibration_rows,
+        calibration_rows,
+        config,
+    )
 
     summary_lookup = {
         (row["material"], row["indenter"], row["morphology_id"]): row
@@ -965,6 +1227,10 @@ def run_analysis(config: PaperFigureConfig) -> dict[str, Path]:
         ),
         "scalar_spatial": _write_csv(
             output / "fig6c_scalar_vs_spatial.csv", scalar_spatial_rows
+        ),
+        "optional_calibration": _write_csv(
+            output / "fig6c_optional_calibration_10mm_combined.csv",
+            optional_rows,
         ),
         "calibration": _write_csv(
             output / "fig6d_calibration_burden.csv", calibration_rows

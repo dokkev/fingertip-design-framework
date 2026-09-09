@@ -68,15 +68,16 @@ _CAMPAIGNS = (
 def _add_panel_title(
     figure: plt.Figure,
     *,
-    x: float,
+    left: float,
     y: float,
     label: str,
     title: str,
+    title_center_x: float | None = None,
 ) -> None:
-    """Draw the README title hierarchy: larger label, light title."""
+    """Draw a left panel label and optionally center its title."""
 
     figure.text(
-        x,
+        left,
         y,
         label,
         ha="left",
@@ -85,10 +86,10 @@ def _add_panel_title(
         fontweight="normal",
     )
     figure.text(
-        x + 0.030,
+        left + 0.030 if title_center_x is None else title_center_x,
         y,
         title,
-        ha="left",
+        ha="left" if title_center_x is None else "center",
         va="bottom",
         fontsize=DEFAULT_STYLE.panel_title_font_size_pt,
         fontweight="normal",
@@ -654,31 +655,35 @@ def main() -> None:
 
         _add_panel_title(
             figure,
-            x=structure_frame_bounds[0],
+            left=structure_frame_bounds[0],
             y=structure_title_y,
             label="(a)",
             title="Structure",
+            title_center_x=0.5 * (
+                structure_frame_bounds[0] + structure_frame_bounds[2]
+            ),
         )
         _add_panel_title(
             figure,
-            x=carrier_axes.get_position().x0,
+            left=carrier_axes.get_position().x0,
             y=response_title_y,
             label="(b)",
             title="Carrier Contribution",
         )
         _add_panel_title(
             figure,
-            x=void_axes.get_position().x0,
+            left=void_axes.get_position().x0,
             y=response_title_y,
             label="(c)",
             title="Void Effect",
         )
         _add_panel_title(
             figure,
-            x=optimization_slot.x0,
+            left=optimization_slot.x0,
             y=optimization_title_y,
             label="(d)",
             title="Morphology Optimization",
+            title_center_x=0.5 * (optimization_slot.x0 + optimization_slot.x1),
         )
         outputs = save_figure(
             figure,

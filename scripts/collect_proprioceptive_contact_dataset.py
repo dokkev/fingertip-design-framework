@@ -22,6 +22,9 @@ from experiments.data_collection import (  # noqa: E402
     ProprioceptiveContactDatasetController,
     ProprioceptiveExperimentRuntime,
 )
+from experiments.data_collection.proprioceptive_contact_dataset import (  # noqa: E402
+    RELEASE_FORCE_THRESHOLD_N,
+)
 from experiments.force_estimation import (  # noqa: E402
     LocationConditionedForceCalibration,
     OnlineForceEstimator,
@@ -57,6 +60,13 @@ class ContactDatasetConsole:
     ) -> None:
         self._runtime = runtime
         self._contact_dataset = contact_dataset
+        self._force_gauge_max_n = max(
+            25.0,
+            max(
+                target + contact_dataset.config.tolerance_n(target)
+                for target in contact_dataset.config.target_forces_n
+            ),
+        )
         self._last_motor_timestamp_ns: int | None = None
         self._last_ft_timestamp_ns: int | None = None
         self._last_optical_timestamp_ns: int | None = None
@@ -78,8 +88,11 @@ class ContactDatasetConsole:
             self._build_status()
             with ui.row().classes("w-full items-start gap-3 no-wrap"):
                 self._build_camera()
-                with ui.column().classes("w-[480px] gap-3"):
+                self._build_force_tracking()
+            with ui.row().classes("w-full items-start gap-3 no-wrap"):
+                with ui.column().classes("w-[640px] shrink-0"):
                     self._build_motor()
+                with ui.column().classes("grow min-w-0 gap-3"):
                     self._build_ft()
                     self._build_estimator()
             self._build_recording()
@@ -291,10 +304,79 @@ class ContactDatasetConsole:
                 "proximally: LED1 is 103.6 mm from the motor rotation axis, "
                 "LED pitch is 11 mm, and hole pitch is 10 mm. AK40-10 feedback "
                 "torque and Rokubi force are recorded continuously. Lossless RGB "
-                "is saved only during each stable target-force recording band. "
-                "The run finishes automatically after the 20 N checkpoint; Abort "
-                "deletes the incomplete run."
+                "is saved at the configured rate throughout the complete run, "
+                "including final release below 2 N. After the 20 N checkpoint, "
+                "release the indenter; the run finishes once force falls below 2 N. "
+                "Abort deletes the incomplete run."
             ).classes("text-xs text-gray-600")
+
+    def _build_force_tracking(self) -> None:
+        with ui.card().classes("w-[440px] shrink-0 self-stretch"):
+            ui.label("Target-force tracking").classes("text-xl font-medium")
+            with ui.row().classes("w-full justify-between gap-3"):
+                self._force_current_label = ui.label("Current -- N").classes(
+                    "text-xl font-medium"
+                )
+                with ui.column().classes("items-end gap-0"):
+                    self._force_target_label = ui.label("Target -- N").classes(
+                        "text-lg font-medium"
+                    )
+                    self._force_margin_label = ui.label("Margin -- N").classes(
+                        "text-sm text-gray-600"
+                    )
+            self._force_tracking_chart = ui.echart(
+                {
+                    "animation": False,
+                    "grid": {"left": 68, "right": 34, "top": 16, "bottom": 16},
+                    "xAxis": {
+                        "type": "category",
+                        "data": [""],
+                        "axisLine": {"show": False},
+                        "axisTick": {"show": False},
+                        "axisLabel": {"show": False},
+                    },
+                    "yAxis": {
+                        "type": "value",
+                        "min": 0.0,
+                        "max": self._force_gauge_max_n,
+                        "interval": 5.0,
+                        "name": "Force [N]",
+                        "nameLocation": "middle",
+                        "nameGap": 48,
+                        "axisLabel": {"fontSize": 14},
+                        "nameTextStyle": {"fontSize": 16},
+                    },
+                    "series": [
+                        {
+                            "type": "bar",
+                            "barWidth": 96,
+                            "z": 3,
+                            "data": [
+                                {
+                                    "value": 0.0,
+                                    "itemStyle": {
+                                        "color": "#2C758E",
+                                        "borderColor": "#4C5055",
+                                        "borderWidth": 1,
+                                    },
+                                }
+                            ],
+                            "markArea": {
+                                "silent": True,
+                                "itemStyle": {"color": "rgba(0, 158, 115, 0.18)"},
+                                "data": [],
+                            },
+                            "markLine": {
+                                "silent": True,
+                                "symbol": "none",
+                                "lineStyle": {"color": "#202020", "width": 3},
+                                "label": {"show": False},
+                                "data": [],
+                            },
+                        }
+                    ],
+                }
+            ).classes("w-full h-[460px]")
 
     def _build_plots(self) -> None:
         with ui.row().classes("w-full gap-3 no-wrap"):
@@ -476,16 +558,34 @@ class ContactDatasetConsole:
                 )
                 self._estimation_error.set_text("Estimation error: unavailable")
 
-        recorder = snapshot.recorder
-        duration_s = 0.0
-        if recorder.started_ns is not None and recorder.status in {"recording", "saving"}:
-            duration_s = (monotonic_ns() - recorder.started_ns) / 1.0e9
         sequence = self._contact_dataset.snapshot()
-        target = (
-            "complete"
-            if sequence.current_target_n is None
-            else f"{sequence.current_target_n:g} N"
+        current_force_n = sequence.actual_force_n
+        if snapshot.ft is not None:
+            if snapshot.ft.force_normal_n is not None:
+                current_force_n = abs(snapshot.ft.force_normal_n)
+            else:
+                current_force_n = math.sqrt(
+                    snapshot.ft.fx_n**2
+                    + snapshot.ft.fy_n**2
+                    + snapshot.ft.fz_n**2
+                )
+        self._update_force_tracking(
+            current_force_n=current_force_n,
+            target_force_n=(
+                RELEASE_FORCE_THRESHOLD_N
+                if sequence.status == "waiting_for_release"
+                else sequence.current_target_n
+            ),
+            release_mode=sequence.status == "waiting_for_release",
         )
+        recorder = snapshot.recorder
+        duration_s = sequence.session_elapsed_s
+        if sequence.status == "waiting_for_release":
+            target = f"release < {RELEASE_FORCE_THRESHOLD_N:g} N"
+        elif sequence.current_target_n is None:
+            target = "complete"
+        else:
+            target = f"{sequence.current_target_n:g} N"
         actual = (
             "--"
             if sequence.actual_force_n is None
@@ -507,7 +607,8 @@ class ContactDatasetConsole:
         if sequence.error:
             self._fault_label.set_text(" | ".join(errors + [sequence.error]))
         self._record_label.set_text(
-            f"{recorder.status} | {recorder.run_id or '--'} | {duration_s:.1f} s | "
+            f"{recorder.status} | {recorder.run_id or '--'} | "
+            f"session {duration_s:.1f} s | "
             f"motor {recorder.motor_samples} | F/T {recorder.ft_samples} | "
             f"camera {recorder.camera_frames} | optical {recorder.optical_samples} | "
             f"force {recorder.force_estimates} | "
@@ -522,6 +623,67 @@ class ContactDatasetConsole:
         self._update_chart(self._torque_chart, self._torque_points)
         self._update_chart(self._force_chart, self._force_points)
         self._update_chart(self._location_chart, self._location_points)
+
+    def _update_force_tracking(
+        self,
+        *,
+        current_force_n: float | None,
+        target_force_n: float | None,
+        release_mode: bool = False,
+    ) -> None:
+        current_text = (
+            "-- N" if current_force_n is None else f"{current_force_n:.2f} N"
+        )
+        self._force_current_label.set_text(f"Current {current_text}")
+
+        series = self._force_tracking_chart.options["series"][0]
+        current_value = 0.0 if current_force_n is None else max(0.0, current_force_n)
+        bar_color = "#2C758E"
+        if release_mode:
+            assert target_force_n is not None
+            lower_n = 0.0
+            upper_n = target_force_n
+            self._force_target_label.set_text(f"Release < {target_force_n:g} N")
+            self._force_margin_label.set_text("Run ends below threshold")
+            series["markArea"]["data"] = [
+                [{"yAxis": lower_n}, {"yAxis": upper_n}]
+            ]
+            series["markLine"]["data"] = [{"yAxis": target_force_n}]
+            if current_force_n is not None:
+                bar_color = (
+                    "#009E73" if current_force_n < target_force_n else "#D62728"
+                )
+        elif target_force_n is None:
+            self._force_target_label.set_text("Target -- N")
+            self._force_margin_label.set_text("Margin -- N")
+            series["markArea"]["data"] = []
+            series["markLine"]["data"] = []
+        else:
+            tolerance_n = self._contact_dataset.config.tolerance_n(target_force_n)
+            lower_n = max(0.0, target_force_n - tolerance_n)
+            upper_n = target_force_n + tolerance_n
+            self._force_target_label.set_text(f"Target {target_force_n:g} N")
+            self._force_margin_label.set_text(f"Margin ±{tolerance_n:g} N")
+            series["markArea"]["data"] = [
+                [{"yAxis": lower_n}, {"yAxis": upper_n}]
+            ]
+            series["markLine"]["data"] = [{"yAxis": target_force_n}]
+            if current_force_n is not None:
+                if lower_n <= current_force_n <= upper_n:
+                    bar_color = "#009E73"
+                elif current_force_n > upper_n:
+                    bar_color = "#D62728"
+        series["data"] = [
+            {
+                "value": current_value,
+                "itemStyle": {
+                    "color": bar_color,
+                    "borderColor": "#4C5055",
+                    "borderWidth": 1,
+                },
+            }
+        ]
+        self._force_tracking_chart.update()
 
     def _append_point(
         self,
@@ -543,7 +705,7 @@ class ContactDatasetConsole:
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--channel", default="can1")
+    parser.add_argument("--channel", default="can0")
     parser.add_argument("--motor-id", type=_motor_id, default=13)
     parser.add_argument("--motor-rate-hz", type=float, default=100.0)
     parser.add_argument("--motor-feedback-timeout-s", type=float, default=0.05)
@@ -578,12 +740,6 @@ def _parse_args() -> argparse.Namespace:
         default=100.0,
     )
     parser.add_argument(
-        "--camera-contact-threshold-n",
-        type=float,
-        default=0.5,
-        help="save lossless camera frames only above this Rokubi force (default: 0.5 N)",
-    )
-    parser.add_argument(
         "--contact-processing",
         choices=("online", "offline", "both"),
         default="offline",
@@ -607,7 +763,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output-root",
         type=Path,
-        default=Path("output/experiments/proprioceptive_contact_dataset"),
+        default=Path("output/proprioceptive_robust_dataset"),
     )
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8080)
@@ -619,11 +775,6 @@ def _parse_args() -> argparse.Namespace:
         parser.error(f"--kd must be within [0, {KD_MAX:g}]")
     if args.motor_rate_hz <= 0.0 or args.motor_feedback_timeout_s <= 0.0:
         parser.error("motor rate and feedback timeout must be positive")
-    if (
-        not math.isfinite(args.camera_contact_threshold_n)
-        or args.camera_contact_threshold_n < 0.0
-    ):
-        parser.error("--camera-contact-threshold-n must be finite and nonnegative")
     if (
         not math.isfinite(args.camera_record_rate_hz)
         or args.camera_record_rate_hz <= 0.0
@@ -682,7 +833,7 @@ def main() -> None:
         kd=args.kd,
         motor_rate_hz=args.motor_rate_hz,
         motor_feedback_timeout_s=args.motor_feedback_timeout_s,
-        camera_contact_threshold_n=args.camera_contact_threshold_n,
+        camera_contact_threshold_n=0.0,
         contact_processing_mode=args.contact_processing,
         camera_record_rate_hz=args.camera_record_rate_hz,
         offline_reference_frame_count=args.offline_reference_frames,
